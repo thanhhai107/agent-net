@@ -7,6 +7,7 @@ from nika.orchestrator.tasks.detection import DetectionTask
 from nika.orchestrator.tasks.localization import LocalizationTask
 from nika.orchestrator.tasks.rca import RCATask
 from nika.service.kathara import KatharaAPIALL
+from nika.utils.failure_params import FailureParamField, FailureParamSchema
 from nika.utils.logger import system_logger
 
 logger = system_logger
@@ -21,6 +22,15 @@ class P4AggressiveDetectionThresholdsBase:
     root_cause_category = RootCauseCategory.NETWORK_NODE_ERROR
     root_cause_name = "p4_aggressive_detection_thresholds"
     TAGS: str = ["p4", "bloom_filter"]
+    FAILURE_PARAM_SCHEMA = FailureParamSchema(
+        problem_name="p4_aggressive_detection_thresholds",
+        summary="Lower P4 packet threshold in program and restart switch.",
+        fields=(
+            FailureParamField("host_name", "str", "Target BMv2 switch name."),
+            FailureParamField("p4_name", "str", "P4 program name (without suffix)."),
+        ),
+        example="nika failure inject p4_aggressive_detection_thresholds --set host_name=s1",
+    )
 
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()

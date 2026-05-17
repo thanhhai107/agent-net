@@ -1,7 +1,7 @@
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
-from nika.workflows.net_env_stop import stop_net_env
+from nika.workflows.net_env_stop import _stop_session_record, stop_net_env
 
 
 class FakeStore:
@@ -38,6 +38,31 @@ class NetEnvStopTest(unittest.TestCase):
         with patch("nika.workflows.net_env_stop.SessionStore", return_value=fake_store):
             with self.assertRaises(FileNotFoundError):
                 stop_net_env(session_id="sid-finished")
+
+    def test_stop_session_record_marks_failures_ended(self) -> None:
+        session_meta = {
+            "session_id": "sid-1",
+            "status": "running",
+            "scenario_name": "dc_clos_bgp",
+            "scenario_topo_size": "s",
+            "lab_name": "dc_clos_bgp__a",
+        }
+        fake_session = MagicMock()
+        fake_store = MagicMock()
+        fake_store.mark_session_failures_ended.return_value = 2
+        fake_env = MagicMock()
+        fake_env.lab_exists.return_value = True
+
+        with (
+            patch("nika.workflows.net_env_stop.Session", return_value=fake_session),
+            patch("nika.workflows.net_env_stop.SessionStore", return_value=fake_store),
+            patch("nika.workflows.net_env_stop.get_net_env_instance", return_value=fake_env),
+        ):
+            _stop_session_record(session_meta)
+
+        fake_env.undeploy.assert_called_once()
+        fake_store.mark_session_failures_ended.assert_called_once()
+        fake_session.clear_session.assert_called_once()
 
 
 if __name__ == "__main__":

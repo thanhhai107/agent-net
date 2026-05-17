@@ -1,8 +1,7 @@
-import os
+import shlex
 
 import docker
 
-from nika.config import BASE_DIR
 from nika.service.kathara import KatharaAPIALL
 from nika.utils.logger import system_logger
 
@@ -26,20 +25,51 @@ class FaultInjectorBase:
 
     def inject_link_flap(self, host_name: str, intf_name: str, down_time: int = 1, up_time: int = 1):
         """Inject link flap on a specific interface of a host."""
-        with open(os.path.join(BASE_DIR, "src/nika/generator/fault/utils/link_flap.sh"), "r") as f:
-            script = f.read()
-        write_cmd = f"cat <<'EOF' > /tmp/link_flap.sh\n{script}\nEOF\nchmod +x /tmp/link_flap.sh"
+        if down_time <= 0 or up_time <= 0:
+            raise ValueError("down_time and up_time must be positive integers")
+
+        script_path = f"/tmp/link_flap_{intf_name}.sh"
+        pid_path = f"/tmp/link_flap_{intf_name}.pid"
+        log_path = f"/tmp/link_flap_{intf_name}.log"
+
+        script = f"""#!/bin/bash
+IFACE={shlex.quote(intf_name)}
+DOWN_TIME={int(down_time)}
+UP_TIME={int(up_time)}
+PID_FILE={shlex.quote(pid_path)}
+
+cleanup() {{
+    ip link set "$IFACE" up >/dev/null 2>&1 || true
+    rm -f "$PID_FILE"
+}}
+trap cleanup EXIT INT TERM
+
+echo $$ > "$PID_FILE"
+while true; do
+    ip link set "$IFACE" down
+    sleep "$DOWN_TIME"
+    ip link set "$IFACE" up
+    sleep "$UP_TIME"
+done
+"""
+        write_cmd = (
+            f"cat <<'EOF' > {shlex.quote(script_path)}\n{script}\nEOF\n"
+            f"chmod +x {shlex.quote(script_path)}"
+        )
         self.kathara_api.exec_cmd(host_name, write_cmd)
 
         # kill the previous link flap process if any
-        self.kathara_api.exec_cmd(
-            host_name, "if [ -f /tmp/link_flap.pid ]; then kill $(cat /tmp/link_flap.pid) 2>/dev/null; fi"
+        stop_previous_cmd = (
+            f"if [ -f {shlex.quote(pid_path)} ]; then "
+            f"kill $(cat {shlex.quote(pid_path)}) 2>/dev/null || true; "
+            f"rm -f {shlex.quote(pid_path)}; "
+            "fi"
         )
+        self.kathara_api.exec_cmd(host_name, stop_previous_cmd)
 
         # start the link flap script
         start_cmd = (
-            f"nohup /tmp/link_flap.sh {intf_name} {down_time} {up_time} "
-            f"> /tmp/link_flap_{intf_name}.log 2>&1 & echo $! > /tmp/link_flap.pid"
+            f"nohup {shlex.quote(script_path)} > {shlex.quote(log_path)} 2>&1 < /dev/null &"
         )
         self.kathara_api.exec_cmd(host_name, start_cmd)
 
@@ -47,12 +77,16 @@ class FaultInjectorBase:
 
     def recover_link_flap(self, host_name: str, intf_name: str):
         # kill process & restore interface
+        pid_path = f"/tmp/link_flap_{intf_name}.pid"
+        script_path = f"/tmp/link_flap_{intf_name}.sh"
+        log_path = f"/tmp/link_flap_{intf_name}.log"
         stop_cmd = (
-            "if [ -f /tmp/link_flap.pid ]; then "
-            "  kill $(cat /tmp/link_flap.pid) 2>/dev/null || true; "
-            "  rm -f /tmp/link_flap.pid; "
-            f"  ip link set {intf_name} up; "
-            "fi"
+            f"if [ -f {shlex.quote(pid_path)} ]; then "
+            f"  kill $(cat {shlex.quote(pid_path)}) 2>/dev/null || true; "
+            f"  rm -f {shlex.quote(pid_path)}; "
+            "fi; "
+            f"rm -f {shlex.quote(script_path)} {shlex.quote(log_path)}; "
+            f"ip link set {shlex.quote(intf_name)} up 2>/dev/null || true"
         )
         self.kathara_api.exec_cmd(host_name, stop_cmd)
         self.logger.info(f"Stopped link flap on {host_name}:{intf_name}")
@@ -74,18 +108,30 @@ class FaultInjectorBase:
         self.logger.info(f"Recovered link detach on {host_name}:{intf_name}")
 
     def inject_host_down(self, host_name: str):
-        """Inject a fault by stopping a host."""
+        """Inject a host crash fault by pausing the container."""
         docker_client = docker.from_env()
-        container_name = docker_client.containers.list(filters={"name": f"{host_name}"})[0]
-        container_name.kill()
-        self.logger.info(f"Injected host down fault on {host_name}.")
+        candidates = docker_client.containers.list(all=True, filters={"name": host_name})
+        if not candidates:
+            raise ValueError(f"No container found for host {host_name}")
+        container = next((item for item in candidates if item.name == host_name), candidates[0])
+        container.reload()
+        if container.status != "paused":
+            container.pause()
+        self.logger.info(f"Injected host down fault on {host_name} (container paused).")
 
     def recover_host_down(self, host_name: str):
-        """Recover from a fault by starting a host."""
+        """Recover from host crash fault by unpausing or starting the container."""
         docker_client = docker.from_env()
-        container_name = docker_client.containers.list(filters={"name": f"{host_name}"})[0]
-        container_name.kill()
-        self.logger.info(f"Recovered host down fault on {host_name}.")
+        candidates = docker_client.containers.list(all=True, filters={"name": host_name})
+        if not candidates:
+            raise ValueError(f"No container found for host {host_name}")
+        container = next((item for item in candidates if item.name == host_name), candidates[0])
+        container.reload()
+        if container.status == "paused":
+            container.unpause()
+        elif container.status in {"created", "exited"}:
+            container.start()
+        self.logger.info(f"Recovered host down fault on {host_name} (container restored).")
 
     def inject_fragmentation_disabled(self, host_name: str, mtu: int = 100):
         self.kathara_api.exec_cmd(host_name, f"iptables -A OUTPUT -m length --length {mtu}:65535 -j DROP")

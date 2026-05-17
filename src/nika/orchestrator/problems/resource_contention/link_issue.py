@@ -9,6 +9,7 @@ from nika.orchestrator.tasks.detection import DetectionTask
 from nika.orchestrator.tasks.localization import LocalizationTask
 from nika.orchestrator.tasks.rca import RCATask
 from nika.service.kathara import KatharaAPIALL
+from nika.utils.failure_params import FailureParamField, FailureParamSchema
 from nika.utils.logger import system_logger
 
 # ==================================================================
@@ -20,6 +21,15 @@ class LinkHighPacketCorruptionBase:
     root_cause_category: RootCauseCategory = RootCauseCategory.RESOURCE_CONTENTION
     root_cause_name: str = "link_high_packet_corruption"
     TAGS: str = ["link"]
+    FAILURE_PARAM_SCHEMA = FailureParamSchema(
+        problem_name="link_high_packet_corruption",
+        summary="Inject high packet corruption on one host interface.",
+        fields=(
+            FailureParamField("host_name", "str", "Target host name."),
+            FailureParamField("corruption_percentage", "int", "Corruption percentage.", default=60),
+        ),
+        example="nika failure inject link_high_packet_corruption --set host_name=h1 --set corruption_percentage=60",
+    )
 
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()
@@ -27,11 +37,14 @@ class LinkHighPacketCorruptionBase:
         self.kathara_api = KatharaAPIALL(lab_name=self.net_env.lab.name)
         self.injector = FaultInjectorTC(lab_name=self.net_env.lab.name)
         self.faulty_devices = [random.choice(self.net_env.hosts)]
+        self.corruption_percentage = 60
 
     def inject_fault(self):
         intf_name = self.kathara_api.get_host_interfaces(self.faulty_devices[0])[-1]
         self.injector.inject_packet_corruption(
-            host_name=self.faulty_devices[0], intf_name=intf_name, corruption_percentage=60
+            host_name=self.faulty_devices[0],
+            intf_name=intf_name,
+            corruption_percentage=self.corruption_percentage,
         )
 
 class LinkHighPacketCorruptionDetection(LinkHighPacketCorruptionBase, DetectionTask):
@@ -70,6 +83,17 @@ class LinkBandwidthThrottlingBase:
     root_cause_category: RootCauseCategory = RootCauseCategory.RESOURCE_CONTENTION
     root_cause_name: str = "link_bandwidth_throttling"
     TAGS: str = ["link"]
+    FAILURE_PARAM_SCHEMA = FailureParamSchema(
+        problem_name="link_bandwidth_throttling",
+        summary="Throttle host bandwidth and amplify with background traffic.",
+        fields=(
+            FailureParamField("host_name", "str", "Target host name."),
+            FailureParamField("rate", "str", "Bandwidth rate.", default="30kbit"),
+            FailureParamField("burst", "str", "TBF burst.", default="64kb"),
+            FailureParamField("limit", "str", "TBF limit.", default="500kb"),
+        ),
+        example="nika failure inject link_bandwidth_throttling --set host_name=h1 --set rate=30kbit",
+    )
 
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()
@@ -78,11 +102,18 @@ class LinkBandwidthThrottlingBase:
         self.injector = FaultInjectorTC(lab_name=self.net_env.lab.name)
         self.faulty_devices = [random.choice(self.net_env.hosts)]
         self.scenario_name = scenario_name
+        self.rate = "30kbit"
+        self.burst = "64kb"
+        self.limit = "500kb"
 
     def inject_fault(self):
         intf_name = self.kathara_api.get_host_interfaces(self.faulty_devices[0])[0]
         self.injector.inject_bandwidth_limit(
-            host_name=self.faulty_devices[0], intf_name=intf_name, rate="30kbit", burst="64kb", limit="500kb"
+            host_name=self.faulty_devices[0],
+            intf_name=intf_name,
+            rate=self.rate,
+            burst=self.burst,
+            limit=self.limit,
         )
 
         generator = ODFLowGenerator(lab_name=self.scenario_name)
@@ -131,6 +162,18 @@ class IncastTrafficNetworkLimitationBase:
     root_cause_category: RootCauseCategory = RootCauseCategory.RESOURCE_CONTENTION
     root_cause_name: str = "incast_traffic_network_limitation"
     TAGS: str = ["http"]
+    FAILURE_PARAM_SCHEMA = FailureParamSchema(
+        problem_name="incast_traffic_network_limitation",
+        summary="Limit server interface then create incast background traffic.",
+        fields=(
+            FailureParamField("host_name", "str", "Target web server host name."),
+            FailureParamField("rate", "str", "Bandwidth rate.", default="1mbit"),
+            FailureParamField("burst", "str", "TBF burst.", default="500kb"),
+            FailureParamField("limit", "str", "TBF limit.", default="500kb"),
+            FailureParamField("delay_ms", "int", "Netem delay milliseconds.", default=20),
+        ),
+        example="nika failure inject incast_traffic_network_limitation --set host_name=web0 --set rate=1mbit",
+    )
 
     def __init__(self, scenario_name: str = "dc_clos_service", **kwargs):
         super().__init__()
@@ -139,15 +182,24 @@ class IncastTrafficNetworkLimitationBase:
         self.kathara_api = KatharaAPIALL(lab_name=self.net_env.lab.name)
         self.injector = FaultInjectorTC(lab_name=self.net_env.lab.name)
         self.faulty_devices = [random.choice(self.net_env.servers["web"])]
+        self.delay_ms = 20
+        self.rate = "1mbit"
+        self.burst = "500kb"
+        self.limit = "500kb"
 
     def inject_fault(self):
-        self.kathara_api.tc_set_netem(host_name=self.faulty_devices[0], intf_name="eth0", delay_ms=20, handle="1")
+        self.kathara_api.tc_set_netem(
+            host_name=self.faulty_devices[0],
+            intf_name="eth0",
+            delay_ms=self.delay_ms,
+            handle="1",
+        )
         self.kathara_api.tc_set_tbf(
             host_name=self.faulty_devices[0],
             intf_name="eth0",
-            rate="1mbit",
-            burst="500kb",
-            limit="500kb",
+            rate=self.rate,
+            burst=self.burst,
+            limit=self.limit,
             handle="10",
             parent="1:1",
         )

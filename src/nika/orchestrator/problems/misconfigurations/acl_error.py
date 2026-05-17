@@ -8,6 +8,7 @@ from nika.orchestrator.tasks.detection import DetectionTask
 from nika.orchestrator.tasks.localization import LocalizationTask
 from nika.orchestrator.tasks.rca import RCATask
 from nika.service.kathara import KatharaAPIALL
+from nika.utils.failure_params import FailureParamField, FailureParamSchema
 
 # ==================================================================
 # Problem: BGP Access Policy Misconfiguration - ACL blocking BGP traffic
@@ -18,6 +19,12 @@ class BGPAclBlockBase:
     root_cause_category = RootCauseCategory.MISCONFIGURATION
     root_cause_name = "bgp_acl_block"
     TAGS: str = ["bgp"]
+    FAILURE_PARAM_SCHEMA = FailureParamSchema(
+        problem_name="bgp_acl_block",
+        summary="Block BGP traffic with ACL on one router.",
+        fields=(FailureParamField("host_name", "str", "Target router host name."),),
+        example="nika failure inject bgp_acl_block --set host_name=r1",
+    )
 
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()
@@ -75,6 +82,12 @@ class OSPFAclBlockBase:
     root_cause_category = RootCauseCategory.MISCONFIGURATION
     root_cause_name = "ospf_acl_block"
     TAGS: str = ["ospf"]
+    FAILURE_PARAM_SCHEMA = FailureParamSchema(
+        problem_name="ospf_acl_block",
+        summary="Block OSPF traffic with ACL on one router.",
+        fields=(FailureParamField("host_name", "str", "Target router host name."),),
+        example="nika failure inject ospf_acl_block --set host_name=r1",
+    )
 
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()
@@ -132,6 +145,12 @@ class ARPAclBlockBase:
     root_cause_category = RootCauseCategory.MISCONFIGURATION
     root_cause_name = "arp_acl_block"
     TAGS: str = ["arp"]
+    FAILURE_PARAM_SCHEMA = FailureParamSchema(
+        problem_name="arp_acl_block",
+        summary="Block ARP traffic with ACL on one host.",
+        fields=(FailureParamField("host_name", "str", "Target host name."),),
+        example="nika failure inject arp_acl_block --set host_name=h1",
+    )
 
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()
@@ -180,6 +199,12 @@ class IcmpAclBlockBase:
     root_cause_category = RootCauseCategory.MISCONFIGURATION
     root_cause_name = "icmp_acl_block"
     TAGS: str = ["icmp"]
+    FAILURE_PARAM_SCHEMA = FailureParamSchema(
+        problem_name="icmp_acl_block",
+        summary="Block ICMP traffic with ACL on one host.",
+        fields=(FailureParamField("host_name", "str", "Target host name."),),
+        example="nika failure inject icmp_acl_block --set host_name=h1",
+    )
 
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()
@@ -229,6 +254,12 @@ class HttpAclBlockBase:
     root_cause_category = RootCauseCategory.MISCONFIGURATION
     root_cause_name = "http_acl_block"
     TAGS: str = ["http", "host"]
+    FAILURE_PARAM_SCHEMA = FailureParamSchema(
+        problem_name="http_acl_block",
+        summary="Block HTTP traffic with ACL on one host.",
+        fields=(FailureParamField("host_name", "str", "Target host name."),),
+        example="nika failure inject http_acl_block --set host_name=h1",
+    )
 
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()
@@ -279,6 +310,12 @@ class DNSPortBlockedBase:
     root_cause_name: str = "dns_port_blocked"
 
     TAGS: str = ["dns", "http"]
+    FAILURE_PARAM_SCHEMA = FailureParamSchema(
+        problem_name="dns_port_blocked",
+        summary="Block DNS service ports with ACL on DNS server.",
+        fields=(FailureParamField("host_name", "str", "Target DNS server host name."),),
+        example="nika failure inject dns_port_blocked --set host_name=dns0",
+    )
 
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()

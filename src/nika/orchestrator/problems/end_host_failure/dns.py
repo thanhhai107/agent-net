@@ -8,6 +8,7 @@ from nika.orchestrator.tasks.detection import DetectionTask
 from nika.orchestrator.tasks.localization import LocalizationTask
 from nika.orchestrator.tasks.rca import RCATask
 from nika.service.kathara import KatharaBaseAPI
+from nika.utils.failure_params import FailureParamField, FailureParamSchema
 from nika.utils.logger import system_logger
 
 logger = system_logger
@@ -23,6 +24,17 @@ class DNSRecordErrorBase:
 
     symptom_desc = "Some hosts cannot access external websites."
     TAGS: str = ["dns"]
+    FAILURE_PARAM_SCHEMA = FailureParamSchema(
+        problem_name="dns_record_error",
+        summary="Rewrite DNS record to point to wrong IP.",
+        fields=(
+            FailureParamField("host_name", "str", "Target DNS server host name."),
+            FailureParamField("target_website", "str", "Record host label (optional)."),
+            FailureParamField("target_domain", "str", "DNS zone/domain (optional)."),
+            FailureParamField("wrong_ip", "str", "Incorrect IP to set (optional)."),
+        ),
+        example="nika failure inject dns_record_error --set host_name=dns0",
+    )
 
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()

@@ -10,6 +10,7 @@ from nika.orchestrator.tasks.detection import DetectionTask
 from nika.orchestrator.tasks.localization import LocalizationTask
 from nika.orchestrator.tasks.rca import RCATask
 from nika.service.kathara import KatharaAPIALL
+from nika.utils.failure_params import FailureParamField, FailureParamSchema
 
 # ==================================================================
 """ Problem: Base class for a BGP ASN misconfiguration problem. """
@@ -20,6 +21,12 @@ class BGPAsnMisconfigBase:
     root_cause_category: RootCauseCategory = RootCauseCategory.MISCONFIGURATION
     root_cause_name: str = "bgp_asn_misconfig"
     TAGS: str = ["bgp"]
+    FAILURE_PARAM_SCHEMA = FailureParamSchema(
+        problem_name="bgp_asn_misconfig",
+        summary="Change router BGP ASN to an incorrect value.",
+        fields=(FailureParamField("host_name", "str", "Target router host name."),),
+        example="nika failure inject bgp_asn_misconfig --set host_name=r1",
+    )
 
     symptom_desc = "Some hosts are experiencing connectivity issues."
 
@@ -79,6 +86,12 @@ class BGPMissingAdvertiseBase:
     root_cause_category: RootCauseCategory = RootCauseCategory.MISCONFIGURATION
     root_cause_name: str = "bgp_missing_route_advertisement"
     TAGS: str = ["bgp"]
+    FAILURE_PARAM_SCHEMA = FailureParamSchema(
+        problem_name="bgp_missing_route_advertisement",
+        summary="Remove BGP route advertisement from one router.",
+        fields=(FailureParamField("host_name", "str", "Target router host name."),),
+        example="nika failure inject bgp_missing_route_advertisement --set host_name=r1",
+    )
 
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()
@@ -127,6 +140,12 @@ class StaticBlackHoleBase:
     root_cause_category: RootCauseCategory = RootCauseCategory.MISCONFIGURATION
     root_cause_name: str = "host_static_blackhole"
     TAGS: str = ["bgp"]
+    FAILURE_PARAM_SCHEMA = FailureParamSchema(
+        problem_name="host_static_blackhole",
+        summary="Add static blackhole route on one router for connected host subnet.",
+        fields=(FailureParamField("host_name", "str", "Target router host name."),),
+        example="nika failure inject host_static_blackhole --set host_name=r1",
+    )
 
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()
@@ -184,6 +203,12 @@ class BGPBlackholeRouteLeakBase:
     root_cause_category: RootCauseCategory = RootCauseCategory.MISCONFIGURATION
     root_cause_name: str = "bgp_blackhole_route_leak"
     TAGS: str = ["bgp"]
+    FAILURE_PARAM_SCHEMA = FailureParamSchema(
+        problem_name="bgp_blackhole_route_leak",
+        summary="Advertise blackhole route via BGP on one router.",
+        fields=(FailureParamField("host_name", "str", "Target router host name."),),
+        example="nika failure inject bgp_blackhole_route_leak --set host_name=r1",
+    )
 
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()
@@ -249,6 +274,15 @@ class BGPHijackingBase:
     root_cause_category: RootCauseCategory = RootCauseCategory.MISCONFIGURATION
     root_cause_name: str = "bgp_hijacking"
     TAGS: str = ["bgp", "http"]
+    FAILURE_PARAM_SCHEMA = FailureParamSchema(
+        problem_name="bgp_hijacking",
+        summary="Inject forged route advertisement from one router.",
+        fields=(
+            FailureParamField("host_name", "str", "Target hijacking router host name."),
+            FailureParamField("target_network", "str", "Network prefix to advertise (optional)."),
+        ),
+        example="nika failure inject bgp_hijacking --set host_name=r1",
+    )
 
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()

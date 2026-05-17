@@ -8,6 +8,7 @@ from nika.orchestrator.tasks.detection import DetectionTask
 from nika.orchestrator.tasks.localization import LocalizationTask
 from nika.orchestrator.tasks.rca import RCATask
 from nika.service.kathara import KatharaAPIALL, KatharaBaseAPI
+from nika.utils.failure_params import FailureParamField, FailureParamSchema
 from nika.utils.logger import system_logger
 
 logger = system_logger
@@ -21,6 +22,12 @@ class Bmv2SwitchDownBase:
     root_cause_category = RootCauseCategory.LINK_FAILURE
     root_cause_name = "bmv2_switch_down"
     TAGS: str = ["p4"]
+    FAILURE_PARAM_SCHEMA = FailureParamSchema(
+        problem_name="bmv2_switch_down",
+        summary="Kill BMv2 switch process on a target switch.",
+        fields=(FailureParamField("host_name", "str", "Target BMv2 switch name."),),
+        example="nika failure inject bmv2_switch_down --set host_name=s1",
+    )
 
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()
@@ -70,6 +77,15 @@ class FrrDownBase:
     root_cause_category: RootCauseCategory = RootCauseCategory.NETWORK_NODE_ERROR
     root_cause_name: str = "frr_service_down"
     TAGS: str = ["frr"]
+    FAILURE_PARAM_SCHEMA = FailureParamSchema(
+        problem_name="frr_service_down",
+        summary="Stop FRR service on one router.",
+        fields=(
+            FailureParamField("host_name", "str", "Target router host name."),
+            FailureParamField("service_name", "str", "Service name.", default="frr"),
+        ),
+        example="nika failure inject frr_service_down --set host_name=r1",
+    )
 
     symptom_desc = "Users report connectivity issues to other hosts in the network."
 
@@ -79,9 +95,10 @@ class FrrDownBase:
         self.kathara_api = KatharaBaseAPI(lab_name=self.net_env.lab.name)
         self.injector = FaultInjectorBase(lab_name=self.net_env.lab.name)
         self.faulty_devices = [random.choice(self.net_env.routers)]
+        self.service_name = "frr"
 
     def inject_fault(self):
-        self.injector.inject_service_down(host_name=self.faulty_devices[0], service_name="frr")
+        self.injector.inject_service_down(host_name=self.faulty_devices[0], service_name=self.service_name)
 
 class FrrDownDetection(FrrDownBase, DetectionTask):
     META = ProblemMeta(

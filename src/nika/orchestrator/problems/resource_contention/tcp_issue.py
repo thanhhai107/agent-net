@@ -13,6 +13,7 @@ from nika.orchestrator.tasks.detection import DetectionTask
 from nika.orchestrator.tasks.localization import LocalizationTask
 from nika.orchestrator.tasks.rca import RCATask
 from nika.service.kathara import KatharaAPIALL
+from nika.utils.failure_params import FailureParamField, FailureParamSchema
 from nika.utils.logger import system_logger
 
 # ==================================================================
@@ -24,6 +25,15 @@ class SenderResourceContentionBase:
     root_cause_category: RootCauseCategory = RootCauseCategory.RESOURCE_CONTENTION
     root_cause_name: str = "sender_resource_contention"
     TAGS: str = ["http"]
+    FAILURE_PARAM_SCHEMA = FailureParamSchema(
+        problem_name="sender_resource_contention",
+        summary="Stress sender host resources.",
+        fields=(
+            FailureParamField("host_name", "str", "Target sender host name."),
+            FailureParamField("duration", "int", "Stress duration in seconds.", default=600),
+        ),
+        example="nika failure inject sender_resource_contention --set host_name=web0 --set duration=600",
+    )
 
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()
@@ -31,11 +41,12 @@ class SenderResourceContentionBase:
         self.kathara_api = KatharaAPIALL(lab_name=self.net_env.lab.name)
         self.injector = FaultInjectorHost(lab_name=self.net_env.lab.name)
         self.faulty_devices = [random.choice(self.net_env.servers["web"])]
+        self.duration = 600
 
     def inject_fault(self):
         self.injector.inject_stress_all(
             host_name=self.faulty_devices[0],
-            duration=600,
+            duration=self.duration,
         )
         system_logger.info(f"Injected TCP slow sender issue on host {self.faulty_devices[0]}")
 
@@ -75,6 +86,12 @@ class SenderApplicationDelayBase:
     root_cause_category: RootCauseCategory = RootCauseCategory.RESOURCE_CONTENTION
     root_cause_name: str = "sender_application_delay"
     TAGS: str = ["http"]
+    FAILURE_PARAM_SCHEMA = FailureParamSchema(
+        problem_name="sender_application_delay",
+        summary="Replace sender web server with delayed-response implementation.",
+        fields=(FailureParamField("host_name", "str", "Target sender host name."),),
+        example="nika failure inject sender_application_delay --set host_name=web0",
+    )
 
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()
@@ -143,6 +160,15 @@ class ReceiverResourceContentionBase:
     root_cause_category: RootCauseCategory = RootCauseCategory.RESOURCE_CONTENTION
     root_cause_name: str = "receiver_resource_contention"
     TAGS: str = ["http"]
+    FAILURE_PARAM_SCHEMA = FailureParamSchema(
+        problem_name="receiver_resource_contention",
+        summary="Stress receiver host resources.",
+        fields=(
+            FailureParamField("host_name", "str", "Target receiver host name."),
+            FailureParamField("duration", "int", "Stress duration in seconds.", default=600),
+        ),
+        example="nika failure inject receiver_resource_contention --set host_name=h1 --set duration=600",
+    )
 
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()
@@ -150,11 +176,12 @@ class ReceiverResourceContentionBase:
         self.kathara_api = KatharaAPIALL(lab_name=self.net_env.lab.name)
         self.injector = FaultInjectorHost(lab_name=self.net_env.lab.name)
         self.faulty_devices = [random.choice(self.net_env.hosts)]
+        self.duration = 600
 
     def inject_fault(self):
         self.injector.inject_stress_all(
             host_name=self.faulty_devices[0],
-            duration=600,
+            duration=self.duration,
         )
         system_logger.info(f"Injected TCP receiver resource contention on host {self.faulty_devices[0]}")
 

@@ -10,6 +10,7 @@ from nika.orchestrator.tasks.detection import DetectionTask
 from nika.orchestrator.tasks.localization import LocalizationTask
 from nika.orchestrator.tasks.rca import RCATask
 from nika.service.kathara import KatharaFRRAPI
+from nika.utils.failure_params import FailureParamField, FailureParamSchema
 from nika.utils.logger import system_logger
 
 # ==================================================================
@@ -22,6 +23,12 @@ class OSPFAreaMisconfigBase:
     root_cause_name: str = "ospf_area_misconfiguration"
 
     TAGS: str = ["ospf"]
+    FAILURE_PARAM_SCHEMA = FailureParamSchema(
+        problem_name="ospf_area_misconfiguration",
+        summary="Change OSPF area ID on one router.",
+        fields=(FailureParamField("host_name", "str", "Target router host name."),),
+        example="nika failure inject ospf_area_misconfiguration --set host_name=r1",
+    )
 
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()
@@ -88,6 +95,12 @@ class OSPFNeighborMissingBase:
     root_cause_name: str = "ospf_neighbor_missing"
 
     TAGS: str = ["ospf"]
+    FAILURE_PARAM_SCHEMA = FailureParamSchema(
+        problem_name="ospf_neighbor_missing",
+        summary="Comment out OSPF network statements on one router.",
+        fields=(FailureParamField("host_name", "str", "Target router host name."),),
+        example="nika failure inject ospf_neighbor_missing --set host_name=r1",
+    )
 
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()

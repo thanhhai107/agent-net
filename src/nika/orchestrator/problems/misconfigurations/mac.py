@@ -8,6 +8,7 @@ from nika.orchestrator.tasks.detection import DetectionTask
 from nika.orchestrator.tasks.localization import LocalizationTask
 from nika.orchestrator.tasks.rca import RCATask
 from nika.service.kathara import KatharaAPIALL
+from nika.utils.failure_params import FailureParamField, FailureParamSchema
 from nika.utils.logger import system_logger
 
 # ==================================================================
@@ -19,6 +20,15 @@ class MacAddressConflictBase:
     root_cause_category: RootCauseCategory = RootCauseCategory.MISCONFIGURATION
     root_cause_name: str = "mac_address_conflict"
     TAGS: str = ["mac"]
+    FAILURE_PARAM_SCHEMA = FailureParamSchema(
+        problem_name="mac_address_conflict",
+        summary="Assign duplicate MAC on one endpoint from its neighbor.",
+        fields=(
+            FailureParamField("host_name", "str", "Target host/device receiving conflicting MAC."),
+            FailureParamField("host_name_2", "str", "Peer device whose MAC is copied."),
+        ),
+        example="nika failure inject mac_address_conflict --set host_name=h1 --set host_name_2=h2",
+    )
 
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()

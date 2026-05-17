@@ -5,6 +5,19 @@ import typer
 failure_app = typer.Typer(help="Inject faults into the running lab.")
 
 
+def _parse_set_options(raw_items: list[str] | None) -> dict[str, str]:
+    overrides: dict[str, str] = {}
+    for raw in raw_items or []:
+        if "=" not in raw:
+            raise typer.BadParameter(f"Invalid --set value {raw!r}. Use key=value.")
+        key, value = raw.split("=", 1)
+        key = key.strip()
+        if not key:
+            raise typer.BadParameter(f"Invalid --set value {raw!r}. Key cannot be empty.")
+        overrides[key] = value.strip()
+    return overrides
+
+
 @failure_app.command("list")
 def failure_list() -> None:
     """Print injectable problem ids."""
@@ -22,13 +35,80 @@ def failure_inject(
         help="One or more problem ids (see `nika failure list`).",
     ),
     session_id: str | None = typer.Option(None, "--session-id", help="Target session id (lab_hash)."),
+    sets: list[str] | None = typer.Option(
+        None,
+        "--set",
+        help="Override injection parameters as key=value. Repeat the flag for multiple values.",
+    ),
 ) -> None:
     """Inject one or more faults for the current session."""
     from nika.workflows.failure_inject import inject_failure
 
     if not problems:
         raise typer.BadParameter("Provide at least one problem name.")
+    overrides = _parse_set_options(sets)
     try:
-        inject_failure(problems, session_id=session_id)
+        inject_failure(problems, session_id=session_id, param_overrides=overrides)
     except (FileNotFoundError, ValueError) as exc:
         raise typer.BadParameter(str(exc)) from exc
+
+
+@failure_app.command("describe")
+def failure_describe(
+    problem: str = typer.Argument(..., metavar="PROBLEM", help="Problem id to inspect."),
+) -> None:
+    """Describe supported parameters for one failure type."""
+    from nika.utils.failure_params import get_failure_param_schema
+
+    schema = get_failure_param_schema(problem)
+    if schema is None:
+        typer.echo(f"{problem}: no typed parameter schema yet.")
+        typer.echo("You can still run injection without --set; defaults come from scenario runtime.")
+        return
+
+    typer.echo(f"{schema.problem_name}: {schema.summary}")
+    typer.echo("Parameters:")
+    for field in schema.fields:
+        default_text = f"default={field.default!r}" if field.default is not None else "default=<runtime>"
+        required_text = "required" if field.required else "optional"
+        typer.echo(f"- {field.name} ({field.param_type}, {required_text}, {default_text}) - {field.description}")
+    typer.echo(f"Example:\n  {schema.example}")
+
+
+@failure_app.command("ps")
+def failure_ps(
+    session_id: str | None = typer.Option(None, "--session-id", help="Target session id (lab_hash)."),
+) -> None:
+    """List persisted failure injection states for one session."""
+    from nika.utils.session import Session
+    from nika.utils.session_store import SessionStore
+
+    store = SessionStore()
+    target_session_id = session_id
+    if target_session_id is None:
+        session = Session()
+        try:
+            session.load_running_session()
+        except (FileNotFoundError, ValueError) as exc:
+            raise typer.BadParameter(str(exc)) from exc
+        target_session_id = session.session_id
+
+    rows = store.list_failure_injections(session_id=target_session_id)
+    if not rows:
+        typer.echo(f"No failure records for session {target_session_id}.")
+        return
+
+    for item in rows:
+        typer.echo(
+            " | ".join(
+                [
+                    f"id={item.get('id')}",
+                    f"session_id={item.get('session_id')}",
+                    f"problem={item.get('problem_name')}",
+                    f"status={item.get('status')}",
+                    f"start={item.get('start_time')}",
+                    f"end={item.get('end_time')}",
+                    f"params={item.get('injection_params_json')}",
+                ]
+            )
+        )

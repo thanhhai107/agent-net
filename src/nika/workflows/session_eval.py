@@ -15,6 +15,7 @@ from nika.orchestrator.tasks.localization import LocalizationTask
 from nika.orchestrator.tasks.rca import RCATask
 from nika.utils.logger import system_logger
 from nika.utils.session import Session
+from nika.utils.session_store import SessionStore
 
 logger = system_logger
 
@@ -252,6 +253,9 @@ def publish_session_eval(*, destroy_env: bool = True, session_id: str | None = N
     if destroy_env and net_env.lab_exists():
         net_env.undeploy()
     logger.info(f"Destroyed network environment: {session.scenario_name} with session ID: {session.session_id}")
+    ended_cnt = SessionStore().mark_session_failures_ended(session.session_id)
+    if ended_cnt:
+        logger.info(f"Marked {ended_cnt} failure record(s) as ended for session {session.session_id}")
     session.clear_session()
 
 

@@ -8,6 +8,7 @@ from nika.orchestrator.tasks.detection import DetectionTask
 from nika.orchestrator.tasks.localization import LocalizationTask
 from nika.orchestrator.tasks.rca import RCATask
 from nika.service.kathara import KatharaAPIALL
+from nika.utils.failure_params import FailureParamField, FailureParamSchema
 
 # ==================================================================
 # Problem: BGP hijacking problem.
@@ -18,6 +19,15 @@ class BGPHijackingBase:
     root_cause_category: RootCauseCategory = RootCauseCategory.NETWORK_UNDER_ATTACK
     root_cause_name: str = "bgp_hijacking"
     TAGS: str = ["bgp", "http"]
+    FAILURE_PARAM_SCHEMA = FailureParamSchema(
+        problem_name="bgp_hijacking",
+        summary="Inject forged BGP route advertisement from one router.",
+        fields=(
+            FailureParamField("host_name", "str", "Target router host name."),
+            FailureParamField("target_network", "str", "Network prefix to advertise (optional)."),
+        ),
+        example="nika failure inject bgp_hijacking --set host_name=r1",
+    )
 
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()

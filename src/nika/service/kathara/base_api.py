@@ -33,16 +33,16 @@ class KatharaBaseAPI:
         if self.lab is None:
             raise ValueError(f"Lab {lab_name} not found.")
 
-    def exec_cmd(self, host_name: str, command: str) -> str:
+    def exec_cmd(self, host_name: str, command: str, timeout: float = 10) -> str:
         """
         Run a command on a machine and return its output as a string.
         """
-        CMD_TIMEOUT = 10
+        cmd_timeout = timeout
         cmd = "/bin/bash -c '{}'".format(command.replace("'", "'\\''").replace('"', '\\"'))
         try:
-            return func_timeout(CMD_TIMEOUT, self._run_cmd, args=(host_name, cmd))
+            return func_timeout(cmd_timeout, self._run_cmd, args=(host_name, cmd))
         except FunctionTimedOut:
-            return f"[TIMEOUT] Command '{command}' on '{host_name}' exceeded {CMD_TIMEOUT}s."
+            return f"[TIMEOUT] Command '{command}' on '{host_name}' exceeded {cmd_timeout}s."
 
     def get_hosts(self) -> list[Machine]:
         """

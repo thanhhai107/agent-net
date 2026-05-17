@@ -8,6 +8,7 @@ from nika.orchestrator.tasks.detection import DetectionTask
 from nika.orchestrator.tasks.localization import LocalizationTask
 from nika.orchestrator.tasks.rca import RCATask
 from nika.service.kathara import KatharaBaseAPI
+from nika.utils.failure_params import FailureParamField, FailureParamSchema
 from nika.utils.logger import system_logger
 
 logger = system_logger
@@ -25,6 +26,15 @@ class DNSServiceDownBase:
     faulty_devices = "dns_server"
     symptom_desc = "Some hosts cannot access external websites."
     TAGS: str = ["dns"]
+    FAILURE_PARAM_SCHEMA = FailureParamSchema(
+        problem_name="dns_service_down",
+        summary="Stop DNS service on a DNS server.",
+        fields=(
+            FailureParamField("host_name", "str", "Target DNS server host name."),
+            FailureParamField("service_name", "str", "Service name.", default="named"),
+        ),
+        example="nika failure inject dns_service_down --set host_name=dns0",
+    )
 
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()
@@ -32,9 +42,10 @@ class DNSServiceDownBase:
         self.kathara_api = KatharaBaseAPI(lab_name=self.net_env.lab.name)
         self.injector = FaultInjectorBase(lab_name=self.net_env.lab.name)
         self.faulty_devices = [random.choice(self.net_env.servers["dns"])]
+        self.service_name = "named"
 
     def inject_fault(self):
-        self.injector.inject_service_down(host_name=self.faulty_devices[0], service_name="named")
+        self.injector.inject_service_down(host_name=self.faulty_devices[0], service_name=self.service_name)
 
 class DNSServiceDownDetection(DNSServiceDownBase, DetectionTask):
     META = ProblemMeta(
@@ -73,6 +84,15 @@ class DHCPServiceDownBase:
     root_cause_name: str = "dhcp_service_down"
 
     TAGS: str = ["dhcp"]
+    FAILURE_PARAM_SCHEMA = FailureParamSchema(
+        problem_name="dhcp_service_down",
+        summary="Stop DHCP service on a DHCP server.",
+        fields=(
+            FailureParamField("host_name", "str", "Target DHCP server host name."),
+            FailureParamField("service_name", "str", "Service name.", default="isc-dhcp-server"),
+        ),
+        example="nika failure inject dhcp_service_down --set host_name=dhcp0",
+    )
 
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()
@@ -80,9 +100,10 @@ class DHCPServiceDownBase:
         self.kathara_api = KatharaBaseAPI(lab_name=self.net_env.lab.name)
         self.injector = FaultInjectorBase(lab_name=self.net_env.lab.name)
         self.faulty_devices = [random.choice(self.net_env.servers["dhcp"])]
+        self.service_name = "isc-dhcp-server"
 
     def inject_fault(self):
-        self.injector.inject_service_down(host_name=self.faulty_devices[0], service_name="isc-dhcp-server")
+        self.injector.inject_service_down(host_name=self.faulty_devices[0], service_name=self.service_name)
 
 class DHCPServiceDownDetection(DHCPServiceDownBase, DetectionTask):
     META = ProblemMeta(

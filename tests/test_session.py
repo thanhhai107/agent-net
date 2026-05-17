@@ -66,6 +66,68 @@ class SessionStoreTest(_SessionDbTestCase):
         self.assertEqual(row["problem_names"], ["link_down", "dhcp_service_down"])
         self.assertEqual(row["eval_metrics_json"]["detection_score"], 1.0)
 
+    def test_failure_injection_create_list_and_mark_ended(self) -> None:
+        self.store.create_session(
+            {
+                "session_id": "sid-failure",
+                "lab_name": "dc_clos_bgp__failure",
+                "scenario_name": "dc_clos_bgp",
+                "status": "running",
+            }
+        )
+        failure_id = self.store.create_failure_injection(
+            {
+                "session_id": "sid-failure",
+                "problem_name": "link_down",
+                "root_cause_category": "link_failure",
+                "scenario_name": "dc_clos_bgp",
+                "lab_name": "dc_clos_bgp__failure",
+                "injection_params_json": {"faulty_devices": ["pc1"], "faulty_intf": "eth0"},
+                "status": "pending",
+                "start_time": 123.0,
+            }
+        )
+        self.store.update_failure_injection(failure_id, {"status": "injected"})
+
+        rows = self.store.list_failure_injections(session_id="sid-failure")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["problem_name"], "link_down")
+        self.assertEqual(rows[0]["status"], "injected")
+        self.assertEqual(rows[0]["injection_params"]["faulty_intf"], "eth0")
+
+        updated = self.store.mark_session_failures_ended("sid-failure", end_time=456.0)
+        self.assertEqual(updated, 1)
+        rows_after = self.store.list_failure_injections(session_id="sid-failure")
+        self.assertEqual(rows_after[0]["status"], "ended")
+        self.assertEqual(rows_after[0]["end_time"], 456.0)
+
+    def test_count_failure_statuses(self) -> None:
+        self.store.create_session(
+            {
+                "session_id": "sid-counts",
+                "lab_name": "dc_clos_bgp__counts",
+                "scenario_name": "dc_clos_bgp",
+                "status": "running",
+            }
+        )
+        self.store.create_failure_injection(
+            {
+                "session_id": "sid-counts",
+                "problem_name": "link_down",
+                "status": "injected",
+            }
+        )
+        self.store.create_failure_injection(
+            {
+                "session_id": "sid-counts",
+                "problem_name": "host_crash",
+                "status": "pending",
+            }
+        )
+        counts = self.store.count_failure_statuses(session_id="sid-counts")
+        self.assertEqual(counts["injected"], 1)
+        self.assertEqual(counts["pending"], 1)
+
 
 class SessionTest(_SessionDbTestCase):
     def _new_session(self) -> Session:

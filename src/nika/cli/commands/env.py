@@ -46,7 +46,13 @@ def env_ps() -> None:
     if not sessions:
         typer.echo("No running env instances.")
         return
+    store = SessionStore()
     for item in sessions:
+        counts = store.count_failure_statuses(session_id=item["session_id"])
+        if counts:
+            failure_summary = ",".join(f"{status}:{count}" for status, count in sorted(counts.items()))
+        else:
+            failure_summary = "none"
         typer.echo(
             " | ".join(
                 [
@@ -55,6 +61,7 @@ def env_ps() -> None:
                     f"scenario={item.get('scenario_name')}",
                     f"tier={item.get('scenario_topo_size')}",
                     f"created_at={item.get('created_at')}",
+                    f"failures={failure_summary}",
                 ]
             )
         )

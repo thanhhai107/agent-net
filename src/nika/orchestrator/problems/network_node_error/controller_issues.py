@@ -8,6 +8,7 @@ from nika.orchestrator.tasks.detection import DetectionTask
 from nika.orchestrator.tasks.localization import LocalizationTask
 from nika.orchestrator.tasks.rca import RCATask
 from nika.service.kathara import KatharaAPIALL
+from nika.utils.failure_params import FailureParamField, FailureParamSchema
 from nika.utils.logger import system_logger
 
 # ==================================================================
@@ -20,6 +21,14 @@ class SDNControllerCrashBase:
     root_cause_category: RootCauseCategory = RootCauseCategory.NETWORK_NODE_ERROR
     root_cause_name: str = "sdn_controller_crash"
     TAGS: str = ["sdn"]
+    FAILURE_PARAM_SCHEMA = FailureParamSchema(
+        problem_name="sdn_controller_crash",
+        summary="Crash one SDN controller by killing the ryu-manager process.",
+        fields=(
+            FailureParamField("host_name", "str", "Target SDN controller host name."),
+        ),
+        example="nika failure inject sdn_controller_crash --set host_name=ctrl1",
+    )
 
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()
@@ -70,6 +79,15 @@ class SouthboundPortBlockBase:
     root_cause_category: RootCauseCategory = RootCauseCategory.NETWORK_NODE_ERROR
     root_cause_name: str = "southbound_port_block"
     TAGS: str = ["sdn"]
+    FAILURE_PARAM_SCHEMA = FailureParamSchema(
+        problem_name="southbound_port_block",
+        summary="Block SDN southbound port with ACL.",
+        fields=(
+            FailureParamField("host_name", "str", "Target SDN controller host name."),
+            FailureParamField("southbound_port", "int", "Port to block.", default=6633),
+        ),
+        example="nika failure inject southbound_port_block --set host_name=ctrl1 --set southbound_port=6633",
+    )
 
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()
@@ -121,6 +139,16 @@ class SouthboundPortMismatchBase:
     root_cause_category: RootCauseCategory = RootCauseCategory.NETWORK_NODE_ERROR
     root_cause_name: str = "southbound_port_mismatch"
     TAGS: str = ["sdn"]
+    FAILURE_PARAM_SCHEMA = FailureParamSchema(
+        problem_name="southbound_port_mismatch",
+        summary="Restart SDN controller with mismatched OpenFlow port.",
+        fields=(
+            FailureParamField("host_name", "str", "Target SDN controller host name."),
+            FailureParamField("mismatched_port", "int", "Port used after restart.", default=6653),
+            FailureParamField("original_port", "int", "Expected original OpenFlow port.", default=6633),
+        ),
+        example="nika failure inject southbound_port_mismatch --set host_name=ctrl1 --set mismatched_port=6653",
+    )
 
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()
@@ -177,6 +205,12 @@ class FlowRuleShadowingBase:
     root_cause_category: RootCauseCategory = RootCauseCategory.NETWORK_NODE_ERROR
     root_cause_name: str = "flow_rule_shadowing"
     TAGS: str = ["sdn"]
+    FAILURE_PARAM_SCHEMA = FailureParamSchema(
+        problem_name="flow_rule_shadowing",
+        summary="Insert a high-priority drop flow on one OVS switch.",
+        fields=(FailureParamField("host_name", "str", "Target OVS switch name."),),
+        example="nika failure inject flow_rule_shadowing --set host_name=ovs1",
+    )
 
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()
@@ -228,6 +262,15 @@ class FlowRuleLoopBase:
     root_cause_category: RootCauseCategory = RootCauseCategory.NETWORK_NODE_ERROR
     root_cause_name: str = "flow_rule_loop"
     TAGS: str = ["sdn"]
+    FAILURE_PARAM_SCHEMA = FailureParamSchema(
+        problem_name="flow_rule_loop",
+        summary="Inject loop-inducing flow rules on two OVS switches.",
+        fields=(
+            FailureParamField("host_name", "str", "Primary OVS switch name."),
+            FailureParamField("host_name_2", "str", "Secondary OVS switch name."),
+        ),
+        example="nika failure inject flow_rule_loop --set host_name=ovs1 --set host_name_2=ovs2",
+    )
 
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()

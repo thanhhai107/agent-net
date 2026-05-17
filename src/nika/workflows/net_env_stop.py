@@ -1,5 +1,7 @@
 """Stop the Kathara lab for the current session and clear runtime state."""
 
+from datetime import datetime
+
 from nika.net_env.net_env_pool import get_net_env_instance
 from nika.utils.logger import system_logger
 from nika.utils.session import Session
@@ -28,6 +30,10 @@ def _stop_session_record(session_meta: dict) -> None:
         system_logger.info(f"Stopped network environment: {scenario} ({session.session_id})")
     else:
         system_logger.info(f"Network environment {scenario} ({session.session_id}) is not deployed.")
+
+    ended_cnt = SessionStore().mark_session_failures_ended(session.session_id, end_time=datetime.now().timestamp())
+    if ended_cnt:
+        system_logger.info(f"Marked {ended_cnt} failure record(s) as ended for session {session.session_id}")
 
     session.clear_session()
 

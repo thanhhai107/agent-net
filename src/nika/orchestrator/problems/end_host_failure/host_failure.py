@@ -7,6 +7,7 @@ from nika.orchestrator.tasks.detection import DetectionTask
 from nika.orchestrator.tasks.localization import LocalizationTask
 from nika.orchestrator.tasks.rca import RCATask
 from nika.service.kathara import KatharaBaseAPI
+from nika.utils.failure_params import FailureParamField, FailureParamSchema
 
 # ==========================================
 # Problem: Host crash simulated by pausing a docker instance
@@ -17,6 +18,12 @@ class HostCrashBase:
     root_cause_category: RootCauseCategory = RootCauseCategory.END_HOST_FAILURE
     root_cause_name: str = "host_crash"
     TAGS: str = ["host"]
+    FAILURE_PARAM_SCHEMA = FailureParamSchema(
+        problem_name="host_crash",
+        summary="Crash one host container.",
+        fields=(FailureParamField("host_name", "str", "Target host name."),),
+        example="nika failure inject host_crash --set host_name=pc1",
+    )
 
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()

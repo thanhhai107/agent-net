@@ -8,6 +8,7 @@ from nika.orchestrator.tasks.detection import DetectionTask
 from nika.orchestrator.tasks.localization import LocalizationTask
 from nika.orchestrator.tasks.rca import RCATask
 from nika.service.kathara import KatharaBaseAPI
+from nika.utils.failure_params import FailureParamField, FailureParamSchema
 
 # ==================================================================
 # Problem: DHCP distributing spoofed gateway to hosts
@@ -19,6 +20,15 @@ class DHCPSpoofedGatewayBase:
     root_cause_name: str = "dhcp_spoofed_gateway"
 
     TAGS: str = ["dhcp"]
+    FAILURE_PARAM_SCHEMA = FailureParamSchema(
+        problem_name="dhcp_spoofed_gateway",
+        summary="Distribute spoofed gateway via DHCP.",
+        fields=(
+            FailureParamField("host_name", "str", "DHCP server host name."),
+            FailureParamField("host_name_2", "str", "Affected client host name."),
+        ),
+        example="nika failure inject dhcp_spoofed_gateway --set host_name=dhcp0 --set host_name_2=h1",
+    )
 
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()
@@ -79,6 +89,16 @@ class DHCPSpoofedDNSBase:
 
     symptom_desc = "Some hosts can not access webservices."
     TAGS: str = ["dhcp"]
+    FAILURE_PARAM_SCHEMA = FailureParamSchema(
+        problem_name="dhcp_spoofed_dns",
+        summary="Distribute spoofed DNS via DHCP.",
+        fields=(
+            FailureParamField("host_name", "str", "DHCP server host name."),
+            FailureParamField("host_name_2", "str", "Affected client host name."),
+            FailureParamField("wrong_dns", "str", "Spoofed DNS IP.", default="8.8.8.8"),
+        ),
+        example="nika failure inject dhcp_spoofed_dns --set host_name=dhcp0 --set host_name_2=h1",
+    )
 
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()
@@ -87,6 +107,7 @@ class DHCPSpoofedDNSBase:
         self.injector = FaultInjectorService(lab_name=self.net_env.lab.name)
         self.faulty_devices = [random.choice(self.net_env.servers["dhcp"])]
         self.faulty_devices.append(random.choice(self.net_env.hosts))
+        self.wrong_dns = "8.8.8.8"
 
     def inject_fault(self):
         subnet = str(
@@ -95,7 +116,7 @@ class DHCPSpoofedDNSBase:
             ).network_address
         )
 
-        self.injector.inject_wrong_dns(dhcp_server=self.faulty_devices[0], subnet=subnet, wrong_dns="8.8.8.8")
+        self.injector.inject_wrong_dns(dhcp_server=self.faulty_devices[0], subnet=subnet, wrong_dns=self.wrong_dns)
 
 class DHCPSpoofedDNSDetection(DHCPSpoofedDNSBase, DetectionTask):
     META = ProblemMeta(
@@ -134,6 +155,15 @@ class DHCPSpoofedSubnetBase:
     root_cause_name: str = "dhcp_spoofed_subnet"
 
     TAGS: str = ["dhcp"]
+    FAILURE_PARAM_SCHEMA = FailureParamSchema(
+        problem_name="dhcp_spoofed_subnet",
+        summary="Delete DHCP subnet entry for an active client subnet.",
+        fields=(
+            FailureParamField("host_name", "str", "DHCP server host name."),
+            FailureParamField("host_name_2", "str", "Affected client host name."),
+        ),
+        example="nika failure inject dhcp_spoofed_subnet --set host_name=dhcp0 --set host_name_2=h1",
+    )
 
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()

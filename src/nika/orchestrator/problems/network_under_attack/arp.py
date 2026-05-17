@@ -7,6 +7,7 @@ from nika.orchestrator.tasks.detection import DetectionTask
 from nika.orchestrator.tasks.localization import LocalizationTask
 from nika.orchestrator.tasks.rca import RCATask
 from nika.service.kathara import KatharaAPIALL
+from nika.utils.failure_params import FailureParamField, FailureParamSchema
 from nika.utils.logger import system_logger
 
 # ==================================================================
@@ -18,6 +19,15 @@ class ArpCachePoisoningBase:
     root_cause_category: RootCauseCategory = RootCauseCategory.NETWORK_UNDER_ATTACK
     root_cause_name: str = "arp_cache_poisoning"
     TAGS: str = ["arp"]
+    FAILURE_PARAM_SCHEMA = FailureParamSchema(
+        problem_name="arp_cache_poisoning",
+        summary="Inject ARP cache poisoning on one host.",
+        fields=(
+            FailureParamField("host_name", "str", "Target host name."),
+            FailureParamField("fake_mac", "str", "Forged MAC address.", default="00:11:22:33:44:55"),
+        ),
+        example="nika failure inject arp_cache_poisoning --set host_name=h1 --set fake_mac=00:11:22:33:44:55",
+    )
 
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()
@@ -26,13 +36,14 @@ class ArpCachePoisoningBase:
         self.kathara_api = KatharaAPIALL(lab_name=self.net_env.lab.name)
         self.injector = FaultInjectorHost(lab_name=self.net_env.lab.name)
         self.faulty_devices = [random.choice(self.net_env.hosts)]
+        self.fake_mac = "00:11:22:33:44:55"
 
     def inject_fault(self):
         default_gateway = self.kathara_api.get_default_gateway(self.faulty_devices[0])
         self.injector.inject_arp_misconfiguration(
             host_name=self.faulty_devices[0],
             ip_address=default_gateway,
-            fake_mac="00:11:22:33:44:55",
+            fake_mac=self.fake_mac,
         )
 
 class ArpCachePoisoningDetection(ArpCachePoisoningBase, DetectionTask):
