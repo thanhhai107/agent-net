@@ -25,9 +25,12 @@ This repository is a unified platform that can offer:
 ## Features
 
 - Standardized network troubleshooting environment based on Kathará
+- Unified `nika` CLI for env deploy, fault injection, agent runs, and evaluation
+- Session-based workflow with multi-session support (`nika session`, `--session-id`)
+- Parameterized fault injection (`nika failure describe`, `--set key=value`)
 - MCP-based tool support
 - Pre-built network scenarios and fault injection mechanisms
-- Reproducible evaluation framework
+- Reproducible evaluation framework with batch summary (`nika eval summary`)
 - Support for various network topologies and configurations
 - Easy integration of custom AI agents
 - Automatic evaluation mechanism
@@ -101,29 +104,53 @@ OLLAMA_API_URL=<>
 ## Step by step guide
 You can follow the steps below to run a complete troubleshooting task with NIKA. Use the `nika` CLI.
 
+Each `nika env run` creates a **session** (printed as `session_id=…`). Session state lives under `runtime/sessions/` and tracks the deployed lab, injected failures, and agent activity. When only one session is running, most commands auto-select it; pass `--session-id` when several sessions are active.
+
 1. **List scenarios and start the network environment**
 
    ```shell
    nika env list
    nika env run <scenario>                    # scenarios without topology tiers (e.g. simple_bgp)
    nika env run <scenario> -t s             # scalable scenarios (tier: s, m, or l)
+   nika env ps                                # running lab instances (grouped by deployed env)
    ```
 
-2. **List problems and inject faults**
+2. **Inspect and manage sessions**
+
+   ```shell
+   nika session ps                            # running sessions (status, failures, agents)
+   nika session ps -a                         # include finished sessions
+   nika session inspect [SESSION_ID]          # full session JSON + failure summary
+   nika session close [SESSION_ID]            # undeploy lab and clear runtime state
+   nika session close all -y                  # close every running session
+   ```
+
+3. **List problems and inject faults**
 
    ```shell
    nika failure list
+   nika failure describe <problem_id>         # parameter schema and usage hints
    nika failure inject <problem_id> [<problem_id> ...]
+   nika failure inject link_down --set device=sw1 --set interface=eth0
+   nika failure ps [--session-id ID]          # persisted injection records
    ```
 
-3. **List agent options and run the agent**
+4. **Run commands inside a lab host** (optional debugging)
+
+   ```shell
+   nika exec host_1 ip addr show
+   nika exec host_1 ping -c 3 10.0.0.2 --timeout 30
+   ```
+
+5. **List agent options and run the agent**
 
    ```shell
    nika agent list
    nika agent run -a react -b openai -m gpt-5-mini -n 20
+   nika agent run -a mock -n 5                  # no LLM; useful for pipeline testing
    ```
 
-4. **Evaluate the run** (metrics, judge, session teardown, and CSV summary are separate steps)
+6. **Evaluate the run** (metrics, judge, session teardown, and CSV summary are separate steps)
 
    ```shell
    nika eval metrics

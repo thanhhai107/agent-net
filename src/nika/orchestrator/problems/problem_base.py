@@ -36,3 +36,17 @@ class ProblemMeta(BaseModel):
     root_cause_name: str
     task_level: TaskLevel
     description: str
+
+
+def build_verify_result(
+    root_cause_name: str,
+    faulty_devices: list[str],
+    verified: bool,
+    details: dict,
+) -> dict:
+    return {
+        "verified": verified,
+        "root_cause_name": root_cause_name,
+        "faulty_devices": list(faulty_devices),
+        "details": details,
+    }

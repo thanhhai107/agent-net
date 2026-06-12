@@ -64,7 +64,7 @@ class NetworkEnvBase:
 
             elif "sdn" in image:
                 self.ovs_switches.append(machine)
-            elif "pox" in image or "ryu" in image:
+            elif "pox" in image:
                 self.sdn_controllers.append(machine)
             else:
                 print(f"Unknown machine type: {machine} with image {image}")

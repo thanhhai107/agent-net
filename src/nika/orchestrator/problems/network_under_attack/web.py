@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 from nika.generator.fault.injector_service import FaultInjectorService
 from nika.net_env.base import NetworkEnvBase
 from nika.net_env.net_env_pool import get_net_env_instance
-from nika.orchestrator.problems.problem_base import ProblemMeta, RootCauseCategory, TaskDescription, TaskLevel
+from nika.orchestrator.problems.problem_base import ProblemMeta, RootCauseCategory, TaskDescription, TaskLevel, build_verify_result
 from nika.orchestrator.tasks.detection import DetectionTask
 from nika.orchestrator.tasks.localization import LocalizationTask
 from nika.orchestrator.tasks.rca import RCATask
@@ -51,6 +51,26 @@ class WebDoSBase:
         attacker = params.attacker_device if params.attacker_device is not None else self.attacker_device
         target_ip = self.kathara_api.get_host_ip(web_server, with_prefix=False)
         self.injector.inject_ab_attack(attacker_host=attacker, website=target_ip)
+
+    def verify_fault(self, params: WebDoSParams | None = None) -> dict:
+        """Verify the ab attack process is running on the attacker device.
+
+        KNOWN ISSUE: inject_ab_attack uses & which may not survive the exec_cmd session.
+        This verify is expected to fail.
+        """
+        if params is None:
+            params = WebDoSParams()
+        web_server = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        attacker = params.attacker_device if params.attacker_device is not None else self.attacker_device
+        target_ip = self.kathara_api.get_host_ip(web_server, with_prefix=False)
+        pgrep_output = self.kathara_api.exec_cmd(attacker, "pgrep -a ab 2>/dev/null || echo NONE").strip()
+        verified = "ab" in pgrep_output and pgrep_output != "NONE"
+        return build_verify_result(
+            root_cause_name=self.root_cause_name,
+            faulty_devices=self.faulty_devices,
+            verified=verified,
+            details={"attacker": attacker, "target_ip": target_ip, "pgrep_output": pgrep_output},
+        )
 
 
 class WebDoSDetection(WebDoSBase, DetectionTask):

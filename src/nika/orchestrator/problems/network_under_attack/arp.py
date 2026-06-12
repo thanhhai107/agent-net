@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 
 from nika.generator.fault.injector_host import FaultInjectorHost
 from nika.net_env.net_env_pool import get_net_env_instance
-from nika.orchestrator.problems.problem_base import ProblemMeta, RootCauseCategory, TaskDescription, TaskLevel
+from nika.orchestrator.problems.problem_base import ProblemMeta, RootCauseCategory, TaskDescription, TaskLevel, build_verify_result
 from nika.orchestrator.tasks.detection import DetectionTask
 from nika.orchestrator.tasks.localization import LocalizationTask
 from nika.orchestrator.tasks.rca import RCATask
@@ -49,6 +49,22 @@ class ArpCachePoisoningBase:
             host_name=host,
             ip_address=default_gateway,
             fake_mac=params.fake_mac,
+        )
+
+    def verify_fault(self, params: ArpCachePoisoningParams | None = None) -> dict:
+        """Verify the ARP cache has the fake MAC for the default gateway."""
+        if params is None:
+            params = ArpCachePoisoningParams()
+        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        fake_mac = params.fake_mac
+        gateway = self.kathara_api.get_default_gateway(host)
+        neigh_output = self.kathara_api.exec_cmd(host, f"ip neigh show | grep '{fake_mac}'").strip()
+        verified = bool(neigh_output)
+        return build_verify_result(
+            root_cause_name=self.root_cause_name,
+            faulty_devices=self.faulty_devices,
+            verified=verified,
+            details={"host": host, "gateway": gateway, "fake_mac": fake_mac, "neigh_entry": neigh_output},
         )
 
 

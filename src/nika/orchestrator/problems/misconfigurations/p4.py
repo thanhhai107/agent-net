@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 
 from nika.generator.fault.injector_base import FaultInjectorBase
 from nika.net_env.net_env_pool import get_net_env_instance
-from nika.orchestrator.problems.problem_base import ProblemMeta, RootCauseCategory, TaskDescription, TaskLevel
+from nika.orchestrator.problems.problem_base import ProblemMeta, RootCauseCategory, TaskDescription, TaskLevel, build_verify_result
 from nika.orchestrator.tasks.detection import DetectionTask
 from nika.orchestrator.tasks.localization import LocalizationTask
 from nika.orchestrator.tasks.rca import RCATask
@@ -56,6 +56,31 @@ class P4AggressiveDetectionThresholdsBase:
         )
         self.kathara_api.exec_cmd(host, "pkill -f simple_switch")
         self.kathara_api.exec_cmd(host, f"./hostlab/{host}.startup")
+
+    def verify_fault(self, params: P4AggressiveDetectionThresholdsParams | None = None) -> dict:
+        """Verify PACKET_THRESHOLD was changed to 100 in the P4 source."""
+        if params is None:
+            params = P4AggressiveDetectionThresholdsParams()
+        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        p4_name = params.p4_name if params.p4_name is not None else getattr(self, "p4_name", None)
+        if p4_name is None:
+            p4_name = self.kathara_api.exec_cmd(host, "echo *.p4 | sed 's/\\.p4//'").strip()
+        threshold_check = self.kathara_api.exec_cmd(
+            host,
+            f"grep 'PACKET_THRESHOLD 100' {p4_name}.p4 2>/dev/null && echo found || echo absent",
+        ).strip()
+        json_check = self.kathara_api.exec_cmd(
+            host, f"ls {p4_name}.json 2>/dev/null && echo exists || echo missing"
+        ).strip()
+        threshold_modified = "found" in threshold_check
+        json_exists = "exists" in json_check
+        verified = threshold_modified
+        return build_verify_result(
+            root_cause_name=self.root_cause_name,
+            faulty_devices=self.faulty_devices,
+            verified=verified,
+            details={"host": host, "threshold_modified": threshold_modified, "json_exists": json_exists},
+        )
 
 
 class P4AggressiveDetectionThresholdsDetection(P4AggressiveDetectionThresholdsBase, DetectionTask):

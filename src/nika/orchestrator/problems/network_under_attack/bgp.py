@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 
 from nika.generator.fault.injector_base import FaultInjectorBase
 from nika.net_env.net_env_pool import get_net_env_instance
-from nika.orchestrator.problems.problem_base import ProblemMeta, RootCauseCategory, TaskDescription, TaskLevel
+from nika.orchestrator.problems.problem_base import ProblemMeta, RootCauseCategory, TaskDescription, TaskLevel, build_verify_result
 from nika.orchestrator.tasks.detection import DetectionTask
 from nika.orchestrator.tasks.localization import LocalizationTask
 from nika.orchestrator.tasks.rca import RCATask
@@ -51,6 +51,32 @@ class BGPHijackingBase:
         asn_number = self.kathara_api.frr_get_bgp_asn_number(self.faulty_devices[0])
         self.injector.inject_bgp_add_interface(host_name=host, intf_name="lo", ip_address=target_network)
         self.injector.inject_bgp_add_advertisement(host_name=host, network=target_network, AS=asn_number)
+
+    def verify_fault(self, params: BGPHijackingParams | None = None) -> dict:
+        """Verify the router is advertising the hijacked network via BGP."""
+        if params is None:
+            params = BGPHijackingParams()
+        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        target_network = params.target_network if params.target_network is not None else self.target_network
+        running_config = self.kathara_api.exec_cmd(
+            host, "vtysh -c 'show running-config' 2>/dev/null"
+        ).strip()
+        network_prefix = target_network.split("/")[0]
+        has_advertisement = f"network {target_network}" in running_config or f"network {network_prefix}" in running_config
+        lo_output = self.kathara_api.exec_cmd(host, "ip addr show lo 2>/dev/null").strip()
+        has_lo_ip = network_prefix in lo_output
+        verified = has_advertisement and has_lo_ip
+        return build_verify_result(
+            root_cause_name=self.root_cause_name,
+            faulty_devices=self.faulty_devices,
+            verified=verified,
+            details={
+                "host": host,
+                "target_network": target_network,
+                "has_advertisement": has_advertisement,
+                "has_lo_ip": has_lo_ip,
+            },
+        )
 
 
 class BGPHijackingDetection(BGPHijackingBase, DetectionTask):

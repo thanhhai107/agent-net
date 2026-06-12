@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 from nika.generator.fault.injector_tc import FaultInjectorTC
 from nika.generator.traffic.od_flows import ODFLowGenerator
 from nika.net_env.net_env_pool import get_net_env_instance
-from nika.orchestrator.problems.problem_base import ProblemMeta, RootCauseCategory, TaskDescription, TaskLevel
+from nika.orchestrator.problems.problem_base import ProblemMeta, RootCauseCategory, TaskDescription, TaskLevel, build_verify_result
 from nika.orchestrator.tasks.detection import DetectionTask
 from nika.orchestrator.tasks.localization import LocalizationTask
 from nika.orchestrator.tasks.rca import RCATask
@@ -50,6 +50,21 @@ class LinkHighPacketCorruptionBase:
             host_name=host,
             intf_name=intf_name,
             corruption_percentage=params.corruption_percentage,
+        )
+
+    def verify_fault(self, params: LinkHighPacketCorruptionParams | None = None) -> dict:
+        """Verify tc qdisc on the host's last interface has corruption configured."""
+        if params is None:
+            params = LinkHighPacketCorruptionParams()
+        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        intf = self.kathara_api.get_host_interfaces(host)[-1]
+        tc_output = self.kathara_api.exec_cmd(host, f"tc qdisc show dev {intf}").strip()
+        verified = "corrupt" in tc_output
+        return build_verify_result(
+            root_cause_name=self.root_cause_name,
+            faulty_devices=self.faulty_devices,
+            verified=verified,
+            details={"host": host, "intf": intf, "tc_output": tc_output},
         )
 
 
@@ -133,6 +148,21 @@ class LinkBandwidthThrottlingBase:
                 od_dict[h][host] = mbps
         res = generator.start_traffic_background(od_dicts=od_dict, interval=300, unit="M", udp=True)
         system_logger.info(f"Started background traffic generation {res} to amplify the bandwidth throttling effect.")
+
+    def verify_fault(self, params: LinkBandwidthThrottlingParams | None = None) -> dict:
+        """Verify tc qdisc on the host's first interface has TBF (token bucket filter) configured."""
+        if params is None:
+            params = LinkBandwidthThrottlingParams()
+        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        intf = self.kathara_api.get_host_interfaces(host)[0]
+        tc_output = self.kathara_api.exec_cmd(host, f"tc qdisc show dev {intf}").strip()
+        verified = "tbf" in tc_output
+        return build_verify_result(
+            root_cause_name=self.root_cause_name,
+            faulty_devices=self.faulty_devices,
+            verified=verified,
+            details={"host": host, "intf": intf, "tc_output": tc_output},
+        )
 
 
 class LinkBandwidthThrottlingDetection(LinkBandwidthThrottlingBase, DetectionTask):
@@ -220,6 +250,20 @@ class IncastTrafficNetworkLimitationBase:
                 od_dict[h][host] = mbps
         res = generator.start_traffic_background(od_dicts=od_dict, interval=300, unit="M", udp=True)
         system_logger.info(f"Started background traffic generation {res} to amplify the network limitation effect.")
+
+    def verify_fault(self, params: IncastTrafficNetworkLimitationParams | None = None) -> dict:
+        """Verify tc qdisc on eth0 has netem or tbf (incast network limitation)."""
+        if params is None:
+            params = IncastTrafficNetworkLimitationParams()
+        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        tc_output = self.kathara_api.exec_cmd(host, "tc qdisc show dev eth0").strip()
+        verified = "netem" in tc_output or "tbf" in tc_output
+        return build_verify_result(
+            root_cause_name=self.root_cause_name,
+            faulty_devices=self.faulty_devices,
+            verified=verified,
+            details={"host": host, "tc_output": tc_output},
+        )
 
 
 class IncastTrafficNetworkLimitationDetection(IncastTrafficNetworkLimitationBase, DetectionTask):

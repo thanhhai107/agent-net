@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 
 from nika.generator.fault.injector_service import FaultInjectorService
 from nika.net_env.net_env_pool import get_net_env_instance
-from nika.orchestrator.problems.problem_base import ProblemMeta, RootCauseCategory, TaskDescription, TaskLevel
+from nika.orchestrator.problems.problem_base import ProblemMeta, RootCauseCategory, TaskDescription, TaskLevel, build_verify_result
 from nika.orchestrator.tasks.detection import DetectionTask
 from nika.orchestrator.tasks.localization import LocalizationTask
 from nika.orchestrator.tasks.rca import RCATask
@@ -53,6 +53,32 @@ class DHCPMissingSubnetBase:
             ).network_address
         )
         self.injector.inject_delete_subnet(dhcp_server=dhcp_server, subnet=subnet)
+        self._injected_subnet = subnet
+
+    def verify_fault(self, params: DHCPMissingSubnetParams | None = None) -> dict:
+        """Verify the deleted subnet is absent from dhcpd.conf."""
+        if params is None:
+            params = DHCPMissingSubnetParams()
+        dhcp_server = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        client_host = params.host_name_2 if params.host_name_2 is not None else self.faulty_devices[1]
+        subnet = getattr(self, "_injected_subnet", None)
+        if subnet is None:
+            subnet = str(
+                ipaddress.ip_network(
+                    self.kathara_api.get_host_ip(client_host, with_prefix=True), strict=False
+                ).network_address
+            )
+        grep_result = self.kathara_api.exec_cmd(
+            dhcp_server,
+            f"grep 'subnet {subnet} netmask' /etc/dhcp/dhcpd.conf && echo found || echo absent",
+        ).strip()
+        verified = "absent" in grep_result
+        return build_verify_result(
+            root_cause_name=self.root_cause_name,
+            faulty_devices=self.faulty_devices,
+            verified=verified,
+            details={"dhcp_server": dhcp_server, "subnet": subnet, "grep_result": grep_result},
+        )
 
 
 class DHCPMissingSubnetDetection(DHCPMissingSubnetBase, DetectionTask):

@@ -17,6 +17,7 @@ from pathlib import Path
 from typer.testing import CliRunner
 
 from nika.cli.main import app
+from nika.cli.utils import env_id_from_lab
 from nika.config import RESULTS_DIR
 from nika.utils.session_store import SESSIONS_DIR, SessionStore
 
@@ -70,24 +71,49 @@ class PipelineIntegrationTest(unittest.TestCase):
         """Confirm the session is active in env ps and session store."""
         self.assertIsNotNone(self.session_id)
 
-        ps_output = self._invoke_ok(["env", "ps"])
-        self.assertIn(self.session_id, ps_output)
-        self.assertIn(f"scenario={SCENARIO}", ps_output)
-
         row = SessionStore().get_session(self.session_id)
         self.assertEqual(row["status"], "running")
         self.assertEqual(row["scenario_name"], SCENARIO)
-        self.assertIsNotNone(row.get("lab_name"))
+        lab_name = row.get("lab_name")
+        self.assertIsNotNone(lab_name)
+
+        ps_output = self._invoke_ok(["env", "ps"])
+        self.assertIn(env_id_from_lab(lab_name), ps_output)
+        self.assertIn(SCENARIO, ps_output)
+        self.assertIn("1 active", ps_output)
 
     def test_step_03_inject_failure(self) -> None:
         """Inject a fault and record ground truth for the session."""
         self.assertIsNotNone(self.session_id)
 
-        self._invoke_ok(["failure", "inject", PROBLEM, "--session-id", self.session_id])
+        self._invoke_ok(
+            [
+                "failure",
+                "inject",
+                PROBLEM,
+                "--session-id",
+                self.session_id,
+                "--set",
+                "host_name=pc1",
+                "--set",
+                "intf_name=eth0",
+            ]
+        )
 
         ps_output = self._invoke_ok(["failure", "ps", "--session-id", self.session_id])
         self.assertIn(f"problem={PROBLEM}", ps_output)
         self.assertIn("status=injected", ps_output)
+
+        failures = SessionStore().list_failure_injections(session_id=self.session_id)
+        self.assertEqual(len(failures), 1)
+        injection_params = failures[0]["injection_params"]
+        self.assertEqual(
+            injection_params["requested_overrides"],
+            {"host_name": "pc1", "intf_name": "eth0"},
+        )
+        resolved = injection_params["resolved_params"]
+        self.assertEqual(resolved["host_name"], "pc1")
+        self.assertEqual(resolved["intf_name"], "eth0")
 
         row = SessionStore().get_session(self.session_id)
         self.assertIn(PROBLEM, row.get("problem_names", []))

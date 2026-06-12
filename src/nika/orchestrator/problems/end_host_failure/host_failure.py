@@ -5,7 +5,9 @@ from pydantic import BaseModel, Field
 
 from nika.generator.fault.injector_base import FaultInjectorBase
 from nika.net_env.net_env_pool import get_net_env_instance
-from nika.orchestrator.problems.problem_base import ProblemMeta, RootCauseCategory, TaskDescription, TaskLevel
+import docker
+
+from nika.orchestrator.problems.problem_base import ProblemMeta, RootCauseCategory, TaskDescription, TaskLevel, build_verify_result
 from nika.orchestrator.tasks.detection import DetectionTask
 from nika.orchestrator.tasks.localization import LocalizationTask
 from nika.orchestrator.tasks.rca import RCATask
@@ -41,6 +43,25 @@ class HostCrashBase:
             params = HostCrashParams()
         host = params.host_name if params.host_name is not None else self.faulty_devices[0]
         self.injector.inject_host_down(host_name=host)
+
+    def verify_fault(self, params: HostCrashParams | None = None) -> dict:
+        """Verify the host container is paused (simulated crash)."""
+        if params is None:
+            params = HostCrashParams()
+        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        client = docker.from_env()
+        containers = client.containers.list(all=True, filters={"name": host})
+        container_status = "not_found"
+        if containers:
+            containers[0].reload()
+            container_status = containers[0].status
+        verified = container_status == "paused"
+        return build_verify_result(
+            root_cause_name=self.root_cause_name,
+            faulty_devices=self.faulty_devices,
+            verified=verified,
+            details={"host": host, "container_status": container_status},
+        )
 
 
 class HostCrashDetection(HostCrashBase, DetectionTask):

@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 
 from nika.generator.fault.injector_base import FaultInjectorBase
 from nika.net_env.net_env_pool import get_net_env_instance
-from nika.orchestrator.problems.problem_base import ProblemMeta, RootCauseCategory, TaskDescription, TaskLevel
+from nika.orchestrator.problems.problem_base import ProblemMeta, RootCauseCategory, TaskDescription, TaskLevel, build_verify_result
 from nika.orchestrator.tasks.detection import DetectionTask
 from nika.orchestrator.tasks.localization import LocalizationTask
 from nika.orchestrator.tasks.rca import RCATask
@@ -55,6 +55,28 @@ class P4HeaderDefinitionErrorBase:
         )
         self.kathara_api.exec_cmd(host, "pkill -f simple_switch")
         self.kathara_api.exec_cmd(host, f"./hostlab/{host}.startup")
+
+    def verify_fault(self, params: P4HeaderDefinitionErrorParams | None = None) -> dict:
+        """Verify the P4 JSON is missing (compilation failed) or switch is not running."""
+        if params is None:
+            params = P4HeaderDefinitionErrorParams()
+        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        p4_name = params.p4_name if params.p4_name is not None else self.p4_name
+        json_check = self.kathara_api.exec_cmd(
+            host, f"ls {p4_name}.json 2>/dev/null && echo exists || echo missing"
+        ).strip()
+        switch_check = self.kathara_api.exec_cmd(
+            host, "pgrep -a simple_switch 2>/dev/null || echo NONE"
+        ).strip()
+        json_exists = "exists" in json_check
+        switch_running = "simple_switch" in switch_check and switch_check != "NONE"
+        verified = not json_exists or not switch_running
+        return build_verify_result(
+            root_cause_name=self.root_cause_name,
+            faulty_devices=self.faulty_devices,
+            verified=verified,
+            details={"host": host, "p4_name": p4_name, "json_exists": json_exists, "switch_running": switch_running},
+        )
 
 
 class P4CompilationErrorHeaderDetection(P4HeaderDefinitionErrorBase, DetectionTask):
@@ -125,6 +147,28 @@ class P4CompilationErrorParserStateBase:
         self.kathara_api.exec_cmd(host, "pkill -f simple_switch")
         self.kathara_api.exec_cmd(host, f"./hostlab/{host}.startup")
 
+    def verify_fault(self, params: P4CompilationErrorParserStateParams | None = None) -> dict:
+        """Verify the P4 JSON is missing (compilation failed) or switch is not running."""
+        if params is None:
+            params = P4CompilationErrorParserStateParams()
+        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        p4_name = params.p4_name if params.p4_name is not None else self.p4_name
+        json_check = self.kathara_api.exec_cmd(
+            host, f"ls {p4_name}.json 2>/dev/null && echo exists || echo missing"
+        ).strip()
+        switch_check = self.kathara_api.exec_cmd(
+            host, "pgrep -a simple_switch 2>/dev/null || echo NONE"
+        ).strip()
+        json_exists = "exists" in json_check
+        switch_running = "simple_switch" in switch_check and switch_check != "NONE"
+        verified = not json_exists or not switch_running
+        return build_verify_result(
+            root_cause_name=self.root_cause_name,
+            faulty_devices=self.faulty_devices,
+            verified=verified,
+            details={"host": host, "p4_name": p4_name, "json_exists": json_exists, "switch_running": switch_running},
+        )
+
 
 class P4CompilationErrorParserStateDetection(P4CompilationErrorParserStateBase, DetectionTask):
     META = ProblemMeta(
@@ -184,6 +228,22 @@ class P4TableEntryMissingBase:
         host = params.host_name if params.host_name is not None else self.faulty_devices[0]
         self.kathara_api.exec_cmd(host, "simple_switch_CLI <<< 'table_clear MyIngress.ipv4_lpm'")
         logger.info(f"Injected fault: Deleted table entries on {host}")
+
+    def verify_fault(self, params: P4TableEntryMissingParams | None = None) -> dict:
+        """Verify the IPv4 LPM table has no entries."""
+        if params is None:
+            params = P4TableEntryMissingParams()
+        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        table_dump = self.kathara_api.exec_cmd(
+            host, "simple_switch_CLI <<< 'table_dump MyIngress.ipv4_lpm' 2>/dev/null"
+        ).strip()
+        verified = "0 entries" in table_dump or table_dump == "" or "Dumping entry" not in table_dump
+        return build_verify_result(
+            root_cause_name=self.root_cause_name,
+            faulty_devices=self.faulty_devices,
+            verified=verified,
+            details={"host": host, "table_dump": table_dump},
+        )
 
 
 class P4TableEntryMissingDetection(P4TableEntryMissingBase, DetectionTask):
@@ -246,6 +306,23 @@ class P4TableEntryMisconfigBase:
         self.kathara_api.exec_cmd(host, "sed -Ei.bak 's/00:00:/66:66:/g' commands.txt")
         self.kathara_api.exec_cmd(host, "simple_switch_CLI <<< $(cat commands.txt)")
         logger.info(f"Injected fault: Modified table entries on {host}")
+
+    def verify_fault(self, params: P4TableEntryMisconfigParams | None = None) -> dict:
+        """Verify the IPv4 LPM table entries have modified 66:66: MACs."""
+        if params is None:
+            params = P4TableEntryMisconfigParams()
+        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        check_output = self.kathara_api.exec_cmd(
+            host,
+            "simple_switch_CLI <<< 'table_dump MyIngress.ipv4_lpm' 2>/dev/null | grep '66:66' && echo found || echo absent",
+        ).strip()
+        verified = "found" in check_output
+        return build_verify_result(
+            root_cause_name=self.root_cause_name,
+            faulty_devices=self.faulty_devices,
+            verified=verified,
+            details={"host": host, "has_modified_mac": verified},
+        )
 
 
 class P4TableEntryMisconfigDetection(P4TableEntryMisconfigBase, DetectionTask):
@@ -315,6 +392,28 @@ class P4MPLSLabelLimitExceededBase:
         self.kathara_api.exec_cmd(host, "pkill -f simple_switch")
         self.kathara_api.exec_cmd(host, f"./hostlab/{host}.startup")
         self.logger.info(f"Injected MPLS label limit exceeded fault on device: {host}")
+
+    def verify_fault(self, params: P4MPLSLabelLimitExceededParams | None = None) -> dict:
+        """Verify CONST_MAX_LABELS was changed to 2 and the JSON may be missing."""
+        if params is None:
+            params = P4MPLSLabelLimitExceededParams()
+        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        const_check = self.kathara_api.exec_cmd(
+            host,
+            "grep 'CONST_MAX_LABELS 2' mpls.p4 2>/dev/null && echo found || echo absent",
+        ).strip()
+        json_check = self.kathara_api.exec_cmd(
+            host, "ls mpls.json 2>/dev/null && echo exists || echo missing"
+        ).strip()
+        const_modified = "found" in const_check
+        json_exists = "exists" in json_check
+        verified = const_modified
+        return build_verify_result(
+            root_cause_name=self.root_cause_name,
+            faulty_devices=self.faulty_devices,
+            verified=verified,
+            details={"host": host, "const_modified": const_modified, "json_exists": json_exists},
+        )
 
 
 class P4MPLSLabelLimitExceededDetection(P4MPLSLabelLimitExceededBase, DetectionTask):

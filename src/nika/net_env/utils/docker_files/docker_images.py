@@ -17,7 +17,7 @@ NIKA_IMAGE_DOCKERFILES: dict[str, str] = {
     "kathara/nika-base": "Dockerfile.base",
     "kathara/nika-nginx": "Dockerfile.nginx",
     "kathara/nika-wireguard": "Dockerfile.wireguard",
-    "kathara/nika-ryu": "Dockerfile.ryu",
+    "kathara/nika-pox": "Dockerfile.pox",
 }
 
 _client: docker.DockerClient | None = None

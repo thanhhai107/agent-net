@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 
 from nika.generator.fault.injector_service import FaultInjectorService
 from nika.net_env.net_env_pool import get_net_env_instance
-from nika.orchestrator.problems.problem_base import ProblemMeta, RootCauseCategory, TaskDescription, TaskLevel
+from nika.orchestrator.problems.problem_base import ProblemMeta, RootCauseCategory, TaskDescription, TaskLevel, build_verify_result
 from nika.orchestrator.tasks.detection import DetectionTask
 from nika.orchestrator.tasks.localization import LocalizationTask
 from nika.orchestrator.tasks.rca import RCATask
@@ -54,6 +54,26 @@ class DHCPSpoofedGatewayBase:
             dhcp_server=dhcp_server,
             subnet=subnet,
             wrong_gw=".".join(subnet.split(".")[:3] + ["254"]),
+        )
+
+    def verify_fault(self, params: DHCPSpoofedGatewayParams | None = None) -> dict:
+        """Verify dhcpd.conf has spoofed gateway ending in .254.
+
+        KNOWN ISSUE: _renew_dhcp_on_all_hosts may overwrite the fault on clients.
+        """
+        if params is None:
+            params = DHCPSpoofedGatewayParams()
+        dhcp_server = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        grep_result = self.kathara_api.exec_cmd(
+            dhcp_server,
+            "grep 'option routers.*\\.254' /etc/dhcp/dhcpd.conf && echo found || echo absent",
+        ).strip()
+        verified = "found" in grep_result
+        return build_verify_result(
+            root_cause_name=self.root_cause_name,
+            faulty_devices=self.faulty_devices,
+            verified=verified,
+            details={"dhcp_server": dhcp_server, "grep_result": grep_result},
         )
 
 
@@ -127,6 +147,27 @@ class DHCPSpoofedDNSBase:
         )
         self.injector.inject_wrong_dns(dhcp_server=dhcp_server, subnet=subnet, wrong_dns=params.wrong_dns)
 
+    def verify_fault(self, params: DHCPSpoofedDNSParams | None = None) -> dict:
+        """Verify dhcpd.conf has spoofed DNS server 8.8.8.8.
+
+        KNOWN ISSUE: _renew_dhcp_on_all_hosts may overwrite the fault on clients.
+        """
+        if params is None:
+            params = DHCPSpoofedDNSParams()
+        dhcp_server = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        wrong_dns = params.wrong_dns
+        grep_result = self.kathara_api.exec_cmd(
+            dhcp_server,
+            f"grep 'option domain-name-servers.*{wrong_dns}' /etc/dhcp/dhcpd.conf && echo found || echo absent",
+        ).strip()
+        verified = "found" in grep_result
+        return build_verify_result(
+            root_cause_name=self.root_cause_name,
+            faulty_devices=self.faulty_devices,
+            verified=verified,
+            details={"dhcp_server": dhcp_server, "wrong_dns": wrong_dns, "grep_result": grep_result},
+        )
+
 
 class DHCPSpoofedDNSDetection(DHCPSpoofedDNSBase, DetectionTask):
     META = ProblemMeta(
@@ -194,3 +235,51 @@ class DHCPSpoofedSubnetBase:
             ).network_address
         )
         self.injector.inject_delete_subnet(dhcp_server=dhcp_server, subnet=subnet)
+
+    def verify_fault(self, params: DHCPSpoofedSubnetParams | None = None) -> dict:
+        """Verify dhcpd.conf subnet count is reduced (subnet deleted)."""
+        if params is None:
+            params = DHCPSpoofedSubnetParams()
+        dhcp_server = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        count_output = self.kathara_api.exec_cmd(
+            dhcp_server,
+            "grep 'subnet.*netmask' /etc/dhcp/dhcpd.conf | wc -l",
+        ).strip()
+        try:
+            subnet_count = int(count_output)
+        except ValueError:
+            subnet_count = -1
+        verified = subnet_count == 0
+        return build_verify_result(
+            root_cause_name=self.root_cause_name,
+            faulty_devices=self.faulty_devices,
+            verified=verified,
+            details={"dhcp_server": dhcp_server, "subnet_count": subnet_count},
+        )
+
+
+class DHCPSpoofedSubnetDetection(DHCPSpoofedSubnetBase, DetectionTask):
+    META = ProblemMeta(
+        root_cause_category=DHCPSpoofedSubnetBase.root_cause_category,
+        root_cause_name=DHCPSpoofedSubnetBase.root_cause_name,
+        task_level=TaskLevel.DETECTION,
+        description=TaskDescription.DETECTION,
+    )
+
+
+class DHCPSpoofedSubnetLocalization(DHCPSpoofedSubnetBase, LocalizationTask):
+    META = ProblemMeta(
+        root_cause_category=DHCPSpoofedSubnetBase.root_cause_category,
+        root_cause_name=DHCPSpoofedSubnetBase.root_cause_name,
+        task_level=TaskLevel.LOCALIZATION,
+        description=TaskDescription.LOCALIZATION,
+    )
+
+
+class DHCPSpoofedSubnetRCA(DHCPSpoofedSubnetBase, RCATask):
+    META = ProblemMeta(
+        root_cause_category=DHCPSpoofedSubnetBase.root_cause_category,
+        root_cause_name=DHCPSpoofedSubnetBase.root_cause_name,
+        task_level=TaskLevel.RCA,
+        description=TaskDescription.RCA,
+    )

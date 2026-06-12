@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 
 from nika.generator.fault.injector_host import FaultInjectorHost
 from nika.net_env.net_env_pool import get_net_env_instance
-from nika.orchestrator.problems.problem_base import ProblemMeta, RootCauseCategory, TaskDescription, TaskLevel
+from nika.orchestrator.problems.problem_base import ProblemMeta, RootCauseCategory, TaskDescription, TaskLevel, build_verify_result
 from nika.orchestrator.tasks.detection import DetectionTask
 from nika.orchestrator.tasks.localization import LocalizationTask
 from nika.orchestrator.tasks.rca import RCATask
@@ -54,6 +54,23 @@ class HostMissingIPBase:
         self.kathara_api.exec_cmd(host_name=host, command=f"ip addr del {real_ip} dev {intf}")
         self.kathara_api.exec_cmd(host_name=host, command=f"echo '{real_ip} {real_gateway}' > /tmp/removed_ip.txt")
         self.logger.info(f"Injected missing IP on {host} from {real_ip} and gateway {real_gateway}.")
+
+    def verify_fault(self, params: HostMissingIPParams | None = None) -> dict:
+        """Verify that the host has no global IPv4 address on the interface."""
+        if params is None:
+            params = HostMissingIPParams()
+        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        intf = params.intf_name
+        ip_line = self.kathara_api.exec_cmd(
+            host, f"ip -4 -o addr show dev {intf} scope global"
+        ).strip()
+        verified = "inet " not in ip_line
+        return build_verify_result(
+            root_cause_name=self.root_cause_name,
+            faulty_devices=self.faulty_devices,
+            verified=verified,
+            details={"host": host, "intf": intf, "ip_line": ip_line},
+        )
 
 
 class HostMissingIPDetection(HostMissingIPBase, DetectionTask):
@@ -121,6 +138,25 @@ class HostIPConflictBase:
             new_ip=self.kathara_api.get_host_ip(src_host, "eth0", with_prefix=True),
             intf_name="eth0",
             new_gateway=self.kathara_api.get_default_gateway(src_host),
+        )
+
+    def verify_fault(self, params: HostIPConflictParams | None = None) -> dict:
+        """Verify both hosts share the same eth0 IP (conflict)."""
+        if params is None:
+            params = HostIPConflictParams()
+        host_a = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        host_b = params.host_name_2 if params.host_name_2 is not None else self.faulty_devices[1]
+        cmd = "ip -4 -o addr show dev eth0 scope global | awk '/inet /{print $4}'"
+        ip_a_raw = self.kathara_api.exec_cmd(host_a, cmd).strip()
+        ip_b_raw = self.kathara_api.exec_cmd(host_b, cmd).strip()
+        ip_a = ip_a_raw.split("/")[0] if ip_a_raw else ""
+        ip_b = ip_b_raw.split("/")[0] if ip_b_raw else ""
+        verified = bool(ip_a) and ip_a == ip_b
+        return build_verify_result(
+            root_cause_name=self.root_cause_name,
+            faulty_devices=self.faulty_devices,
+            verified=verified,
+            details={"host_a": host_a, "host_b": host_b, "ip_a": ip_a, "ip_b": ip_b},
         )
 
 
@@ -191,6 +227,22 @@ class HostIncorrectIPBase:
             new_ip=incorrect_ip,
             intf_name="eth0",
             new_gateway=ip_gateway,
+        )
+
+    def verify_fault(self, params: HostIncorrectIPParams | None = None) -> dict:
+        """Verify that the host eth0 has an IP in the 10.2.1.x/24 range (injected incorrect range)."""
+        if params is None:
+            params = HostIncorrectIPParams()
+        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        ip_line = self.kathara_api.exec_cmd(
+            host, "ip -4 -o addr show dev eth0 scope global"
+        ).strip()
+        verified = "inet 10.2.1." in ip_line
+        return build_verify_result(
+            root_cause_name=self.root_cause_name,
+            faulty_devices=self.faulty_devices,
+            verified=verified,
+            details={"host": host, "ip_line": ip_line},
         )
 
 
@@ -270,6 +322,20 @@ class HostIncorrectGatewayBase:
             new_gateway=new_gateway,
         )
 
+    def verify_fault(self, params: HostIncorrectGatewayParams | None = None) -> dict:
+        """Verify that the default route gateway ends in .254 (injected wrong gateway)."""
+        if params is None:
+            params = HostIncorrectGatewayParams()
+        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        route_line = self.kathara_api.exec_cmd(host, "ip route show default").strip()
+        verified = ".254" in route_line
+        return build_verify_result(
+            root_cause_name=self.root_cause_name,
+            faulty_devices=self.faulty_devices,
+            verified=verified,
+            details={"host": host, "route_line": route_line},
+        )
+
 
 class HostIncorrectGatewayDetection(HostIncorrectGatewayBase, DetectionTask):
     META = ProblemMeta(
@@ -342,6 +408,32 @@ class HostIncorrectNetmaskBase:
             new_gateway=self.kathara_api.get_default_gateway(host),
         )
 
+    def verify_fault(self, params: HostIncorrectNetmaskParams | None = None) -> dict:
+        """Verify that eth0 has a non-/24 prefix (injected wrong netmask)."""
+        if params is None:
+            params = HostIncorrectNetmaskParams()
+        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        expected_prefix = params.netmask_prefix
+        ip_line = self.kathara_api.exec_cmd(
+            host, "ip -4 -o addr show dev eth0 scope global"
+        ).strip()
+        prefix = None
+        if "inet " in ip_line:
+            parts = ip_line.split()
+            for i, p in enumerate(parts):
+                if p == "inet" and i + 1 < len(parts):
+                    cidr = parts[i + 1]
+                    if "/" in cidr:
+                        prefix = int(cidr.split("/")[1])
+                    break
+        verified = prefix is not None and prefix != 24
+        return build_verify_result(
+            root_cause_name=self.root_cause_name,
+            faulty_devices=self.faulty_devices,
+            verified=verified,
+            details={"host": host, "ip_line": ip_line, "expected_prefix": expected_prefix, "actual_prefix": prefix},
+        )
+
 
 class HostIncorrectNetmaskDetection(HostIncorrectNetmaskBase, DetectionTask):
     META = ProblemMeta(
@@ -403,6 +495,21 @@ class HostIncorrectDNSBase:
             params = HostIncorrectDNSParams()
         host = params.host_name if params.host_name is not None else self.faulty_devices[0]
         self.injector.inject_dns_misconfiguration(host_name=host, fake_dns_ip=params.fake_dns_ip)
+
+    def verify_fault(self, params: HostIncorrectDNSParams | None = None) -> dict:
+        """Verify the incorrect-DNS fault by checking /etc/resolv.conf contains the fake DNS IP."""
+        if params is None:
+            params = HostIncorrectDNSParams()
+        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        fake_dns_ip = params.fake_dns_ip
+        resolv = self.kathara_api.exec_cmd(host, "cat /etc/resolv.conf 2>/dev/null || echo ''")
+        verified = fake_dns_ip in resolv
+        return build_verify_result(
+            root_cause_name=self.root_cause_name,
+            faulty_devices=self.faulty_devices,
+            verified=verified,
+            details={"host": host, "fake_dns_ip": fake_dns_ip, "resolv_conf": resolv.strip()},
+        )
 
 
 class HostIncorrectDNSDetection(HostIncorrectDNSBase, DetectionTask):

@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 
 from nika.generator.fault.injector_base import FaultInjectorBase
 from nika.net_env.net_env_pool import get_net_env_instance
-from nika.orchestrator.problems.problem_base import ProblemMeta, RootCauseCategory, TaskDescription, TaskLevel
+from nika.orchestrator.problems.problem_base import ProblemMeta, RootCauseCategory, TaskDescription, TaskLevel, build_verify_result
 from nika.orchestrator.tasks.detection import DetectionTask
 from nika.orchestrator.tasks.localization import LocalizationTask
 from nika.orchestrator.tasks.rca import RCATask
@@ -45,7 +45,23 @@ class SDNControllerCrashBase:
         if params is None:
             params = SDNControllerCrashParams()
         host = params.host_name if params.host_name is not None else self.faulty_devices[0]
-        self.kathara_api.exec_cmd(host, "pkill -f ryu-manager")
+        self.kathara_api.exec_cmd(host, "pkill -f pox.py")
+
+    def verify_fault(self, params: SDNControllerCrashParams | None = None) -> dict:
+        """Verify POX controller is NOT running on the SDN controller."""
+        if params is None:
+            params = SDNControllerCrashParams()
+        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        pgrep_output = self.kathara_api.exec_cmd(
+            host, "pgrep -af pox 2>/dev/null | grep -v 'pgrep\\|bash\\|grep' | grep . || echo NONE"
+        ).strip()
+        verified = pgrep_output == "NONE" or "pox" not in pgrep_output
+        return build_verify_result(
+            root_cause_name=self.root_cause_name,
+            faulty_devices=self.faulty_devices,
+            verified=verified,
+            details={"host": host, "pgrep_output": pgrep_output},
+        )
 
 
 class SDNControllerCrashDetection(SDNControllerCrashBase, DetectionTask):
@@ -108,6 +124,21 @@ class SouthboundPortBlockBase:
         host = params.host_name if params.host_name is not None else self.faulty_devices[0]
         self.injector.inject_acl_rule(host_name=host, rule=f"tcp dport {params.southbound_port} drop")
 
+    def verify_fault(self, params: SouthboundPortBlockParams | None = None) -> dict:
+        """Verify nftables has a rule blocking the southbound port."""
+        if params is None:
+            params = SouthboundPortBlockParams()
+        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        port = params.southbound_port
+        nft_output = self.kathara_api.exec_cmd(host, "nft list ruleset 2>/dev/null").strip()
+        verified = f"tcp dport {port}" in nft_output and "drop" in nft_output
+        return build_verify_result(
+            root_cause_name=self.root_cause_name,
+            faulty_devices=self.faulty_devices,
+            verified=verified,
+            details={"host": host, "nft_output": nft_output},
+        )
+
 
 class SouthboundPortBlockDetection(SouthboundPortBlockBase, DetectionTask):
     META = ProblemMeta(
@@ -169,8 +200,30 @@ class SouthboundPortMismatchBase:
         if params is None:
             params = SouthboundPortMismatchParams()
         host = params.host_name if params.host_name is not None else self.faulty_devices[0]
-        self.kathara_api.exec_cmd(host, "pkill -f ryu-manager")
-        self.kathara_api.exec_cmd(host, f"ryu-manager --ofp-tcp-listen-port {params.mismatched_port} ryu.app.simple_switch &")
+        self.kathara_api.exec_cmd(host, "pkill -f pox.py")
+        self.kathara_api.exec_cmd(
+            host,
+            f"python3 /pox/pox.py openflow.of_01 --port={params.mismatched_port} forwarding.l2_learning &",
+        )
+
+    def verify_fault(self, params: SouthboundPortMismatchParams | None = None) -> dict:
+        """Verify POX controller is running with the mismatched port."""
+        if params is None:
+            params = SouthboundPortMismatchParams()
+        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        mismatched_port = params.mismatched_port
+        pgrep_output = self.kathara_api.exec_cmd(
+            host, "pgrep -af pox 2>/dev/null | grep -v 'pgrep\\|bash\\|grep' | grep . || echo NONE"
+        ).strip()
+        running = "pox" in pgrep_output and pgrep_output != "NONE"
+        has_port = str(mismatched_port) in pgrep_output
+        verified = running and has_port
+        return build_verify_result(
+            root_cause_name=self.root_cause_name,
+            faulty_devices=self.faulty_devices,
+            verified=verified,
+            details={"host": host, "pgrep_output": pgrep_output},
+        )
 
 
 class SouthboundPortMismatchDetection(SouthboundPortMismatchBase, DetectionTask):
@@ -230,6 +283,20 @@ class FlowRuleShadowingBase:
             params = FlowRuleShadowingParams()
         host = params.host_name if params.host_name is not None else self.faulty_devices[0]
         self.kathara_api.exec_cmd(host, f"ovs-ofctl add-flow {host} 'priority=100,actions=drop'")
+
+    def verify_fault(self, params: FlowRuleShadowingParams | None = None) -> dict:
+        """Verify the OVS switch has a high-priority drop rule."""
+        if params is None:
+            params = FlowRuleShadowingParams()
+        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        flows = self.kathara_api.exec_cmd(host, f"ovs-ofctl dump-flows {host} 2>/dev/null").strip()
+        verified = "priority=100" in flows and "drop" in flows
+        return build_verify_result(
+            root_cause_name=self.root_cause_name,
+            faulty_devices=self.faulty_devices,
+            verified=verified,
+            details={"host": host, "flows": flows},
+        )
 
 
 class FlowRuleShadowingDetection(FlowRuleShadowingBase, DetectionTask):
@@ -292,6 +359,24 @@ class FlowRuleLoopBase:
         host1 = params.host_name_2 if params.host_name_2 is not None else self.faulty_devices[1]
         self.kathara_api.exec_cmd(host0, f"ovs-ofctl add-flow {host0} 'in_port=eth0,actions=output:eth0'")
         self.kathara_api.exec_cmd(host1, f"ovs-ofctl add-flow {host1} 'in_port=eth1,actions=output:eth1'")
+
+    def verify_fault(self, params: FlowRuleLoopParams | None = None) -> dict:
+        """Verify both OVS switches have loop flow rules."""
+        if params is None:
+            params = FlowRuleLoopParams()
+        host0 = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        host1 = params.host_name_2 if params.host_name_2 is not None else self.faulty_devices[1]
+        flows0 = self.kathara_api.exec_cmd(host0, f"ovs-ofctl dump-flows {host0} 2>/dev/null").strip()
+        flows1 = self.kathara_api.exec_cmd(host1, f"ovs-ofctl dump-flows {host1} 2>/dev/null").strip()
+        has_loop0 = "in_port" in flows0 and "output" in flows0
+        has_loop1 = "in_port" in flows1 and "output" in flows1
+        verified = has_loop0 and has_loop1
+        return build_verify_result(
+            root_cause_name=self.root_cause_name,
+            faulty_devices=self.faulty_devices,
+            verified=verified,
+            details={"host0_flows": flows0, "host1_flows": flows1},
+        )
 
 
 class FlowRuleLoopDetection(FlowRuleLoopBase, DetectionTask):

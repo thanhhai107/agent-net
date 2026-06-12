@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 from nika.generator.fault.injector_host import FaultInjectorHost
 from nika.generator.fault.injector_tc import FaultInjectorTC
 from nika.net_env.net_env_pool import get_net_env_instance
-from nika.orchestrator.problems.problem_base import ProblemMeta, RootCauseCategory, TaskDescription, TaskLevel
+from nika.orchestrator.problems.problem_base import ProblemMeta, RootCauseCategory, TaskDescription, TaskLevel, build_verify_result
 from nika.orchestrator.tasks.detection import DetectionTask
 from nika.orchestrator.tasks.localization import LocalizationTask
 from nika.orchestrator.tasks.rca import RCATask
@@ -47,6 +47,21 @@ class DNSLookupLatencyBase:
             params = DNSLookupLatencyParams()
         host = params.host_name if params.host_name is not None else self.faulty_devices[0]
         self.injector.inject_delay(host_name=host, intf_name=params.intf_name, delay_ms=params.delay_ms)
+
+    def verify_fault(self, params: DNSLookupLatencyParams | None = None) -> dict:
+        """Verify tc qdisc on DNS server interface has a delay configured."""
+        if params is None:
+            params = DNSLookupLatencyParams()
+        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        intf = params.intf_name
+        tc_output = self.kathara_api.exec_cmd(host, f"tc qdisc show dev {intf}").strip()
+        verified = "delay" in tc_output
+        return build_verify_result(
+            root_cause_name=self.root_cause_name,
+            faulty_devices=self.faulty_devices,
+            verified=verified,
+            details={"host": host, "intf": intf, "tc_output": tc_output},
+        )
 
 
 class DNSLookupLatencyDetection(DNSLookupLatencyBase, DetectionTask):
@@ -108,6 +123,23 @@ class LoadBalancerOverloadBase:
             params = LoadBalancerOverloadParams()
         host = params.host_name if params.host_name is not None else self.faulty_devices[0]
         self.injector.inject_stress_all(host_name=host, duration=params.duration)
+
+    def verify_fault(self, params: LoadBalancerOverloadParams | None = None) -> dict:
+        """Verify stress-ng is running on the load balancer.
+
+        KNOWN ISSUE: inject_stress_all uses & without nohup/setsid; process may die immediately.
+        """
+        if params is None:
+            params = LoadBalancerOverloadParams()
+        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        pgrep_output = self.kathara_api.exec_cmd(host, "pgrep -a stress-ng 2>/dev/null || echo NONE").strip()
+        verified = "stress-ng" in pgrep_output and pgrep_output != "NONE"
+        return build_verify_result(
+            root_cause_name=self.root_cause_name,
+            faulty_devices=self.faulty_devices,
+            verified=verified,
+            details={"host": host, "pgrep_output": pgrep_output},
+        )
 
 
 class LoadBalancerOverloadDetection(LoadBalancerOverloadBase, DetectionTask):

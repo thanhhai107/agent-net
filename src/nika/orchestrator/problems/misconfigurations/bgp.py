@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 
 from nika.generator.fault.injector_base import FaultInjectorBase
 from nika.net_env.net_env_pool import get_net_env_instance
-from nika.orchestrator.problems.problem_base import ProblemMeta, RootCauseCategory, TaskDescription, TaskLevel
+from nika.orchestrator.problems.problem_base import ProblemMeta, RootCauseCategory, TaskDescription, TaskLevel, build_verify_result
 from nika.orchestrator.tasks.detection import DetectionTask
 from nika.orchestrator.tasks.localization import LocalizationTask
 from nika.orchestrator.tasks.rca import RCATask
@@ -52,6 +52,30 @@ class BGPAsnMisconfigBase:
         else:
             raise ValueError("Could not find AS number in BGP summary output")
         self.injector.inject_bgp_misconfig(host_name=host, correct_asn=as_number, wrong_asn=as_number + 600)
+
+    def verify_fault(self, params: BGPAsnMisconfigParams | None = None) -> dict:
+        """Verify file ASN differs from in-memory ASN.
+
+        KNOWN ISSUE: systemctl restart is a no-op in Kathara; in-memory ASN won't change.
+        """
+        if params is None:
+            params = BGPAsnMisconfigParams()
+        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        file_asn_raw = self.kathara_api.exec_cmd(
+            host,
+            "grep -E '^router bgp' /etc/frr/frr.conf 2>/dev/null | awk '{print $3}'",
+        ).strip()
+        mem_asn_raw = self.kathara_api.exec_cmd(
+            host,
+            "vtysh -c 'show running-config' 2>/dev/null | grep -E '^router bgp' | awk '{print $3}'",
+        ).strip()
+        verified = bool(file_asn_raw) and file_asn_raw != mem_asn_raw
+        return build_verify_result(
+            root_cause_name=self.root_cause_name,
+            faulty_devices=self.faulty_devices,
+            verified=verified,
+            details={"host": host, "file_asn": file_asn_raw, "mem_asn": mem_asn_raw},
+        )
 
 
 class BGPAsnMisconfigDetection(BGPAsnMisconfigBase, DetectionTask):
@@ -111,6 +135,30 @@ class BGPMissingAdvertiseBase:
             params = BGPMissingAdvertiseParams()
         host = params.host_name if params.host_name is not None else self.faulty_devices[0]
         self.injector.inject_bgp_remove_advertisement(host_name=host)
+
+    def verify_fault(self, params: BGPMissingAdvertiseParams | None = None) -> dict:
+        """Verify frr.conf has commented-out network lines.
+
+        KNOWN ISSUE: sed \\1 escape bug + systemctl no-op in Kathara. Expected to fail.
+        """
+        if params is None:
+            params = BGPMissingAdvertiseParams()
+        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        count_raw = self.kathara_api.exec_cmd(
+            host,
+            "grep -c '^[[:space:]]*# network' /etc/frr/frr.conf 2>/dev/null || echo 0",
+        ).strip()
+        try:
+            count = int(count_raw)
+        except ValueError:
+            count = 0
+        verified = count > 0
+        return build_verify_result(
+            root_cause_name=self.root_cause_name,
+            faulty_devices=self.faulty_devices,
+            verified=verified,
+            details={"host": host, "commented_network_count": count},
+        )
 
 
 class BGPMissingAdvertiseDetection(BGPMissingAdvertiseBase, DetectionTask):
@@ -180,6 +228,25 @@ class StaticBlackHoleBase:
             self.kathara_api.get_host_ip(self.victim_device, with_prefix=True), strict=False
         )
         self.injector.inject_add_route_blackhole_nexthop(host_name=host, network=host_network)
+
+    def verify_fault(self, params: StaticBlackHoleParams | None = None) -> dict:
+        """Verify a blackhole route for the victim's network exists."""
+        if params is None:
+            params = StaticBlackHoleParams()
+        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        host_network = str(
+            ipaddress.ip_network(
+                self.kathara_api.get_host_ip(self.victim_device, with_prefix=True), strict=False
+            )
+        )
+        route_output = self.kathara_api.exec_cmd(host, "ip route show").strip()
+        verified = f"blackhole {host_network}" in route_output or "blackhole" in route_output
+        return build_verify_result(
+            root_cause_name=self.root_cause_name,
+            faulty_devices=self.faulty_devices,
+            verified=verified,
+            details={"host": host, "network": host_network, "route_output": route_output},
+        )
 
 
 class StaticBlackHoleDetection(StaticBlackHoleBase, DetectionTask):
@@ -254,6 +321,23 @@ class BGPBlackholeRouteLeakBase:
             raise ValueError("Could not find AS number in BGP summary output")
         self.injector.inject_add_route_blackhole_advertise(host_name=host, network=network_30, AS=as_number)
 
+    def verify_fault(self, params: BGPBlackholeRouteLeakParams | None = None) -> dict:
+        """Verify vtysh running-config contains the Null0 route advertisement."""
+        if params is None:
+            params = BGPBlackholeRouteLeakParams()
+        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        network_30 = str(ipaddress.ip_network(f"{self.victim_ip}/30", strict=False))
+        running_config = self.kathara_api.exec_cmd(
+            host, "vtysh -c 'show running-config' 2>/dev/null"
+        ).strip()
+        has_null_route = f"ip route {network_30} Null0" in running_config or "Null0" in running_config
+        return build_verify_result(
+            root_cause_name=self.root_cause_name,
+            faulty_devices=self.faulty_devices,
+            verified=has_null_route,
+            details={"host": host, "network_30": network_30, "has_null_route": has_null_route},
+        )
+
 
 class BGPBlackholeRouteLeakDetection(BGPBlackholeRouteLeakBase, DetectionTask):
     META = ProblemMeta(
@@ -321,6 +405,23 @@ class BGPHijackingBase:
         asn_number = self.kathara_api.frr_get_bgp_asn_number(self.faulty_devices)
         self.injector.inject_bgp_add_interface(host_name=host, intf_name="lo", ip_address=target_network)
         self.injector.inject_bgp_add_advertisement(host_name=host, network=target_network, AS=asn_number)
+
+    def verify_fault(self, params: BGPHijackingParams | None = None) -> dict:
+        """Verify the router's running-config contains the hijacked network advertisement."""
+        if params is None:
+            params = BGPHijackingParams()
+        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        target_network = params.target_network if params.target_network is not None else self.target_network
+        running_config = self.kathara_api.exec_cmd(
+            host, "vtysh -c 'show running-config' 2>/dev/null"
+        ).strip()
+        has_advertisement = f"network {target_network}" in running_config
+        return build_verify_result(
+            root_cause_name=self.root_cause_name,
+            faulty_devices=self.faulty_devices,
+            verified=has_advertisement,
+            details={"host": host, "target_network": target_network, "has_advertisement": has_advertisement},
+        )
 
 
 class BGPHijackingDetection(BGPHijackingBase, DetectionTask):

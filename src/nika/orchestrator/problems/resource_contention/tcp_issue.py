@@ -9,7 +9,7 @@ from nika.config import BASE_DIR
 from nika.generator.fault.injector_host import FaultInjectorHost
 from nika.generator.fault.injector_tc import FaultInjectorTC
 from nika.net_env.net_env_pool import get_net_env_instance
-from nika.orchestrator.problems.problem_base import ProblemMeta, RootCauseCategory, TaskDescription, TaskLevel
+from nika.orchestrator.problems.problem_base import ProblemMeta, RootCauseCategory, TaskDescription, TaskLevel, build_verify_result
 from nika.orchestrator.tasks.detection import DetectionTask
 from nika.orchestrator.tasks.localization import LocalizationTask
 from nika.orchestrator.tasks.rca import RCATask
@@ -50,6 +50,24 @@ class SenderResourceContentionBase:
         host = params.host_name if params.host_name is not None else self.faulty_devices[0]
         self.injector.inject_stress_all(host_name=host, duration=params.duration)
         system_logger.info(f"Injected TCP slow sender issue on host {host}")
+
+    def verify_fault(self, params: SenderResourceContentionParams | None = None) -> dict:
+        """Verify stress-ng is running on the sender host.
+
+        KNOWN ISSUE: inject_stress_all uses & without nohup/setsid and has a -vm typo;
+        the process may die immediately. This verify is expected to fail.
+        """
+        if params is None:
+            params = SenderResourceContentionParams()
+        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        pgrep_output = self.kathara_api.exec_cmd(host, "pgrep -a stress-ng 2>/dev/null || echo NONE").strip()
+        verified = "stress-ng" in pgrep_output and pgrep_output != "NONE"
+        return build_verify_result(
+            root_cause_name=self.root_cause_name,
+            faulty_devices=self.faulty_devices,
+            verified=verified,
+            details={"host": host, "pgrep_output": pgrep_output},
+        )
 
 
 class SenderResourceContentionDetection(SenderResourceContentionBase, DetectionTask):
@@ -120,6 +138,22 @@ class SenderApplicationDelayBase:
         self.kathara_api.exec_cmd(host_name=host, command="systemctl restart web_server.service")
         system_logger.info(f"Injected TCP sender application delay issue on host {host}")
 
+    def verify_fault(self, params: SenderApplicationDelayParams | None = None) -> dict:
+        """Verify the web_server.py has a sleep call injected."""
+        if params is None:
+            params = SenderApplicationDelayParams()
+        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        has_sleep = self.kathara_api.exec_cmd(
+            host, "grep -l 'time.sleep' /web_server.py 2>/dev/null && echo yes || echo no"
+        ).strip()
+        verified = has_sleep == "yes"
+        return build_verify_result(
+            root_cause_name=self.root_cause_name,
+            faulty_devices=self.faulty_devices,
+            verified=verified,
+            details={"host": host, "has_sleep": has_sleep},
+        )
+
 
 class SenderApplicationDelayDetection(SenderApplicationDelayBase, DetectionTask):
     META = ProblemMeta(
@@ -181,6 +215,24 @@ class ReceiverResourceContentionBase:
         host = params.host_name if params.host_name is not None else self.faulty_devices[0]
         self.injector.inject_stress_all(host_name=host, duration=params.duration)
         system_logger.info(f"Injected TCP receiver resource contention on host {host}")
+
+    def verify_fault(self, params: ReceiverResourceContentionParams | None = None) -> dict:
+        """Verify stress-ng is running on the receiver host.
+
+        KNOWN ISSUE: inject_stress_all uses & without nohup/setsid and has a -vm typo;
+        the process may die immediately. This verify is expected to fail.
+        """
+        if params is None:
+            params = ReceiverResourceContentionParams()
+        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        pgrep_output = self.kathara_api.exec_cmd(host, "pgrep -a stress-ng 2>/dev/null || echo NONE").strip()
+        verified = "stress-ng" in pgrep_output and pgrep_output != "NONE"
+        return build_verify_result(
+            root_cause_name=self.root_cause_name,
+            faulty_devices=self.faulty_devices,
+            verified=verified,
+            details={"host": host, "pgrep_output": pgrep_output},
+        )
 
 
 class ReceiverResourceContentionDetection(ReceiverResourceContentionBase, DetectionTask):

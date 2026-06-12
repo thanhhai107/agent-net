@@ -94,7 +94,7 @@ class SDNStar(NetworkEnvBase):
 
         # add controller
         controller = self.lab.new_machine(
-            "controller", **{"image": "kathara/nika-ryu", "cpus": 0.5, "mem": "256m", "bridged": True}
+            "controller", **{"image": "kathara/nika-pox", "cpus": 0.5, "mem": "256m", "bridged": True}
         )
 
         for switch_meta in tot_switch_list:
@@ -144,10 +144,8 @@ class SDNStar(NetworkEnvBase):
             switch_meta.cmd_list.append(f"ovs-vsctl set-controller {switch_meta.name} tcp:{controller_ip}:6633")
         self.lab.connect_machine_to_link(controller.name, "switch_controller")
 
-        # Add basic configuration to controller
-        # general conf for ryu
         self.lab.create_file_from_list(
-            ["ip addr add 20.0.0.100/24 dev eth0", "ip link set eth0 up", "ryu-manager ryu.app.simple_switch &"],
+            ["ip addr add 20.0.0.100/24 dev eth0", "ip link set eth0 up", "python3 /pox/pox.py forwarding.l2_learning &"],
             f"{controller.name}.startup",
         )
 

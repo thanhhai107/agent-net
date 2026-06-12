@@ -1,7 +1,7 @@
 import asyncio
 
 from nika.net_env.net_env_pool import get_net_env_instance
-from nika.orchestrator.problems.problem_base import ProblemMeta, RootCauseCategory, TaskDescription, TaskLevel
+from nika.orchestrator.problems.problem_base import ProblemMeta, RootCauseCategory, TaskDescription, TaskLevel, build_verify_result
 from nika.orchestrator.tasks.base import TaskBase
 from nika.orchestrator.tasks.detection import DetectionTask
 from nika.orchestrator.tasks.localization import LocalizationTask
@@ -31,6 +31,31 @@ class MultiFaultBase(TaskBase):
 
     def inject_fault(self):
         asyncio.run(self._inject_fault_async())
+
+    def verify_fault(self) -> dict:
+        """Verify all sub-faults and aggregate results."""
+        sub_results = []
+        all_verified = True
+        for fault in self.sub_faults:
+            if hasattr(fault, "verify_fault"):
+                r = fault.verify_fault()
+                sub_results.append(r)
+                if not r.get("verified", False):
+                    all_verified = False
+            else:
+                all_verified = False
+                sub_results.append({
+                    "verified": False,
+                    "root_cause_name": getattr(fault, "root_cause_name", "unknown"),
+                    "details": {"error": "no verify_fault method"},
+                })
+        return build_verify_result(
+            root_cause_name=str(self.root_cause_name),
+            faulty_devices=self.faulty_devices,
+            verified=all_verified,
+            details={"sub_results": sub_results},
+        )
+
 
 class MultiFaultDetection(MultiFaultBase, DetectionTask):
     META = ProblemMeta(

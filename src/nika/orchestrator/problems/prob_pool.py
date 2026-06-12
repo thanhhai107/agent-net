@@ -37,12 +37,12 @@ def _register_problems():
         except Exception as e:
             logger.warning(f"Failed to inspect members of {root_cause_category_name}: {e}")
             continue
-        # Register each problem class
+        # Register each concrete problem task class (Detection / Localization / RCA).
         for cls_name, cls_obj in members:
             if cls_obj.__module__ != module.__name__:
                 continue
 
-            if "base" in cls_name.lower():
+            if not (inspect.isclass(cls_obj) and issubclass(cls_obj, TaskBase) and cls_obj is not TaskBase):
                 continue
 
             try:

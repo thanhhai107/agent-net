@@ -39,7 +39,7 @@ class HostMeta:
 class ControllerMeta:
     name: str
     cmd_list: list[str] = field(default_factory=list)
-    image: str = "kathara/nika-ryu"
+    image: str = "kathara/nika-pox"
     cpus: float = 0.5
     mem: str = "256m"
     links: list[tuple[int, str]] = field(default_factory=list)
@@ -119,7 +119,7 @@ def generate_sdn_star_topology(
     controller.cmd_list = [
         "ip addr add 20.0.0.100/24 dev eth0",
         "ip link set eth0 up",
-        "ryu-manager ryu.app.simple_switch &",
+        "python3 /pox/pox.py forwarding.l2_learning &",
     ]
 
     out_path = os.path.abspath(output_dir)

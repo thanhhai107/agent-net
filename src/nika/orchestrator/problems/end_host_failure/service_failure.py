@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 
 from nika.generator.fault.injector_base import FaultInjectorBase
 from nika.net_env.net_env_pool import get_net_env_instance
-from nika.orchestrator.problems.problem_base import ProblemMeta, RootCauseCategory, TaskDescription, TaskLevel
+from nika.orchestrator.problems.problem_base import ProblemMeta, RootCauseCategory, TaskDescription, TaskLevel, build_verify_result
 from nika.orchestrator.tasks.detection import DetectionTask
 from nika.orchestrator.tasks.localization import LocalizationTask
 from nika.orchestrator.tasks.rca import RCATask
@@ -50,7 +50,22 @@ class DNSServiceDownBase:
         if params is None:
             params = DNSServiceDownParams()
         host = params.host_name if params.host_name is not None else self.faulty_devices[0]
-        self.injector.inject_service_down(host_name=host, service_name=params.service_name)
+        self.injector.inject_process_kill(host_name=host, process_name="named")
+
+    def verify_fault(self, params: DNSServiceDownParams | None = None) -> dict:
+        """Verify named process is not running."""
+        if params is None:
+            params = DNSServiceDownParams()
+        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        service = params.service_name
+        pgrep_output = self.kathara_api.exec_cmd(host, "pgrep -a named 2>/dev/null || echo NONE").strip()
+        verified = "named" not in pgrep_output or pgrep_output == "NONE"
+        return build_verify_result(
+            root_cause_name=self.root_cause_name,
+            faulty_devices=self.faulty_devices,
+            verified=verified,
+            details={"host": host, "service": service, "pgrep_output": pgrep_output},
+        )
 
 
 class DNSServiceDownDetection(DNSServiceDownBase, DetectionTask):
@@ -112,7 +127,24 @@ class DHCPServiceDownBase:
         if params is None:
             params = DHCPServiceDownParams()
         host = params.host_name if params.host_name is not None else self.faulty_devices[0]
-        self.injector.inject_service_down(host_name=host, service_name=params.service_name)
+        self.injector.inject_process_kill(host_name=host, process_name="dhcpd")
+
+    def verify_fault(self, params: DHCPServiceDownParams | None = None) -> dict:
+        """Verify DHCP server process is not running."""
+        if params is None:
+            params = DHCPServiceDownParams()
+        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        service = params.service_name
+        pgrep_output = self.kathara_api.exec_cmd(
+            host, "pgrep -a dhcpd 2>/dev/null || echo NONE"
+        ).strip()
+        verified = "dhcpd" not in pgrep_output or pgrep_output == "NONE"
+        return build_verify_result(
+            root_cause_name=self.root_cause_name,
+            faulty_devices=self.faulty_devices,
+            verified=verified,
+            details={"host": host, "service": service, "pgrep_output": pgrep_output},
+        )
 
 
 class DHCPServiceDownDetection(DHCPServiceDownBase, DetectionTask):

@@ -115,8 +115,8 @@ class SDNClos(NetworkEnvBase):
                 tot_host_list.append(host_meta)
 
         # ---------- Controller ----------
-        controller = self.lab.new_machine(
-            "controller", **{"image": "kathara/nika-ryu", "cpus": 0.5, "mem": "256m", "bridged": True}
+        controller = self.lab.new_machine(  
+            "controller", **{"image": "kathara/nika-pox", "cpus": 0.5, "mem": "256m", "bridged": True}
         )
 
         # ---------- Switch initialize ----------
@@ -189,7 +189,7 @@ class SDNClos(NetworkEnvBase):
             [
                 "ip addr add 20.0.0.100/24 dev eth0",
                 "ip link set eth0 up",
-                "ryu-manager ryu.app.simple_switch &",
+                "python3 /pox/pox.py forwarding.l2_learning &",
             ],
             f"{controller.name}.startup",
         )

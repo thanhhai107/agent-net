@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 
 from nika.generator.fault.injector_base import FaultInjectorBase
 from nika.net_env.net_env_pool import get_net_env_instance
-from nika.orchestrator.problems.problem_base import ProblemMeta, RootCauseCategory, TaskDescription, TaskLevel
+from nika.orchestrator.problems.problem_base import ProblemMeta, RootCauseCategory, TaskDescription, TaskLevel, build_verify_result
 from nika.orchestrator.tasks.detection import DetectionTask
 from nika.orchestrator.tasks.localization import LocalizationTask
 from nika.orchestrator.tasks.rca import RCATask
@@ -74,6 +74,36 @@ class DNSRecordErrorBase:
         logger.info(
             f"Injecting DNS record error on {host}: mapping {target_website}:{target_domain} "
             f"to wrong IP {wrong_ip} instead of {self.right_ip}"
+        )
+
+    def verify_fault(self, params: DNSRecordErrorParams | None = None) -> dict:
+        """Verify the DNS zone file contains the wrong IP.
+
+        KNOWN ISSUE: systemctl restart named is a no-op in Kathara (no systemd).
+        The file will be modified but the daemon won't reload. This verify checks
+        file content only, not DNS resolution.
+        """
+        if params is None:
+            params = DNSRecordErrorParams()
+        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        target_website = params.target_website if params.target_website is not None else self.target_website
+        target_domain = params.target_domain if params.target_domain is not None else self.target_domain
+        wrong_ip = params.wrong_ip if params.wrong_ip is not None else self.wrong_ip
+        grep_result = self.kathara_api.exec_cmd(
+            host,
+            f"grep '{target_website}.*{wrong_ip}' /etc/bind/db.{target_domain} 2>/dev/null && echo found || echo absent",
+        ).strip()
+        verified = "found" in grep_result
+        return build_verify_result(
+            root_cause_name=self.root_cause_name,
+            faulty_devices=self.faulty_devices,
+            verified=verified,
+            details={
+                "host": host,
+                "target_website": target_website,
+                "wrong_ip": wrong_ip,
+                "grep_result": grep_result,
+            },
         )
 
 

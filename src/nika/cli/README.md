@@ -8,8 +8,10 @@ Requires `BASE_DIR` in the environment (or `.env`) pointing at the repository ro
 
 | Group | Purpose |
 |--------|---------|
+| `nika session` | List, inspect, and close active troubleshooting sessions |
 | `nika env` | List / deploy Kathará scenarios and create a session |
-| `nika failure` | List injectable problems / inject faults for a selected running session |
+| `nika failure` | List, describe, inject, and inspect faults for a running session |
+| `nika exec` | Run a shell command inside a lab host container |
 | `nika agent` | Run a troubleshooting agent on one selected session task |
 | `nika eval` | Metrics, LLM judge, session teardown, and offline summary CSV for finished sessions |
 | `nika benchmark` | Full pipeline for benchmark CSV rows or a single `(scenario, problem)` case |
@@ -18,6 +20,13 @@ Requires `BASE_DIR` in the environment (or `.env`) pointing at the repository ro
 Use `nika <group> --help` and `nika <group> <command> --help` for generated option text.
 
 ## Global conventions
+
+### Sessions and `--session-id`
+
+- **`nika env run`** prints `session_id=…` and writes `runtime/sessions/{session_id}.json`.
+- Most commands that operate on a lab accept **`--session-id`** to target a specific session.
+- When **`--session-id` is omitted** and exactly **one** session is running, that session is selected automatically. With zero or multiple running sessions, the CLI raises an error asking you to pass `--session-id` or reduce concurrency.
+- **`nika session close`** and **`nika env stop`** both undeploy the Kathará lab and clear runtime session state; `session close` adds a confirmation prompt (skippable with `-y` / `--yes`).
 
 ### Topology tier (`-t` / `--tier`)
 
@@ -32,7 +41,7 @@ This flag is reused on **`nika benchmark run`** and **`nika traffic run`** when 
 
 Aligned with `nika agent run`:
 
-- **`-a` / `--agent`**: agent implementation (currently `react`).
+- **`-a` / `--agent`**: agent implementation (`react`, or `mock` for pipeline testing without an LLM).
 - **`-b` / `--backend`**: provider (`openai`, `ollama`, `deepseek`, …).
 - **`-m` / `--model`**: model id for that provider.
 - **`-n` / `--max-steps`**: ReAct step cap.
@@ -48,26 +57,52 @@ Aligned with `nika agent run`:
 
 ---
 
+## `nika session`
+
+- **`nika session ps [-a]`**: list sessions. Default: running only; **`-a` / `--all`** includes finished sessions. Columns: session id, env id, scenario name, status, failure count, agent summary.
+- **`nika session inspect [SESSION_ID]`**: print the session document as JSON plus a table of `failure_injections`. Auto-selects when only one session is running.
+- **`nika session close [SESSION_ID | all] [-y]`**: undeploy the lab, mark failure records ended, and remove the runtime session file. Pass **`all`** to close every running session; **`-y`** skips the confirmation prompt.
+
+---
+
 ## `nika env`
 
 - **`nika env list`**: print registered scenario ids.
-- **`nika env run NAME [-t s|m|l] [--no-redeploy] [--instance-tag TAG]`**: deploy one instance and persist it in SQLite (`session_id = lab_hash`).
-- **`nika env ps`**: list currently running instances (`session_id`, `lab_name`, scenario, tier).
-- **`nika env stop [--session-id ID | --all]`**: stop one running instance (auto-select only when exactly one running) or stop all.
+- **`nika env run NAME [-t s|m|l] [--no-redeploy] [--instance-tag TAG]`**: deploy one instance, create a session, and print `session_id=…`.
+- **`nika env ps`**: list running lab instances (one row per deployed Kathará lab). Columns: env id, topology, status, age, active session count, endpoint.
+- **`nika env stop [--session-id ID | --all]`**: stop one running session (auto-select only when exactly one running) or stop all.
 
 ---
 
 ## `nika failure`
 
 - **`nika failure list`**: injectable problem ids.
-- **`nika failure inject PROBLEM [PROBLEM …] [--session-id ID]`**: inject for a selected running session and write ground truth.
+- **`nika failure describe PROBLEM`**: print the typed parameter schema (JSON Schema or legacy field list) and an example `nika failure inject … --set …` line.
+- **`nika failure inject PROBLEM [PROBLEM …] [--session-id ID] [--set key=value …]`**: inject for a selected running session and write ground truth. Repeat **`--set`** to override injection parameters (see `describe` for valid keys).
+- **`nika failure ps [--session-id ID]`**: list persisted failure injection records for one session.
+
+---
+
+## `nika exec`
+
+Run a shell command inside a host container for the selected session-bound lab:
+
+```shell
+nika exec HOST COMMAND… [--session-id ID] [--timeout SECONDS]
+```
+
+- **`HOST`**: container / host name in the lab (e.g. `host_1`).
+- **`COMMAND`**: passed to the container shell (remaining args are joined with spaces).
+- **`--timeout`**: default `10` seconds.
+
+Example: `nika exec host_1 ping -c 3 10.0.0.2 --timeout 30`
 
 ---
 
 ## `nika agent`
 
-- **`nika agent list`**: supported agent types and backends.
-- **`nika agent run [-a react] [-b openai] [-m MODEL] [-n 20] [--session-id ID]`**: run the agent on one selected session.
+- **`nika agent list`**: supported agent types (`react`, `mock`) and LLM backends.
+- **`nika agent run [-a react] [-b openai] [-m MODEL] [-n 20] [--session-id ID]`**: run the agent on one selected session. Use **`-a mock`** to exercise the pipeline without calling an LLM.
 
 ---
 
