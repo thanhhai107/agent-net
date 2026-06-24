@@ -77,37 +77,36 @@ newgrp docker
 
 ## Configure environment variables
 
-Create a `.env` file under the base directory and set the following environment variables:
+Copy `.env.sample` to `.env`, then configure the variables required by the
+features you use:
 
 ```shell
-# if use Langsmith for observability
-# check langsmith documentation for more details
-LANGSMITH_TRACING="true"
-LANGSMITH_ENDPOINT=<>
-LANGSMITH_API_KEY=<>
-LANGSMITH_PROJECT=<>
+DEEPSEEK_API_KEY=
+OPENAI_API_KEY=
+OLLAMA_API_URL=http://localhost:11434
 
-# if use langfuse for observability
-# check langfuse documentation for more details
-LANGFUSE_SECRET_KEY=<>
-LANGFUSE_PUBLIC_KEY=<>
-LANGFUSE_HOST="https://cloud.langfuse.com"
+QDRANT_URL=http://localhost:6333
+QDRANT_API_KEY=
+QDRANT_COLLECTION=
 
-# api key for you LLM, e.g. DeepSeek here
-DEEPSEEK_API_KEY=<>
-OPENAI_API_KEY=<>
+# Embedding model
+EMBEDDING_MODEL=
+EMBEDDING_DIMENSION=1024
 
-# if use Viettel NetMind's OpenAI-compatible gateway
-NETMIND_API_KEY=<>
-# optional; defaults to https://stream-netmind.viettel.vn/gateway/v1
-NETMIND_BASE_URL="https://stream-netmind.viettel.vn/gateway/v1"
-# optional request controls; defaults shown
-NETMIND_TIMEOUT_SECONDS=90
-NETMIND_MAX_RETRIES=0
+LANGSMITH_TRACING=true
+LANGSMITH_ENDPOINT=https://api.smith.langchain.com
+LANGSMITH_API_KEY=
+LANGSMITH_PROJECT=
 
-# if use ollama for llm 
-OLLAMA_API_URL=<>
+LANGFUSE_SECRET_KEY=
+LANGFUSE_PUBLIC_KEY=
+LANGFUSE_BASE_URL=https://cloud.langfuse.com
 ```
+
+At least one LLM configuration is required for LangChain agents:
+`OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, or `OLLAMA_API_URL`. Qdrant and embedding
+settings are required only by features that use vector storage. LangSmith and
+Langfuse variables are optional observability settings.
 
 ## Step by step guide
 You can follow the steps below to run a complete troubleshooting task with NIKA. Use the `nika` CLI.
@@ -223,7 +222,7 @@ NIKA ships four LLM-backed agents for real troubleshooting runs, plus a determin
 
 | Agent | CLI flag | How it works | Prerequisites |
 | ----- | -------- | ------------ | ------------- |
-| **ReAct** | `-a react` | LangGraph orchestrates two LangChain ReAct workers (diagnosis → submission) | LLM API key in `.env` (`OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, `NETMIND_API_KEY`, or Ollama URL) |
+| **ReAct** | `-a react` | LangGraph orchestrates two LangChain ReAct workers (diagnosis → submission) | LLM API key in `.env` (`OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, or Ollama URL) |
 | **Plan & Execute** | `-a plan-execute` | Structured planner, tool-enabled step executor, and adaptive replanner | Same as ReAct |
 | **Reflexion** | `-a reflexion` | Iterative attempt → evaluate → reflect → retry with episodic memory | Same as ReAct |
 | **Codex CLI** | `-a cli` | Same two-phase LangGraph flow, but each phase runs `codex exec` as a subprocess with Kathara MCP servers | [Codex CLI](https://developers.openai.com/codex) installed and authenticated (`codex login` or `OPENAI_API_KEY`) |
@@ -237,28 +236,15 @@ All agents write structured traces to `results/{session_id}/messages.jsonl` and 
 nika agent list
 nika agent run -a react -b openai -m gpt-5-mini -n 20
 nika agent run -a react -b deepseek -m deepseek-chat -n 20
-nika agent run -a react -b netmind -m Qwen/Qwen3-30B-A3B-Instruct-2507-FP8 -n 20
 nika agent run -a plan-execute -b openai -m gpt-5-mini -n 20
 nika agent run -a reflexion -b openai -m gpt-5-mini -n 20 -r 3
 ```
 
-- **`-b` / `--backend`**: `openai`, `ollama`, `deepseek`, or `netmind`
+- **`-b` / `--backend`**: `openai`, `ollama`, or `deepseek`
 - **`-m` / `--model`**: model id for the chosen backend
 - **`-n` / `--max-steps`**: recursion limit for each tool-enabled worker; for `plan-execute`, also the maximum number of executed plan items
 - **`-r` / `--max-attempts`**: maximum number of Reflexion attempts (default `3`; used only by `reflexion`)
 - Tracing: Langfuse + LangSmith (configure keys in `.env`)
-
-For NetMind agents, choose a chat model with tool-calling support. The gateway's
-`/models` response also contains embedding, reranker, OCR, and other specialized
-models that cannot drive a LangGraph chat agent. NIKA allows these verified
-NetMind models:
-
-- `Qwen/Qwen3-30B-A3B-Instruct-2507-FP8`
-- `Qwen/Qwen3.5-35B-A3B-FP8`
-- `openai/gpt-oss-20b`
-- `MiniMax/MiniMax-M2.7`
-
-Passing any other model with `-b netmind` fails before an API request is made.
 
 `plan-execute` uses `planner → executor → replanner` until a diagnosis is
 complete or the plan-item limit is reached. `reflexion` implements an iterative
