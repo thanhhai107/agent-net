@@ -22,12 +22,14 @@ class Session:
         lab_name: str,
         scenario_topo_size: str | None,
         scenario_params: dict | None = None,
+        topology: list[tuple[str, str]] | None = None,
     ) -> None:
         self.session_id = session_id
         self.scenario_name = scenario_name
         self.lab_name = lab_name
         self.scenario_topo_size = scenario_topo_size
         self.scenario_params = scenario_params or {}
+        self.topology = topology or []
         self.session_dir = os.path.join(str(RESULTS_DIR), session_id)
         os.makedirs(self.session_dir, exist_ok=True)
         self.store.create_session(
@@ -123,7 +125,7 @@ class Session:
         """Write/update run.json in the session results directory."""
         os.makedirs(self.session_dir, exist_ok=True)
         run_path = os.path.join(self.session_dir, "run.json")
-        serializable = {k: v for k, v in payload.items() if k not in ("store", "failure_injections")}
+        serializable = {k: v for k, v in payload.items() if k != "store"}
         with open(run_path, "w", encoding="utf-8") as f:
             json.dump(serializable, f, indent=2, default=str)
 

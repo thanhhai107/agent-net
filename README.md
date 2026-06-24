@@ -168,6 +168,20 @@ Each `nika env run` creates a **session** (printed as `session_id=…`). Session
 
 Full CLI documentation (benchmark batch mode, traffic types, parameter tables, and conventions) lives in **[src/nika/codex_cli/README.md](src/nika/codex_cli/README.md)**.
 
+### Visualize a session
+
+Launch the built-in dashboard to inspect topology, injected failures, agent
+tool calls, event timelines, submissions, and evaluation metrics:
+
+```shell
+nika visualize
+nika visualize --session-id <SESSION_ID>
+nika visualize --host 0.0.0.0 --port 8501 --no-browser
+```
+
+The dashboard reads persisted files under `runtime/sessions/` and `results/`,
+so it works for both running and completed sessions.
+
 ### Optional: benchmark or traffic from the CLI
 
 ```shell

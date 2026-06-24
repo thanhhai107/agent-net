@@ -55,6 +55,7 @@ def start_net_env(
         lab_name=net_env.lab.name,
         scenario_topo_size=tier,
         scenario_params=scenario_params,
+        topology=net_env.get_topology(),
     )
     bind_session_dir(session.session_dir)
     log_event(

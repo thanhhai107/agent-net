@@ -25,7 +25,8 @@ dependencies = [
     "langchain-ollama",
     "langchain",
     "typer>=0.25.1",
-    "func_timeout"
+    "func_timeout",
+    "streamlit>=1.40"
 ]
 
 [project.scripts]
@@ -42,4 +43,3 @@ filterwarnings = [
     "ignore::DeprecationWarning:fs.opener",
     "ignore::DeprecationWarning:pkg_resources",
 ]
-
