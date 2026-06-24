@@ -5,7 +5,7 @@ from typing import Any
 from agent.cli.agent import CliAgent
 from agent.langgraph.plan_execute_agent import PlanExecuteAgent
 from agent.langgraph.react_agent import BasicReActAgent
-from agent.langgraph.reflection_agent import ReflectionAgent
+from agent.langgraph.reflexion_agent import ReflexionAgent
 from agent.mock.mock_agent import MockAgent
 
 
@@ -16,6 +16,7 @@ def create_agent(
     llm_backend: str,
     model: str,
     max_steps: int = 20,
+    max_attempts: int = 3,
     reasoning_effort: str | None = None,
     stream_output: bool = True,
 ) -> Any:
@@ -35,12 +36,13 @@ def create_agent(
                 model=model,
                 max_steps=max_steps,
             )
-        case "reflection":
-            return ReflectionAgent(
+        case "reflexion":
+            return ReflexionAgent(
                 session_id=session_id,
                 llm_backend=llm_backend,
                 model=model,
                 max_steps=max_steps,
+                max_attempts=max_attempts,
             )
         case "mock":
             return MockAgent(

@@ -43,10 +43,11 @@ This flag is reused on **`nika benchmark run`** and **`nika traffic run`** when 
 
 Aligned with `nika agent run`:
 
-- **`-a` / `--agent`**: `react`, `plan-execute`, or `reflection` (LangGraph + LangChain), `cli` (LangGraph + Codex CLI subprocess), or `mock` (pipeline testing without an LLM).
-- **`-b` / `--backend`**: LLM provider for `react`, `plan-execute`, `reflection`, and `mock` (`openai`, `ollama`, `deepseek`, `netmind`). Ignored for `cli` (Codex uses OpenAI models).
+- **`-a` / `--agent`**: `react`, `plan-execute`, or `reflexion` (LangGraph + LangChain), `cli` (LangGraph + Codex CLI subprocess), or `mock` (pipeline testing without an LLM).
+- **`-b` / `--backend`**: LLM provider for `react`, `plan-execute`, `reflexion`, and `mock` (`openai`, `ollama`, `deepseek`, `netmind`). Ignored for `cli` (Codex uses OpenAI models).
 - **`-m` / `--model`**: model id.
 - **`-n` / `--max-steps`**: per-worker recursion limit for LangGraph agents; also caps executed plan items for `plan-execute`.
+- **`-r` / `--max-attempts`**: maximum Reflexion attempts for `reflexion` (default: `3`).
 - **`-e` / `--reasoning-effort`**: Codex `model_reasoning_effort` (`cli` only): `none`, `minimal`, `low`, `medium`, `high`, `xhigh`.
 
 `nika eval judge` uses **`-b`** and **`-m`** for the judge only (no agent in that command).
@@ -111,10 +112,11 @@ Example: `nika exec pc1 ping -c 3 10.0.0.2 --timeout 30`
 
   | Flag | Applies to | Meaning |
   |------|------------|---------|
-  | `-a` / `--agent` | all | `react`, `plan-execute`, `reflection`, `cli`, or `mock` |
+  | `-a` / `--agent` | all | `react`, `plan-execute`, `reflexion`, `cli`, or `mock` |
   | `-b` / `--backend` | `react`, `mock` | `openai`, `ollama`, `deepseek`, or `netmind` |
   | `-m` / `--model` | all | model id |
   | `-n` / `--max-steps` | LangGraph, `mock` | Worker step cap; plan-item cap for `plan-execute` |
+  | `-r` / `--max-attempts` | `reflexion` | Maximum attempt → evaluate → reflect cycles |
   | `-e` / `--reasoning-effort` | `cli` | Codex reasoning effort level |
   | `--session-id` | all | target session |
 
@@ -124,7 +126,7 @@ Example: `nika exec pc1 ping -c 3 10.0.0.2 --timeout 30`
   nika agent run -a react -b openai -m gpt-5-mini -n 20
   nika agent run -a react -b netmind -m Qwen/Qwen3-30B-A3B-Instruct-2507-FP8 -n 20
   nika agent run -a plan-execute -b openai -m gpt-5-mini -n 20
-  nika agent run -a reflection -b openai -m gpt-5-mini -n 20
+  nika agent run -a reflexion -b openai -m gpt-5-mini -n 20 -r 3
   nika agent run -a cli -m gpt-5.4-mini -e medium
   nika agent run -a mock -n 5
   ```

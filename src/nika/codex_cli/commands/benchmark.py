@@ -54,6 +54,13 @@ def benchmark_run(
             "executed plan items for plan-execute. Ignored for cli."
         ),
     ),
+    max_attempts: int = typer.Option(
+        3,
+        "-r",
+        "--max-attempts",
+        min=1,
+        help="Maximum attempts for the reflexion agent; ignored by other agents.",
+    ),
     parallel: int = typer.Option(
         1,
         "-j",
@@ -106,6 +113,7 @@ def benchmark_run(
             llm_backend=llm_backend,
             model=model,
             max_steps=max_steps,
+            max_attempts=max_attempts,
             run_judge=run_judge,
             judge_llm_backend=judge_backend,
             judge_model=judge_model,
@@ -122,6 +130,7 @@ def benchmark_run(
         llm_backend=llm_backend,
         model=model,
         max_steps=max_steps,
+        max_attempts=max_attempts,
         parallel=parallel,
         run_judge=run_judge,
         judge_llm_backend=judge_backend,

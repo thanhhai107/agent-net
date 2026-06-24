@@ -11,7 +11,7 @@ src/agent/
 ├── langgraph/            # [implemented] LangGraph + LangChain workflows
 │   ├── react_agent.py    # ReAct orchestration: diagnosis → submission
 │   ├── plan_execute_agent.py
-│   ├── reflection_agent.py
+│   ├── reflexion_agent.py
 │   ├── workflow_models.py
 │   └── domain_agents/    # LangChain create_agent subgraphs
 ├── mock/                 # [implemented] Deterministic mock without an LLM
@@ -36,7 +36,7 @@ src/agent/
 |------|----------|---------------|------------|--------|
 | LangGraph | `react` | LangGraph `StateGraph` | LangChain ReAct + `load_model()` | Implemented |
 | LangGraph | `plan-execute` | Planner → executor → replanner | LangChain structured output + ReAct tools | Implemented |
-| LangGraph | `reflection` | Diagnosis → critic → reviser | LangChain structured output + ReAct tools | Implemented |
+| LangGraph | `reflexion` | Attempt → evaluator → reflect → retry | Structured evaluator/memory + ReAct tools | Implemented |
 | Mock | `mock` | Hand-written two-phase flow | No LLM; fixed tool sequence | Implemented |
 | SDK | `sdk` | TBD (recommended: same two phases) | Anthropic SDK / Cursor SDK | Planned |
 | LangGraph + CLI | `cli` | LangGraph `StateGraph` | `codex exec` subprocess | Implemented |
@@ -97,16 +97,18 @@ The NetMind backend is restricted to the verified models printed by
 nika agent run -a plan-execute -b openai -m gpt-5-mini -n 20
 ```
 
-## 3. Reflection Path (`-a reflection`)
+## 3. Reflexion Path (`-a reflexion`)
 
-**Entry point**: `agent.langgraph.reflection_agent.ReflectionAgent`
+**Entry point**: `agent.langgraph.reflexion_agent.ReflexionAgent`
 
-- Runs the normal ReAct diagnosis once.
-- A structured critic checks evidence, localization, root cause, and contradictions.
-- A tool-enabled reviser performs one revision pass and may collect missing evidence.
+- Runs a fresh tool-enabled diagnosis attempt.
+- A strict structured evaluator checks evidence, localization, root cause, and contradictions.
+- Failed attempts produce compact episodic memory containing lessons and a different next strategy.
+- The next attempt receives all accumulated episodic memory and performs a fresh investigation.
+- Stops when the evaluator accepts an attempt or `--max-attempts` is reached.
 
 ```bash
-nika agent run -a reflection -b openai -m gpt-5-mini -n 20
+nika agent run -a reflexion -b openai -m gpt-5-mini -n 20 -r 3
 ```
 
 ## 4. Mock Path (`-a mock`)
@@ -150,7 +152,7 @@ codex login
 nika agent run -a cli -m gpt-5.4-mini -e medium
 ```
 
-The `-b` / `--backend` flag applies to ``react``, ``plan-execute``, ``reflection``, and ``mock``; Codex CLI always uses OpenAI models.
+The `-b` / `--backend` flag applies to ``react``, ``plan-execute``, ``reflexion``, and ``mock``; Codex CLI always uses OpenAI models.
 Use `-e` / `--reasoning-effort` to set Codex ``model_reasoning_effort`` (``none``, ``minimal``, ``low``, ``medium``, ``high``, ``xhigh``).
 
 ## Example Workflow
@@ -177,7 +179,7 @@ See the root [README.md](../../README.md#troubleshooting-agents) for a longer wa
 nika agent list                              # List agent types and LLM backends
 nika agent run -a react -b openai -m ...   # ReAct baseline
 nika agent run -a plan-execute -b openai -m ...
-nika agent run -a reflection -b openai -m ...
+nika agent run -a reflexion -b openai -m ...
 nika agent run -a cli -m gpt-5.4-mini      # Codex CLI path
 nika agent run -a mock                       # Mock path (no LLM required)
 # nika agent run -a sdk                      # Not yet implemented

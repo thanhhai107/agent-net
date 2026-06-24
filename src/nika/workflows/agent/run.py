@@ -16,6 +16,7 @@ def start_agent(
     model: str,
     max_steps: int,
     *,
+    max_attempts: int = 3,
     session_id: str | None = None,
     reasoning_effort: str | None = None,
     stream_output: bool = True,
@@ -26,6 +27,8 @@ def start_agent(
     session.update_session("agent_type", agent_type)
     session.update_session("llm_backend", llm_backend)
     session.update_session("model", model)
+    if agent_type == "reflexion":
+        session.update_session("max_attempts", max_attempts)
     if reasoning_effort is not None:
         session.update_session("reasoning_effort", reasoning_effort)
     session.start_session()
@@ -52,6 +55,7 @@ def start_agent(
         llm_backend=llm_backend,
         model=model,
         max_steps=max_steps,
+        max_attempts=max_attempts,
         reasoning_effort=reasoning_effort,
         stream_output=stream_output,
     )

@@ -11,11 +11,12 @@ from langgraph.errors import GraphRecursionError
 from pydantic import ValidationError
 
 from agent.langgraph.plan_execute_agent import PlanExecuteAgent
-from agent.langgraph.reflection_agent import ReflectionAgent
+from agent.langgraph.reflexion_agent import ReflexionAgent
 from agent.langgraph.workflow_models import (
-    DiagnosisCritique,
     InvestigationPlan,
     PlanStep,
+    ReflexionEvaluation,
+    ReflexionMemory,
     ReplanDecision,
     StepResult,
 )
@@ -49,14 +50,15 @@ class WorkflowModelTest(unittest.TestCase):
         with self.assertRaises(ValidationError):
             ReplanDecision(completed=False, remaining_steps=[])
 
-    def test_critique_requires_revision_instructions(self) -> None:
+    def test_reflexion_success_requires_high_quality_score(self) -> None:
         with self.assertRaises(ValidationError):
-            DiagnosisCritique(
-                evidence_sufficient=False,
-                anomaly_assessment="Unclear",
-                localization_assessment="Unsupported",
-                root_cause_assessment="Unsupported",
-                revision_instructions=[],
+            ReflexionEvaluation(
+                success=True,
+                quality_score=0.6,
+                evidence_sufficient=True,
+                anomaly_assessment="Anomaly confirmed",
+                localization_assessment="Device identified",
+                root_cause_assessment="Cause identified",
             )
 
 
@@ -64,13 +66,13 @@ class WorkflowRegistrationTest(unittest.TestCase):
     def test_cli_lists_all_agent_types(self) -> None:
         self.assertEqual(
             SUPPORTED_AGENT_TYPES,
-            ("react", "plan-execute", "reflection", "mock", "cli"),
+            ("react", "plan-execute", "reflexion", "mock", "cli"),
         )
 
     def test_registry_constructs_new_agent_types(self) -> None:
         with (
             patch("agent.registry.PlanExecuteAgent") as plan_agent,
-            patch("agent.registry.ReflectionAgent") as reflection_agent,
+            patch("agent.registry.ReflexionAgent") as reflexion_agent,
         ):
             create_agent(
                 "plan-execute",
@@ -80,11 +82,12 @@ class WorkflowRegistrationTest(unittest.TestCase):
                 max_steps=7,
             )
             create_agent(
-                "reflection",
+                "reflexion",
                 session_id="session",
                 llm_backend="deepseek",
                 model="model",
                 max_steps=9,
+                max_attempts=4,
             )
 
         plan_agent.assert_called_once_with(
@@ -93,11 +96,12 @@ class WorkflowRegistrationTest(unittest.TestCase):
             model="model",
             max_steps=7,
         )
-        reflection_agent.assert_called_once_with(
+        reflexion_agent.assert_called_once_with(
             session_id="session",
             llm_backend="deepseek",
             model="model",
             max_steps=9,
+            max_attempts=4,
         )
 
     def test_cli_lists_netmind_backend(self) -> None:
@@ -111,7 +115,6 @@ class WorkflowRegistrationTest(unittest.TestCase):
                 "MiniMax/MiniMax-M2.7",
             ),
         )
-
 
 class ModelFactoryTest(unittest.TestCase):
     @patch.dict("os.environ", {}, clear=True)
@@ -374,82 +377,211 @@ class PlanExecuteBehaviorTest(unittest.IsolatedAsyncioTestCase):
         self.agent.submission_agent.ainvoke.assert_not_awaited()
 
 
-class ReflectionBehaviorTest(unittest.IsolatedAsyncioTestCase):
+class ReflexionBehaviorTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
-        self.agent = ReflectionAgent.__new__(ReflectionAgent)
+        self.agent = ReflexionAgent.__new__(ReflexionAgent)
         self.agent.max_steps = 3
+        self.agent.max_attempts = 3
         self.agent.session_dir = self.tmp.name
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
 
-    async def test_critic_failure_preserves_initial_report(self) -> None:
-        self.agent.critic = AsyncMock()
-        self.agent.critic.ainvoke.side_effect = RuntimeError("invalid response")
+    async def test_retry_attempt_receives_episodic_memory(self) -> None:
+        self.agent.actor = AsyncMock()
+        self.agent.actor.ainvoke.return_value = {
+            "messages": [SimpleNamespace(content="Evidence-backed diagnosis")]
+        }
+        memory = ReflexionMemory(
+            summary="The first attempt over-focused on routing.",
+            lessons=["A paused host is direct evidence of host failure."],
+            next_strategy=["Inspect the affected host before the control plane."],
+            evidence_to_collect=["Host runtime state"],
+            avoid_repeating=["Do not infer host health from BGP health."],
+        )
 
-        update = await self.agent._critique(
+        update = await self.agent._attempt(
             {
                 "task_description": "Diagnose",
-                "initial_report": "Initial diagnosis",
+                "attempt_count": 1,
+                "diagnosis_report": "Old report",
+                "memories": [memory],
             }
         )
 
-        self.assertTrue(update["critic_failed"])
-        self.assertEqual(update["diagnosis_report"], "Initial diagnosis")
+        self.assertEqual(update["attempt_count"], 2)
+        self.assertEqual(update["attempt_report"], "Evidence-backed diagnosis")
+        call = self.agent.actor.ainvoke.await_args
+        prompt = call.args[0]["messages"][0].content
+        self.assertIn("paused host", prompt)
+        self.assertIn('"attempt": 2', prompt)
 
-    def test_critic_failure_routes_directly_to_submission(self) -> None:
+    async def test_attempt_failure_is_preserved_for_evaluation(self) -> None:
+        self.agent.actor = AsyncMock()
+        self.agent.actor.ainvoke.side_effect = GraphRecursionError()
+
+        update = await self.agent._attempt(
+            {
+                "task_description": "Diagnose",
+                "attempt_count": 0,
+                "diagnosis_report": "",
+                "memories": [],
+            }
+        )
+
+        self.assertEqual(update["attempt_count"], 1)
+        self.assertEqual(update["attempt_report"], "")
+        self.assertTrue(update["attempt_error"])
+
+    async def test_evaluator_returns_structured_success(self) -> None:
+        self.agent.evaluator = AsyncMock()
+        self.agent.evaluator.ainvoke.return_value = ReflexionEvaluation(
+            success=True,
+            quality_score=0.95,
+            evidence_sufficient=True,
+            anomaly_assessment="Anomaly confirmed",
+            localization_assessment="pc_0_0 confirmed",
+            root_cause_assessment="Host is paused",
+        )
+
+        update = await self.agent._evaluate(
+            {
+                "task_description": "Diagnose",
+                "attempt_count": 1,
+                "attempt_report": "pc_0_0 is paused",
+                "attempt_error": "",
+                "best_score": -1.0,
+            }
+        )
+
+        self.assertTrue(update["evaluation"].success)
+        self.assertFalse(update["evaluation_failed"])
+        self.assertEqual(update["diagnosis_report"], "pc_0_0 is paused")
+
+    async def test_lower_scoring_attempt_does_not_replace_best_report(self) -> None:
+        self.agent.evaluator = AsyncMock()
+        self.agent.evaluator.ainvoke.return_value = ReflexionEvaluation(
+            success=False,
+            quality_score=0.4,
+            evidence_sufficient=False,
+            anomaly_assessment="Anomaly plausible",
+            localization_assessment="Localization uncertain",
+            root_cause_assessment="Cause speculative",
+            failure_reasons=["Insufficient direct evidence"],
+        )
+
+        update = await self.agent._evaluate(
+            {
+                "task_description": "Diagnose",
+                "attempt_count": 2,
+                "attempt_report": "A weaker second report",
+                "attempt_error": "",
+                "diagnosis_report": "The stronger first report",
+                "best_score": 0.7,
+            }
+        )
+
+        self.assertNotIn("diagnosis_report", update)
+        self.assertNotIn("best_score", update)
+
+    def test_successful_evaluation_routes_to_submission(self) -> None:
+        evaluation = ReflexionEvaluation(
+            success=True,
+            quality_score=0.9,
+            evidence_sufficient=True,
+            anomaly_assessment="Anomaly confirmed",
+            localization_assessment="pc_0_0 confirmed",
+            root_cause_assessment="Host crash confirmed",
+        )
         self.assertEqual(
-            self.agent._route_after_critique({"critic_failed": True}),
+            self.agent._route_after_evaluation(
+                {
+                    "evaluation": evaluation,
+                    "attempt_count": 1,
+                    "diagnosis_report": "Complete report",
+                }
+            ),
             "submission",
         )
 
-    async def test_reviser_receives_critique_and_returns_revised_report(self) -> None:
-        self.agent.reviser = AsyncMock()
-        self.agent.reviser.ainvoke.return_value = {
-            "messages": [SimpleNamespace(content="Evidence-backed diagnosis")]
-        }
-        critique = DiagnosisCritique(
+    def test_failed_evaluation_routes_to_reflect(self) -> None:
+        evaluation = ReflexionEvaluation(
+            success=False,
+            quality_score=0.4,
             evidence_sufficient=False,
             anomaly_assessment="Anomaly is plausible",
             localization_assessment="Needs one more check",
             root_cause_assessment="Weakly supported",
             missing_evidence=["routing table"],
-            revision_instructions=["Inspect the routing table"],
+            failure_reasons=["Root cause is speculative"],
         )
 
-        update = await self.agent._revise(
-            {
-                "task_description": "Diagnose",
-                "initial_report": "Initial diagnosis",
-                "critique": critique,
-            }
+        self.assertEqual(
+            self.agent._route_after_evaluation(
+                {
+                    "evaluation": evaluation,
+                    "attempt_count": 1,
+                    "diagnosis_report": "Incomplete report",
+                }
+            ),
+            "reflect",
         )
 
-        self.assertEqual(update["diagnosis_report"], "Evidence-backed diagnosis")
-        call = self.agent.reviser.ainvoke.await_args
-        self.assertIn("routing table", call.args[0]["messages"][0].content)
-
-    async def test_reviser_failure_falls_back_to_initial_report(self) -> None:
-        self.agent.reviser = AsyncMock()
-        self.agent.reviser.ainvoke.side_effect = GraphRecursionError()
-        critique = DiagnosisCritique(
+    def test_last_failed_attempt_submits_best_available_report(self) -> None:
+        evaluation = ReflexionEvaluation(
+            success=False,
+            quality_score=0.5,
             evidence_sufficient=False,
             anomaly_assessment="Unclear",
             localization_assessment="Unclear",
             root_cause_assessment="Unclear",
-            revision_instructions=["Collect more evidence"],
+            failure_reasons=["Evidence remains incomplete"],
         )
 
-        update = await self.agent._revise(
+        self.assertEqual(
+            self.agent._route_after_evaluation(
+                {
+                    "evaluation": evaluation,
+                    "attempt_count": 3,
+                    "diagnosis_report": "Best available report",
+                }
+            ),
+            "submission",
+        )
+
+    async def test_reflexion_memory_is_appended(self) -> None:
+        self.agent.reflector = AsyncMock()
+        memory = ReflexionMemory(
+            summary="The attempt stopped at a healthy control-plane check.",
+            lessons=["Healthy BGP does not prove host health."],
+            next_strategy=["Inspect host runtime state first."],
+        )
+        self.agent.reflector.ainvoke.return_value = memory
+        evaluation = ReflexionEvaluation(
+            success=False,
+            quality_score=0.3,
+            evidence_sufficient=False,
+            anomaly_assessment="Anomaly not resolved",
+            localization_assessment="No exact device",
+            root_cause_assessment="Unsupported",
+            missing_evidence=["Host runtime state"],
+        )
+
+        update = await self.agent._reflect(
             {
                 "task_description": "Diagnose",
-                "initial_report": "Initial diagnosis",
-                "critique": critique,
+                "attempt_count": 1,
+                "attempt_report": "BGP is healthy",
+                "attempt_error": "",
+                "evaluation": evaluation,
+                "memories": [],
             }
         )
 
-        self.assertEqual(update["diagnosis_report"], "Initial diagnosis")
+        self.assertEqual(update["memories"], [memory])
+        call = self.agent.reflector.ainvoke.await_args
+        self.assertIn("Host runtime state", call.args[0][1].content)
 
     async def test_empty_report_skips_submission(self) -> None:
         self.agent.submission_agent = AsyncMock()

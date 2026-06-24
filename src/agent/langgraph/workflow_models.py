@@ -42,13 +42,37 @@ class ReplanDecision(BaseModel):
         return self
 
 
-class DiagnosisCritique(BaseModel):
-    """Structured quality review of a diagnosis report."""
+class ReflexionEvaluation(BaseModel):
+    """Evaluator verdict for one complete troubleshooting attempt."""
 
+    success: bool
+    quality_score: float = Field(ge=0.0, le=1.0)
     evidence_sufficient: bool
     anomaly_assessment: str = Field(min_length=1)
     localization_assessment: str = Field(min_length=1)
     root_cause_assessment: str = Field(min_length=1)
     contradictions: list[str] = Field(default_factory=list)
     missing_evidence: list[str] = Field(default_factory=list)
-    revision_instructions: list[str] = Field(min_length=1)
+    failure_reasons: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_success(self) -> "ReflexionEvaluation":
+        if self.success and not self.evidence_sufficient:
+            raise ValueError("a successful evaluation requires sufficient evidence")
+        if self.success and self.quality_score < 0.8:
+            raise ValueError("a successful evaluation requires quality_score >= 0.8")
+        if not self.success and not (
+            self.contradictions or self.missing_evidence or self.failure_reasons
+        ):
+            raise ValueError("an unsuccessful evaluation requires actionable feedback")
+        return self
+
+
+class ReflexionMemory(BaseModel):
+    """Compact episodic memory generated after an unsuccessful attempt."""
+
+    summary: str = Field(min_length=1)
+    lessons: list[str] = Field(min_length=1)
+    next_strategy: list[str] = Field(min_length=1)
+    evidence_to_collect: list[str] = Field(default_factory=list)
+    avoid_repeating: list[str] = Field(default_factory=list)

@@ -5,7 +5,7 @@ import typer
 from agent.cli.codex_worker import REASONING_EFFORT_LEVELS
 from agent.llm.model_factory import NETMIND_SUPPORTED_MODELS
 
-SUPPORTED_AGENT_TYPES = ("react", "plan-execute", "reflection", "mock", "cli")
+SUPPORTED_AGENT_TYPES = ("react", "plan-execute", "reflexion", "mock", "cli")
 SUPPORTED_LLM_BACKENDS = ("openai", "ollama", "deepseek", "netmind")
 
 agent_app = typer.Typer(help="Troubleshooting agents.")
@@ -47,6 +47,13 @@ def agent_run(
             "executed plan items for plan-execute. Ignored for cli."
         ),
     ),
+    max_attempts: int = typer.Option(
+        3,
+        "-r",
+        "--max-attempts",
+        min=1,
+        help="Maximum attempts for the reflexion agent; ignored by other agents.",
+    ),
     reasoning_effort: str | None = typer.Option(
         None,
         "-e",
@@ -69,6 +76,7 @@ def agent_run(
             llm_backend,
             model,
             max_steps,
+            max_attempts=max_attempts,
             session_id=session_id,
             reasoning_effort=reasoning_effort,
         )
