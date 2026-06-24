@@ -97,6 +97,14 @@ LANGFUSE_HOST="https://cloud.langfuse.com"
 DEEPSEEK_API_KEY=<>
 OPENAI_API_KEY=<>
 
+# if use Viettel NetMind's OpenAI-compatible gateway
+NETMIND_API_KEY=<>
+# optional; defaults to https://stream-netmind.viettel.vn/gateway/v1
+NETMIND_BASE_URL="https://stream-netmind.viettel.vn/gateway/v1"
+# optional request controls; defaults shown
+NETMIND_TIMEOUT_SECONDS=90
+NETMIND_MAX_RETRIES=0
+
 # if use ollama for llm 
 OLLAMA_API_URL=<>
 ```
@@ -215,7 +223,7 @@ NIKA ships four LLM-backed agents for real troubleshooting runs, plus a determin
 
 | Agent | CLI flag | How it works | Prerequisites |
 | ----- | -------- | ------------ | ------------- |
-| **ReAct** | `-a react` | LangGraph orchestrates two LangChain ReAct workers (diagnosis → submission) | LLM API key in `.env` (`OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, or Ollama URL) |
+| **ReAct** | `-a react` | LangGraph orchestrates two LangChain ReAct workers (diagnosis → submission) | LLM API key in `.env` (`OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, `NETMIND_API_KEY`, or Ollama URL) |
 | **Plan & Execute** | `-a plan-execute` | Structured planner, tool-enabled step executor, and adaptive replanner | Same as ReAct |
 | **Reflection** | `-a reflection` | ReAct diagnosis followed by structured critique and tool-enabled revision | Same as ReAct |
 | **Codex CLI** | `-a cli` | Same two-phase LangGraph flow, but each phase runs `codex exec` as a subprocess with Kathara MCP servers | [Codex CLI](https://developers.openai.com/codex) installed and authenticated (`codex login` or `OPENAI_API_KEY`) |
@@ -229,14 +237,27 @@ All agents write structured traces to `results/{session_id}/messages.jsonl` and 
 nika agent list
 nika agent run -a react -b openai -m gpt-5-mini -n 20
 nika agent run -a react -b deepseek -m deepseek-chat -n 20
+nika agent run -a react -b netmind -m Qwen/Qwen3-30B-A3B-Instruct-2507-FP8 -n 20
 nika agent run -a plan-execute -b openai -m gpt-5-mini -n 20
 nika agent run -a reflection -b openai -m gpt-5-mini -n 20
 ```
 
-- **`-b` / `--backend`**: `openai`, `ollama`, or `deepseek`
+- **`-b` / `--backend`**: `openai`, `ollama`, `deepseek`, or `netmind`
 - **`-m` / `--model`**: model id for the chosen backend
 - **`-n` / `--max-steps`**: recursion limit for each tool-enabled worker; for `plan-execute`, also the maximum number of executed plan items
 - Tracing: Langfuse + LangSmith (configure keys in `.env`)
+
+For NetMind agents, choose a chat model with tool-calling support. The gateway's
+`/models` response also contains embedding, reranker, OCR, and other specialized
+models that cannot drive a LangGraph chat agent. NIKA allows these verified
+NetMind models:
+
+- `Qwen/Qwen3-30B-A3B-Instruct-2507-FP8`
+- `Qwen/Qwen3.5-35B-A3B-FP8`
+- `openai/gpt-oss-20b`
+- `MiniMax/MiniMax-M2.7`
+
+Passing any other model with `-b netmind` fails before an API request is made.
 
 `plan-execute` uses `planner → executor → replanner` until a diagnosis is
 complete or the plan-item limit is reached. `reflection` performs one

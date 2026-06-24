@@ -38,7 +38,12 @@ def benchmark_run(
         help="Topology tier s, m, or l (required only for scalable scenarios).",
     ),
     agent_type: str = typer.Option("react", "-a", "--agent", help="Agent implementation."),
-    llm_backend: str = typer.Option("openai", "-b", "--backend", help="LLM provider (openai, ollama, deepseek)."),
+    llm_backend: str = typer.Option(
+        "openai",
+        "-b",
+        "--backend",
+        help="LLM provider (openai, ollama, deepseek, netmind).",
+    ),
     model: str = typer.Option("gpt-5-mini", "-m", "--model", help="Model id for the agent."),
     max_steps: int = typer.Option(
         20,

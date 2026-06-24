@@ -72,13 +72,17 @@ flowchart LR
 
 - Top-level orchestration uses a LangGraph `StateGraph` with two nodes.
 - Each node is a LangChain `create_agent` ReAct subgraph (`DiagnosisAgent` / `SubmissionAgent`).
-- LLMs are loaded via `agent.llm.model_factory.load_model()` (openai / ollama / deepseek).
+- LLMs are loaded via `agent.llm.model_factory.load_model()` (openai / ollama / deepseek / netmind).
 - Tracing: Langfuse + LangSmith. Logging: `AgentCallbackLogger`.
 
 ```bash
 nika agent run -a react -b openai -m gpt-5-mini -n 20
+nika agent run -a react -b netmind -m Qwen/Qwen3-30B-A3B-Instruct-2507-FP8 -n 20
 nika agent run -a react -b deepseek -m deepseek-chat -n 20
 ```
+
+The NetMind backend is restricted to the verified models printed by
+`nika agent list`.
 
 ## 2. Plan & Execute Path (`-a plan-execute`)
 

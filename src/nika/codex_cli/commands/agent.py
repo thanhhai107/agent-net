@@ -3,9 +3,10 @@
 import typer
 
 from agent.cli.codex_worker import REASONING_EFFORT_LEVELS
+from agent.llm.model_factory import NETMIND_SUPPORTED_MODELS
 
 SUPPORTED_AGENT_TYPES = ("react", "plan-execute", "reflection", "mock", "cli")
-SUPPORTED_LLM_BACKENDS = ("openai", "ollama", "deepseek")
+SUPPORTED_LLM_BACKENDS = ("openai", "ollama", "deepseek", "netmind")
 
 agent_app = typer.Typer(help="Troubleshooting agents.")
 
@@ -19,6 +20,9 @@ def agent_list() -> None:
     typer.echo("llm_backends:")
     for backend in SUPPORTED_LLM_BACKENDS:
         typer.echo(f"  {backend}")
+    typer.echo("netmind_models:")
+    for model in NETMIND_SUPPORTED_MODELS:
+        typer.echo(f"  {model}")
     typer.echo("reasoning_effort (cli only):")
     for level in REASONING_EFFORT_LEVELS:
         typer.echo(f"  {level}")
@@ -27,7 +31,12 @@ def agent_list() -> None:
 @agent_app.command("run")
 def agent_run(
     agent_type: str = typer.Option("react", "-a", "--agent", help="Agent implementation."),
-    llm_backend: str = typer.Option("openai", "-b", "--backend", help="LLM provider (openai, ollama, deepseek)."),
+    llm_backend: str = typer.Option(
+        "openai",
+        "-b",
+        "--backend",
+        help="LLM provider (openai, ollama, deepseek, netmind).",
+    ),
     model: str = typer.Option("gpt-5-mini", "-m", "--model", help="Model id for the chosen backend."),
     max_steps: int = typer.Option(
         20,

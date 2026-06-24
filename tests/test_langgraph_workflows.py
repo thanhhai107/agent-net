@@ -19,9 +19,19 @@ from agent.langgraph.workflow_models import (
     ReplanDecision,
     StepResult,
 )
+from agent.llm.model_factory import (
+    NETMIND_BASE_URL,
+    NETMIND_MAX_RETRIES,
+    NETMIND_SUPPORTED_MODELS,
+    NETMIND_TIMEOUT_SECONDS,
+    load_model,
+)
 from agent.registry import create_agent
 from agent.utils.loggers import AgentCallbackLogger
-from nika.codex_cli.commands.agent import SUPPORTED_AGENT_TYPES
+from nika.codex_cli.commands.agent import (
+    SUPPORTED_AGENT_TYPES,
+    SUPPORTED_LLM_BACKENDS,
+)
 
 
 class WorkflowModelTest(unittest.TestCase):
@@ -89,6 +99,102 @@ class WorkflowRegistrationTest(unittest.TestCase):
             model="model",
             max_steps=9,
         )
+
+    def test_cli_lists_netmind_backend(self) -> None:
+        self.assertIn("netmind", SUPPORTED_LLM_BACKENDS)
+        self.assertEqual(
+            NETMIND_SUPPORTED_MODELS,
+            (
+                "Qwen/Qwen3-30B-A3B-Instruct-2507-FP8",
+                "Qwen/Qwen3.5-35B-A3B-FP8",
+                "openai/gpt-oss-20b",
+                "MiniMax/MiniMax-M2.7",
+            ),
+        )
+
+
+class ModelFactoryTest(unittest.TestCase):
+    @patch.dict("os.environ", {}, clear=True)
+    def test_netmind_requires_api_key(self) -> None:
+        with self.assertRaisesRegex(ValueError, "NETMIND_API_KEY"):
+            load_model("netmind", "NetMind/NetMind-X1")
+
+    @patch.dict(
+        "os.environ",
+        {
+            "NETMIND_API_KEY": "test-key",
+            "NETMIND_BASE_URL": "https://netmind.example/v1",
+        },
+        clear=True,
+    )
+    @patch("agent.llm.model_factory.ChatOpenAI")
+    def test_netmind_uses_openai_compatible_endpoint(self, chat_openai) -> None:
+        load_model("netmind", "openai/gpt-oss-20b")
+
+        chat_openai.assert_called_once_with(
+            model="openai/gpt-oss-20b",
+            api_key="test-key",
+            base_url="https://netmind.example/v1",
+            temperature=0,
+            timeout=NETMIND_TIMEOUT_SECONDS,
+            max_retries=NETMIND_MAX_RETRIES,
+        )
+
+    @patch.dict(
+        "os.environ",
+        {"NETMIND_API_KEY": "test-key"},
+        clear=True,
+    )
+    @patch("agent.llm.model_factory.ChatOpenAI")
+    def test_netmind_uses_default_base_url(self, chat_openai) -> None:
+        load_model("netmind", "Qwen/Qwen3.5-35B-A3B-FP8")
+
+        self.assertEqual(chat_openai.call_args.kwargs["base_url"], NETMIND_BASE_URL)
+        self.assertEqual(
+            chat_openai.call_args.kwargs["timeout"],
+            NETMIND_TIMEOUT_SECONDS,
+        )
+        self.assertEqual(
+            chat_openai.call_args.kwargs["max_retries"],
+            NETMIND_MAX_RETRIES,
+        )
+
+    @patch.dict(
+        "os.environ",
+        {
+            "NETMIND_API_KEY": "test-key",
+            "NETMIND_TIMEOUT_SECONDS": "12.5",
+            "NETMIND_MAX_RETRIES": "2",
+        },
+        clear=True,
+    )
+    @patch("agent.llm.model_factory.ChatOpenAI")
+    def test_netmind_allows_timeout_and_retry_overrides(self, chat_openai) -> None:
+        load_model("netmind", "MiniMax/MiniMax-M2.7")
+
+        self.assertEqual(chat_openai.call_args.kwargs["timeout"], 12.5)
+        self.assertEqual(chat_openai.call_args.kwargs["max_retries"], 2)
+
+    @patch.dict(
+        "os.environ",
+        {
+            "NETMIND_API_KEY": "test-key",
+            "NETMIND_TIMEOUT_SECONDS": "never",
+        },
+        clear=True,
+    )
+    def test_netmind_rejects_invalid_timeout(self) -> None:
+        with self.assertRaisesRegex(ValueError, "NETMIND_TIMEOUT_SECONDS"):
+            load_model("netmind", "openai/gpt-oss-20b")
+
+    @patch.dict(
+        "os.environ",
+        {"NETMIND_API_KEY": "test-key"},
+        clear=True,
+    )
+    def test_netmind_rejects_model_outside_whitelist(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Unsupported NetMind model"):
+            load_model("netmind", "Qwen/Qwen3-4B-Instruct-2507")
 
 
 class WorkflowLoggingTest(unittest.TestCase):
