@@ -211,15 +211,17 @@ uv run --with pytest pytest tests/test_session.py -v
 
 Agent implementations live under [`src/agent/`](src/agent/). For architecture, directory layout, and extension notes, see **[src/agent/README.md](src/agent/README.md)**.
 
-NIKA ships two LLM-backed agents for real troubleshooting runs, plus a deterministic mock for CI:
+NIKA ships four LLM-backed agents for real troubleshooting runs, plus a deterministic mock for CI:
 
 | Agent | CLI flag | How it works | Prerequisites |
 | ----- | -------- | ------------ | ------------- |
 | **ReAct** | `-a react` | LangGraph orchestrates two LangChain ReAct workers (diagnosis → submission) | LLM API key in `.env` (`OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, or Ollama URL) |
+| **Plan & Execute** | `-a plan-execute` | Structured planner, tool-enabled step executor, and adaptive replanner | Same as ReAct |
+| **Reflection** | `-a reflection` | ReAct diagnosis followed by structured critique and tool-enabled revision | Same as ReAct |
 | **Codex CLI** | `-a cli` | Same two-phase LangGraph flow, but each phase runs `codex exec` as a subprocess with Kathara MCP servers | [Codex CLI](https://developers.openai.com/codex) installed and authenticated (`codex login` or `OPENAI_API_KEY`) |
 | **Mock** | `-a mock` | Fixed tool-call script; no LLM | None |
 
-Both LLM agents (and the mock agent) write structured traces to `results/{session_id}/messages.jsonl` and produce `submission.json` via the task MCP server.
+All agents write structured traces to `results/{session_id}/messages.jsonl` and produce `submission.json` via the task MCP server.
 
 ### ReAct agent (`-a react`)
 
@@ -227,12 +229,19 @@ Both LLM agents (and the mock agent) write structured traces to `results/{sessio
 nika agent list
 nika agent run -a react -b openai -m gpt-5-mini -n 20
 nika agent run -a react -b deepseek -m deepseek-chat -n 20
+nika agent run -a plan-execute -b openai -m gpt-5-mini -n 20
+nika agent run -a reflection -b openai -m gpt-5-mini -n 20
 ```
 
 - **`-b` / `--backend`**: `openai`, `ollama`, or `deepseek`
 - **`-m` / `--model`**: model id for the chosen backend
-- **`-n` / `--max-steps`**: max ReAct recursion steps per phase
+- **`-n` / `--max-steps`**: recursion limit for each tool-enabled worker; for `plan-execute`, also the maximum number of executed plan items
 - Tracing: Langfuse + LangSmith (configure keys in `.env`)
+
+`plan-execute` uses `planner → executor → replanner` until a diagnosis is
+complete or the plan-item limit is reached. `reflection` performs one
+`diagnosis → critique → revision` pass before submission; the reviser may call
+diagnostic tools to address missing evidence.
 
 ### Codex CLI agent (`-a cli`)
 

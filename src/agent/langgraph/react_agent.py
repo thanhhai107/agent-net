@@ -128,14 +128,17 @@ class BasicReActAgent:
                 },
                 debug=True,
             )
-            return {"diagnosis_report": [diagnosis_report["messages"][-1].content], "is_max_steps_reached": False}
+            return {
+                "diagnosis_report": diagnosis_report["messages"][-1].content,
+                "is_max_steps_reached": False,
+            }
         except ValidationError as e:
             AgentCallbackLogger(agent="diagnosis_agent", session_dir=self.session_dir)._log(
                 "error", {"message": f"Validation error: {e}"}
             )
             return {
                 "messages": [HumanMessage(content=f"Error: {e}")],
-                "diagnosis_report": ["ERROR_VALIDATION"],
+                "diagnosis_report": "ERROR_VALIDATION",
                 "is_max_steps_reached": False,
             }
         except GraphRecursionError:
@@ -145,12 +148,12 @@ class BasicReActAgent:
             )
             return {
                 "messages": [HumanMessage(content="Error: diagnosis did not finish within max steps.")],
-                "diagnosis_report": ["ERROR_MAX_STEPS_REACHED"],
+                "diagnosis_report": "ERROR_MAX_STEPS_REACHED",
                 "is_max_steps_reached": True,
             }
 
     async def submission_agent_builder(self, state: AgentState):
-        diag_text = state["diagnosis_report"][-1]
+        diag_text = state["diagnosis_report"]
         result = await self.submission_agent.ainvoke(
             {
                 "messages": [

@@ -3,7 +3,9 @@
 from typing import Any
 
 from agent.cli.agent import CliAgent
+from agent.langgraph.plan_execute_agent import PlanExecuteAgent
 from agent.langgraph.react_agent import BasicReActAgent
+from agent.langgraph.reflection_agent import ReflectionAgent
 from agent.mock.mock_agent import MockAgent
 
 
@@ -21,6 +23,20 @@ def create_agent(
     match agent_type.lower():
         case "react":
             return BasicReActAgent(
+                session_id=session_id,
+                llm_backend=llm_backend,
+                model=model,
+                max_steps=max_steps,
+            )
+        case "plan-execute":
+            return PlanExecuteAgent(
+                session_id=session_id,
+                llm_backend=llm_backend,
+                model=model,
+                max_steps=max_steps,
+            )
+        case "reflection":
+            return ReflectionAgent(
                 session_id=session_id,
                 llm_backend=llm_backend,
                 model=model,

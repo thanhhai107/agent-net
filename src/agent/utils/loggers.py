@@ -38,17 +38,26 @@ class MessageLogger:
     session_dir:
         Path to the session results directory (must already exist or be
         creatable).
+    extra_fields:
+        Optional fields added to every event, such as a workflow ``phase``.
     """
 
-    def __init__(self, agent: str, session_dir: str) -> None:
+    def __init__(
+        self,
+        agent: str,
+        session_dir: str,
+        extra_fields: dict[str, Any] | None = None,
+    ) -> None:
         self.agent = agent
         self._path = Path(session_dir) / MESSAGES_FILENAME
+        self._extra_fields = extra_fields or {}
         os.makedirs(session_dir, exist_ok=True)
 
     def log(self, event_type: str, payload: dict[str, Any]) -> None:
         entry = {
             "timestamp": datetime.now().isoformat(),
             "agent": self.agent,
+            **self._extra_fields,
             "event": event_type,
             **payload,
         }
@@ -63,9 +72,18 @@ class AgentCallbackLogger(BaseCallbackHandler):
     ``_log(event_type, payload)`` interface for use in agent code.
     """
 
-    def __init__(self, agent: str, session_dir: str) -> None:
+    def __init__(
+        self,
+        agent: str,
+        session_dir: str,
+        extra_fields: dict[str, Any] | None = None,
+    ) -> None:
         super().__init__()
-        self._logger = MessageLogger(agent=agent, session_dir=session_dir)
+        self._logger = MessageLogger(
+            agent=agent,
+            session_dir=session_dir,
+            extra_fields=extra_fields,
+        )
 
     # Compatibility shim used by MockAgent and tests.
     def _log(self, event_type: str, payload: dict[str, Any]) -> None:

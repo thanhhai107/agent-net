@@ -4,7 +4,7 @@ import typer
 
 from agent.cli.codex_worker import REASONING_EFFORT_LEVELS
 
-SUPPORTED_AGENT_TYPES = ("react", "mock", "cli")
+SUPPORTED_AGENT_TYPES = ("react", "plan-execute", "reflection", "mock", "cli")
 SUPPORTED_LLM_BACKENDS = ("openai", "ollama", "deepseek")
 
 agent_app = typer.Typer(help="Troubleshooting agents.")
@@ -33,7 +33,10 @@ def agent_run(
         20,
         "-n",
         "--max-steps",
-        help="Max ReAct steps (react and mock only; ignored for cli).",
+        help=(
+            "Per-worker step limit for LangGraph agents; also the maximum "
+            "executed plan items for plan-execute. Ignored for cli."
+        ),
     ),
     reasoning_effort: str | None = typer.Option(
         None,

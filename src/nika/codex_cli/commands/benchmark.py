@@ -44,7 +44,10 @@ def benchmark_run(
         20,
         "-n",
         "--max-steps",
-        help="Max ReAct steps (react and mock only; ignored for cli).",
+        help=(
+            "Per-worker step limit for LangGraph agents; also the maximum "
+            "executed plan items for plan-execute. Ignored for cli."
+        ),
     ),
     parallel: int = typer.Option(
         1,

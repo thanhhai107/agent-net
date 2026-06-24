@@ -1,0 +1,363 @@
+"""Plan-and-execute troubleshooting workflow."""
+
+import asyncio
+import json
+import logging
+import os
+from typing import Any
+
+import langsmith as ls
+from dotenv import load_dotenv
+from langchain.agents import create_agent
+from langchain_core.messages import HumanMessage, SystemMessage
+from langfuse import get_client
+from langfuse.langchain import CallbackHandler
+from langgraph.errors import GraphRecursionError
+from langgraph.graph import END, START, StateGraph
+from typing_extensions import TypedDict
+
+from agent.langgraph.domain_agents.diagnosis_agent import DiagnosisAgent
+from agent.langgraph.domain_agents.submission_agent import SubmissionAgent
+from agent.langgraph.workflow_models import (
+    InvestigationPlan,
+    PlanStep,
+    ReplanDecision,
+    StepResult,
+)
+from agent.llm.model_factory import load_model
+from agent.utils.loggers import AgentCallbackLogger
+from nika.utils.logger import system_logger
+from nika.utils.session import Session
+
+load_dotenv()
+logging.basicConfig(level=logging.INFO)
+
+PLANNER_PROMPT = """\
+You are a network troubleshooting planner. Create a concise, ordered investigation
+plan for the task. Each step must be independently executable with network
+diagnostic tools and must name the evidence it expects to collect. Do not diagnose
+the fault yet and do not propose mitigation.
+"""
+
+EXECUTOR_PROMPT = """\
+You are a network troubleshooting executor. Perform only the assigned investigation
+step using the available tools. Report the commands or checks performed, the
+observations, and what those observations imply. Do not submit a final answer and
+do not perform unrelated plan steps.
+"""
+
+REPLANNER_PROMPT = """\
+You are coordinating a network investigation. Review the original objective,
+completed evidence, and remaining plan. If anomaly detection, faulty-device
+localization, and root-cause identification are sufficiently supported, finish with
+a concise diagnosis report. Otherwise return a revised ordered list of only the
+remaining investigation steps. Do not include already completed work.
+"""
+
+SYNTHESIS_PROMPT = """\
+You are a network troubleshooting expert. Produce the best possible final diagnosis
+from the collected evidence. Explicitly state whether an anomaly exists, the faulty
+devices, the likely root cause, and the supporting evidence. Acknowledge uncertainty
+when evidence is incomplete. Do not propose mitigation.
+"""
+
+
+class PlanExecuteState(TypedDict, total=False):
+    task_description: str
+    objective: str
+    plan: list[PlanStep]
+    completed_steps: list[StepResult]
+    executed_steps: int
+    diagnosis_report: str
+    planning_failed: bool
+    messages: list[Any]
+
+
+class PlanExecuteAgent:
+    """Planner → executor → replanner troubleshooting workflow."""
+
+    def __init__(
+        self,
+        session_id: str,
+        llm_backend: str = "openai",
+        model: str = "gpt-5-mini",
+        max_steps: int = 20,
+    ) -> None:
+        if max_steps < 1:
+            raise ValueError("max_steps must be >= 1")
+
+        self.session_id = session_id
+        self.max_steps = max_steps
+        self.session = Session()
+        self.session.load_running_session(session_id=session_id)
+        self.session_dir = self.session.session_dir
+        self.llm = load_model(llm_backend=llm_backend, model=model)
+        self.planner = self.llm.with_structured_output(InvestigationPlan)
+        self.replanner = self.llm.with_structured_output(ReplanDecision)
+
+        diagnosis = DiagnosisAgent(
+            session_id=session_id,
+            llm_backend=llm_backend,
+            model=model,
+            scenario_name=self.session.scenario_name,
+            problem_names=self.session.problem_names,
+        )
+        asyncio.run(diagnosis.load_tools())
+        self.executor = create_agent(
+            model=self.llm,
+            system_prompt=EXECUTOR_PROMPT,
+            tools=diagnosis.tools,
+            name="PlanExecutor",
+        )
+
+        submission = SubmissionAgent(
+            session_id=session_id,
+            llm_backend=llm_backend,
+            model=model,
+        )
+        asyncio.run(submission.load_tools())
+        self.submission_agent = submission.get_agent()
+
+        self.langfuse_handler = CallbackHandler()
+        if get_client().auth_check():
+            system_logger.info("Authentication to Langfuse successful.")
+        else:
+            system_logger.warning(
+                "Authentication to Langfuse failed. Please check your LANGFUSE_API_KEY."
+            )
+
+        builder = StateGraph(PlanExecuteState)
+        builder.add_node("planner", self._plan)
+        builder.add_node("executor", self._execute)
+        builder.add_node("replanner", self._replan)
+        builder.add_node("synthesis", self._synthesize)
+        builder.add_node("submission", self._submit)
+        builder.add_edge(START, "planner")
+        builder.add_conditional_edges(
+            "planner",
+            self._route_after_plan,
+            {"executor": "executor", "end": END},
+        )
+        builder.add_edge("executor", "replanner")
+        builder.add_conditional_edges(
+            "replanner",
+            self._route_after_replan,
+            {
+                "executor": "executor",
+                "synthesis": "synthesis",
+                "submission": "submission",
+            },
+        )
+        builder.add_edge("synthesis", "submission")
+        builder.add_edge("submission", END)
+        self.graph = builder.compile()
+
+    def _callback(self, phase: str) -> AgentCallbackLogger:
+        return AgentCallbackLogger(
+            agent="diagnosis_agent",
+            session_dir=self.session_dir,
+            extra_fields={"phase": phase},
+        )
+
+    async def run(self, task_description: str) -> dict[str, Any]:
+        with ls.tracing_context(
+            project_name=os.getenv("LANGSMITH_PROJECT", "NIKA"),
+            metadata={
+                "scenario": self.session.scenario_name,
+                "problem": self.session.problem_names[0],
+                "topo_size": self.session.scenario_topo_size,
+                "model": self.session.model,
+                "agent": "plan-execute",
+            },
+        ):
+            return await self.graph.ainvoke(
+                {
+                    "task_description": task_description,
+                    "plan": [],
+                    "completed_steps": [],
+                    "executed_steps": 0,
+                    "diagnosis_report": "",
+                    "planning_failed": False,
+                    "messages": [HumanMessage(content=task_description)],
+                },
+                config={
+                    "callbacks": [self.langfuse_handler],
+                    "recursion_limit": self.max_steps * 3 + 10,
+                },
+            )
+
+    async def _plan(self, state: PlanExecuteState) -> dict[str, Any]:
+        callback = self._callback("planner")
+        try:
+            raw_plan = await self.planner.ainvoke(
+                [
+                    SystemMessage(content=PLANNER_PROMPT),
+                    HumanMessage(content=state["task_description"]),
+                ],
+                config={"callbacks": [callback]},
+            )
+            plan = InvestigationPlan.model_validate(raw_plan)
+            return {
+                "objective": plan.objective,
+                "plan": plan.steps,
+                "planning_failed": False,
+            }
+        except Exception as exc:
+            callback._log("error", {"message": f"Planner failed: {exc}"})
+            return {"plan": [], "planning_failed": True}
+
+    @staticmethod
+    def _route_after_plan(state: PlanExecuteState) -> str:
+        return "executor" if state.get("plan") and not state.get("planning_failed") else "end"
+
+    async def _execute(self, state: PlanExecuteState) -> dict[str, Any]:
+        step = state["plan"][0]
+        callback = self._callback("executor")
+        prior_evidence = [
+            item.model_dump() for item in state.get("completed_steps", [])
+        ]
+        prompt = (
+            f"Original task: {state['task_description']}\n"
+            f"Investigation objective: {state['objective']}\n"
+            f"Step ID: {step.step_id}\n"
+            f"Action: {step.action}\n"
+            f"Expected evidence: {step.expected_evidence}\n"
+            f"Evidence from completed steps: "
+            f"{json.dumps(prior_evidence, ensure_ascii=False)}"
+        )
+        try:
+            result = await self.executor.ainvoke(
+                {"messages": [HumanMessage(content=prompt)]},
+                config={
+                    "callbacks": [callback],
+                    "recursion_limit": self.max_steps,
+                },
+            )
+            observation = str(result["messages"][-1].content)
+            step_result = StepResult(step=step, observation=observation)
+        except Exception as exc:
+            callback._log(
+                "error",
+                {"message": f"Executor failed for {step.step_id}: {exc}"},
+            )
+            step_result = StepResult(
+                step=step,
+                observation=f"ERROR: {exc}",
+                succeeded=False,
+            )
+
+        return {
+            "plan": state["plan"][1:],
+            "completed_steps": [*state.get("completed_steps", []), step_result],
+            "executed_steps": state.get("executed_steps", 0) + 1,
+        }
+
+    async def _replan(self, state: PlanExecuteState) -> dict[str, Any]:
+        callback = self._callback("replanner")
+        evidence = [item.model_dump() for item in state.get("completed_steps", [])]
+        remaining = [item.model_dump() for item in state.get("plan", [])]
+        prompt = json.dumps(
+            {
+                "objective": state["objective"],
+                "task": state["task_description"],
+                "completed_evidence": evidence,
+                "remaining_plan": remaining,
+            },
+            ensure_ascii=False,
+        )
+        try:
+            raw_decision = await self.replanner.ainvoke(
+                [
+                    SystemMessage(content=REPLANNER_PROMPT),
+                    HumanMessage(content=prompt),
+                ],
+                config={"callbacks": [callback]},
+            )
+            decision = ReplanDecision.model_validate(raw_decision)
+            if decision.completed:
+                return {
+                    "diagnosis_report": decision.diagnosis_report,
+                    "plan": [],
+                }
+            return {"plan": decision.remaining_steps}
+        except Exception as exc:
+            callback._log("error", {"message": f"Replanner failed: {exc}"})
+            return {"plan": state.get("plan", [])}
+
+    def _route_after_replan(self, state: PlanExecuteState) -> str:
+        if state.get("diagnosis_report", "").strip():
+            return "submission"
+        if state.get("executed_steps", 0) >= self.max_steps:
+            return "synthesis"
+        if state.get("plan"):
+            return "executor"
+        return "synthesis"
+
+    async def _synthesize(self, state: PlanExecuteState) -> dict[str, Any]:
+        callback = self._callback("synthesis")
+        evidence = [item.model_dump() for item in state.get("completed_steps", [])]
+        try:
+            response = await self.llm.ainvoke(
+                [
+                    SystemMessage(content=SYNTHESIS_PROMPT),
+                    HumanMessage(
+                        content=json.dumps(
+                            {
+                                "task": state["task_description"],
+                                "evidence": evidence,
+                            },
+                            ensure_ascii=False,
+                        )
+                    ),
+                ],
+                config={"callbacks": [callback]},
+            )
+            return {"diagnosis_report": str(response.content)}
+        except Exception as exc:
+            callback._log("error", {"message": f"Synthesis failed: {exc}"})
+            return {"diagnosis_report": ""}
+
+    async def _submit(self, state: PlanExecuteState) -> dict[str, Any]:
+        report = state.get("diagnosis_report", "").strip()
+        if not report:
+            self._callback("submission")._log(
+                "error",
+                {"message": "Submission skipped because no valid diagnosis report is available."},
+            )
+            return {}
+        try:
+            result = await self.submission_agent.ainvoke(
+                {
+                    "messages": [
+                        HumanMessage(
+                            content=(
+                                f"Based on the diagnosis report: {report}, please provide "
+                                "the submission. Do not submit if no report is available."
+                            )
+                        )
+                    ]
+                },
+                config={
+                    "callbacks": [
+                        AgentCallbackLogger(
+                            agent="submission_agent",
+                            session_dir=self.session_dir,
+                            extra_fields={"phase": "submission"},
+                        )
+                    ],
+                    "recursion_limit": self.max_steps,
+                },
+            )
+            return {"messages": result["messages"]}
+        except GraphRecursionError:
+            self._callback("submission")._log(
+                "error",
+                {"message": "Submission agent reached max recursion limit."},
+            )
+            return {}
+        except Exception as exc:
+            self._callback("submission")._log(
+                "error",
+                {"message": f"Submission agent failed: {exc}"},
+            )
+            return {}

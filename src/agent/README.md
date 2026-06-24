@@ -8,8 +8,11 @@
 src/agent/
 ├── protocols.py          # Shared Protocol interface
 ├── registry.py           # Type registry and factory for `nika agent run`
-├── langgraph/            # [implemented] LangGraph + LangChain ReAct
-│   ├── react_agent.py    # StateGraph orchestration: diagnosis → submission
+├── langgraph/            # [implemented] LangGraph + LangChain workflows
+│   ├── react_agent.py    # ReAct orchestration: diagnosis → submission
+│   ├── plan_execute_agent.py
+│   ├── reflection_agent.py
+│   ├── workflow_models.py
 │   └── domain_agents/    # LangChain create_agent subgraphs
 ├── mock/                 # [implemented] Deterministic mock without an LLM
 │   └── mock_agent.py
@@ -27,11 +30,13 @@ src/agent/
     └── loggers.py        # Structured logging to messages.jsonl
 ```
 
-## Four Implementation Paths
+## Agent Implementations
 
 | Type | CLI name | Orchestration | LLM access | Status |
 |------|----------|---------------|------------|--------|
 | LangGraph | `react` | LangGraph `StateGraph` | LangChain ReAct + `load_model()` | Implemented |
+| LangGraph | `plan-execute` | Planner → executor → replanner | LangChain structured output + ReAct tools | Implemented |
+| LangGraph | `reflection` | Diagnosis → critic → reviser | LangChain structured output + ReAct tools | Implemented |
 | Mock | `mock` | Hand-written two-phase flow | No LLM; fixed tool sequence | Implemented |
 | SDK | `sdk` | TBD (recommended: same two phases) | Anthropic SDK / Cursor SDK | Planned |
 | LangGraph + CLI | `cli` | LangGraph `StateGraph` | `codex exec` subprocess | Implemented |
@@ -75,7 +80,32 @@ nika agent run -a react -b openai -m gpt-5-mini -n 20
 nika agent run -a react -b deepseek -m deepseek-chat -n 20
 ```
 
-## 2. Mock Path (`-a mock`)
+## 2. Plan & Execute Path (`-a plan-execute`)
+
+**Entry point**: `agent.langgraph.plan_execute_agent.PlanExecuteAgent`
+
+- The planner creates a typed investigation plan.
+- A tool-enabled ReAct executor completes one plan item at a time.
+- The replanner either revises the remaining steps or emits the final diagnosis.
+- `--max-steps` limits both each executor invocation and total executed plan items.
+
+```bash
+nika agent run -a plan-execute -b openai -m gpt-5-mini -n 20
+```
+
+## 3. Reflection Path (`-a reflection`)
+
+**Entry point**: `agent.langgraph.reflection_agent.ReflectionAgent`
+
+- Runs the normal ReAct diagnosis once.
+- A structured critic checks evidence, localization, root cause, and contradictions.
+- A tool-enabled reviser performs one revision pass and may collect missing evidence.
+
+```bash
+nika agent run -a reflection -b openai -m gpt-5-mini -n 20
+```
+
+## 4. Mock Path (`-a mock`)
 
 **Entry point**: `agent.mock.mock_agent.MockAgent`
 
@@ -87,7 +117,7 @@ nika agent run -a react -b deepseek -m deepseek-chat -n 20
 nika agent run -a mock -n 5
 ```
 
-## 3. SDK Path (`-a sdk`, planned)
+## 5. SDK Path (`-a sdk`, planned)
 
 **Placeholder**: `agent.sdk.agent.SdkAgent`
 
@@ -99,7 +129,7 @@ Design notes:
 
 Register the `"sdk"` branch in `registry.create_agent()` once implemented.
 
-## 4. LangGraph + CLI Path (`-a cli`)
+## 6. LangGraph + CLI Path (`-a cli`)
 
 **Entry point**: `agent.cli.agent.CliAgent`
 
@@ -116,7 +146,7 @@ codex login
 nika agent run -a cli -m gpt-5.4-mini -e medium
 ```
 
-The `-b` / `--backend` flag applies to ``react`` and ``mock`` only; Codex CLI always uses OpenAI models.
+The `-b` / `--backend` flag applies to ``react``, ``plan-execute``, ``reflection``, and ``mock``; Codex CLI always uses OpenAI models.
 Use `-e` / `--reasoning-effort` to set Codex ``model_reasoning_effort`` (``none``, ``minimal``, ``low``, ``medium``, ``high``, ``xhigh``).
 
 ## Example Workflow
@@ -141,7 +171,9 @@ See the root [README.md](../../README.md#troubleshooting-agents) for a longer wa
 
 ```bash
 nika agent list                              # List agent types and LLM backends
-nika agent run -a react -b openai -m ...   # LangGraph path
+nika agent run -a react -b openai -m ...   # ReAct baseline
+nika agent run -a plan-execute -b openai -m ...
+nika agent run -a reflection -b openai -m ...
 nika agent run -a cli -m gpt-5.4-mini      # Codex CLI path
 nika agent run -a mock                       # Mock path (no LLM required)
 # nika agent run -a sdk                      # Not yet implemented

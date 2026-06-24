@@ -43,10 +43,10 @@ This flag is reused on **`nika benchmark run`** and **`nika traffic run`** when 
 
 Aligned with `nika agent run`:
 
-- **`-a` / `--agent`**: `react` (LangGraph + LangChain ReAct), `cli` (LangGraph + Codex CLI subprocess), or `mock` (pipeline testing without an LLM).
-- **`-b` / `--backend`**: LLM provider for `react` and `mock` (`openai`, `ollama`, `deepseek`). Ignored for `cli` (Codex uses OpenAI models).
+- **`-a` / `--agent`**: `react`, `plan-execute`, or `reflection` (LangGraph + LangChain), `cli` (LangGraph + Codex CLI subprocess), or `mock` (pipeline testing without an LLM).
+- **`-b` / `--backend`**: LLM provider for `react`, `plan-execute`, `reflection`, and `mock` (`openai`, `ollama`, `deepseek`). Ignored for `cli` (Codex uses OpenAI models).
 - **`-m` / `--model`**: model id.
-- **`-n` / `--max-steps`**: max ReAct recursion steps per phase (`react` and `mock` only).
+- **`-n` / `--max-steps`**: per-worker recursion limit for LangGraph agents; also caps executed plan items for `plan-execute`.
 - **`-e` / `--reasoning-effort`**: Codex `model_reasoning_effort` (`cli` only): `none`, `minimal`, `low`, `medium`, `high`, `xhigh`.
 
 `nika eval judge` uses **`-b`** and **`-m`** for the judge only (no agent in that command).
@@ -111,10 +111,10 @@ Example: `nika exec pc1 ping -c 3 10.0.0.2 --timeout 30`
 
   | Flag | Applies to | Meaning |
   |------|------------|---------|
-  | `-a` / `--agent` | all | `react`, `cli`, or `mock` |
+  | `-a` / `--agent` | all | `react`, `plan-execute`, `reflection`, `cli`, or `mock` |
   | `-b` / `--backend` | `react`, `mock` | `openai`, `ollama`, or `deepseek` |
   | `-m` / `--model` | all | model id |
-  | `-n` / `--max-steps` | `react`, `mock` | ReAct step cap per phase |
+  | `-n` / `--max-steps` | LangGraph, `mock` | Worker step cap; plan-item cap for `plan-execute` |
   | `-e` / `--reasoning-effort` | `cli` | Codex reasoning effort level |
   | `--session-id` | all | target session |
 
@@ -122,6 +122,8 @@ Example: `nika exec pc1 ping -c 3 10.0.0.2 --timeout 30`
 
   ```shell
   nika agent run -a react -b openai -m gpt-5-mini -n 20
+  nika agent run -a plan-execute -b openai -m gpt-5-mini -n 20
+  nika agent run -a reflection -b openai -m gpt-5-mini -n 20
   nika agent run -a cli -m gpt-5.4-mini -e medium
   nika agent run -a mock -n 5
   ```
@@ -182,7 +184,7 @@ nika benchmark run -j 4
 | `scenario` | Scenario id (same as `nika env run`) |
 | `topo_size` | Tier `s`, `m`, or `l`; **empty** for scenarios without tiers (same values as `nika env run -t`) |
 
-Agent and judge options use the same flags as below (including `-a cli` and `-e` for Codex runs; `-n` applies only to `react` and `mock`).
+Agent and judge options use the same flags as below (including `-a cli` and `-e` for Codex runs; `-n` applies to all agents except `cli`).
 
 ### Single-case mode
 
