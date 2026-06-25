@@ -11,6 +11,7 @@ load_dotenv(_REPO_ROOT / ".env")
 
 RUNTIME_DIR = _REPO_ROOT / "runtime"
 SESSIONS_DIR = RUNTIME_DIR / "sessions"
+MEMORY_DIR = RUNTIME_DIR / "memory"
 RESULTS_DIR = _REPO_ROOT / "results"
 BENCHMARK_DIR = _REPO_ROOT / "benchmark"
 MCP_SERVER_DIR = _PKG_DIR / "service" / "mcp_server"

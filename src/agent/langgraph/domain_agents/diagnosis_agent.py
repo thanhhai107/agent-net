@@ -28,10 +28,14 @@ class DiagnosisAgent:
         model: str = "gpt-5-mini",
         scenario_name: str = "",
         problem_names: list[str] | None = None,
+        load_all_tools: bool = False,
     ):
         mcp_cfg = MCPServerConfig(session_id=session_id)
-        server_names = select_diagnosis_servers(scenario_name, problem_names or [])
-        mcp_server_config = mcp_cfg.load_filtered_config(server_names)
+        if load_all_tools:
+            mcp_server_config = mcp_cfg.load_config(if_submit=False)
+        else:
+            server_names = select_diagnosis_servers(scenario_name, problem_names or [])
+            mcp_server_config = mcp_cfg.load_filtered_config(server_names)
         self.client = MultiServerMCPClient(connections=mcp_server_config)
         self.tools = None
         self.llm = load_model(llm_backend=llm_backend, model=model)
@@ -44,6 +48,9 @@ class DiagnosisAgent:
 
     def get_agent(self):
         agent = create_agent(
-            model=self.llm, system_prompt=OVERALL_DIAGNOSIS_PROMPT, tools=self.tools, name="DiagnosisAgent"
+            model=self.llm,
+            system_prompt=OVERALL_DIAGNOSIS_PROMPT,
+            tools=self.tools,
+            name="DiagnosisAgent",
         )
         return agent

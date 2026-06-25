@@ -66,13 +66,22 @@ class WorkflowRegistrationTest(unittest.TestCase):
     def test_cli_lists_all_agent_types(self) -> None:
         self.assertEqual(
             SUPPORTED_AGENT_TYPES,
-            ("react", "plan-execute", "reflexion", "mock", "cli"),
+            (
+                "react",
+                "plan-execute",
+                "reflexion",
+                "mock",
+                "cli",
+            ),
         )
 
     def test_registry_constructs_new_agent_types(self) -> None:
         with (
+            patch("agent.registry.BasicReActAgent") as react_agent,
             patch("agent.registry.PlanExecuteAgent") as plan_agent,
             patch("agent.registry.ReflexionAgent") as reflexion_agent,
+            patch("agent.registry.HybridMemoryModule") as memory_module,
+            patch("agent.registry.MemoryAugmentedAgent") as memory_adapter,
         ):
             create_agent(
                 "plan-execute",
@@ -89,6 +98,17 @@ class WorkflowRegistrationTest(unittest.TestCase):
                 max_steps=9,
                 max_attempts=4,
             )
+            create_agent(
+                "react",
+                session_id="session",
+                llm_backend="openai",
+                model="model",
+                max_steps=11,
+                memory_mode="read",
+                memory_bank="experiment",
+                memory_top_k=4,
+                memory_token_budget=900,
+            )
 
         plan_agent.assert_called_once_with(
             session_id="session",
@@ -103,6 +123,25 @@ class WorkflowRegistrationTest(unittest.TestCase):
             max_steps=9,
             max_attempts=4,
         )
+        react_agent.assert_called_once_with(
+            session_id="session",
+            llm_backend="openai",
+            model="model",
+            max_steps=11,
+            use_problem_tool_hints=False,
+        )
+        memory_module.assert_called_once_with(
+            bank_id="experiment",
+            llm_backend="openai",
+            model="model",
+        )
+        memory_adapter.assert_called_once_with(
+            react_agent.return_value,
+            memory_module.return_value,
+            memory_mode="read",
+            memory_top_k=4,
+            memory_token_budget=900,
+        )
 
     def test_cli_lists_netmind_backend(self) -> None:
         self.assertIn("netmind", SUPPORTED_LLM_BACKENDS)
@@ -115,6 +154,55 @@ class WorkflowRegistrationTest(unittest.TestCase):
                 "MiniMax/MiniMax-M2.7",
             ),
         )
+
+    def test_memory_composes_with_each_supported_workflow(self) -> None:
+        cases = (
+            ("react", "agent.registry.BasicReActAgent", {}),
+            ("plan-execute", "agent.registry.PlanExecuteAgent", {}),
+            (
+                "reflexion",
+                "agent.registry.ReflexionAgent",
+                {"max_attempts": 4},
+            ),
+        )
+        for agent_type, target, extra in cases:
+            with self.subTest(agent_type=agent_type):
+                with (
+                    patch(target) as workflow,
+                    patch("agent.registry.HybridMemoryModule") as memory_module,
+                    patch("agent.registry.MemoryAugmentedAgent") as adapter,
+                ):
+                    result = create_agent(
+                        agent_type,
+                        session_id="session",
+                        llm_backend="openai",
+                        model="model",
+                        max_steps=7,
+                        memory_mode="evolve",
+                        memory_bank="experiment",
+                        **extra,
+                    )
+
+                self.assertIs(result, adapter.return_value)
+                self.assertFalse(workflow.call_args.kwargs["use_problem_tool_hints"])
+                adapter.assert_called_once_with(
+                    workflow.return_value,
+                    memory_module.return_value,
+                    memory_mode="evolve",
+                    memory_top_k=5,
+                    memory_token_budget=1500,
+                )
+
+    def test_memory_rejects_unsupported_workflow(self) -> None:
+        with self.assertRaisesRegex(ValueError, "supported only"):
+            create_agent(
+                "mock",
+                session_id="session",
+                llm_backend="mock",
+                model="model",
+                memory_mode="read",
+            )
+
 
 class ModelFactoryTest(unittest.TestCase):
     @patch.dict("os.environ", {}, clear=True)
@@ -298,17 +386,13 @@ class PlanExecuteBehaviorTest(unittest.IsolatedAsyncioTestCase):
                 "objective": "Find the fault",
                 "task_description": "Diagnose",
                 "plan": [],
-                "completed_steps": [
-                    StepResult(step=step, observation="Packet loss")
-                ],
+                "completed_steps": [StepResult(step=step, observation="Packet loss")],
             }
         )
 
         self.assertEqual(update["diagnosis_report"], "Link failure on r1.")
         self.assertEqual(
-            self.agent._route_after_replan(
-                {**update, "executed_steps": 1}
-            ),
+            self.agent._route_after_replan({**update, "executed_steps": 1}),
             "submission",
         )
 

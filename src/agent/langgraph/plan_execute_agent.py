@@ -82,6 +82,7 @@ class PlanExecuteAgent:
         llm_backend: str = "openai",
         model: str = "gpt-5-mini",
         max_steps: int = 20,
+        use_problem_tool_hints: bool = True,
     ) -> None:
         if max_steps < 1:
             raise ValueError("max_steps must be >= 1")
@@ -100,9 +101,13 @@ class PlanExecuteAgent:
             llm_backend=llm_backend,
             model=model,
             scenario_name=self.session.scenario_name,
-            problem_names=self.session.problem_names,
+            problem_names=(
+                self.session.problem_names if use_problem_tool_hints else []
+            ),
+            load_all_tools=not use_problem_tool_hints,
         )
         asyncio.run(diagnosis.load_tools())
+        self.diagnosis_tool_names = [tool.name for tool in (diagnosis.tools or [])]
         self.executor = create_agent(
             model=self.llm,
             system_prompt=EXECUTOR_PROMPT,
@@ -208,7 +213,11 @@ class PlanExecuteAgent:
 
     @staticmethod
     def _route_after_plan(state: PlanExecuteState) -> str:
-        return "executor" if state.get("plan") and not state.get("planning_failed") else "end"
+        return (
+            "executor"
+            if state.get("plan") and not state.get("planning_failed")
+            else "end"
+        )
 
     async def _execute(self, state: PlanExecuteState) -> dict[str, Any]:
         step = state["plan"][0]
@@ -322,7 +331,9 @@ class PlanExecuteAgent:
         if not report:
             self._callback("submission")._log(
                 "error",
-                {"message": "Submission skipped because no valid diagnosis report is available."},
+                {
+                    "message": "Submission skipped because no valid diagnosis report is available."
+                },
             )
             return {}
         try:

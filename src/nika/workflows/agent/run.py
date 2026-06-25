@@ -3,7 +3,7 @@
 import asyncio
 import logging
 
-from agent.registry import create_agent
+from agent.registry import MEMORY_COMPATIBLE_AGENT_TYPES, create_agent
 from nika.utils.logger import bind_session_dir, log_event
 from nika.utils.session import Session
 
@@ -20,8 +20,18 @@ def start_agent(
     session_id: str | None = None,
     reasoning_effort: str | None = None,
     stream_output: bool = True,
+    memory_mode: str = "off",
+    memory_bank: str = "default",
+    memory_top_k: int = 5,
+    memory_token_budget: int = 1500,
 ) -> None:
     """Load the running session, run the agent on ``task_description``, then end the session."""
+    if memory_mode not in {"off", "read", "evolve"}:
+        raise ValueError("memory_mode must be one of: off, read, evolve")
+    if memory_mode != "off" and agent_type.lower() not in MEMORY_COMPATIBLE_AGENT_TYPES:
+        supported = ", ".join(sorted(MEMORY_COMPATIBLE_AGENT_TYPES))
+        raise ValueError(f"memory is supported only for these workflows: {supported}")
+
     session = Session()
     session.load_running_session(session_id=session_id)
     session.update_session("agent_type", agent_type)
@@ -29,6 +39,11 @@ def start_agent(
     session.update_session("model", model)
     if agent_type == "reflexion":
         session.update_session("max_attempts", max_attempts)
+    session.update_session("memory_mode", memory_mode)
+    if memory_mode != "off":
+        session.update_session("memory_bank", memory_bank)
+        session.update_session("memory_top_k", memory_top_k)
+        session.update_session("memory_token_budget", memory_token_budget)
     if reasoning_effort is not None:
         session.update_session("reasoning_effort", reasoning_effort)
     session.start_session()
@@ -42,7 +57,9 @@ def start_agent(
         model=model,
     )
     if agent_type == "cli" and stream_output:
-        effort_line = f" | Reasoning effort: {reasoning_effort}" if reasoning_effort else ""
+        effort_line = (
+            f" | Reasoning effort: {reasoning_effort}" if reasoning_effort else ""
+        )
         print(
             f"Session {session.session_id}\n"
             f"Agent: cli | Model: {model}{effort_line}\n"
@@ -58,6 +75,10 @@ def start_agent(
         max_attempts=max_attempts,
         reasoning_effort=reasoning_effort,
         stream_output=stream_output,
+        memory_mode=memory_mode,
+        memory_bank=memory_bank,
+        memory_top_k=memory_top_k,
+        memory_token_budget=memory_token_budget,
     )
     asyncio.run(agent.run(task_description=session.task_description))
 

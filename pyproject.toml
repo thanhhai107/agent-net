@@ -26,7 +26,8 @@ dependencies = [
     "langchain",
     "typer>=0.25.1",
     "func_timeout",
-    "streamlit>=1.40"
+    "streamlit>=1.40",
+    "qdrant-client>=1.14,<2",
 ]
 
 [project.scripts]

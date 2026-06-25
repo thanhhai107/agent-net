@@ -4,7 +4,9 @@ import random
 from typing import Iterable, Optional
 
 from nika.net_env.base import NetworkEnvBase
-from nika.net_env.intradomain_routing.ospf_enterprise.lab_static import OSPFEnterpriseStatic
+from nika.net_env.intradomain_routing.ospf_enterprise.lab_static import (
+    OSPFEnterpriseStatic,
+)
 from nika.net_env.net_env_pool import get_net_env_instance
 from nika.service.kathara import KatharaAPIALL
 
@@ -12,7 +14,7 @@ from nika.service.kathara import KatharaAPIALL
 class WebBrowsingTrafficGenerator:
     def __init__(
         self,
-        scenario_name: NetworkEnvBase = OSPFEnterpriseStatic(),
+        scenario_name: NetworkEnvBase | str = "ospf_enterprise_static",
         request_delay_range: tuple[float, float] = (1.0, 5.0),
         pages_per_session_range: tuple[int, int] = (3, 10),
         loop_forever: bool = True,
@@ -48,12 +50,14 @@ class WebBrowsingTrafficGenerator:
             num_pages = random.randint(*self.pages_per_session_range)
 
             if num_pages >= len(self.web_domains):
-                domains_to_visit: Iterable[str] = random.sample(self.web_domains, k=len(self.web_domains))
+                domains_to_visit: Iterable[str] = random.sample(
+                    self.web_domains, k=len(self.web_domains)
+                )
             else:
                 domains_to_visit = random.sample(self.web_domains, k=num_pages)
 
             for web_domain in domains_to_visit:
-                result = await self._browse_once(src_host, web_domain)
+                await self._browse_once(src_host, web_domain)
 
                 delay = random.uniform(*self.request_delay_range)
                 await asyncio.sleep(delay)
@@ -65,7 +69,9 @@ class WebBrowsingTrafficGenerator:
             await asyncio.sleep(session_pause)
 
     async def _generate_traffic_async(self):
-        tasks = [asyncio.create_task(self._client_session(client)) for client in self.clients]
+        tasks = [
+            asyncio.create_task(self._client_session(client)) for client in self.clients
+        ]
         await asyncio.gather(*tasks)
 
     async def generate_traffic(self):

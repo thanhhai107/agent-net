@@ -96,6 +96,7 @@ class ReflexionAgent:
         model: str = "gpt-5-mini",
         max_steps: int = 20,
         max_attempts: int = 3,
+        use_problem_tool_hints: bool = True,
     ) -> None:
         if max_steps < 1:
             raise ValueError("max_steps must be >= 1")
@@ -117,9 +118,13 @@ class ReflexionAgent:
             llm_backend=llm_backend,
             model=model,
             scenario_name=self.session.scenario_name,
-            problem_names=self.session.problem_names,
+            problem_names=(
+                self.session.problem_names if use_problem_tool_hints else []
+            ),
+            load_all_tools=not use_problem_tool_hints,
         )
         asyncio.run(diagnosis.load_tools())
+        self.diagnosis_tool_names = [tool.name for tool in (diagnosis.tools or [])]
         self.actor = create_agent(
             model=self.llm,
             system_prompt=ACTOR_PROMPT,
@@ -309,7 +314,9 @@ class ReflexionAgent:
             }
             report = state.get("attempt_report", "").strip()
             best_score = state.get("best_score", -1.0)
-            if report and (evaluation.success or evaluation.quality_score >= best_score):
+            if report and (
+                evaluation.success or evaluation.quality_score >= best_score
+            ):
                 update["diagnosis_report"] = report
                 update["best_score"] = evaluation.quality_score
             return update
@@ -401,7 +408,9 @@ class ReflexionAgent:
         if not report:
             self._callback("submission")._log(
                 "error",
-                {"message": "Submission skipped because no valid diagnosis report is available."},
+                {
+                    "message": "Submission skipped because no valid diagnosis report is available."
+                },
             )
             return {}
         try:

@@ -13,8 +13,6 @@
 
 <h1 id="🤖overview">🤖 Overview</h1>
 
-![alt text](./assets/images/nika_arch_gpt.png)
-
 This repository is a unified platform that can offer: 
 1. A benchmark suite of curated network incidents that covers 54 realistic network issues, ranging from link and host failures to resource contention, and includes five network scenarios, four of which can be instantiated at different topology sizes, spanning campus and data center networks. By combining these dimensions, the benchmark yields 640 distinct troubleshooting incidents for evaluating AI agents. The benchmark can be further extended by randomizing failure locations and composing multiple issues within a single incident. 
 2. A modular plug-and-play orchestration platform that connects AI agents with the network environment, enabling real-time troubleshooting in realistic conditions, and providing a human-facing interface to monitor agent performance.
@@ -238,6 +236,8 @@ nika agent run -a react -b openai -m gpt-5-mini -n 20
 nika agent run -a react -b deepseek -m deepseek-chat -n 20
 nika agent run -a plan-execute -b openai -m gpt-5-mini -n 20
 nika agent run -a reflexion -b openai -m gpt-5-mini -n 20 -r 3
+nika agent run -a react -b openai -m gpt-5-mini \
+  --memory-bank bgp-study --memory-mode evolve
 ```
 
 - **`-b` / `--backend`**: `openai`, `ollama`, or `deepseek`
@@ -252,6 +252,41 @@ Reflexion loop: each tool-enabled attempt is evaluated against strict evidence,
 failed attempts generate compact episodic memory, and the next attempt receives
 that memory as strategy guidance. The loop stops on evaluator success or after
 `--max-attempts`.
+
+### Composable procedural memory
+
+Memory is an optional module composed with `react`, `plan-execute`, or
+`reflexion`; it is not a separate workflow. The wrapper retrieves validated
+procedural lessons before calling the selected workflow. After `nika eval
+metrics` produces detection, localization, and RCA scores, the shared
+post-evaluation hook can evolve the same memory bank.
+
+- SQLite + FTS5 under `runtime/memory/` is the canonical typed memory store.
+- Qdrant is an optional semantic index; the agent falls back to FTS5 when it is
+  unavailable.
+- The extractor sees the diagnosis trajectory but never ground-truth text.
+- Failed episodes may stage only observations/errors. Fully successful episodes
+  can validate learnings; repeated validation promotes them to instructions.
+- Each evaluated episode writes `memory_update.json` and
+  `memory_snapshot.jsonl` under its result directory.
+
+Online evolution must be sequential:
+
+```shell
+nika benchmark run --csv benchmark/benchmark_selected.csv \
+  -a react --memory-mode evolve --memory-bank experiment-01 -j 1
+
+nika benchmark run --csv benchmark/benchmark_selected.csv \
+  -a plan-execute --memory-mode read --memory-bank experiment-01
+
+nika memory inspect --bank experiment-01
+nika memory snapshot --bank experiment-01
+nika memory clear --bank experiment-01 -y
+```
+
+Retrieval defaults to 20 candidates and injects at most 5 memories within an
+estimated 1,500-token budget. Override with `--memory-top-k` and
+`--memory-token-budget`.
 
 ### Codex CLI agent (`-a cli`)
 

@@ -45,6 +45,7 @@ class BasicReActAgent:
         llm_backend: str = "openai",
         model: str = "gpt-5-mini",
         max_steps: int = 20,
+        use_problem_tool_hints: bool = True,
     ):
         self.session_id = session_id
         self.max_steps = max_steps
@@ -62,7 +63,9 @@ class BasicReActAgent:
         if langfuse.auth_check():
             system_logger.info("Authentication to Langfuse successful.")
         else:
-            system_logger.warning("Authentication to Langfuse failed. Please check your LANGFUSE_API_KEY.")
+            system_logger.warning(
+                "Authentication to Langfuse failed. Please check your LANGFUSE_API_KEY."
+            )
 
         # load agent and tools
         diagnosis_agent = DiagnosisAgent(
@@ -70,12 +73,20 @@ class BasicReActAgent:
             llm_backend=llm_backend,
             model=model,
             scenario_name=self.session.scenario_name,
-            problem_names=self.session.problem_names,
+            problem_names=(
+                self.session.problem_names if use_problem_tool_hints else []
+            ),
+            load_all_tools=not use_problem_tool_hints,
         )
         asyncio.run(diagnosis_agent.load_tools())
+        self.diagnosis_tool_names = [
+            tool.name for tool in (diagnosis_agent.tools or [])
+        ]
         self.diagnosis_agent = diagnosis_agent.get_agent()
 
-        submission_agent = SubmissionAgent(session_id=session_id, llm_backend=llm_backend, model=model)
+        submission_agent = SubmissionAgent(
+            session_id=session_id, llm_backend=llm_backend, model=model
+        )
         asyncio.run(submission_agent.load_tools())
         self.submission_agent = submission_agent.get_agent()
 
@@ -119,7 +130,9 @@ class BasicReActAgent:
 
     async def diagnosis_agent_builder(self, state: AgentState):
         try:
-            cb = AgentCallbackLogger(agent="diagnosis_agent", session_dir=self.session_dir)
+            cb = AgentCallbackLogger(
+                agent="diagnosis_agent", session_dir=self.session_dir
+            )
             diagnosis_report = await self.diagnosis_agent.ainvoke(
                 {"messages": state["messages"]},
                 config={
@@ -133,21 +146,27 @@ class BasicReActAgent:
                 "is_max_steps_reached": False,
             }
         except ValidationError as e:
-            AgentCallbackLogger(agent="diagnosis_agent", session_dir=self.session_dir)._log(
-                "error", {"message": f"Validation error: {e}"}
-            )
+            AgentCallbackLogger(
+                agent="diagnosis_agent", session_dir=self.session_dir
+            )._log("error", {"message": f"Validation error: {e}"})
             return {
                 "messages": [HumanMessage(content=f"Error: {e}")],
                 "diagnosis_report": "ERROR_VALIDATION",
                 "is_max_steps_reached": False,
             }
         except GraphRecursionError:
-            AgentCallbackLogger(agent="diagnosis_agent", session_dir=self.session_dir)._log(
+            AgentCallbackLogger(
+                agent="diagnosis_agent", session_dir=self.session_dir
+            )._log(
                 "error",
                 {"message": "Diagnosis agent reached max recursion limit."},
             )
             return {
-                "messages": [HumanMessage(content="Error: diagnosis did not finish within max steps.")],
+                "messages": [
+                    HumanMessage(
+                        content="Error: diagnosis did not finish within max steps."
+                    )
+                ],
                 "diagnosis_report": "ERROR_MAX_STEPS_REACHED",
                 "is_max_steps_reached": True,
             }
@@ -163,7 +182,11 @@ class BasicReActAgent:
                 ]
             },
             config={
-                "callbacks": [AgentCallbackLogger(agent="submission_agent", session_dir=self.session_dir)],
+                "callbacks": [
+                    AgentCallbackLogger(
+                        agent="submission_agent", session_dir=self.session_dir
+                    )
+                ],
                 "recursion_limit": self.max_steps,
             },
             debug=True,

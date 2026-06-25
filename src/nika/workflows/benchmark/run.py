@@ -8,6 +8,7 @@ import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+from agent.registry import MEMORY_COMPATIBLE_AGENT_TYPES
 from nika.config import BENCHMARK_DIR, RESULTS_DIR
 from nika.net_env.net_env_pool import scenario_requires_topo_tier
 from nika.workflows.agent.run import start_agent
@@ -30,6 +31,10 @@ def _benchmark_row_cli_args(
     model: str,
     max_steps: int,
     max_attempts: int,
+    memory_mode: str,
+    memory_bank: str,
+    memory_top_k: int,
+    memory_token_budget: int,
     run_judge: bool,
     judge_llm_backend: str | None,
     judge_model: str | None,
@@ -48,12 +53,26 @@ def _benchmark_row_cli_args(
         str(max_steps),
         "-r",
         str(max_attempts),
+        "--memory-mode",
+        memory_mode,
+        "--memory-bank",
+        memory_bank,
+        "--memory-top-k",
+        str(memory_top_k),
+        "--memory-token-budget",
+        str(memory_token_budget),
     ]
     topo = row.get("topo_size") or ""
     if topo:
         args += ["-t", topo]
     if run_judge:
-        args += ["--judge", "--judge-backend", judge_llm_backend, "--judge-model", judge_model]
+        args += [
+            "--judge",
+            "--judge-backend",
+            judge_llm_backend,
+            "--judge-model",
+            judge_model,
+        ]
     return args
 
 
@@ -65,6 +84,10 @@ def _run_benchmark_row_subprocess(
     model: str,
     max_steps: int,
     max_attempts: int,
+    memory_mode: str,
+    memory_bank: str,
+    memory_top_k: int,
+    memory_token_budget: int,
     run_judge: bool,
     judge_llm_backend: str | None,
     judge_model: str | None,
@@ -77,6 +100,10 @@ def _run_benchmark_row_subprocess(
         model=model,
         max_steps=max_steps,
         max_attempts=max_attempts,
+        memory_mode=memory_mode,
+        memory_bank=memory_bank,
+        memory_top_k=memory_top_k,
+        memory_token_budget=memory_token_budget,
         run_judge=run_judge,
         judge_llm_backend=judge_llm_backend,
         judge_model=judge_model,
@@ -110,6 +137,10 @@ def run_single_benchmark(
     max_steps: int,
     max_attempts: int = 3,
     *,
+    memory_mode: str = "off",
+    memory_bank: str = "default",
+    memory_top_k: int = 5,
+    memory_token_budget: int = 1500,
     run_judge: bool = False,
     judge_llm_backend: str | None = None,
     judge_model: str | None = None,
@@ -120,11 +151,15 @@ def run_single_benchmark(
     Returns:
         The session id for the completed run.
     """
-    print(f"Running benchmark for Problem: {problem}, Scenario: {scenario}, Topo Size: {topo_size}")
+    print(
+        f"Running benchmark for Problem: {problem}, Scenario: {scenario}, Topo Size: {topo_size}"
+    )
 
     tier = topo_size if topo_size else None
     if scenario_requires_topo_tier(scenario) and not tier:
-        raise ValueError(f"Scenario '{scenario}' requires a non-empty topology tier (-t s|m|l).")
+        raise ValueError(
+            f"Scenario '{scenario}' requires a non-empty topology tier (-t s|m|l)."
+        )
     if not scenario_requires_topo_tier(scenario):
         tier = None
 
@@ -141,6 +176,10 @@ def run_single_benchmark(
         max_attempts=max_attempts,
         session_id=session_id,
         stream_output=False,
+        memory_mode=memory_mode,
+        memory_bank=memory_bank,
+        memory_top_k=memory_top_k,
+        memory_token_budget=memory_token_budget,
     )
 
     eval_results(
@@ -166,6 +205,10 @@ def run_benchmark_from_csv(
     max_attempts: int = 3,
     *,
     parallel: int = 1,
+    memory_mode: str = "off",
+    memory_bank: str = "default",
+    memory_top_k: int = 5,
+    memory_token_budget: int = 1500,
     run_judge: bool = False,
     judge_llm_backend: str | None = None,
     judge_model: str | None = None,
@@ -180,6 +223,14 @@ def run_benchmark_from_csv(
     """
     if parallel < 1:
         raise ValueError("parallel must be >= 1")
+    if memory_mode != "off" and agent_type.lower() not in MEMORY_COMPATIBLE_AGENT_TYPES:
+        supported = ", ".join(sorted(MEMORY_COMPATIBLE_AGENT_TYPES))
+        raise ValueError(f"memory is supported only for these workflows: {supported}")
+    if memory_mode == "evolve" and parallel != 1:
+        raise ValueError(
+            "online memory evolution requires --parallel 1 so episode "
+            "memory ordering is deterministic"
+        )
 
     with open(benchmark_file, newline="", encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
@@ -199,6 +250,10 @@ def run_benchmark_from_csv(
                 model=model,
                 max_steps=max_steps,
                 max_attempts=max_attempts,
+                memory_mode=memory_mode,
+                memory_bank=memory_bank,
+                memory_top_k=memory_top_k,
+                memory_token_budget=memory_token_budget,
                 run_judge=run_judge,
                 judge_llm_backend=judge_llm_backend,
                 judge_model=judge_model,
@@ -215,6 +270,10 @@ def run_benchmark_from_csv(
                 model=model,
                 max_steps=max_steps,
                 max_attempts=max_attempts,
+                memory_mode=memory_mode,
+                memory_bank=memory_bank,
+                memory_top_k=memory_top_k,
+                memory_token_budget=memory_token_budget,
                 run_judge=run_judge,
                 judge_llm_backend=judge_llm_backend,
                 judge_model=judge_model,
