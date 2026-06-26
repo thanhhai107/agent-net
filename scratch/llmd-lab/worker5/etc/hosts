@@ -1,0 +1,8 @@
+127.0.0.1 localhost
+::1       localhost
+200.0.0.1 controller
+200.0.0.2 worker1
+200.0.0.3 worker2
+200.0.0.4 worker3
+200.0.0.5 worker4
+200.0.0.6 worker5
