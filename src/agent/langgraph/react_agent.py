@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 from langchain_core.messages import BaseMessage, HumanMessage
 from langfuse import get_client
 from langfuse.langchain import CallbackHandler
+from langgraph.errors import GraphRecursionError
 from langgraph.graph import END, START, StateGraph
 from pydantic import Field, ValidationError
 from typing_extensions import TypedDict
@@ -50,6 +51,7 @@ class BasicReActAgent:
         tool_evolution_enabled: bool = False,
         tool_library_id: str = "default",
         tool_evolution_mode: str = "dual",
+        use_problem_tool_hints: bool = True,
     ):
         self.session_id = session_id
         self.max_steps = max_steps
@@ -67,7 +69,9 @@ class BasicReActAgent:
         if langfuse.auth_check():
             system_logger.info("Authentication to Langfuse successful.")
         else:
-            system_logger.warning("Authentication to Langfuse failed. Please check your LANGFUSE_API_KEY.")
+            system_logger.warning(
+                "Authentication to Langfuse failed. Please check your LANGFUSE_API_KEY."
+            )
 
         # load agent and tools
         diagnosis_agent = DiagnosisAgent(
@@ -75,8 +79,11 @@ class BasicReActAgent:
             llm_backend=llm_backend,
             model=model,
             scenario_name=self.session.scenario_name,
-            problem_names=self.session.problem_names,
+            problem_names=(
+                self.session.problem_names if use_problem_tool_hints else []
+            ),
             oracle_routing=oracle_routing,
+            load_all_tools=not use_problem_tool_hints,
             tool_evolution_enabled=tool_evolution_enabled,
             tool_library_id=tool_library_id,
             tool_evolution_mode=tool_evolution_mode,
@@ -84,9 +91,14 @@ class BasicReActAgent:
         asyncio.run(diagnosis_agent.load_tools())
         self.llm = diagnosis_agent.llm
         self.tool_evolution_runtime = diagnosis_agent.tool_evolution_runtime
+        self.diagnosis_tool_names = [
+            tool.name for tool in (diagnosis_agent.tools or [])
+        ]
         self.diagnosis_agent = diagnosis_agent.get_agent()
 
-        submission_agent = SubmissionAgent(session_id=session_id, llm_backend=llm_backend, model=model)
+        submission_agent = SubmissionAgent(
+            session_id=session_id, llm_backend=llm_backend, model=model
+        )
         asyncio.run(submission_agent.load_tools())
         self.submission_agent = submission_agent.get_agent()
 
@@ -135,7 +147,9 @@ class BasicReActAgent:
 
     async def diagnosis_agent_builder(self, state: AgentState):
         try:
-            cb = AgentCallbackLogger(agent="diagnosis_agent", session_dir=self.session_dir)
+            cb = AgentCallbackLogger(
+                agent="diagnosis_agent", session_dir=self.session_dir
+            )
             diagnosis_report = await self.diagnosis_agent.ainvoke(
                 {"messages": state["messages"]},
                 config={
@@ -149,13 +163,29 @@ class BasicReActAgent:
                 "is_max_steps_reached": False,
             }
         except ValidationError as e:
-            AgentCallbackLogger(agent="diagnosis_agent", session_dir=self.session_dir)._log(
-                "error", {"message": f"Validation error: {e}"}
-            )
+            AgentCallbackLogger(
+                agent="diagnosis_agent", session_dir=self.session_dir
+            )._log("error", {"message": f"Validation error: {e}"})
             return {
                 "messages": [HumanMessage(content=f"Error: {e}")],
                 "diagnosis_report": "ERROR_VALIDATION",
                 "is_max_steps_reached": False,
+            }
+        except GraphRecursionError:
+            AgentCallbackLogger(
+                agent="diagnosis_agent", session_dir=self.session_dir
+            )._log(
+                "error",
+                {"message": "Diagnosis agent reached max recursion limit."},
+            )
+            return {
+                "messages": [
+                    HumanMessage(
+                        content="Error: diagnosis did not finish within max steps."
+                    )
+                ],
+                "diagnosis_report": "ERROR_MAX_STEPS_REACHED",
+                "is_max_steps_reached": True,
             }
 
     async def submission_agent_builder(self, state: AgentState):
@@ -169,7 +199,11 @@ class BasicReActAgent:
                 ]
             },
             config={
-                "callbacks": [AgentCallbackLogger(agent="submission_agent", session_dir=self.session_dir)],
+                "callbacks": [
+                    AgentCallbackLogger(
+                        agent="submission_agent", session_dir=self.session_dir
+                    )
+                ],
                 "recursion_limit": self.max_steps,
             },
             debug=True,

@@ -26,6 +26,11 @@ src/agent/
 │   └── domain_agents/    # Per-phase Codex CLI workers (diagnosis / submission)
 ├── llm/                  # LangChain model factory for the LangGraph path
 │   └── model_factory.py
+├── memory/               # Composable cross-session procedural memory
+│   ├── adapter.py        # Wraps an existing workflow
+│   ├── service.py        # Extract, validate, consolidate, retrieve
+│   ├── store.py          # SQLite/FTS5 canonical store
+│   └── vector_index.py   # Optional Qdrant embedding index
 └── utils/                # Shared utilities across implementations
     ├── mcp_servers.py    # Kathara / task MCP configuration
     └── loggers.py        # Structured logging to messages.jsonl
@@ -111,6 +116,26 @@ nika agent run -a plan-execute -b netmind -m openai/gpt-oss-120b -n 20
 nika agent run -a reflexion -b netmind -m openai/gpt-oss-120b -n 20 -r 3
 ```
 
+## Composable Memory Module
+
+`MemoryAugmentedAgent` is a composition wrapper around `react`,
+`plan-execute`, or `reflexion`. It adds cross-session typed procedural memory
+without changing the selected workflow's graph.
+
+- Canonical records, versions, links, provenance, and validation state live in
+  SQLite; Qdrant stores only rebuildable embedding vectors and filter metadata.
+- Retrieval uses lexical/semantic relevance, attributes, confidence,
+  information content, diversity, and a token budget.
+- Memory extraction and consolidation run after numeric evaluation. Ground
+  truth is never included in the extractor prompt.
+- Use a unique `--memory-bank` per experimental condition and seed.
+
+```bash
+nika agent run -a reflexion --memory-mode evolve \
+  --memory-bank experiment-01 --memory-top-k 5 \
+  --memory-token-budget 1500
+```
+
 ## 4. Mock Path (`-a mock`)
 
 **Entry point**: `agent.mock.mock_agent.MockAgent`
@@ -184,7 +209,8 @@ codex login
 nika agent run -a cli -m gpt-5.4-mini -e medium
 ```
 
-The `-b` / `--backend` flag applies to ``react``, ``plan-execute``, ``reflexion``, and ``mock``; Codex CLI always uses OpenAI models.
+The `-b` / `--backend` flag applies to ``react``, ``plan-execute``,
+``reflexion``, and ``mock``; Codex CLI always uses OpenAI models.
 Use `-e` / `--reasoning-effort` to set Codex ``model_reasoning_effort`` (``none``, ``minimal``, ``low``, ``medium``, ``high``, ``xhigh``).
 
 ## Example Workflow

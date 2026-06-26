@@ -13,7 +13,9 @@ from nika.workflows.benchmark.run import (
     run_single_benchmark,
 )
 
-benchmark_app = typer.Typer(help="Run curated benchmark cases (env → fault → agent → eval).")
+benchmark_app = typer.Typer(
+    help="Run curated benchmark cases (env → fault → agent → eval)."
+)
 
 
 @benchmark_app.command("run")
@@ -39,14 +41,18 @@ def benchmark_run(
         "--tier",
         help="Topology tier s, m, or l (required only for scalable scenarios).",
     ),
-    agent_type: str = typer.Option("react", "-a", "--agent", help="Agent implementation."),
+    agent_type: str = typer.Option(
+        "react", "-a", "--agent", help="Agent implementation."
+    ),
     llm_backend: str = typer.Option(
         DEFAULT_LLM_BACKEND,
         "-b",
         "--backend",
         help="LLM provider (openai, ollama, deepseek, netmind).",
     ),
-    model: str = typer.Option(DEFAULT_MODEL, "-m", "--model", help="Model id for the agent."),
+    model: str = typer.Option(
+        DEFAULT_MODEL, "-m", "--model", help="Model id for the agent."
+    ),
     max_steps: int = typer.Option(
         20,
         "-n",
@@ -68,6 +74,29 @@ def benchmark_run(
         "-j",
         "--parallel",
         help="Number of benchmark cases to run concurrently in CSV batch mode (default: 1).",
+    ),
+    memory_mode: str = typer.Option(
+        "off",
+        "--memory-mode",
+        help="Composable memory module: off, read, or evolve.",
+    ),
+    memory_bank: str = typer.Option(
+        "default",
+        "--memory-bank",
+        help="Persistent memory-bank id when memory is enabled.",
+    ),
+    memory_top_k: int = typer.Option(
+        5,
+        "--memory-top-k",
+        min=1,
+        max=20,
+        help="Maximum memories injected into one diagnosis.",
+    ),
+    memory_token_budget: int = typer.Option(
+        1500,
+        "--memory-token-budget",
+        min=100,
+        help="Maximum estimated tokens used by retrieved memory.",
     ),
     run_judge: bool = typer.Option(
         False,
@@ -107,7 +136,9 @@ def benchmark_run(
 ) -> None:
     """Run one benchmark row from CSV, or a single case when SCENARIO and --problem are set."""
     if not run_judge and (judge_backend is not None or judge_model is not None):
-        raise typer.BadParameter("Pass --judge to enable LLM judge; omit --judge-backend/--judge-model otherwise.")
+        raise typer.BadParameter(
+            "Pass --judge to enable LLM judge; omit --judge-backend/--judge-model otherwise."
+        )
     judge_backend = judge_backend or DEFAULT_LLM_BACKEND
     judge_model = judge_model or DEFAULT_MODEL
     try:
@@ -117,21 +148,41 @@ def benchmark_run(
             "evolution_mode must be one of "
             + ", ".join(item.value for item in ToolEvolutionMode)
         ) from exc
+    if memory_mode not in {"off", "read", "evolve"}:
+        raise typer.BadParameter("--memory-mode must be off, read, or evolve")
+    if memory_mode != "off" and agent_type.lower() not in {
+        "react",
+        "plan-execute",
+        "reflexion",
+    }:
+        raise typer.BadParameter(
+            "memory is supported only for: react, plan-execute, reflexion"
+        )
+    if memory_mode == "evolve" and parallel != 1:
+        raise typer.BadParameter("online memory evolution requires --parallel 1")
 
     if scenario is not None and csv is not None:
-        raise typer.BadParameter("Use either SCENARIO (single-case mode) or --csv (batch mode), not both.")
+        raise typer.BadParameter(
+            "Use either SCENARIO (single-case mode) or --csv (batch mode), not both."
+        )
 
     single_mode = scenario is not None
 
     if single_mode:
         if parallel != 1:
-            raise typer.BadParameter("--parallel applies to CSV batch mode only; omit it for a single case.")
+            raise typer.BadParameter(
+                "--parallel applies to CSV batch mode only; omit it for a single case."
+            )
         if not problem:
             raise typer.BadParameter("--problem is required when SCENARIO is given.")
         if scenario_requires_topo_tier(scenario) and not tier:
-            raise typer.BadParameter(f"Scenario '{scenario}' requires -t/--tier (s, m, or l).")
+            raise typer.BadParameter(
+                f"Scenario '{scenario}' requires -t/--tier (s, m, or l)."
+            )
         if not scenario_requires_topo_tier(scenario) and tier is not None:
-            raise typer.BadParameter(f"Scenario '{scenario}' does not use tiers; omit -t/--tier.")
+            raise typer.BadParameter(
+                f"Scenario '{scenario}' does not use tiers; omit -t/--tier."
+            )
         topo = tier or ""
         run_single_benchmark(
             problem=problem,
@@ -142,6 +193,10 @@ def benchmark_run(
             model=model,
             max_steps=max_steps,
             max_attempts=max_attempts,
+            memory_mode=memory_mode,
+            memory_bank=memory_bank,
+            memory_top_k=memory_top_k,
+            memory_token_budget=memory_token_budget,
             run_judge=run_judge,
             judge_llm_backend=judge_backend,
             judge_model=judge_model,
@@ -153,7 +208,9 @@ def benchmark_run(
         return
 
     if problem is not None:
-        raise typer.BadParameter("--problem without SCENARIO is invalid; pass SCENARIO or use batch mode with --csv.")
+        raise typer.BadParameter(
+            "--problem without SCENARIO is invalid; pass SCENARIO or use batch mode with --csv."
+        )
 
     benchmark_path = str(csv) if csv is not None else default_benchmark_csv_path()
     run_benchmark_from_csv(
@@ -164,6 +221,10 @@ def benchmark_run(
         max_steps=max_steps,
         max_attempts=max_attempts,
         parallel=parallel,
+        memory_mode=memory_mode,
+        memory_bank=memory_bank,
+        memory_top_k=memory_top_k,
+        memory_token_budget=memory_token_budget,
         run_judge=run_judge,
         judge_llm_backend=judge_backend,
         judge_model=judge_model,

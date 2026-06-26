@@ -34,17 +34,21 @@ class DiagnosisAgent:
         scenario_name: str = "",
         problem_names: list[str] | None = None,
         oracle_routing: bool = False,
+        load_all_tools: bool = False,
         tool_evolution_enabled: bool = False,
         tool_library_id: str = "default",
         tool_evolution_mode: str = "dual",
     ):
         mcp_cfg = MCPServerConfig(session_id=session_id)
-        server_names = select_diagnosis_servers(
-            scenario_name,
-            problem_names or [],
-            oracle=oracle_routing,
-        )
-        mcp_server_config = mcp_cfg.load_filtered_config(server_names)
+        if load_all_tools:
+            mcp_server_config = mcp_cfg.load_config(if_submit=False)
+        else:
+            server_names = select_diagnosis_servers(
+                scenario_name,
+                problem_names or [],
+                oracle=oracle_routing,
+            )
+            mcp_server_config = mcp_cfg.load_filtered_config(server_names)
         self.client = MultiServerMCPClient(connections=mcp_server_config)
         self.tools: list[BaseTool] = []
         self.llm = load_model(llm_backend=llm_backend, model=model)

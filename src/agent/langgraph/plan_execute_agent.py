@@ -87,6 +87,7 @@ class PlanExecuteAgent:
         tool_evolution_enabled: bool = False,
         tool_library_id: str = "default",
         tool_evolution_mode: str = "dual",
+        use_problem_tool_hints: bool = True,
     ) -> None:
         if max_steps < 1:
             raise ValueError("max_steps must be >= 1")
@@ -105,14 +106,18 @@ class PlanExecuteAgent:
             llm_backend=llm_backend,
             model=model,
             scenario_name=self.session.scenario_name,
-            problem_names=self.session.problem_names,
+            problem_names=(
+                self.session.problem_names if use_problem_tool_hints else []
+            ),
             oracle_routing=oracle_routing,
+            load_all_tools=not use_problem_tool_hints,
             tool_evolution_enabled=tool_evolution_enabled,
             tool_library_id=tool_library_id,
             tool_evolution_mode=tool_evolution_mode,
         )
         asyncio.run(diagnosis.load_tools())
         self.tool_evolution_runtime = diagnosis.tool_evolution_runtime
+        self.diagnosis_tool_names = [tool.name for tool in (diagnosis.tools or [])]
         self.executor = create_agent(
             model=self.llm,
             system_prompt=EXECUTOR_PROMPT + diagnosis.prompt_suffix(),
@@ -224,7 +229,11 @@ class PlanExecuteAgent:
 
     @staticmethod
     def _route_after_plan(state: PlanExecuteState) -> str:
-        return "executor" if state.get("plan") and not state.get("planning_failed") else "end"
+        return (
+            "executor"
+            if state.get("plan") and not state.get("planning_failed")
+            else "end"
+        )
 
     async def _execute(self, state: PlanExecuteState) -> dict[str, Any]:
         step = state["plan"][0]
@@ -338,7 +347,9 @@ class PlanExecuteAgent:
         if not report:
             self._callback("submission")._log(
                 "error",
-                {"message": "Submission skipped because no valid diagnosis report is available."},
+                {
+                    "message": "Submission skipped because no valid diagnosis report is available."
+                },
             )
             return {}
         try:

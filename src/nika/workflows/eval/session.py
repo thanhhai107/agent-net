@@ -1,5 +1,6 @@
 """Session evaluation: numeric metrics, LLM judge, and publish on closed sessions."""
 
+import asyncio
 import json
 import os
 import textwrap
@@ -21,7 +22,9 @@ logger = system_logger
 def generic_eval(gt, submission):
     """Score detection, localization, and RCA from structured ``gt`` and ``submission``."""
     try:
-        parsed_detect_sub = DetectionSubmission.model_validate({"is_anomaly": submission.get("is_anomaly", False)})
+        parsed_detect_sub = DetectionSubmission.model_validate(
+            {"is_anomaly": submission.get("is_anomaly", False)}
+        )
         if gt["is_anomaly"] == parsed_detect_sub.is_anomaly:
             detection_score = 1.0
         else:
@@ -153,10 +156,53 @@ def run_eval_metrics(*, session_id: str | None = None) -> None:
     out_path = Path(session.session_dir) / EVAL_METRICS_FILENAME
     out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     session.update_run_meta("eval_metrics", payload)
-    log_event("eval_metrics_saved", f"Wrote numeric eval metrics to {out_path}", session_id=session.session_id)
+    log_event(
+        "eval_metrics_saved",
+        f"Wrote numeric eval metrics to {out_path}",
+        session_id=session.session_id,
+    )
+
+    if getattr(session, "memory_mode", "off") == "evolve":
+        try:
+            from agent.memory.workflow import evolve_session_memory
+
+            run_meta = {
+                key: value for key, value in session.__dict__.items() if key != "store"
+            }
+            memory_report = asyncio.run(
+                evolve_session_memory(
+                    run_meta=run_meta,
+                    metrics=payload,
+                    session_dir=session.session_dir,
+                )
+            )
+            session.update_run_meta("memory_update", memory_report)
+            log_event(
+                "memory_evolution_completed",
+                (
+                    f"Memory evolution {memory_report.get('status')} for "
+                    f"session {session.session_id}"
+                ),
+                session_id=session.session_id,
+                memory_report=memory_report,
+            )
+        except Exception as exc:
+            logger.exception(
+                "Memory evolution failed for session %s; evaluation remains valid.",
+                session.session_id,
+            )
+            memory_report = {"status": "failed", "error": str(exc)}
+            session.update_run_meta("memory_update", memory_report)
+            log_event(
+                "memory_evolution_failed",
+                f"Memory evolution failed: {exc}",
+                session_id=session.session_id,
+            )
 
 
-def run_llm_judge(judge_llm_backend: str, judge_model: str, *, session_id: str | None = None) -> None:
+def run_llm_judge(
+    judge_llm_backend: str, judge_model: str, *, session_id: str | None = None
+) -> None:
     """Run LLM-as-judge only; writes ``llm_judge.json`` under the session dir."""
     session = Session()
     session.load_closed_session(session_id=session_id)
@@ -181,7 +227,9 @@ def run_llm_judge(judge_llm_backend: str, judge_model: str, *, session_id: str |
     )
     judge_path = Path(session.session_dir) / "llm_judge.json"
     if judge_path.exists():
-        session.update_run_meta("llm_judge", json.loads(judge_path.read_text(encoding="utf-8")))
+        session.update_run_meta(
+            "llm_judge", json.loads(judge_path.read_text(encoding="utf-8"))
+        )
 
 
 def publish_session_eval(*, session_id: str | None = None) -> None:
@@ -214,7 +262,9 @@ def eval_results(
 ) -> None:
     """Close the session, then run metrics and publish; LLM judge runs only when ``run_judge`` is set."""
     if run_judge and (not judge_llm_backend or not judge_model):
-        raise ValueError("--judge-backend and --judge-model are required when run_judge is enabled.")
+        raise ValueError(
+            "--judge-backend and --judge-model are required when run_judge is enabled."
+        )
 
     session = Session()
     session.load_running_session(session_id=session_id)

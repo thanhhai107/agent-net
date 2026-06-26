@@ -17,6 +17,7 @@ SUPPORTED_AGENT_TYPES = (
     "mock",
     "cli",
 )
+MEMORY_COMPATIBLE_AGENT_TYPES = ("react", "plan-execute", "reflexion")
 SUPPORTED_LLM_BACKENDS = ("openai", "ollama", "deepseek", "netmind")
 
 agent_app = typer.Typer(help="Troubleshooting agents.")
@@ -44,14 +45,18 @@ def agent_list() -> None:
 
 @agent_app.command("run")
 def agent_run(
-    agent_type: str = typer.Option("react", "-a", "--agent", help="Agent implementation."),
+    agent_type: str = typer.Option(
+        "react", "-a", "--agent", help="Agent implementation."
+    ),
     llm_backend: str = typer.Option(
         DEFAULT_LLM_BACKEND,
         "-b",
         "--backend",
         help="LLM provider (openai, ollama, deepseek, netmind).",
     ),
-    model: str = typer.Option(DEFAULT_MODEL, "-m", "--model", help="Model id for the chosen backend."),
+    model: str = typer.Option(
+        DEFAULT_MODEL, "-m", "--model", help="Model id for the chosen backend."
+    ),
     max_steps: int = typer.Option(
         20,
         "-n",
@@ -74,7 +79,9 @@ def agent_run(
         "--reasoning-effort",
         help="Codex model_reasoning_effort (cli only): none, minimal, low, medium, high, xhigh.",
     ),
-    session_id: str | None = typer.Option(None, "--session-id", help="Target session id (lab_hash)."),
+    session_id: str | None = typer.Option(
+        None, "--session-id", help="Target session id (lab_hash)."
+    ),
     oracle_routing: bool = typer.Option(
         False,
         "--oracle-routing",
@@ -95,6 +102,29 @@ def agent_run(
         "--evolution-mode",
         help="Tool Evolution mode: mastery, distill, dual, dual-no-validation, dual-no-dedup.",
     ),
+    memory_mode: str = typer.Option(
+        "off",
+        "--memory-mode",
+        help="Composable memory module: off, read, or evolve.",
+    ),
+    memory_bank: str = typer.Option(
+        "default",
+        "--memory-bank",
+        help="Persistent memory-bank id when memory is enabled.",
+    ),
+    memory_top_k: int = typer.Option(
+        5,
+        "--memory-top-k",
+        min=1,
+        max=20,
+        help="Maximum memories injected into one diagnosis.",
+    ),
+    memory_token_budget: int = typer.Option(
+        1500,
+        "--memory-token-budget",
+        min=100,
+        help="Maximum estimated tokens used by retrieved memory.",
+    ),
 ) -> None:
     """Run the agent on the current session task."""
     from nika.workflows.agent.run import start_agent
@@ -110,6 +140,11 @@ def agent_run(
             "evolution_mode must be one of "
             + ", ".join(item.value for item in ToolEvolutionMode)
         ) from exc
+    if memory_mode not in {"off", "read", "evolve"}:
+        raise typer.BadParameter("--memory-mode must be off, read, or evolve")
+    if memory_mode != "off" and agent_type.lower() not in MEMORY_COMPATIBLE_AGENT_TYPES:
+        supported = ", ".join(MEMORY_COMPATIBLE_AGENT_TYPES)
+        raise typer.BadParameter(f"memory is supported only for: {supported}")
 
     try:
         start_agent(
@@ -124,6 +159,10 @@ def agent_run(
             tool_evolution_enabled=tool_evolution,
             tool_library_id=tool_library,
             tool_evolution_mode=evolution_mode,
+            memory_mode=memory_mode,
+            memory_bank=memory_bank,
+            memory_top_k=memory_top_k,
+            memory_token_budget=memory_token_budget,
         )
     except (FileNotFoundError, ValueError) as exc:
         raise typer.BadParameter(str(exc)) from exc
