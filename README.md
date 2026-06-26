@@ -91,7 +91,7 @@ QDRANT_COLLECTION=
 EMBEDDING_MODEL=
 EMBEDDING_DIMENSION=1024
 
-LANGSMITH_TRACING=true
+LANGSMITH_TRACING=false
 LANGSMITH_ENDPOINT=https://api.smith.langchain.com
 LANGSMITH_API_KEY=
 LANGSMITH_PROJECT=
@@ -103,8 +103,9 @@ LANGFUSE_BASE_URL=https://cloud.langfuse.com
 
 At least one LLM configuration is required for LangChain agents:
 `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, or `OLLAMA_API_URL`. Qdrant and embedding
-settings are required only by features that use vector storage. LangSmith and
-Langfuse variables are optional observability settings.
+settings are required only by features that use vector storage. Langfuse is the
+default tracing path; LangSmith is optional and used only when
+`LANGSMITH_TRACING=true`.
 
 ## Step by step guide
 You can follow the steps below to run a complete troubleshooting task with NIKA. Use the `nika` CLI.
@@ -250,7 +251,7 @@ nika agent run -a react -b netmind -m openai/gpt-oss-120b \
 - **`-m` / `--model`**: model id for the chosen backend
 - **`-n` / `--max-steps`**: recursion limit for each tool-enabled worker; for `plan-execute`, also the maximum number of executed plan items
 - **`-r` / `--max-attempts`**: maximum number of Reflexion attempts (default `3`; used only by `reflexion`)
-- Tracing: Langfuse + LangSmith (configure keys in `.env`)
+- Tracing: Langfuse by default; LangSmith is optional via `LANGSMITH_TRACING=true`
 
 `plan-execute` uses `planner → executor → replanner` until a diagnosis is
 complete or the plan-item limit is reached. `reflexion` implements an iterative
@@ -519,7 +520,7 @@ You can also plug in your own MCP servers following the configuration instructio
 
 ## Logging and Observability
 
-The built-in ReAct agent (`react`) traces runs with **Langfuse** (LangChain `CallbackHandler`) and **LangSmith** (`langsmith.tracing_context`). The Codex CLI agent (`cli`) streams `codex exec --json` events to the terminal and logs them to `messages.jsonl` in real time. Configure observability keys in `.env` as shown above. See [LangChain Callbacks](https://python.langchain.com/docs/concepts/callbacks/) for callback details.
+The built-in LangGraph agents trace runs with **Langfuse** by default through the LangChain `CallbackHandler`. **LangSmith** tracing is optional and is enabled only when `LANGSMITH_TRACING=true`. The Codex CLI agent (`cli`) streams `codex exec --json` events to the terminal and logs them to `messages.jsonl` in real time. Configure observability keys in `.env` as shown above. See [LangChain Callbacks](https://python.langchain.com/docs/concepts/callbacks/) for callback details.
 
 Each session directory under `results/{session_id}/` also contains:
 

@@ -6,7 +6,6 @@ import logging
 import os
 from typing import Any
 
-import langsmith as ls
 from dotenv import load_dotenv
 from langchain.agents import create_agent
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -22,6 +21,7 @@ from agent.langgraph.workflow_models import ReflexionEvaluation, ReflexionMemory
 from agent.llm.model_factory import DEFAULT_LLM_BACKEND, DEFAULT_MODEL, load_model
 from agent.tool_evolution.integration import write_tool_evolution_session
 from agent.utils.loggers import AgentCallbackLogger
+from agent.utils.tracing import langsmith_tracing_context
 from nika.utils.logger import system_logger
 from nika.utils.session import Session
 
@@ -214,7 +214,7 @@ class ReflexionAgent:
 
     async def run(self, task_description: str) -> dict[str, Any]:
         problem_names = getattr(self.session, "problem_names", [])
-        with ls.tracing_context(
+        with langsmith_tracing_context(
             project_name=os.getenv("LANGSMITH_PROJECT", "NIKA"),
             metadata={
                 "scenario": self.session.scenario_name,

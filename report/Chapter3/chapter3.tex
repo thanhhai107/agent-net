@@ -1,0 +1,232 @@
+\chapter{Kiến trúc hệ thống}
+% \label{chap:model}
+% % -------------------------------------------------------------------
+% % Introduction of the chapter
+% % ------------------------------------------------------------------
+% Chương 3 sẽ trình bày kiến trúc chi tiết của hệ thống của chúng tôi trong dự án này. Bắt đầu từ phần \ref{sec:overall_arch}, chúng tôi sẽ đưa ra kiến trúc tổng quan của hệ thống, và trong các chương sau đó, từng thành phần trong hệ thống sẽ được trình bày chi tiết và cụ thể.
+
+% \section{Kiến trúc tổng quan}
+% \label{sec:overall_arch}
+% Trong phần này, chúng tôi sẽ đưa ra mô tả ngắn về hệ thống HNAQI. Hệ thống bao gồm một dashboard trực quan hóa dữ liệu và 3 modules chính: giám sát, cảnh báo và dự báo, chi tiết được mô tả trong hình \ref{fig:overall_archtecture}. Module giám sát chính là phần nằm trong Airflow DAG không bao gồm module dự báo, thực hiện tác vụ thu thập và lưu trữ dữ liệu. Module dự báo là cảnh báo lần lượt thực hiện việc chạy mô hình SARIMAX và mô hình trung bình động để trả về kết quả dự báo hoặc cảnh báo sớm xu hướng.
+
+% \begin{figure}[ht]
+%     \centering
+%     \includegraphics[width=1\linewidth]{Chapter3/Figs/final.png}
+%     \caption{Kiến trúc hệ thống HNAQI.}
+%     \label{fig:overall_archtecture}
+% \end{figure}
+
+% \textbf{Module giám sát:} đầu vào là dữ liệu thô (raw data) về chất lượng không khí từ 3 nguồn dữ liệu khác nhau WAQI, IAQI và OpenAQ. Trải qua quá trình ETL, đầu ra mong muốn của module này là hoàn thành chèn dữ liệu sau khi đã tiền xử lý vào cơ sở dữ liệu để lưu trữ và phục vụ cho các tác vụ thống kê hoặc tính toán.   
+
+% \textbf{Module dự báo:} đầu ra của module giám sát cũng chính là đầu vào cho module dự báo. Dữ liệu AQI mới nhất sẽ được đưa qua mô hình SARIMAX kết hợp với các yếu tố ngoại sinh, kết quả đầu ra gồm 2 loại dự báo: 24 giờ tới và 7 ngày tới. Các dữ liệu dự báo này sau đó sẽ được chèn vào các bảng riêng biệt trong cơ sở dữ liệu.
+
+% \textbf{Module cảnh báo:} được thực hiện khi người dùng có yêu cầu xem thông tin chi tiết điểm đo hoặc trạm đo nào đó trên bản đồ. Đầu vào của module này là dữ liệu AQI tùy theo bộ lọc của người dùng, sau đó nhờ vào mô hình trung bình động với cửa sổ trượt phù hợp cho từng mức, module này sẽ cho đầu ra là dự báo hoặc nhận xét về xu hướng của không khí trong quá khứ cho đến hiện tại hoặc từ hiện tại đến tương lai. 
+
+% Định nghĩa toán học của hệ thống HNAQI được trình bày như sau: cho một tập hợp dữ liệu từ ba nguồn dữ liệu khác nhau $D_1, D_2, D_3$ và tập hợp các hành vi của người dùng $B=\{b_1,b_2,...,b_n\}$. Các hành vi này có thể là thống kê hoặc dự đoán, và theo các mức khác nhau được quy định sẵn. Đầu ra của hệ thống sẽ là: tập hợp các thông tin về các điểm trạm đo và dữ liệu AQI hiện tại và lịch sử $O=\{s_1(data_1), s_2(data_2),...,s_n(data_n)\}$, trong đó $s_i$ là trạm thứ $i$, và $data_i$ là các thông tin trên của trạm thứ $i$; tập hợp thông tin cảnh báo người dùng về chất lượng không khí hiện tại $W=\{w_1,w_2,...w_n\}$, trong đó $w_i$ là cảnh báo ở trạm thứ $i$; tập hợp thông tin dự báo về chất lượng không khí ở từng điểm trạm trong tương lai $F=\{f_1(s_1,fc_1), f_2(s_2,{fc}_2),...,f_n(s_n,{fc}_n)\}$, với $s_i, fc_i$ lần lượt là trạm thứ $i$ và tập hợp dự báo ở trạm thứ $i$. Biểu diễn phương trình như sau:
+ 
+% \begin{equation}
+% \nonumber
+%     f_{HNAQI}(D_1,D_2,D_3,\{b_1,b_2,...,b_{n-1},b_n\}) \rightarrow \ {\{O,W,S\}}
+% \end{equation}
+
+% \section{Module giám sát}
+% \label{sec:qanormal}
+% Mục đích của module giám sát thực chất chính là \textbf{extract} (fetch dữ liệu từ API) - \textbf{transform} (biến đổi dữ liệu, làm sạch) - \textbf{load} (thêm vào cơ sở dữ liệu). Đầu ra mong muốn của module này là định kỳ lấy và lưu trữ được dữ liệu AQI mới nhất từ các nguồn dữ liệu khác nhau.
+
+% \begin{figure}[ht]
+%     \centering
+%     \includegraphics[width=1\linewidth]{Chapter3/Figs/openaq.png}
+%     \caption{Tiền xử lý dữ liệu từ nguồn OpenAQ.}
+%     \label{fig:openaq}
+% \end{figure}
+
+
+% Đầu tiên, chúng tôi trích xuất dữ liệu từ 3 nguồn dữ liệu IAQI, OpenAQ và WAQI. Dữ liệu được lấy về là dữ liệu raw dưới dạng JSON. Dữ liệu này sau đó phải trải qua quá trình tiền xử lý trước khi thêm vào cơ sở dữ liệu PostgreSQL. Ngoài việc chuyển từ JSON sang định dạng thích hợp, một vài nguồn dữ liệu còn cần những tác vụ tiền xử lý phức tạp hơn. Cụ thể, với nguồn dữ liệu IAQI, chúng tôi đồng thời sẽ lưu trữ thêm các thông tin về thời tiết với các chỉ số độ ẩm không khí,... Đặc biệt, với bộ dữ liệu OpenAQ, dữ liệu raw trả về không bao gồm giá trị AQI tại các trạm, mà chỉ bao gồm các chỉ số ô nhiễm không khí như nồng dộ $PM2.5$, $PM10$, $CO$, $SO_2$, $NO_2$. Chúng tôi phải thực hiện các tính toán cần thiết theo công thức (sử dụng thư viện $python-aqi$) để nhận được giá trị AQI tại điểm đó trước khi thực hiện chèn dữ liệu vào cơ sở dữ liệu, cụ thể như ở trong hình \ref{fig:openaq}.
+
+% Sau khi tiền xử lý dữ liệu, dữ liệu sẽ được chèn vào cơ sở dữ liệu (CSDL) PostgreSQL. Thiết kế cơ sở dữ liệu chi tiết trong hình \ref{fig:db}. CSDL gồm 3 bảng. Thông tin về trạm đo, giá trị aqi tại trạm đó, thời gian đo và thời gian cập nhật cùng với các chỉ số về thời tiết được lưu trong bảng $aqi\_telemetry$. Một hypertable của TimescaleDB được tạo trên cột $time\_executed$ của bảng này. 2 bảng $aqi\_predicted\_by\_days$ và $aqi\_predicted\_by\_hours$ dùng để lưu trữ thông tin dự đoán AQI tại các trạm với các mức dự đoán khác nhau theo giờ, theo ngày. Hypertable của 2 bảng này cũng được tạo trên cột $time\_executed$.
+
+% \begin{figure}[ht]
+%     \centering
+%     \includegraphics[width=0.7\linewidth]{Chapter3/Figs/db.png}
+%     \caption{Thiết kế cơ sở dữ liệu của hệ thống HNAQI.}
+%     \label{fig:db}
+% \end{figure}
+% \section{Module dự báo}
+% % \label{sec:unanswer}
+% \subsection{Luồng thực hiện}
+
+% Module dự báo được gọi và thực hiện ngay sau khi module giám sát hoàn thành việc chen dữ liệu vào CSDL. Đầu vào cho module dự báo chính là dữ liệu AQI theo các trạm, thống kê theo trung bình từng giờ hoặc từng ngày, tùy theo lựa chọn dự báo. Đầu ra của module này chính là các giá trị AQI được dự đoán trước và các mốc thời gian tương ứng theo giờ hoặc theo ngày.
+
+% Hình \ref{fig:dag} mô tả luồng thực hiện DAG của Airflow trong hệ thống HNAQI. Các tác vụ trích xuất dữ liệu từ các nguồn được thực hiện đồng thời, sau đó đến tác vụ lưu trữ dữ liệu. Cuối cùng, tác vụ dự báo được thực hiện và dữ liệu được lưu lại vào các bảng thích hợp như trình bày ở trên.
+
+% \subsection{Mô hình SARIMAX}
+% \label{subsec:verify}
+% Nhiệm vụ dự đoán AQI tương ứng theo các mức giờ và ngày được thực hiện nhờ vào mô hình SARIMAX. Như trình bày ở phần \ref{sec:sarimax}, mô hình SARIMAX thực chất là mô hình ARIMA nhưng có thêm các biến ngoại sinh để tăng thêm độ tin cậy và tính hợp lý cho dự đoán dữ liệu chuỗi thời gian. Chi tiết hơn, trình tự thực hiện dự đoán bằng mô hình SARIMAX như sau:
+
+% \textbf{Chuẩn bị dữ liệu:} tùy theo từng mức dự báo mà dữ liệu được chuẩn bị tương ứng. Với dự báo cho 7 ngày tới, dữ liệu huấn luyện sẽ được lấy trong vòng 14 ngày gần đây, mỗi ngày lấy ra trung bình AQI trong cả ngày làm dữ liệu huấn luyện. Với dự báo cho 24 giờ sắp tới, dữ liệu AQI của điểm đó sẽ được tính trung bình theo từng giờ, trong vòng 7 ngày gần nhất, để làm dữ liệu huấn luyện. Sau đó, cột $time$ và $aqi$ được chuẩn hóa và loại bỏ các giá trị $null$.
+
+% \textbf{Feature Engineering:} các yếu tố ngoại sinh được thêm vào để sử dụng trong huấn luyện và dự đoán mô hình SARIMAX bao gồm: ngày trong tuần ($day\_of\_week$), ngày cuối tuần ($is\_weekend$), giờ cao điểm ($is\_peak\_hour$), chu kì tuần hoàn giờ ($sni\_hour$, \\ $cos\_hour$), chu kì tuần hoàn ngày ($sin\_day, cos\_day$), ngày lễ ($is\_holiday$). Với dự đoán theo 7 ngày tới, các yếu tố ngoại sinh về ngày sẽ không được sử dụng. Sau đó, các cột này sẽ được chuẩn hóa trước khi thực hiện huấn luyện mô hình SARIMAX.
+
+% \textbf{Huấn luyện mô hình SARIMAX:} sử dụng $auto\_arima$ để tự động lựa chọn bộ tham số phù hợp cho mô hình. Cụ thể, thuật toán $auto\_arima$ sẽ tìm kiếm tổ hợp các tham số \((p, d, q)\) và \((P, D, Q, s)\) trong mô hình SARIMAX sao cho tiêu chí AIC (Akaike Information Criterion) đạt giá trị nhỏ nhất. Sau khi xác định được bộ tham số tối ưu, mô hình được huấn luyện trên tập dữ liệu lịch sử đã được xử lý thời gian (time-indexed) và kiểm định giả định dừng (stationarity). 
+
+% \textbf{Sử dụng mô hình SARIMAX để dự đoán:} mô hình đã huấn luyện sẽ được sử dụng để dự đoán giá trị AQI trung bình trong tương lai theo các khoảng thời gian như 6 giờ, 1 ngày hoặc 7 ngày.
+
+% \textbf{Đánh giá mô hình SARIMAX:} việc đánh giá mô hình dựa trên các chỉ số như RMSE (Root Mean Square Error) và MAE (Mean Absolute Error):
+
+% \begin{equation}
+%     RMSE = \sqrt{\frac{1}{n} \sum_{t=1}^{n} (y_t - \hat{y}_t)^2}
+% \end{equation}
+
+% \begin{equation}
+%     MAE = \frac{1}{n} \sum_{t=1}^{n} |y_t - \hat{y}_t|
+% \end{equation}
+
+% Trong đó:
+% \begin{itemize}
+%     \item \(y_t\): Giá trị thực tế
+%     \item \(\hat{y}_t\): Giá trị dự đoán từ mô hình
+%     \item \(n\): Tổng số điểm dữ liệu trong tập kiểm định
+% \end{itemize}
+
+% % Figure \ref{fig:graph} depicts the logical graph we use to validate generated rules from the prior step. More details, the graph in this figure completely illustrates the whole gold foundation rule of the CLUTRR dataset \cite{sinha-etal-2019-clutrr} (gold foundation rule means gold foundational rules, a set of rules can answer of all queries). 
+
+% % \begin{figure}[ht]
+% %   \centering
+% %   \includegraphics[width=1\linewidth]{Chapter3/Figs/graph.png}
+% %  \caption{The adequate conceptual graph of  CLUTRR dataset}
+% %     \label{fig:graph}
+% % \end{figure}
+
+% % As mentioned previously in subsection \ref{subsec:graph}, firstly we ignore genders and categorize foundational rules into many subsets, as Table \ref{tab:rel}, and $inv$ means "inverse". Afterwards, we define each subset as a vertex of the graph, with three types of edges with discrete colors. Each logical rule has two incoming edges and one outgoing edge. The black edge points to the head predicate. The body of the rule consists of two predicate components, where the incoming edge from the first predicate is in green, while the second is in blue. 
+
+% % Not only three nodes can build a rule. With two nodes, we still are able to construct a logical rule. For instane, both rules $granddaughter(A, C) :- \text{  }\text{  } daughter(A, B), daughter \newline (B, C)$ and $granddaughter(A, C) :- \text{  }\text{  } son(A, B), daughter(B, C)$ are created from a "child" node and a "grand" node, combining with two outcoming edges from "child" vertex. 
+
+% % \begin{table}[H]
+% % \centering
+% % \caption{Categorizing relationships.}
+% % \label{tab:rel}
+% % \begin{tabular}{|l|l|}
+% % \hline
+% % \multicolumn{1}{|c}{\textbf{Subset}} & \multicolumn{1}{|c|}{\textbf{Relation}}             \\ \hline
+% % SO                              & wife, husband                                   \\ \hline
+% % in-law                               & son-in-law, daughter-in-law                                 \\ \hline
+% % inv-in-law                               & father-in-law, mother-in-law                                  \\ \hline
+% % grand                                  & grandson, granddaughter                                \\ \hline
+% % child                                 & son,daughter                                \\ \hline
+% % inv-un                                 & uncle, aunt                                  \\ \hline
+% % inv-grand                                 & grandfather, grandmother                                \\ \hline
+% % inv-child                           & father, mother                                \\ 
+% % \hline
+% % un                        & nephew, niece                                 \\ \hline
+% % sibling                                  & brother, sister                                \\ \hline
+% % \end{tabular}
+% % \end{table}
+
+% % When a rule is generated, the generated rule added to the conceptual graphs on predicates without violating the principles of the graph and which can assist ASP solvers in providing answers to input queries is considered valid. Then, these rules will be updated into the foundation rule set of ASP for subsequent queries. The mathematical definition of this process can be defined as a function:
+
+% % \begin{equation}
+% % (r_1,r_2,...,r_k) \xrightarrow[\text{}]{\text{Graph}} (r'_1,r'_2,...,r'_l) \xrightarrow[\text{the FR}]{\text{add  to}} FR_{enriched}
+% % \end{equation}
+% % where $r'_i$ is the $i-th$ valid rule.
+
+% % To construct and expand the foundation rule set, we iterate the automatic rule generation process and incorporate newly generated rules for logical inference as described clearly in Algorithm \ref{alg:gen-asp}. In this algorithm, we used a hyperparameter \textit{$\epsilon$} (\textit{$\epsilon$} $\geq$ 1) to determine the number of iterations for generating additional rules while still satisfying the graph and answering the input query. However, unresolved queries are not solely dependent on the foundation rule set but could also result from incorrect stories or parsing errors, leading to the omission of these queries. These errors are going to be discussed in Subsection \ref{subsec:error}. During the experiment, we set \textit{$\epsilon$} to 2.
+
+% % \begin{algorithm}[H]
+% % \normalsize
+% % \caption{Gen-ASP Procedure}\label{alg:gen-asp}
+% % \begin{algorithmic}[1]
+% %     \renewcommand{\algorithmicrequire}{\textbf{Input:}}
+% %     \renewcommand{\algorithmicensure}{\textbf{Output:}}
+% %     \REQUIRE 
+% %         List of the story and query pairs: $\mathcal{SQ}=[(story_i,q_i)]_{1\times n}$, \\
+% %         List of the foundation rules: $\mathcal{FR} = [fr_j]_{1\times m}$, \\
+% %         Defined $\epsilon$
+% %     \ENSURE  List of the answers $\mathcal{A}_{1\times n}$
+% %     \STATE List of the answers $\mathcal{A} \leftarrow \O$
+% %     \STATE List of unanswered queries: \\
+% %     $\mathcal{U} =[(story_i,q_i,semantic_i)]_{1\times n} \leftarrow LLM_{parser}(\mathcal{SQ})$
+% %     \STATE Let $\mathcal{M}$ is ASP program built from $\mathcal{FR}$.
+% %     \STATE Call $Clingo$ using $\mathcal{M}$ obtaining the result to update  $\mathcal{A}$ and $\mathcal{U}$
+% %     \WHILE {$\mathcal{U}$ is not $\O$}
+% %         \STATE $count \leftarrow 0$
+% %         \STATE Move to  $\mathcal{U}[x]$, the first element in $\mathcal{U}$ which is not tried
+% %         \WHILE{$count <= \epsilon$}
+% %             \STATE $newFr \leftarrow LLM_{generation}(\mathcal{U}[x])$
+% %             \IF{$verify(newFr)$ is $true$}
+% %                 \STATE Add $newFr$ to $\mathcal{FR}$
+% %                 \STATE Update $\mathcal{M}$
+% %                 \STATE Break
+% %             \ELSE
+% %                 \STATE $count = count + 1$
+% %             \ENDIF
+% %         \ENDWHILE
+% %     \IF{$count$ is not equal $\epsilon$}
+% %         % \STATE Add $\mathcal{U}[1]$ to $\mathcal{A}$
+% %         % \STATE Remove $\mathcal{U}[1]$ on $\mathcal{U}$
+% %         \STATE Call $Clingo$ using $\mathcal{M}$ obtaining the result to update  $\mathcal{A}$ and $\mathcal{U}$
+% %     \ELSE
+% %         \STATE mark $\mathcal{U}[x]$ as tried
+% %     \ENDIF
+% %     \IF{$\mathcal{U}[x]$ is equivalent to $\mathcal{U}[len(\mathcal{U})]$}
+% %         \STATE Break
+% %     \ENDIF
+% %   \ENDWHILE
+% %  \RETURN  $\mathcal{A}$
+
+ 
+% %  \end{algorithmic}
+% % \end{algorithm}
+
+% % As being depicted in the Algorithm \ref{alg:gen-asp}, the input of our framework is a list of stories accompanying with a list of queries which are defined by $\mathcal{SQ}=[(story_i,q_i)]_{1\times n}$, list of the foundation rules $\mathcal{FR} = [fr_j]_{1\times m}$, and the $\epsilon$ used to restrict the number of iterations. The desirable output is a list of answers $\mathcal{A}_{1\times n}$ comprising answers of the given queries.
+
+% % Starting with $\mathcal{A}$ is set to $\O$ because no queries are answered. All input stories and queries are exprienced the semantic parsing process, finally get a list $\mathcal{U}$ containing many elements in the form of $(story,q,semantic)$ where $semantic$ means semantic parses from LLMs. Afterwrads, $\mathcal{M}$ is an ASP solver built from the $\mathcal{FR}$, which can be simply regarded as an ASP system with foundational rules. At the fourth step, $Clingo$ is called by using $\mathcal{M}$ to update $\mathcal{A}$ and $\mathcal{U}$. At this time, $\mathcal{A}$ is a set of answered queries, including both true and false answers, whereas $\mathcal{U}$ is their unanswered counterparts. From this time onwards, $\mathcal{U}$ is utilized to enrich the $\mathcal{FR}$ automatically.
+
+% % While $\mathcal{U}$ is not empty, initially setting $count$ to 0. Next, moving to the first element in $\mathcal{U}$ that is not tried to generate rule before, $ \mathcal{U}[x] $, where $1 \leq x \leq len(\mathcal{U})$. Unless $count > \epsilon$, do the following steps: firstly, a new rule is generated by LLMs through generation stage as mentioned previously; secondly, this new rule is verified whether it is valid or not. If this rule is valid, it will be updated to the $\mathcal{FR}$, and then $\mathcal{M}$ is updated, simultaneously, before breaking from the while loop. By contrast, if this rule conflicts the principle of our conceptual graph, $count$ is added by 1, and the process of generating a new rule is iterated until $count > \epsilon$. 
+
+% % Escaping from this while loop, $count$ is going to be checked. The possible value of $count$ can be ranged from 0 to $\epsilon$. $count$ is equal to $\epsilon$ shows that we have failed to generate a new rule for element $\mathcal{U}[x]$, so $\mathcal{U}[x]$ is marked as tried to avoid unwarranted efforts to offer LLMs to generate a rule for this element again. In a contradictory way, $count$ is different from $\epsilon$ means this generated rule is valid and has been added to the $\mathcal{FR}$. $Clingo$ will be called with the new solver $\mathcal{M}$ to update $\mathcal{A}$ and $\mathcal{U}$. All the above steps will be repeated until there are no story which is not tried, more specifically, when $\mathcal{U}[x]$ is exactly $\mathcal{U}[len(\mathcal{U})]$.
+
+% \section{Module cảnh báo}
+% % \label{sec:unanswer}
+
+% Module này sẽ thực hiện bất cứ khi nào người dùng xem thông tin lịch sử AQI và dự báo AQI tại một trạm đo bất kỳ. Khi người dùng yêu cầu, phía front-end sẽ gửi yêu cầu tới phía back-end, sau đó back-end sẽ gọi tới module cảnh báo. Ngoài việc đưa ra cảnh báo trực tiếp dựa trên giá trị AQI hiện tại, module này còn có thể đưa ra xu hướng của dữ liệu AQI trong từng khoảng thời gian khác nhau. Đầu vào của module này là một danh sách giá trị AQI theo từng thời điểm (có thể là tương lai hoặc quá khứ). Dữ liệu này sau đó sẽ được đưa qua mô hình trung bình động đơn giản để đánh giá xu hướng của các giá trị AQI này và đưa ra cảnh báo. Xu hướng này có thể là chất lượng không khí đang tốt dần lên, đang xấu dần đi hoặc gần như ổn định.
+
+% Chọn kích thước cửa sổ trượt $k$ tùy vào yêu cầu dự báo xu hướng. Với các dự báo xu hướng trong 6 giờ hoặc 7 ngày (cả trong quá khứ lẫn tới tương lai), lựa chọn $k=4$ là phù hợp cho dự báo xu hướng vì kích thước này là vừa đủ, nếu kích thước quá nhỏ sẽ dễ dẫn đến việc mô hình nhạy cảm với biến động nhỏ hoặc theo giai đoạn nhỏ. Nếu kích thước cửa sổ trượt quá lớn thì sẽ không mang lại nhiều ý nghĩa trong việc nhận xét xu hướng. Đối với các cảnh báo theo ngày, kích thước cửa sổ trượt được chọn là $k=8$. 
+
+% Ví dụ, giả sử bây giờ là 16 giờ $x$ phút ($0 < x \leq 59$) và bạn có dữ liệu trung bình AQI theo từng giờ trong vòng 1 ngày trở lại đây, bạn có thể đưa qua mô hình trung bình động để dự đoán xu hướng. Minh họa cho việc dự báo xu hướng có thể thấy trong hình \ref{fig:ma}. Đường màu đỏ chính là đường trung bình động cho dữ liệu AQI theo giờ trong vòng 24 giờ trở lại đây. Dự báo đầu ra cho thấy, giá trị AQI có xu hướng tăng lên trong vòng 24 giờ tính đến hiện tại, do đó chất lượng không khí được cảnh báo có xu hướng xấu đi cũng trong khoảng thời gian đó.
+
+% \begin{figure}[ht]
+%     \centering
+%     \includegraphics[width=1\linewidth]{Chapter3/Figs/ma_1d.png}
+%     \caption{Minh họa việc cảnh báo xu hướng dựa trên mô hình trung bình động.}
+%     \label{fig:ma}
+% \end{figure}
+
+% Chúng ta có thể thấy bất kể hình dạng của đồ thị biểu diễn các giá trị AQI gốc như thế nào, xu hướng vẫn được cảnh báo đúng và hợp lệ. Rõ ràng, điều này chứng tỏ việc chọn kích thước cửa sổ trượt $k$ là hợp lý cho cảnh báo xu hướng của AQI. Để làm rõ hơn, hình \ref{fig:ma2} cho thấy một đường biểu diễn giá trị AQI gốc khác chứa nhiều xu hướng nhỏ theo từng giai đoạn (tức là có tăng lên và giảm đi nhiều theo từng giai đoạn nhỏ). Đặc biệt, đồ thị này có một giai đoạn giảm rõ rệt về giá trị AQI - một xu hướng đi ngược lại so với xu hướng sau này, nhưng mô hình trung bình động vẫn cảnh báo đúng. 
+
+% \begin{figure}[H]
+%     \centering
+%     \includegraphics[width=1\linewidth]{Chapter3/Figs/ma_2d.png}
+%     \caption{Minh họa việc cảnh báo xu hướng dựa trên mô hình trung bình động trong điều kiện không thuận lợi cho xu hướng cuối.}
+%     \label{fig:ma2}
+% \end{figure}
+
+% \begin{figure}[H]
+%     \centering
+%     \includegraphics[width=1\linewidth]{Chapter3/Figs/ma_3d.png}
+%     \caption{Minh họa việc cảnh báo xu hướng của dữ liệu AQI theo ngày nhờ mô hình trung bình động.}
+%     % \label{fig:ma2}
+% \end{figure}
+
+% \section{Dashboard trực quan hóa dữ liệu}
+% % \label{sec:unanswer}
+
+% Để phục vụ cho việc trực quan hóa và thống kê, ban đầu chúng tôi dự định sử dụng Redash - một công cụ mạnh trong việc trực quan hóa dữ liệu để hỗ trợ và tích hợp vào hệ thống. Tuy nhiên, sau khi thử nghiệm, chúng tôi quyết định không sử dụng Redash nữa do những hạn chế trong việc hiển thị và vẽ biểu đồ thống kê theo từng mức giờ hoặc ngày. Do đó, chúng tôi tự xây dựng một dashboard bằng Leaflet.js và Chart.js để phục vụ thực nghiệm và kiểm chứng đầu ra của các module trên, đồng thời trực quan hóa dữ liệu và các thống kê cho người dùng. Hình \ref{fig:dashboard} là giao diện chính của dashboard chúng tôi đã xây dựng
+
+% \begin{figure}[ht]
+%     \centering
+%     \includegraphics[width=1\linewidth]{Chapter3/Figs/map.png}
+%     \caption{Dashboard trực quan hóa dữ liệu.}
+%     \label{fig:dashboard}
+% \end{figure}
+
+% Dashboard cung cấp nhiều chức năng cho người dùng để giám sát, nhận cảnh báo và dự báo về tình hình không khí tại Hà Nội. Người dùng có thể theo dõi tổng quan tất cả các trạm đo và dữ liệu AQI của chúng trên toàn địa bàn thành phố, ngoài ra còn nhìn thấy các giá trị AQI và màu ở điểm đo đó tương ứng với mức độ chất lượng không khí theo ngường quy định trước. Hơn nữa, người dùng có thể xm chi tiết thông tin, nhận cảnh báo và dự báo AQI ở một trạm đo bất kỳ. Tất cả những chức năng này sẽ được thực nghiệm, chứng minh và phân tích rõ hơn ở chương \ref{chap:experiments}.

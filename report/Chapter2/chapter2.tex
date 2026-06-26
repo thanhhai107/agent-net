@@ -1,0 +1,192 @@
+\chapter{Kiến thức nền tảng}
+\label{chap:related_work}
+
+Chương này trình bày những kiến thức nền tảng cần thiết cho việc nghiên cứu và xây dựng hệ thống Self-Evolving AI Agents trong bài toán xử lý sự cố mạng viễn thông. Các nội dung chính bao gồm: tổng quan về mạng viễn thông và bài toán xử lý sự cố mạng, phân tích nguyên nhân gốc rễ, mô hình ngôn ngữ lớn, AI Agent, Self-Evolving AI Agents, cùng với các cơ chế tự cải thiện như vòng lặp phản hồi, tự phản tư, cập nhật bộ nhớ và học tăng cường.
+
+\section{Mạng viễn thông}
+\label{sec1}
+
+Mạng viễn thông là hệ thống hạ tầng cho phép truyền tải thông tin giữa các thiết bị, người dùng và dịch vụ thông qua nhiều công nghệ truyền dẫn khác nhau. Trong thực tế, mạng viễn thông bao gồm nhiều thành phần như thiết bị truy nhập vô tuyến, trạm gốc, đường truyền, thiết bị lõi mạng, phần mềm điều khiển, giao thức truyền thông và các hệ thống giám sát vận hành. Các thành phần này phối hợp với nhau nhằm đảm bảo quá trình kết nối, truyền dữ liệu và cung cấp dịch vụ diễn ra ổn định.
+
+Trong các mạng di động hiện đại như 4G và 5G, độ phức tạp của hệ thống ngày càng tăng do số lượng thiết bị lớn, cấu hình mạng đa dạng, lưu lượng thay đổi liên tục và yêu cầu chất lượng dịch vụ ngày càng cao. Một thay đổi nhỏ trong cấu hình hoặc một lỗi tại một thành phần có thể gây ảnh hưởng dây chuyền đến nhiều thành phần khác. Vì vậy, việc giám sát, phát hiện và xử lý sự cố mạng viễn thông trở thành một nhiệm vụ quan trọng trong quá trình vận hành mạng.
+
+Bảng \ref{tab:telecom-troubleshooting-tasks} trình bày một số bài toán tiêu biểu trong xử lý sự cố mạng viễn thông. Các bài toán này thường được thực hiện theo một quy trình liên tục, từ phát hiện sự cố, phân tích nguyên nhân, đánh giá tác động cho đến đề xuất hành động khắc phục.
+
+\begin{table}[htbp]
+\centering
+\caption{Các bài toán tiêu biểu trong xử lý sự cố mạng viễn thông}
+\label{tab:telecom-troubleshooting-tasks}
+\begin{minipage}{0.95\textwidth}
+\small
+
+\textbf{1. Phát hiện sự cố:}
+Mục tiêu là xác định hệ thống mạng có xuất hiện lỗi hoặc dấu hiệu bất thường hay không.
+Đầu vào thường bao gồm log hệ thống, cảnh báo, chỉ số hiệu năng mạng và dữ liệu giám sát theo thời gian.
+Các metric thường dùng gồm Accuracy, Precision, Recall và F1-score.
+
+\vspace{6pt}
+
+\textbf{2. Phân tích nguyên nhân gốc rễ:}
+Mục tiêu là xác định nguyên nhân chính gây ra sự cố hoặc triệu chứng bất thường trong mạng.
+Đầu vào thường bao gồm cảnh báo, log, KPI, dữ liệu cấu hình, topology mạng và lịch sử sự cố.
+Các metric thường dùng gồm Top-k Accuracy, Precision, Recall và F1-score.
+
+\vspace{6pt}
+
+\textbf{3. Đánh giá tác động:}
+Mục tiêu là xác định phạm vi, mức độ nghiêm trọng và đối tượng bị ảnh hưởng bởi sự cố.
+Đầu vào có thể bao gồm thông tin dịch vụ, dữ liệu người dùng, topology mạng, vùng phủ sóng và KPI sau sự cố.
+Các metric thường dùng gồm MAE, RMSE, Accuracy và Severity Score.
+
+\vspace{6pt}
+
+\textbf{4. Đề xuất khắc phục:}
+Mục tiêu là đưa ra hành động xử lý hoặc khuyến nghị vận hành nhằm khôi phục trạng thái mạng.
+Đầu vào thường bao gồm nguyên nhân gốc rễ, lịch sử xử lý, tài liệu kỹ thuật và trạng thái mạng hiện tại.
+Các metric thường dùng gồm Success Rate, Recovery Rate và MTTR.
+
+\end{minipage}
+\end{table}
+
+\section{Phân tích nguyên nhân gốc rễ}
+\label{sec2}
+
+Phân tích nguyên nhân gốc rễ, hay Root Cause Analysis (RCA), là nhiệm vụ xác định nguyên nhân chính gây ra một hoặc nhiều triệu chứng bất thường trong hệ thống. Trong bối cảnh mạng viễn thông, RCA không chỉ dừng lại ở việc nhận biết rằng mạng đang có lỗi, mà còn cần trả lời câu hỏi: lỗi bắt nguồn từ đâu, vì sao lỗi xảy ra và cần xử lý như thế nào.
+
+Về mặt tổng quát, bài toán RCA có thể được mô tả như sau. Cho một tập dữ liệu mô tả trạng thái mạng, bao gồm các tham số cấu hình, dữ liệu quan sát và triệu chứng bất thường, mục tiêu là xác định nguyên nhân có khả năng cao nhất gây ra triệu chứng đó. Nếu ký hiệu $U$ là tập tham số cấu hình mạng, $Y_t$ là dữ liệu quan sát tại thời điểm $t$, $s_t$ là triệu chứng được phát hiện và $C$ là tập các nguyên nhân có thể xảy ra, thì nhiệm vụ RCA là tìm ra nguyên nhân $\hat{c}$ phù hợp nhất để giải thích cho triệu chứng quan sát được.
+
+\begin{equation}
+\hat{c} = \underset{c \in C}{\mathrm{argmax}} ; p(c \mid U, Y_t, s_t)
+\end{equation}
+
+Trong đó, $p(c \mid U, Y_t, s_t)$ biểu diễn xác suất của nguyên nhân $c$ khi đã biết cấu hình mạng, dữ liệu quan sát và triệu chứng hiện tại. Cách mô hình hóa này cho thấy RCA là một bài toán suy luận ngược, từ các biểu hiện quan sát được để tìm ra nguyên nhân tiềm ẩn. Đây là bài toán khó do dữ liệu mạng thường có nhiều chiều, chứa nhiễu, thay đổi theo thời gian và có nhiều quan hệ phụ thuộc phức tạp giữa các thành phần mạng.
+
+Trong hệ thống được nghiên cứu, RCA đóng vai trò là một tác vụ trung tâm. Agent cần phân tích dữ liệu đầu vào, suy luận nguyên nhân gốc rễ, đưa ra lời giải thích và ghi nhận kết quả để cải thiện khả năng xử lý trong các tình huống tương tự về sau.
+
+
+\section{Mô hình ngôn ngữ lớn}
+\label{sec:large-language-models}
+
+Mô hình ngôn ngữ lớn, hay Large Language Model (LLM), là các mô hình học sâu được huấn luyện trên lượng dữ liệu văn bản rất lớn nhằm học cách hiểu, sinh và suy luận trên ngôn ngữ tự nhiên. Các LLM hiện đại có khả năng thực hiện nhiều tác vụ khác nhau như trả lời câu hỏi, tóm tắt văn bản, sinh mã nguồn, lập kế hoạch, suy luận nhiều bước và sử dụng công cụ thông qua lời gọi API.
+
+Trong bài toán xử lý sự cố mạng viễn thông, LLM có một số ưu điểm quan trọng. Thứ nhất, LLM có thể xử lý dữ liệu dạng văn bản như log hệ thống, cảnh báo lỗi, mô tả sự cố hoặc tài liệu kỹ thuật. Thứ hai, LLM có thể sinh lời giải thích bằng ngôn ngữ tự nhiên, giúp kỹ sư mạng hiểu rõ hơn quá trình chẩn đoán. Thứ ba, LLM có thể kết hợp tri thức miền với dữ liệu quan sát để thực hiện suy luận nhiều bước.
+
+Tuy nhiên, LLM cũng có những hạn chế nhất định. Các mô hình tổng quát có thể thiếu tri thức chuyên sâu về mạng viễn thông, dễ sinh ra câu trả lời thiếu nhất quán hoặc không đủ độ chính xác cho các quyết định vận hành quan trọng. Vì vậy, trong các hệ thống thực tế, LLM thường cần được kết hợp với dữ liệu miền, công cụ kiểm chứng, bộ nhớ, cơ chế phản hồi hoặc các phương pháp huấn luyện bổ sung để nâng cao độ tin cậy.
+
+\section{AI Agent}
+\label{sec:ai-agent}
+
+AI Agent là một hệ thống trí tuệ nhân tạo có khả năng quan sát môi trường, lập kế hoạch, đưa ra hành động và điều chỉnh hành vi để đạt được mục tiêu nhất định. Khác với một mô hình chỉ sinh phản hồi đơn lẻ, agent thường được thiết kế như một hệ thống gồm nhiều thành phần, bao gồm mô hình nền, bộ nhớ, tập công cụ, bộ lập kế hoạch và cơ chế đánh giá kết quả.
+
+Một AI Agent có thể được mô tả thông qua quá trình tương tác với môi trường. Agent nhận quan sát từ môi trường, sử dụng mô hình suy luận để quyết định hành động, thực thi hành động thông qua công cụ hoặc API, sau đó nhận phản hồi từ môi trường để tiếp tục vòng lặp xử lý. Trong bài toán xử lý sự cố mạng viễn thông, môi trường có thể là hệ thống vận hành mạng, dữ liệu log, cảnh báo, dashboard giám sát hoặc phản hồi từ kỹ sư vận hành.
+
+Các hành động của agent trong hệ thống xử lý sự cố có thể bao gồm: truy vấn dữ liệu log, phân tích chỉ số hiệu năng, tìm kiếm tri thức liên quan, xác định nguyên nhân gốc rễ, sinh báo cáo chẩn đoán hoặc đề xuất phương án xử lý. Nhờ khả năng kết hợp suy luận ngôn ngữ với sử dụng công cụ, AI Agent phù hợp với các bài toán phức tạp, cần nhiều bước xử lý và cần tương tác với nhiều nguồn dữ liệu khác nhau.
+
+\section{Self-Evolving AI Agents}
+\label{sec:self-evolving-agents}
+
+Self-Evolving AI Agents là các hệ thống agent có khả năng tự cải thiện dựa trên dữ liệu, phản hồi và kinh nghiệm thu được trong quá trình hoạt động. Khác với các agent thông thường, vốn chủ yếu vận hành dựa trên mô hình, prompt, bộ nhớ, công cụ hoặc quy trình xử lý được thiết kế cố định từ ban đầu, self-evolving agent hướng tới khả năng tự điều chỉnh một hoặc nhiều thành phần bên trong hệ thống nhằm nâng cao hiệu quả xử lý trong các nhiệm vụ tương lai.
+
+Về bản chất, self-evolving agent không chỉ giải quyết một nhiệm vụ đơn lẻ, mà còn khai thác chính quá trình giải quyết nhiệm vụ đó như một nguồn kinh nghiệm học tập. Các thông tin như dữ liệu đầu vào, chuỗi suy luận, hành động đã thực hiện, công cụ đã sử dụng, kết quả đầu ra, phản hồi từ môi trường hoặc đánh giá từ người dùng đều có thể được sử dụng để cải thiện agent. Nhờ đó, agent có thể rút kinh nghiệm từ các lần xử lý trước, tránh lặp lại lỗi sai và điều chỉnh chiến lược suy luận khi gặp các tình huống tương tự.
+
+Trong bài toán xử lý sự cố mạng viễn thông, khả năng tự cải thiện có ý nghĩa đặc biệt quan trọng. Mạng viễn thông là một môi trường động, trong đó cấu hình thiết bị, lưu lượng người dùng, điều kiện truyền dẫn, trạng thái dịch vụ và các loại sự cố có thể thay đổi liên tục theo thời gian. Một chiến lược chẩn đoán hiệu quả ở thời điểm hiện tại có thể không còn phù hợp khi hệ thống mạng thay đổi hoặc khi xuất hiện các dạng lỗi mới. Vì vậy, self-evolving agent có thể được xem là một hướng tiếp cận phù hợp để xây dựng hệ thống hỗ trợ kỹ sư mạng trong việc phát hiện sự cố, phân tích nguyên nhân gốc rễ và đề xuất phương án xử lý một cách thích nghi hơn.
+
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=0.95\textwidth]{Chapter2/Figs/selfevolvingsurvey.png}
+\caption{Bức tranh phát triển của một số framework tiêu biểu trong lĩnh vực Self-Evolving AI Agents giai đoạn 2022--2025. Hình được tổ chức theo trình tự thời gian, thể hiện các mốc nghiên cứu quan trọng trong quá trình phát triển agent có khả năng lập kế hoạch tự động, sử dụng công cụ và tự cải thiện liên tục.}
+\label{fig:self-evolving-survey}
+\end{figure}
+
+\subsection{Các thành phần có thể tiến hóa}
+\label{subsec:what-to-evolve}
+
+Một câu hỏi quan trọng khi thiết kế self-evolving agent là: thành phần nào của agent có thể được cải thiện theo thời gian. Các thành phần thường được xem xét bao gồm mô hình, ngữ cảnh, bộ nhớ, công cụ và kiến trúc agent.
+
+\textbf{Mô hình} là thành phần lõi quyết định khả năng hiểu, suy luận và sinh phản hồi của agent. Tiến hóa ở mức mô hình thường liên quan đến việc cập nhật tham số, fine-tuning hoặc tối ưu chính sách dựa trên dữ liệu mới và phản hồi thu được. Trong bài toán xử lý sự cố mạng viễn thông, mô hình có thể được cải thiện bằng cách học từ các ca chẩn đoán đúng, các lỗi dự đoán sai hoặc các lời giải thích đã được chuyên gia xác nhận.
+
+\textbf{Ngữ cảnh} bao gồm prompt, hướng dẫn, thông tin truy xuất và các dữ liệu được cung cấp cho agent tại thời điểm suy luận. Tiến hóa ngữ cảnh có thể hiểu là việc cải thiện cách tổ chức đầu vào, cách đặt câu hỏi, cách lựa chọn thông tin liên quan hoặc cách xây dựng prompt để agent đưa ra kết quả tốt hơn. Với bài toán RCA, ngữ cảnh tốt cần giúp agent tập trung vào các dấu hiệu quan trọng như cảnh báo, log, KPI bất thường, cấu hình thiết bị và quan hệ topology.
+
+\textbf{Bộ nhớ} giúp agent lưu trữ và truy xuất kinh nghiệm từ các lần xử lý trước. Bộ nhớ có thể bao gồm lịch sử sự cố, kết quả chẩn đoán, phản hồi từ chuyên gia, quy tắc suy luận, tài liệu kỹ thuật hoặc các mẫu lỗi thường gặp. Tiến hóa bộ nhớ không chỉ là lưu thêm thông tin mới, mà còn bao gồm cập nhật, hợp nhất hoặc loại bỏ những thông tin sai, trùng lặp hoặc không còn phù hợp.
+
+\textbf{Công cụ} là các chức năng hoặc mô-đun bên ngoài mà agent có thể sử dụng để hoàn thành nhiệm vụ. Trong hệ thống xử lý sự cố mạng viễn thông, công cụ có thể là mô-đun truy vấn log, kiểm tra KPI, phân tích topology, tìm kiếm tài liệu kỹ thuật hoặc đánh giá kết quả RCA. Tiến hóa công cụ có thể bao gồm việc học cách chọn công cụ phù hợp hơn, cải thiện thứ tự sử dụng công cụ hoặc bổ sung công cụ mới khi agent phát hiện thiếu năng lực xử lý.
+
+\textbf{Kiến trúc agent} mô tả cách các thành phần trong hệ thống được tổ chức và phối hợp với nhau. Ở mức kiến trúc, quá trình tiến hóa có thể là thay đổi luồng xử lý, thêm bước kiểm chứng, phân chia vai trò cho nhiều agent con hoặc điều chỉnh cách phối hợp giữa các agent. Ví dụ, một hệ thống có thể gồm agent phân tích dữ liệu, agent suy luận nguyên nhân, agent kiểm chứng kết quả và agent đề xuất phương án khắc phục.
+
+\subsection{Thời điểm tiến hóa}
+\label{subsec:when-to-evolve}
+
+Bên cạnh câu hỏi thành phần nào cần tiến hóa, một vấn đề quan trọng khác là quá trình tiến hóa diễn ra vào thời điểm nào. Có thể chia thời điểm tiến hóa thành hai nhóm chính: tiến hóa trong khi xử lý nhiệm vụ và tiến hóa sau khi nhiệm vụ kết thúc.
+
+\textbf{Intra-test-time evolution} là quá trình agent tự điều chỉnh trong khi đang giải quyết một nhiệm vụ cụ thể. Khi phát hiện kết quả chưa chắc chắn, thiếu dữ liệu hoặc tồn tại nhiều giả thuyết cạnh tranh, agent có thể truy xuất thêm thông tin, thay đổi kế hoạch, kiểm tra lại suy luận hoặc cập nhật tạm thời ngữ cảnh để cải thiện kết quả hiện tại. Trong xử lý sự cố mạng viễn thông, điều này tương ứng với việc agent đang phân tích một sự cố nhưng tự nhận thấy còn thiếu log, thiếu thông tin cấu hình hoặc chưa đủ bằng chứng để kết luận nguyên nhân gốc rễ.
+
+\textbf{Inter-test-time evolution} là quá trình agent học sau khi một nhiệm vụ đã hoàn thành. Agent sử dụng lịch sử xử lý, kết quả đúng sai và phản hồi từ người dùng để cải thiện cho các nhiệm vụ tiếp theo. Đây là cơ chế phù hợp với môi trường vận hành mạng, nơi mỗi ca sự cố sau khi được xử lý có thể trở thành một kinh nghiệm mới giúp hệ thống chẩn đoán tốt hơn trong tương lai.
+
+\subsection{Các phương thức tiến hóa thường gặp}
+\label{subsec:how-to-evolve}
+
+Dựa trên cách agent tiếp nhận tín hiệu học tập và cập nhật hành vi, các phương thức tiến hóa thường gặp có thể được chia thành một số nhóm chính, bao gồm tiến hóa dựa trên phần thưởng, tiến hóa dựa trên tự phản tư, tiến hóa bộ nhớ, học từ minh họa và tiến hóa dựa trên quần thể.
+
+\subsubsection{Tiến hóa dựa trên phần thưởng}
+\label{subsubsec:reward-based-evolution}
+
+Tiến hóa dựa trên phần thưởng là phương thức trong đó agent cải thiện hành vi thông qua các tín hiệu đánh giá. Tín hiệu này có thể cho biết kết quả của agent là tốt hay chưa tốt, nguyên nhân dự đoán có đúng hay không, lời giải thích có hợp lý hay không hoặc hành động khắc phục có mang lại hiệu quả hay không.
+
+Trong nhóm này, vòng lặp phản hồi là cơ chế nền tảng. Agent thực hiện một nhiệm vụ, sinh kết quả, nhận phản hồi và sử dụng phản hồi đó để điều chỉnh hành vi trong các lần xử lý sau. Một vòng lặp phản hồi cơ bản có thể được mô tả như sau:
+
+\begin{center}
+Input -- Agent Reasoning -- Output -- Feedback -- Update
+\end{center}
+
+Trong đó, bước \textit{Update} có thể là cập nhật bộ nhớ, điều chỉnh prompt, thay đổi chiến lược suy luận hoặc huấn luyện lại một phần mô hình. Với bài toán RCA, phản hồi có thể đến từ chuyên gia mạng, từ bộ đánh giá tự động hoặc từ kết quả thực tế sau khi áp dụng phương án khắc phục.
+
+Một dạng quan trọng của tiến hóa dựa trên phần thưởng là học tăng cường. Trong học tăng cường, agent học cách lựa chọn hành động thông qua việc tương tác với môi trường và nhận phần thưởng tương ứng. Nếu agent xác định đúng nguyên nhân gốc rễ hoặc đưa ra khuyến nghị xử lý hiệu quả, hệ thống có thể gán phần thưởng cao. Ngược lại, nếu agent bỏ sót nguyên nhân, chọn sai lỗi hoặc đưa ra giải thích không phù hợp, phần thưởng sẽ thấp hơn. Theo thời gian, agent học cách ưu tiên các chiến lược có khả năng tạo ra kết quả tốt hơn.
+
+Ngoài phần thưởng dạng số, phản hồi cũng có thể tồn tại dưới dạng ngôn ngữ tự nhiên. Ví dụ, chuyên gia có thể nhận xét rằng agent đã đúng khi kiểm tra KPI nhưng bỏ sót quan hệ topology giữa hai thiết bị. Loại phản hồi này giúp agent hiểu rõ hơn lỗi trong quá trình suy luận, từ đó cải thiện prompt, bộ nhớ hoặc chiến lược phân tích ở các lần sau.
+
+\subsubsection{Tiến hóa dựa trên tự phản tư}
+\label{subsubsec:self-reflection}
+
+Tự phản tư là cơ chế cho phép agent tự đánh giá lại quá trình suy luận và kết quả của chính mình. Sau khi hoàn thành một tác vụ, agent có thể phân tích xem kết luận đã đủ bằng chứng chưa, có bỏ sót dữ liệu nào không, giả thuyết nào đã bị loại bỏ sai hoặc lời giải thích có phù hợp với dữ liệu quan sát hay không.
+
+Trong bài toán RCA, tự phản tư giúp agent phát hiện các lỗi như chọn nguyên nhân chưa đủ bằng chứng, suy luận nhầm quan hệ nhân quả, bỏ sót cảnh báo quan trọng hoặc đưa ra lời giải thích quá chung chung. Kết quả phản tư có thể được lưu vào bộ nhớ dưới dạng kinh nghiệm hoặc quy tắc suy luận để tránh lặp lại sai lầm.
+
+Ví dụ, nếu agent dự đoán nguyên nhân là lỗi handover nhưng phản hồi từ chuyên gia cho biết nguyên nhân thực tế là nhiễu do cell lân cận, agent có thể ghi nhận rằng trong các trường hợp suy giảm thông lượng đi kèm chỉ số nhiễu cao và có cell lân cận đồng tần số, cần ưu tiên kiểm tra giả thuyết về nhiễu trước khi kết luận lỗi handover. Như vậy, tự phản tư giúp biến lỗi sai thành dữ liệu học tập cho tương lai.
+
+\subsubsection{Tiến hóa bộ nhớ}
+\label{subsubsec:memory-evolution}
+
+Tiến hóa bộ nhớ là phương thức trong đó agent cải thiện thông qua việc lưu trữ, cập nhật và truy xuất kinh nghiệm từ các lần tương tác trước. Bộ nhớ giúp agent không phải xử lý mọi tình huống từ đầu, mà có thể tận dụng các trường hợp tương tự đã từng gặp.
+
+Trong hệ thống xử lý sự cố mạng viễn thông, bộ nhớ có thể lưu các ca sự cố đã xử lý, nguyên nhân được xác nhận, dấu hiệu bất thường đi kèm, phương án khắc phục, phản hồi từ chuyên gia và kết quả sau khắc phục. Khi gặp một sự cố mới, agent có thể truy xuất các ca tương tự để hỗ trợ suy luận.
+
+Một cơ chế cập nhật bộ nhớ thường bao gồm ba thao tác chính. Thứ nhất là \textbf{thêm mới}, tức là lưu lại một kinh nghiệm, sự cố hoặc phản hồi mới có giá trị cho tương lai. Thứ hai là \textbf{cập nhật}, tức là điều chỉnh một ghi nhớ cũ khi có thông tin chính xác hơn hoặc khi điều kiện vận hành thay đổi. Thứ ba là \textbf{loại bỏ}, tức là xóa hoặc giảm ưu tiên các thông tin sai, lỗi thời hoặc không còn phù hợp.
+
+Tuy nhiên, tiến hóa bộ nhớ cần được kiểm soát cẩn thận. Nếu agent lưu lại phản hồi sai hoặc kết luận chưa được kiểm chứng, bộ nhớ có thể làm giảm chất lượng suy luận trong tương lai. Vì vậy, với các hệ thống mạng quan trọng, thông tin đưa vào bộ nhớ nên được đánh giá hoặc xác nhận trước khi trở thành tri thức lâu dài.
+
+\subsubsection{Học từ minh họa và kinh nghiệm mẫu}
+\label{subsubsec:imitation-demonstration-learning}
+
+Học từ minh họa, hay imitation and demonstration learning, là phương thức trong đó agent cải thiện bằng cách học từ các ví dụ xử lý tốt. Thay vì chỉ nhận phần thưởng đúng sai, agent được cung cấp một chuỗi xử lý hoàn chỉnh, bao gồm cách phân tích dữ liệu, cách loại trừ giả thuyết sai, cách lựa chọn nguyên nhân và cách trình bày lời giải thích.
+
+Trong self-evolving agents, các minh họa này không nhất thiết phải đến từ con người. Chúng có thể được tạo ra từ chính agent sau khi giải đúng một bài toán, từ một agent mạnh hơn, từ nhiều agent cùng thảo luận hoặc từ dữ liệu đã được chuyên gia xác nhận. Agent sau đó học lại từ các trajectory chất lượng cao để cải thiện năng lực xử lý.
+
+Trong bài toán xử lý sự cố mạng viễn thông, phương thức này có thể được áp dụng bằng cách thu thập các ca RCA mẫu đã được kỹ sư mạng xác nhận. Mỗi ca mẫu có thể bao gồm dữ liệu đầu vào, các bước phân tích, nguyên nhân gốc rễ, bằng chứng hỗ trợ và phương án xử lý. Khi học từ các ví dụ này, agent không chỉ học đáp án cuối cùng mà còn học cách suy luận theo từng bước, từ đó cải thiện khả năng giải thích và độ tin cậy của kết quả.
+
+\subsubsection{Tiến hóa dựa trên quần thể}
+\label{subsubsec:population-based-evolution}
+
+Tiến hóa dựa trên quần thể là phương thức trong đó hệ thống duy trì nhiều biến thể agent, nhiều chiến lược xử lý hoặc nhiều cấu hình kiến trúc khác nhau. Các biến thể này được đánh giá trên cùng một nhóm nhiệm vụ, sau đó những biến thể hiệu quả hơn được giữ lại, kết hợp hoặc tiếp tục cải tiến. Cách tiếp cận này lấy cảm hứng từ quá trình chọn lọc và tiến hóa tự nhiên.
+
+Ở mức đơn agent, hệ thống có thể thử nhiều phiên bản prompt, nhiều chiến lược suy luận hoặc nhiều cách sử dụng công cụ khác nhau. Phiên bản nào tạo ra kết quả tốt hơn sẽ được ưu tiên sử dụng trong các lần sau. Ở mức đa agent, hệ thống có thể thử nhiều cách phân chia vai trò, chẳng hạn agent phân tích log, agent kiểm tra KPI, agent suy luận nguyên nhân và agent phản biện kết quả. Cách phối hợp nào đạt hiệu quả cao hơn sẽ được giữ lại.
+
+Trong bối cảnh xử lý sự cố mạng viễn thông, tiến hóa dựa trên quần thể có thể giúp tìm ra quy trình chẩn đoán phù hợp hơn cho từng loại sự cố. Ví dụ, với sự cố suy giảm thông lượng, một workflow ưu tiên phân tích KPI vô tuyến có thể hiệu quả hơn. Trong khi đó, với sự cố mất dịch vụ hàng loạt, workflow ưu tiên phân tích topology và alarm correlation có thể phù hợp hơn. Việc duy trì nhiều biến thể cho phép hệ thống linh hoạt hơn thay vì phụ thuộc vào một quy trình cố định.
+
+\subsection{Vai trò trong xử lý sự cố mạng viễn thông}
+\label{subsec:self-evolving-role-telecom}
+
+Đối với xử lý sự cố mạng viễn thông, Self-Evolving AI Agents có thể đóng vai trò như một trợ lý thông minh hỗ trợ kỹ sư mạng trong toàn bộ quá trình chẩn đoán. Agent có thể phân tích dữ liệu vận hành, xác định các dấu hiệu bất thường, đề xuất nguyên nhân gốc rễ, giải thích cơ sở suy luận và gợi ý phương án khắc phục.
+
+Điểm khác biệt quan trọng của self-evolving agent nằm ở khả năng cải thiện sau mỗi lần xử lý. Mỗi ca sự cố không chỉ là một nhiệm vụ riêng lẻ mà còn là một nguồn dữ liệu mới cho hệ thống. Khi được thiết kế đúng, agent có thể học từ các ca thành công, rút kinh nghiệm từ các ca thất bại, cập nhật bộ nhớ từ phản hồi của chuyên gia và điều chỉnh chiến lược suy luận khi môi trường mạng thay đổi.
+
+Nhờ đó, Self-Evolving AI Agents mở ra một hướng tiếp cận phù hợp cho các hệ thống mạng hiện đại, nơi dữ liệu vận hành phức tạp, sự cố có thể phát sinh liên tục và yêu cầu xử lý ngày càng cao. Thay vì chỉ xây dựng một mô hình chẩn đoán tĩnh, hướng tiếp cận này tập trung vào một hệ thống có khả năng thích nghi, học hỏi và nâng cao hiệu quả theo thời gian.

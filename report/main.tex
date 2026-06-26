@@ -1,0 +1,198 @@
+\documentclass[oneside]{report}
+\usepackage[utf8]{inputenc}
+% \usepackage[T5]{fontenc}
+\usepackage{lmodern}
+\usepackage{graphicx}
+\usepackage{nameref}
+\usepackage{multicol}
+\usepackage{listings}
+\usepackage{array}
+\usepackage{tabularx}
+\usepackage{inconsolata}
+\lstset{
+  basicstyle=\ttfamily,
+}
+\newenvironment{myfont}{\fontfamily{inconsolata}\selectfont}{\par}
+\DeclareTextFontCommand{\textmyfont}{\myfont}
+
+% custom packages
+\usepackage[table]{xcolor}
+\usepackage{amsmath}
+\DeclareMathOperator*{\argmax}{arg\,max}
+
+% set font, font size and spacing
+\usepackage{times}
+\renewcommand{\baselinestretch}{1.3}
+% section spacing
+\usepackage{titlesec}
+\titlespacing*{\section}{0pt}{0.5\baselineskip}{0.2\baselineskip}
+\titlespacing*{\subsection}{0pt}{0.4\baselineskip}{0.2\baselineskip}
+
+% setup page layout
+\usepackage[a4paper,left=30mm,top=20mm,bottom=25mm,right=20mm,]{geometry}
+
+% Acronyms Auto
+% Enable this block after adding acronym entries to FrontMatter/Acronyms.tex.
+% \usepackage[nopostdot,toc,acronym,nomain,nonumberlist]{glossaries}
+% \makeglossaries
+% \setacronymstyle{long-short}
+% \loadglsentries[acronym]{FrontMatter/Acronyms}
+% \setlength{\glsdescwidth}{0.7\linewidth}
+
+% % prevent text overflow
+% \usepackage{babel}
+% \newcommand\fh{\babelhyphen{hard}}
+
+% Change indent
+% \usepackage{indentfirst} % indent also after section titles
+\setlength{\parindent}{1cm}
+\usepackage{enumitem}
+\setlist{leftmargin=1cm}
+
+% paragraph spacing
+\setlength{\parskip}{0.5em}
+
+% Customs
+% Page numbering at the center top of page
+% \usepackage{fancyhdr} % Custom headers and footers
+% \pagestyle{fancyplain} % Makes all pages in the document conform to the custom headers and footers
+% \fancyhead[L]{}% Empty left header
+% \fancyhead[C]{\thepage} % Page numbering for center header  
+% \fancyhead[R]{}% Empty right header
+% \fancyfoot[L]{}% Empty left footer
+% \fancyfoot[C]{}% Empty center footer
+% \fancyfoot[R]{}% Empty left footer
+
+%%% Package for Japanese
+% \usepackage{xeCJK}
+% \setCJKmainfont{IPAMincho}
+% \setCJKsansfont{IPAGothic}
+% \setCJKmonofont{IPAGothic}
+
+\usepackage{CJKutf8}
+
+% natbib
+% if use natbib, please comment out the cite
+\usepackage[sort,numbers]{natbib}
+% Citation
+% \usepackage{cite}
+
+% Math equation
+\usepackage{amssymb}
+
+\usepackage{algorithm}
+\usepackage{algorithmic}
+
+\usepackage{etoolbox}
+\usepackage{caption}
+\usepackage{mdframed}
+
+\usepackage{ragged2e}
+
+\definecolor{yellow}{RGB}{255,242,204}
+\definecolor{red}{RGB}{248,206,204}
+\definecolor{blue}{RGB}{218,232,252}
+\definecolor{green}{RGB}{213,232,212}
+\definecolor{orange}{RGB}{255,230,204}
+% Table
+\usepackage{multirow}
+\usepackage{longtable}
+\usepackage{bigstrut}
+\usepackage[vietnamese]{babel}
+\usepackage{scrextend}
+\changefontsizes{13pt}
+
+% Cover
+\usepackage{pdfpages}
+
+% pstricks fig
+\usepackage{epsfig}
+
+% Table of Contents
+\usepackage[hidelinks]{hyperref}
+% Uncomment if you want leading dot for chapter
+\usepackage{tocloft}
+\renewcommand{\cftpartleader}{\cftdotfill{\cftdotsep}} % for parts
+\renewcommand{\cftchapleader}{\cftdotfill{\cftdotsep}} % for chapters
+
+% table fixed width column
+\usepackage{array}
+\newcolumntype{L}[1]{>{\raggedright\let\newline\\\arraybackslash\hspace{0pt}}m{#1}}
+\newcolumntype{C}[1]{>{\centering\let\newline\\\arraybackslash\hspace{0pt}}m{#1}}
+\newcolumntype{R}[1]{>{\raggedleft\let\newline\\\arraybackslash\hspace{0pt}}m{#1}}
+
+\hyphenation{Nan-yang}
+
+\title{Legal Knowledge Presentation Infusion into Language Models}
+\author{Tan-Minh Nguyen}
+\date{May 2024}
+
+\begin{document}
+
+%---------------------------------------------
+% Front Matter
+%---------------------------------------------
+\hypersetup{pageanchor=false}
+\includepdf[pages=-]{FrontMatter/VDT26_cover_final.pdf}
+\pagenumbering{roman}
+\hypersetup{pageanchor=true}
+\setcounter{page}{3}
+% \include{FrontMatter/Abstract}
+\include{FrontMatter/Abstract_vn}
+\include{FrontMatter/Acknowledgements}
+\include{FrontMatter/Declaration}
+
+% Show ToC and change title to Table of Contents
+\setcounter{secnumdepth}{3}
+\renewcommand{\contentsname}{Mục lục}
+\addcontentsline{toc}{chapter}{Mục lục}
+\tableofcontents
+
+% Show Acronyms and add it to ToC. Enable this block after adding acronym
+% entries to FrontMatter/Acronyms.tex.
+% \printglossary[title={Thuật ngữ và viết tắt},type=acronym,style=long]
+% \clearpage
+
+% Show list of 
+\addcontentsline{toc}{chapter}{Danh mục hình ảnh}
+\listoffigures
+\clearpage
+% \addcontentsline{toc}{chapter}{Danh mục bảng}
+% \listoftables
+% \clearpage
+
+
+%--------------------------------------------- 
+% Main content
+%---------------------------------------------
+\pagenumbering{arabic}
+\setcounter{page}{1}
+\include{Chapter1/chapter1}
+\include{Chapter2/chapter2}
+\include{Chapter3/chapter3}
+\include{Chapter4/chapter4}
+\include{Chapter5/chapter5}
+\include{Chapter6/chapter6}
+
+
+% % List of publications
+%\include{FrontMatter/Publications}
+
+%--------------------------------------------- 
+% References
+%---------------------------------------------
+% Uncomment this block after adding entries to references.bib and citing them
+% in the report. Leaving BibTeX enabled with an empty bibliography produces
+% "I found no \citation commands" diagnostics.
+% \bibliographystyle{IEEEtranSN}
+% \renewcommand\bibname{Tài liệu tham khảo}
+% \addcontentsline{toc}{chapter}{Tài liệu tham khảo}
+% \bibliography{references} % Path to your references.bib file
+
+%--------------------------------------------- 
+% Appendix
+%---------------------------------------------
+\appendix
+% \include{Appendix/appendix1}
+
+\end{document}

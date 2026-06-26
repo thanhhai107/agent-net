@@ -23,7 +23,6 @@ import os
 import sys
 from typing import Any
 
-import langsmith as ls
 from langchain_core.messages import BaseMessage, HumanMessage
 from langgraph.graph import END, START, StateGraph
 from pydantic import Field
@@ -32,6 +31,7 @@ from typing_extensions import TypedDict
 from agent.cli.domain_agents.diagnosis_agent import CliDiagnosisAgent
 from agent.cli.domain_agents.submission_agent import CliSubmissionAgent
 from agent.utils.loggers import MessageLogger
+from agent.utils.tracing import langsmith_tracing_context
 from nika.utils.session import Session
 
 logging.basicConfig(level=logging.INFO)
@@ -117,7 +117,7 @@ class CliAgent:
 
     async def run(self, task_description: str) -> dict[str, Any]:
         """Execute the two-phase pipeline and return the final graph state."""
-        with ls.tracing_context(
+        with langsmith_tracing_context(
             project_name=os.getenv("LANGSMITH_PROJECT", "NIKA"),
             metadata={
                 "scenario": getattr(self.session, "scenario_name", ""),

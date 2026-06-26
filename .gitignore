@@ -19,3 +19,4 @@ uv.lock
 .cursor/
 .ruff_cache
 .pytest_cache
+.codex/

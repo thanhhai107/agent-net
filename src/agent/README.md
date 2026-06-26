@@ -79,7 +79,8 @@ flowchart LR
 - Top-level orchestration uses a LangGraph `StateGraph` with two nodes.
 - Each node is a LangChain `create_agent` ReAct subgraph (`DiagnosisAgent` / `SubmissionAgent`).
 - LLMs are loaded via `agent.llm.model_factory.load_model()` (openai / ollama / deepseek / netmind).
-- Tracing: Langfuse + LangSmith. Logging: `AgentCallbackLogger`.
+- Tracing: Langfuse by default; LangSmith is optional via `LANGSMITH_TRACING=true`.
+  Logging: `AgentCallbackLogger`.
 
 ```bash
 nika agent run -a react -b netmind -m openai/gpt-oss-120b -n 20

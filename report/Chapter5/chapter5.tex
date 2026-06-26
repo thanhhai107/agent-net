@@ -1,0 +1,218 @@
+\chapter{Thực nghiệm}
+% \label{chap:experiments}
+% % ======================================
+% % chapter introduction
+% % ======================================
+% Chương này trình bày trình tự các thực nghiệm và kết quả tương ứng của chúng để chứng minh giá trị của hệ thống HNAQI. Chúng tôi sẽ phân tích dữ liệu đã thu thập trước khi đi vào từng thực nghiệm cho từng module.   
+
+% \section{Phân tích dữ liệu}
+% \label{sec:dataset}
+
+% Dữ liệu sử dụng trong các thực nghiệm của dự án này đều được thu thập theo module giám sát đã trình bày chi tiết ở chương \ref{chap:model}.
+% Dữ liệu được thu thập mỗi \textbf{20 phút} một lần (tức là, DAG của Apache Airflow được cài đặt sẽ chạy mỗi 20 phút một lần). Chúng tôi chọn 20 phút vì một vài lý do. Thứ nhất, 20 phút là con số không nhỏ nhưng cũng không to, đảm bảo dữ liệu vẫn mang tính chất "near-realtime", vẫn tiệm cận với dữ liệu thực tế và không có sự cách biệt quá đáng kể, do đó đảm bảo các yếu tố cảnh báo và dự đoán. Thứ hai là do sự hạn chế truy cập tới các API công khai. Trong số 3 nguồn dữ liệu, chỉ có nguồn dữ liệu OpenAQ cung cấp API công khai với đầy đủ quyền truy cập không giới hạn, còn IAQI và WAQI bị giới hạn trong phiên bản cộng đồng của API. Dữ liệu trong API cộng đồng chỉ được cập nhật trong khoảng 1 giờ/1 lần, do đó chọn 20 phút là hợp lý để giám sát và cảnh báo kịp thời.
+
+% Tổng cộng có 77 trạm đo AQI, mỗi 20 phút dữ liệu cập nhật vào CSDL một lần, tức là trong 1 giờ sẽ có 231 dòng mới được thêm vào. Trong 1 ngày sẽ có thêm 5544 dòng dữ liệu mới, 1 tuần sẽ có thêm 38808 dòng. Thống kê độ trễ cho thấy, bỏ qua các trạm đo có thời gian cập nhất gần nhất cách đây $> 80$ ngày, độ trễ trung bình nhỏ nhất ghi nhận được là $13$ phút, độ trễ lớn nhất là $67$ ngày $26$ phút. Độ trễ nhiều nhất ghi nhận được là $1$ giờ, nguyên nhân là do sự hạn chế trong quyền truy cập tới các API công khai như đã nói ở trên.
+
+% \section{Môi trường thực nghiệm}
+% \label{sec:experiment_setup}
+% Ngoài các công cụ PostgreSQL, Apache Airflow và pgAdmin được chạy trên Docker, tất cả các module khác đều chạy trên máy cá nhân. Máy cá nhân được trang bị GPU NVIDIA GeForce RTX 3050 8GB. Toàn bộ mã nguồn của dự án được viết bằng ngôn ngữ Python, sử dụng các thư viện cần thiết.
+
+% Với hầu hết các thực nghiệm, kết quả đầu ra mong muốn đều được trực quan hóa trên pgAdmin hoặc dashboard đã xây dựng từ trước. Riêng với module dự báo, ngoài việc quan sát thấy các giá trị AQI dự đoán tương ứng với các mốc thời gian trên dashboard, còn có 2 thang đo đánh giá khác được dùng như đã trình bày ở phần \ref{subsec:verify}.
+
+% \section{Kết quả thực nghiệm}
+% \label{sec:results}
+
+% \subsection{Kết quả thực nghiệm module giám sát}
+% \label{subsec:qaresult}
+
+% \begin{figure}[ht]
+%     \centering
+%     \includegraphics[width=1\linewidth]{Chapter5/Figs/gs.png}
+%     \caption{Kết quả thực nghiệm module giám sát quan sát qua pgAdmin.}
+%     \label{fig:gs}
+% \end{figure}
+
+% Đầu ra mong muốn của module giám sát là dữ liệu được lưu trữ thành công vào CSDL và hiển thị đúng và đủ trên dashboard. Hình \ref{fig:gs} thể hiện truy vấn lựa chọn các bản ghi được thêm vào CSDL theo thời gian thực ở thời điểm $10$ giờ $30$ phút ngày $18$ tháng $6$ năm $2025$. Như đã nhắc đến ở các phần trước, khoảng cách giữa 2 lần chạy liên tiếp của Airflow DAG là 20 phút. Từ hình có thể thấy nhìn chung module giám sát ít gặp độ trễ khi thực hiện, thống kê cho thấy độ trễ lớn nhất gặp phải là gần $5$ phút, nguyên nhân xuất phát từ độ trễ trong việc extract dữ liệu từ API vì vượt quá giới hạn requests trong khoảng thời gian quy định. Đây vẫn là độ trễ có thể chấp nhận được.
+
+% \begin{figure}[ht]
+%     \centering
+%     \includegraphics[width=1\linewidth]{Chapter5/Figs/gs1.png}
+%     \caption{Kết quả quan sát thực nghiệm module giám sát quan sát qua dashboard.}
+%     \label{fig:gs1}
+% \end{figure}
+
+% Hình \ref{fig:gs1} mô tả kết quả thực nghiệm module giám sát quan sát qua dashboard. Các điểm dữ liệu được hiển thị thành công trên dashboard với giá trị AQI và màu sắc tương ứng theo từng ngưỡng. Các giá trị này được cập nhật liên tục mỗi 20 phút, đem lại ý nghĩa cảnh báo và dự đoán lớn.
+
+% \subsection{Kết quả thực nghiệm module cảnh báo}
+% \label{subsec:genrule}
+
+% Module cảnh báo cần cho thấy cảnh báo không chỉ về giá trị AQI hiện tại theo các ngưỡng mà còn là xu hướng của chất lượng không khí với thời gian tiệm cận thời gian thực. Thống kê về lịch sử AQI cũng là một yêu cầu đầu ra cần có của module này. Kết quả thực nghiệm của module cảnh báo được quan sát hoàn toàn qua dashboard.
+
+% Hình \ref{fig:wn1} mô tả kết quả quan sát lịch sử trung bình AQI trong 7 ngày gần nhất và xu hướng nhìn chung của dữ liệu AQI đó. Giá trị AQI hiện tại là 27, thuộc mức Tốt, cũng được cảnh báo trên màn hình cho người dùng. Các thông tin thống kê đều đi kèm với chú thích cụ thể về mặt thời gian. Hình \ref{fig:wn2} biểu diễn kết quả cảnh báo chất lượng không khí tại trạm số 1 trong vòng 24 giờ qua. Nhìn chung, xu hướng của chất lượng không khí ở trạm này là cải thiện tốt dần lên theo thời gian. Tương tự với hình \ref{fig:wn3}. Hơn nữa, người dùng có thể xem chi tiết cụ thể giá trị AQI tại từng thời điểm khi di chuyển qua các cột đó (hình \ref{fig:wn4}).
+
+% \begin{figure}[ht]
+%     \centering
+%     \includegraphics[width=1\linewidth]{Chapter5/Figs/warning1.png}
+%     \caption{Kết quả quan sát thực nghiệm module cảnh báo trong vòng 7 ngày quan sát qua dashboard.}
+%     \label{fig:wn1}
+% \end{figure}
+
+% \begin{figure}[H]
+%     \centering
+%     \includegraphics[width=1\linewidth]{Chapter5/Figs/wn2.png}
+%     \caption{Kết quả quan sát thực nghiệm module cảnh báo trong 24 giờ quan sát qua dashboard.}
+%     \label{fig:wn2}
+% \end{figure}
+
+% \begin{figure}[H]
+%     \centering
+%     \includegraphics[width=1\linewidth]{Chapter5/Figs/wn3.png}
+%     \caption{Kết quả quan sát thực nghiệm module cảnh báo trong 6 giờ quan sát qua dashboard.}
+%     \label{fig:wn3}
+% \end{figure}
+
+% \begin{figure}[H]
+%     \centering
+%     \includegraphics[width=1\linewidth]{Chapter5/Figs/wn4.png}
+%     \caption{Xem chi tiết giá trị AQI tại thời điểm cụ thể.}
+%     \label{fig:wn4}
+% \end{figure}
+% % \begin{table}[H]
+% % \small
+% % \centering
+% % \caption{Accuracy on supporting categories in the CLUTRR dataset.} 
+% % \label{tab:acc}
+% % \renewcommand{\arraystretch}{1.2}
+% % \resizebox{\columnwidth}{!}{%
+% % \begin{tabular}{|l|l|c|c|c|c|c|}
+% % \hline
+% % \textbf{Dataset} & \textbf{Model} & \textbf{Accuracy} & \textbf{True answer}                    & \textbf{False answer}                  & \textbf{No answer}                     \\ \hline
+% % CLUTRR 1.0                        & GPT-4+ASP                        & \textbf{93.15}                            & 4757                           & 102                           & 248                           \\ \hline
+% % CLUTRR 0.85                       & Gen-ASP                         &92.65   & 4732 & 128 & 247                           \\
+% % CLUTRR 0.7                        & Gen-ASP                         & 92.30                           & 4714                           & 146                           & 247                           \\
+% % CLUTRR 0.51                        & Gen-ASP                         & 92.03                             & 4700                           & 161                           & \textbf{246} \\ \hline
+% % \end{tabular}%
+% % }
+% % \end{table}
+
+% \subsection{Kết quả thực nghiệm module dự báo}
+% % \label{subsec:genrule}
+
+% Module dự báo được thực nghiệm và kiểm chứng qua hai tiêu chí: có thể đưa ra được thông tin dự đoán và hiển thị trên dashboard với thống kê chi tiết và dự đoán xu hướng chi tiết; và kiểm chứng độ tin cậy của mô hình dự đoán SARIMAX.
+
+% \textbf{Dự đoán và hiển thị trên dashboard}
+
+% \begin{figure}[H]
+%     \centering
+%     \includegraphics[width=1\linewidth]{Chapter5/Figs/pre3.png}
+%     \caption{Dữ liệu AQI dự đoán trước 24 giờ được hiển thị trên dashboard. Thời gian truy vấn: 13 giờ 18 phút ngày 18 tháng 06.}
+%     \label{fig:pre1}
+% \end{figure}
+
+% Hình \ref{fig:pre1} cho thấy dự báo về chất lượng không khí trong vòng 24 giờ tới tính từ thời điểm truy vấn (13 giờ 18 phút), giá trị AQI tính theo mức giờ tại trạm đo số 8688. Quan sát các biểu đồ ta có thể thấy 24 giờ trước thời điểm hiện tại, chất lượng không khí ở trạm đo này nhìn chung ở mức xấu, sau đó cải thiện dần. Theo như module cảnh báo, trong vòng 24 giờ tới chất lượng không khí tại đây có thể có xu hướng xấu dần đi theo thời gian. Điều này phù hợp và không mâu thuẫn với kết quả của module dự báo khi biểu đồ đường có xu hướng cao dần lên trong gần như sau 12 tiếng nữa. Qua đây có thể thấy sự kết hợp của hai module cảnh báo và dự đoán là cần thiết cho việc theo dõi và đối phó với chất lượng không khí xấu.
+
+% \begin{figure}[H]
+%     \centering
+%     \includegraphics[width=0.9\linewidth]{Chapter5/Figs/pre4.png}
+%     \caption{Dữ liệu AQI dự đoán trước 7 ngày được hiển thị trên dashboard. Thời gian truy vấn: 13 giờ 28 phút ngày 18 tháng 06.}
+%     \label{fig:pre2}
+% \end{figure}
+
+% Đối với các dự đoán xa hơn theo mức ngày, hệ thống cho phép người dùng dự báo trước chất lượng không khí trong vòng 7 ngày tới tại một trạm đo bất kỳ. Quan sát các biểu đồ trong hình \ref{fig:pre2} có thể thấy trong vòng 7 ngày tới, chất lượng không khí có sự dao động nhẹ, nhưng nhìn chung vẫn quanh mức trung bình là khoảng 90. Ở đây module dự đoán đang đưa ra nhận định xu hướng của biểu đồ đường là xu hướng giảm, tức là có thể chất lượng không khí sẽ cải thiện trong 7 ngày tới. Điều này phù hợp và không mâu thuẫn với dữ liệu trực quan quan sát được trên dashboard.
+
+% \textbf{Đánh giá mô hình dự đoán}
+
+% Trong phần \ref{subsec:verify}, hai thang đo đánh giá đã được đưa ra để phục vụ cho việc đánh giá hiệu quả của mô hình dự đoán $SARIMAX$:
+
+% \begin{equation}
+%     RMSE = \sqrt{\frac{1}{n} \sum_{t=1}^{n} (y_t - \hat{y}_t)^2}
+% \end{equation}
+
+% \begin{equation}
+%     probability = \frac{1}{n} \sum_{t=1}^{n} |y_t - \hat{y}_t|
+% \end{equation}
+
+% Trong đó:
+% \begin{itemize}
+%     \item \(y_t\): Giá trị thực tế
+%     \item \(\hat{y}_t\): Giá trị dự đoán từ mô hình
+%     \item \(n\): Tổng số điểm dữ liệu trong tập kiểm định
+% \end{itemize}
+
+% Các giá trị $RMSE$ và $probability$ càng nhỏ thì chứng tỏ hiệu suất dự đoán của mô hình càng gần đúng với thực tế. Thống kê chi tiết tính toán hai chỉ số này của các trạm, chỉ số $RMSE$ thấp nhất và cao nhất lần lượt là 7.69 và 165, với chỉ số $probability$ lần lượt là 3.49 và 165. Nhìn chung, giá trị hai chỉ số này dao động chủ yếu quanh khoảng từ 10-20, đây là một mức khá ổn với độ chính xác vẫn có thể đủ tin cậy để dùng làm dự báo. 
+
+% Các giá trị nằm trong khoảng này không quá thấp nhưng cũng không quá cao đến mức khiến cho dữ liệu dự đoán tách xa khỏi dữ liệu thực tế. Để chứng minh điều này, trong một vài trường hợp cụ thể sau đây chúng tôi cung cấp đồ thị biểu diễn và so sánh dữ liệu dự đoán với dữ liệu thực tế. Hình \ref{fig:aqi_compare} cung cấp so sánh về dữ liệu AQI thật và dữ liệu được dự đoán trước tại một vài trạm đo, cùng với chỉ số RMSE và probability tương ứng (tính tới thời điểm tính toán là 14 giờ 25 phút ngày 18 tháng 06). Có thể thấy được về cơ bản, hai đường đồ thị biểu diễn hai loại giá trị AQI gần như trùng khớp hoặc có hình dạng gần tương tự nhau. Điều đó cho thấy độ tin cậy cao của dữ liệu dự đoán và ý nghĩa dự báo mà nó đem lại so với dữ liệu thực tế.
+
+% \begin{figure}[htbp]
+%     \centering
+%     \begin{subfigure}[t]{0.45\linewidth}
+%         \centering
+%         \includegraphics[width=\linewidth, height=4cm]{Chapter5/Figs/sta1.png}
+%         \caption*{\textbf{Trạm 1}\\Predicted pattern: 19.06, probability=12.28}
+%     \end{subfigure}
+%     \hspace{0.02\linewidth}
+%     \begin{subfigure}[t]{0.45\linewidth}
+%         \centering
+%         \includegraphics[width=\linewidth, height=4cm]{Chapter5/Figs/sta2.png}
+%         \caption*{\textbf{Trạm 2}\\Predicted pattern: 20.04, probability=16.60}
+%     \end{subfigure}
+%     \hspace{0.02\linewidth}
+%     \begin{subfigure}[t]{0.45\linewidth}
+%         \centering
+%         \includegraphics[width=\linewidth, height=4cm]{Chapter5/Figs/sta3.png}
+%         \caption*{\textbf{Trạm 3}\\Predicted pattern: 38.02, probability=20.13}
+%     \end{subfigure}
+%         \begin{subfigure}[t]{0.45\linewidth}
+%         \centering
+%         \includegraphics[width=\linewidth, height=4cm]{Chapter5/Figs/sta4.png}
+%         \caption*{\textbf{Trạm 4}\\Predicted pattern: 29.19, probability=16.39}
+%     \end{subfigure}
+%     \hspace{0.02\linewidth}
+%     \begin{subfigure}[t]{0.45\linewidth}
+%         \centering
+%         \includegraphics[width=\linewidth, height=4cm]{Chapter5/Figs/sta5.png}
+%         \caption*{\textbf{Trạm 5}\\Predicted pattern: 31.49, probability=18.56}
+%     \end{subfigure}
+%     \hspace{0.02\linewidth}
+%     \begin{subfigure}[t]{0.45\linewidth}
+%         \centering
+%         \includegraphics[width=\linewidth, height=4cm]{Chapter5/Figs/sta6.png}
+%         \caption*{\textbf{Trạm 6}\\Predicted pattern: 37.40, probability=20.29}
+%     \end{subfigure}
+%     \hspace{0.02\linewidth}
+%     \begin{subfigure}[t]{0.45\linewidth}
+%         \centering
+%         \includegraphics[width=\linewidth, height=4cm]{Chapter5/Figs/sta1583.png}
+%         \caption*{\textbf{Trạm 1583}\\Predicted pattern: 13.24, probability=8.84}
+%     \end{subfigure}
+%     \hspace{0.02\linewidth}
+%     \begin{subfigure}[t]{0.45\linewidth}
+%         \centering
+%         \includegraphics[width=\linewidth, height=4cm]{Chapter5/Figs/sta8688.png}
+%         \caption*{\textbf{Trạm 8688}\\Predicted pattern: 25.72, probability=16.09}
+%     \end{subfigure}
+%     \caption{So sánh dữ liệu AQI dự đoán và dữ liệu thực tế tại một vài trạm.}
+%     \label{fig:aqi_compare}
+% \end{figure}
+
+% \textbf{Phân tích lỗi}
+
+% Không phải tất cả các trạm đo đều có dữ liệu đầy đủ về chất lượng không khí. Một vài trạm đo trả về chỉ số AQI bằng 0, hoặc không trả về. Đây là một trong những lỗi gây khó khăn trong quá trình thực nghiệm do sự hạn chế trong tiếp cận tới các dữ liệu tại nhiều điểm, từ đó có thể làm giảm đi tính toàn vẹn và toàn diện của hệ thống. Lỗi này xuất phát từ nguồn dữ liệu.
+
+% Bên cạnh việc dữ liệu rỗng, một trong những khó khăn nữa liên quan đến dữ liệu là độ trễ lớn. Dữ liệu không được cập nhật trong một thời gian dài (có thể lên đến 60-80 ngày, thậm chí lâu hơn) sẽ là một thách thức lớn trực tiếp đánh vào tính thời điểm của hệ thống HNAQI, cụ thể là module cảnh báo và dự báo. Nếu độ trễ lớn, dữ liệu sẽ không đảm bảo tính cập nhật và độ tin cậy để hai module này có thể xử lý và đưa ra cảnh báo hay dự báo kịp thời, từ đó giảm hiệu quả của hệ thống HNAQI.
+
+% Bản thân việc dữ liệu không thực sự "sạch" và "đủ" cũng có thể dẫn đến sự sai lệch cho các mô hình dự đoán và dự báo. Nếu các điểm dữ liệu đều giống nhau và nằm trên cùng một đường thằng song song với trục hoành, thì mô hình cảnh báo sẽ luôn cho đầu ra là xu hướng ổn định. Điều này không sai, nhưng không mang ý nghĩa cảnh báo hay dự đoán vì điều này là hiển nhiên, và bản chất là dữ liệu không đủ tính cập nhật. Với mô hình SARIMAX cho dự đoán, lỗi dữ liệu này sẽ dẫn đến một sai lầm nghiêm trọng trong quá trình chọn tham số đầu vào cho mô hình, vì $auto\_arima$ khi tính toán sẽ luôn nhận định rằng chuỗi này đã có tính dừng, nên mặc định sẽ không thay đổi trong tương lai nữa. Từ đó dẫn đến dự báo sai lầm.
+
+% \begin{figure}[H]
+%     \centering
+%     \includegraphics[width=1\linewidth]{Chapter5/Figs/sta18_error.png}
+%     \caption{Mô hình SARIMAX dự báo sai do lỗi dữ liệu - Trạm 18.}
+%     % \label{fig:pre2}
+% \end{figure}
+
+% \begin{figure}[ht]
+%     \centering
+%     \includegraphics[width=1\linewidth]{Chapter5/Figs/sta2446_err.png}
+%     \caption{Mô hình SARIMAX dự báo sai do lỗi dữ liệu - Trạm 2446.}
+%     % \label{fig:pre2}
+% \end{figure}

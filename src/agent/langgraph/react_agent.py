@@ -2,7 +2,6 @@ import asyncio
 import logging
 import os
 
-import langsmith as ls
 from dotenv import load_dotenv
 from langchain_core.messages import BaseMessage, HumanMessage
 from langfuse import get_client
@@ -17,6 +16,7 @@ from agent.langgraph.domain_agents.submission_agent import SubmissionAgent
 from agent.llm.model_factory import DEFAULT_LLM_BACKEND, DEFAULT_MODEL
 from agent.tool_evolution.integration import write_tool_evolution_session
 from agent.utils.loggers import AgentCallbackLogger
+from agent.utils.tracing import langsmith_tracing_context
 from nika.utils.logger import system_logger
 from nika.utils.session import Session
 
@@ -123,7 +123,7 @@ class BasicReActAgent:
         self.graph = worker_builder.compile()
 
     async def run(self, task_description: str):
-        with ls.tracing_context(
+        with langsmith_tracing_context(
             project_name=os.getenv("LANGSMITH_PROJECT", "NIKA"),
             metadata={
                 "scenario": self.session.scenario_name,

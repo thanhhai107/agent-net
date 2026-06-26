@@ -1,0 +1,29 @@
+\babel@toc {vietnamese}{}\relax 
+\contentsline {chapter}{Tóm tắt}{iii}{chapter*.1}%
+\contentsline {chapter}{Lời cảm ơn}{iv}{chapter*.2}%
+\contentsline {chapter}{Lời cam đoan}{v}{chapter*.3}%
+\contentsline {chapter}{Mục lục}{vi}{table.caption.4}%
+\contentsline {chapter}{Danh mục hình ảnh}{vii}{table.caption.4}%
+\contentsline {chapter}{\numberline {1}Giới thiệu chung}{1}{chapter.1}%
+\contentsline {section}{\numberline {1.1}Đặt vấn đề}{1}{section.1.1}%
+\contentsline {section}{\numberline {1.2}Phát biểu bài toán}{2}{section.1.2}%
+\contentsline {section}{\numberline {1.3}Đóng góp của dự án}{3}{section.1.3}%
+\contentsline {chapter}{\numberline {2}Kiến thức nền tảng}{5}{chapter.2}%
+\contentsline {section}{\numberline {2.1}Mạng viễn thông}{5}{section.2.1}%
+\contentsline {section}{\numberline {2.2}Phân tích nguyên nhân gốc rễ}{6}{section.2.2}%
+\contentsline {section}{\numberline {2.3}Mô hình ngôn ngữ lớn}{7}{section.2.3}%
+\contentsline {section}{\numberline {2.4}AI Agent}{7}{section.2.4}%
+\contentsline {section}{\numberline {2.5}Self-Evolving AI Agents}{8}{section.2.5}%
+\contentsline {subsection}{\numberline {2.5.1}Các thành phần có thể tiến hóa}{9}{subsection.2.5.1}%
+\contentsline {subsection}{\numberline {2.5.2}Thời điểm tiến hóa}{10}{subsection.2.5.2}%
+\contentsline {subsection}{\numberline {2.5.3}Các phương thức tiến hóa thường gặp}{11}{subsection.2.5.3}%
+\contentsline {subsubsection}{\numberline {2.5.3.1}Tiến hóa dựa trên phần thưởng}{11}{subsubsection.2.5.3.1}%
+\contentsline {subsubsection}{\numberline {2.5.3.2}Tiến hóa dựa trên tự phản tư}{12}{subsubsection.2.5.3.2}%
+\contentsline {subsubsection}{\numberline {2.5.3.3}Tiến hóa bộ nhớ}{12}{subsubsection.2.5.3.3}%
+\contentsline {subsubsection}{\numberline {2.5.3.4}Học từ minh họa và kinh nghiệm mẫu}{13}{subsubsection.2.5.3.4}%
+\contentsline {subsubsection}{\numberline {2.5.3.5}Tiến hóa dựa trên quần thể}{13}{subsubsection.2.5.3.5}%
+\contentsline {subsection}{\numberline {2.5.4}Vai trò trong xử lý sự cố mạng viễn thông}{14}{subsection.2.5.4}%
+\contentsline {chapter}{\numberline {3}Kiến trúc hệ thống}{15}{chapter.3}%
+\contentsline {chapter}{\numberline {4}Thực nghiệm}{16}{chapter.4}%
+\contentsline {chapter}{\numberline {5}Kết luận}{17}{chapter.5}%
+\contentsline {chapter}{Kết luận}{17}{chapter.5}%
