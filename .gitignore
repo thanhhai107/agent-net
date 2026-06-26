@@ -17,3 +17,4 @@ notebooks/
 uv.lock
 .agents/
 .cursor/
+.DS_Store
