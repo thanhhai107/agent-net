@@ -1,5 +1,4 @@
 import asyncio
-import logging
 import random
 from typing import Iterable, Optional
 
@@ -85,21 +84,3 @@ class WebBrowsingTrafficGenerator:
     def stop_traffic(self):
         if self._traffic_task and not self._traffic_task.done():
             self._traffic_task.cancel()
-
-
-async def main():
-    net_env = OSPFEnterpriseStatic()
-    traffic_generator = WebBrowsingTrafficGenerator(net_env=net_env)
-
-    traffic_task = asyncio.create_task(traffic_generator.generate_traffic())
-    try:
-        while True:
-            await asyncio.sleep(1)
-    except KeyboardInterrupt:
-        traffic_task.cancel()
-        await traffic_task
-
-
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    asyncio.run(main())

@@ -112,9 +112,3 @@ class HostIncorrectDNSRCA(VPNMembershipMissingBase, RCATask):
         task_level=TaskLevel.RCA,
         description=TaskDescription.RCA,
     )
-
-
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    host_ip_conflict = VPNMembershipMissingBase(scenario_name="rip_small_internet_vpn")
-    host_ip_conflict.inject_fault()

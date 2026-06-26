@@ -1,24 +1,29 @@
-"""Parallel benchmark integration test.
+"""Parallel benchmark integration test via --batch-size.
 
-Verifies that `nika benchmark run --parallel` can run multiple CSV rows concurrently
-without cross-contamination, and that each session produces correct, session-scoped
-result files.
+Verifies that ``nika benchmark run --batch-size N`` runs N CSV rows simultaneously,
+each using the mock agent for Diagnosis, followed by per-session eval—all without
+cross-contamination between sessions.
 
-Pipeline per row (runs in parallel via ThreadPoolExecutor in batch mode):
-  benchmark run (env → inject → mock agent → close → eval metrics → publish)
+Pipeline per row (all N rows run concurrently within a batch):
+  benchmark run (env → inject → mock-agent diagnosis → close → eval metrics)
 
 Assertions:
-  - Session IDs are unique and embedded in each session's result directory path
-  - ground_truth.json: is_anomaly=True, root_cause_name matches the injected problem
-  - run.json: session_id, scenario_name, agent_type, status all correct
-  - submission.json: required fields present, written to the correct session dir
-  - eval_metrics.json: required fields present; detection and RCA accuracy == 1.0
-  - messages.jsonl: diagnosis and submission agents appear with expected tool calls
-  - No runtime session files remain after benchmark close
+  - Session IDs are unique across all parallel sessions
+  - Each session writes results to its own isolated directory
+  - ground_truth.json: is_anomaly=True, root_cause_name contains the injected problem
+  - run.json: session_id, scenario_name, agent_type=="mock", status=="finished"
+  - submission.json: required fields present, written under the correct session dir
+  - eval_metrics.json: required fields present; detection_score==1.0, rca_accuracy==1.0
+  - messages.jsonl: both diagnosis and submission phases appear with expected tool calls
+  - Runtime session files are removed after benchmark close (scenario undeployed)
+
+Coverage note:
+  Running N items with --batch-size N executes them all in parallel via one subprocess
+  each, then waits for the batch to complete before returning.
 
 Prerequisites:
   - Docker must be running
-  - Run via: uv run python -m unittest tests/test_parallel_sessions.py -v
+  - Run via: uv run python -m unittest tests/test_benchmark_batch.py -v
 """
 
 import csv
@@ -30,6 +35,7 @@ import unittest
 from pathlib import Path
 from typing import NamedTuple
 
+from agent.utils.phases import DIAGNOSIS, SUBMISSION
 from nika.utils.session_store import SESSIONS_DIR, SessionStore
 from tests.integration_base import CliIntegrationTestCase
 
@@ -43,21 +49,25 @@ class ScenarioCase(NamedTuple):
     scenario: str
     problem: str
     set_params: dict
-    tier: str | None = None
+    size: str | None = None
 
 
 SCENARIO_CASES: list[ScenarioCase] = [
     ScenarioCase("simple_bgp", "link_down", {}),
     ScenarioCase("simple_bgp", "link_flap", {}),
     ScenarioCase("simple_bgp", "link_detach", {}),
-    ScenarioCase("ospf_enterprise_dhcp", "dhcp_service_down", {}, tier="s"),
-    ScenarioCase("rip_small_internet_vpn", "host_vpn_membership_missing", {}, tier="s"),
-    ScenarioCase("dc_clos_bgp", "bgp_asn_misconfig", {}, tier="s"),
+    ScenarioCase("ospf_enterprise_dhcp", "dhcp_service_down", {}, size="s"),
+    ScenarioCase("rip_small_internet_vpn", "host_vpn_membership_missing", {}, size="s"),
+    ScenarioCase("dc_clos_bgp", "bgp_asn_misconfig", {}, size="s"),
+    ScenarioCase("ospf_enterprise_dhcp", "dns_record_error", {}, size="s"),
+    ScenarioCase("dc_clos_bgp", "host_crash", {}, size="s"),
+    ScenarioCase("dc_clos_bgp", "link_fragmentation_disabled", {}, size="s"),
+    ScenarioCase("dc_clos_bgp", "bgp_blackhole_route_leak", {}, size="s"),
 ]
 
 
 class ParallelBenchmarkIntegrationTest(CliIntegrationTestCase):
-    """Run benchmark CSV rows concurrently, then verify each produced correct isolated results."""
+    """Run all benchmark CSV rows as one parallel batch, then verify per-session results."""
 
     _pipeline_results: dict[str, tuple[str, Path] | BaseException]
 
@@ -80,7 +90,7 @@ class ParallelBenchmarkIntegrationTest(CliIntegrationTestCase):
                     {
                         "problem": case.problem,
                         "scenario": case.scenario,
-                        "topo_size": case.tier or "",
+                        "topo_size": case.size or "",
                     }
                 )
             csv_path = handle.name
@@ -95,11 +105,11 @@ class ParallelBenchmarkIntegrationTest(CliIntegrationTestCase):
                     "run",
                     "--csv",
                     csv_path,
-                    "--parallel",
+                    "--batch-size",
                     str(len(SCENARIO_CASES)),
                     "--agent",
                     "mock",
-                    "--backend",
+                    "--provider",
                     "mock",
                     "--model",
                     "mock-v1",
@@ -113,7 +123,7 @@ class ParallelBenchmarkIntegrationTest(CliIntegrationTestCase):
                 output += proc.stderr
             if proc.returncode != 0:
                 raise RuntimeError(
-                    f"`nika benchmark run --parallel {len(SCENARIO_CASES)}` "
+                    f"`nika benchmark run --batch-size {len(SCENARIO_CASES)}` "
                     f"exited {proc.returncode}:\n{output}"
                 )
 
@@ -274,8 +284,8 @@ class ParallelBenchmarkIntegrationTest(CliIntegrationTestCase):
                     if line.strip()
                 ]
                 agents_seen = {e["agent"] for e in events}
-                self.assertIn("diagnosis_agent", agents_seen)
-                self.assertIn("submission_agent", agents_seen)
+                self.assertIn(DIAGNOSIS, agents_seen)
+                self.assertIn(SUBMISSION, agents_seen)
 
                 tool_names_seen = {
                     e["tool"]["name"]
@@ -286,18 +296,24 @@ class ParallelBenchmarkIntegrationTest(CliIntegrationTestCase):
                 self.assertIn("submit", tool_names_seen)
 
     # ------------------------------------------------------------------
-    # Runtime session cleanup
+    # Runtime session cleanup / scenario undeploy
     # ------------------------------------------------------------------
 
     def test_runtime_session_files_cleared_after_close(self):
-        """After benchmark close the runtime session JSON file must be deleted."""
+        """After benchmark close the runtime session JSON file must be deleted.
+
+        The benchmark pipeline calls close_session() inside eval_results(), which
+        tears down the Kathara lab (undeploys the scenario) and removes the runtime
+        file.  Asserting the file is gone confirms each scenario was properly
+        undeployed without interfering with the others.
+        """
         for case in SCENARIO_CASES:
             with self.subTest(scenario=case.scenario, problem=case.problem):
                 session_id, _ = self._result(case)
                 runtime_path = Path(SESSIONS_DIR) / f"{session_id}.json"
                 self.assertFalse(
                     runtime_path.exists(),
-                    f"Runtime session file was not removed: {runtime_path}",
+                    f"Runtime session file was not removed after undeploy: {runtime_path}",
                 )
                 with self.assertRaises(FileNotFoundError):
                     SessionStore().get_session(session_id)

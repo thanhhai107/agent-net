@@ -209,16 +209,3 @@ class SDNClos(NetworkEnvBase):
             )
 
         self.load_machines()
-
-
-if __name__ == "__main__":
-    lab = SDNClos(topo_size="m")
-    print("Lab description:", lab.desc)
-    print("lab net summary:", lab.get_info())
-    if lab.lab_exists():
-        print("Lab exists, undeploying it...")
-        lab.undeploy()
-        print("Lab undeployed")
-
-    # lab.deploy()
-    # print("Lab deployed")

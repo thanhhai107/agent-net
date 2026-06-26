@@ -20,8 +20,10 @@ from pathlib import Path
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
 from agent.utils.mcp_servers import MCPServerConfig
+from agent.utils.phases import DIAGNOSIS, SUBMISSION
 from nika.codex_cli.main import app
 from nika.codex_cli.utils import env_id_from_lab
+from nika.utils.session_index import SessionIndex
 from nika.utils.session_store import SESSIONS_DIR, SessionStore
 from tests.integration_base import OrderedPipelineTestCase
 
@@ -284,7 +286,7 @@ class PipelineIntegrationTest(OrderedPipelineTestCase):
                 "run",
                 "--agent",
                 "mock",
-                "--backend",
+                "--provider",
                 "mock",
                 "--model",
                 "mock-v1",
@@ -300,17 +302,17 @@ class PipelineIntegrationTest(OrderedPipelineTestCase):
 
         messages = self._load_jsonl("messages.jsonl")
         agents = {entry["agent"] for entry in messages}
-        self.assertIn("diagnosis_agent", agents)
-        self.assertIn("submission_agent", agents)
+        self.assertIn(DIAGNOSIS, agents)
+        self.assertIn(SUBMISSION, agents)
 
-        diagnosis_events = [e["event"] for e in messages if e["agent"] == "diagnosis_agent"]
+        diagnosis_events = [e["event"] for e in messages if e["agent"] == DIAGNOSIS]
         self.assertIn("tool_start", diagnosis_events)
         self.assertIn("llm_end", diagnosis_events)
 
         submission_tools = [
             e["tool"]["name"]
             for e in messages
-            if e["agent"] == "submission_agent" and e["event"] == "tool_start"
+            if e["agent"] == SUBMISSION and e["event"] == "tool_start"
         ]
         self.assertIn("list_avail_problems", submission_tools)
         self.assertIn("submit", submission_tools)
@@ -348,6 +350,15 @@ class PipelineIntegrationTest(OrderedPipelineTestCase):
             SessionStore().get_session(self.session_id)
         self.assertFalse((Path(SESSIONS_DIR) / f"{self.session_id}.json").exists())
 
+        ps_all_output = self._invoke_ok(["session", "ps", "-a"])
+        self.assertIn(self.session_id, ps_all_output)
+        self.assertIn("finished", ps_all_output)
+
+        index_row = SessionIndex().get_row(self.session_id)
+        self.assertIsNotNone(index_row)
+        assert index_row is not None
+        self.assertEqual(index_row["status"], "finished")
+
     def test_step_09_eval_metrics(self) -> None:
         """Compute rule-based scores from ground truth and submission on the closed session."""
         self.assertIsNotNone(self.session_id)
@@ -373,11 +384,17 @@ class PipelineIntegrationTest(OrderedPipelineTestCase):
         run = self._load_json("run.json")
         self.assertIn("eval_metrics", run)
 
-    def test_step_10_eval_publish_and_summary(self) -> None:
-        """Publish eval artifacts and build a summary CSV offline."""
-        self.assertIsNotNone(self.session_id)
+        index_row = SessionIndex().get_row(self.session_id)
+        self.assertIsNotNone(index_row)
+        assert index_row is not None
+        self.assertIsNotNone(index_row.get("detection_score"))
+        self.assertIsNotNone(index_row.get("localization_f1"))
+        self.assertIsNotNone(index_row.get("rca_f1"))
+        self.assertGreater(index_row.get("tool_calls", 0), 0)
 
-        self._invoke_ok(["eval", "publish", "--session-id", self.session_id])
+    def test_step_10_eval_summary(self) -> None:
+        """Build a summary CSV from metrics on a closed session."""
+        self.assertIsNotNone(self.session_id)
 
         summary_output = self.session_dir / "session_summary.csv"
         self._invoke_ok(

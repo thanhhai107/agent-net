@@ -150,17 +150,3 @@ class P4Counter(NetworkEnvBase):
 
         # load machines
         self.load_machines()
-
-
-if __name__ == "__main__":
-    l2 = P4Counter()
-    print(l2.get_info())
-
-    if l2.lab_exists():
-        print("Lab exists, undeploying it...")
-        l2.undeploy()
-        print("Lab undeployed")
-
-    print("Deploying lab...")
-    l2.deploy()
-    print("Lab deployed")

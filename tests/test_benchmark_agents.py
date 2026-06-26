@@ -1,13 +1,13 @@
 """Benchmark integration tests for all implemented agent types.
 
-Verifies that ``mock``, ``react``, and ``cli`` agents can complete the full
-benchmark pipeline on a real Kathara scenario with an injected failure:
+Verifies that ``mock``, ``react``, ``codex_cli``, and ``claude_cli`` agents can complete
+the full benchmark pipeline on a real Kathara scenario with an injected failure:
 
     nika benchmark run <scenario> --problem <problem> -a <agent> ...
 
 Each agent type is exercised via the same benchmark entry point used in batch
 CSV runs (``src/nika/workflows/benchmark/run.py``), not the step-by-step CLI
-pipeline used in ``test_pipeline.py`` / ``test_cli_agent_pipeline.py``.
+pipeline used in ``test_pipeline.py`` / ``test_integration_agents.py``.
 
 Assertions (common):
   - ``benchmark_done`` line emitted with session_id and session_dir
@@ -19,13 +19,17 @@ Assertions (common):
 
 Agent-specific:
   - mock: detection_score and rca_accuracy == 1.0
-  - cli: codex_workspace/ present; codex events in messages.jsonl
+  - codex_cli: codex_workspace/ present; codex events in messages.jsonl
+  - claude_cli: claude_workspace/ present; claude stream-json events in messages.jsonl
 
 Prerequisites:
   - Docker must be running
   - mock: always runs (no LLM)
-  - react: DEEPSEEK_API_KEY in ``.env`` (backend ``deepseek``, model ``deepseek-chat``)
-  - cli: Codex CLI installed and authenticated (``codex login`` or OPENAI_API_KEY)
+  - react: DEEPSEEK_API_KEY in ``.env`` (provider ``deepseek``, model ``deepseek-chat``)
+  - codex_cli: Codex CLI installed and authenticated (``codex login`` or OPENAI_API_KEY)
+  - claude_cli: Claude Code CLI installed (``claude`` in PATH); credentials via
+    ``ANTHROPIC_API_KEY`` / ``ANTHROPIC_AUTH_TOKEN`` in ``.env`` or ``claude auth login``
+  - claude model: ``ANTHROPIC_MODEL`` (or related env vars) when ``-m`` is omitted
 
 Run:
     uv run python -m unittest tests/test_benchmark_agents.py -v
@@ -33,7 +37,8 @@ Run:
 Run a single agent class:
     uv run python -m unittest tests.test_benchmark_agents.MockAgentBenchmarkTest -v
     uv run python -m unittest tests.test_benchmark_agents.ReactAgentBenchmarkTest -v
-    uv run python -m unittest tests.test_benchmark_agents.CliAgentBenchmarkTest -v
+    uv run python -m unittest tests.test_benchmark_agents.CodexCliAgentBenchmarkTest -v
+    uv run python -m unittest tests.test_benchmark_agents.ClaudeCliAgentBenchmarkTest -v
 """
 
 from __future__ import annotations
@@ -50,6 +55,8 @@ from typing import ClassVar
 
 from dotenv import load_dotenv
 
+from agent.claude_cli.config import claude_credentials_available, default_claude_model
+from agent.utils.phases import DIAGNOSIS, SUBMISSION
 from nika.utils.session_store import SESSIONS_DIR, SessionStore
 from tests.integration_base import CliIntegrationTestCase
 
@@ -77,40 +84,53 @@ def _codex_cli_available() -> bool:
     return _openai_api_key_available() or (Path.home() / ".codex" / "auth.json").is_file()
 
 
+def _claude_cli_available() -> bool:
+    return claude_credentials_available()
+
+
 @dataclass(frozen=True)
 class AgentBenchmarkConfig:
     agent_type: str
     extra_args: tuple[str, ...]
-    diagnosis_agent: str
-    submission_agent: str
+    diagnosis_phase: str
+    submission_phase: str
     expect_perfect_scores: bool
-    expect_codex_workspace: bool
+    workspace_dir: str | None = None
+    subprocess_event_key: str | None = None
 
 
 AGENT_CONFIGS: dict[str, AgentBenchmarkConfig] = {
     "mock": AgentBenchmarkConfig(
         agent_type="mock",
-        extra_args=("-a", "mock", "-b", "mock", "-m", "mock-v1", "-n", "5"),
-        diagnosis_agent="diagnosis_agent",
-        submission_agent="submission_agent",
+        extra_args=("-a", "mock", "-p", "mock", "-m", "mock-v1", "-n", "5"),
+        diagnosis_phase=DIAGNOSIS,
+        submission_phase=SUBMISSION,
         expect_perfect_scores=True,
-        expect_codex_workspace=False,
     ),
     "react": AgentBenchmarkConfig(
         agent_type="react",
-        extra_args=("-a", "react", "-b", "deepseek", "-m", "deepseek-chat", "-n", "20"),
-        diagnosis_agent="diagnosis_agent",
-        submission_agent="submission_agent",
+        extra_args=("-a", "react", "-p", "deepseek", "-m", "deepseek-chat", "-n", "20"),
+        diagnosis_phase=DIAGNOSIS,
+        submission_phase=SUBMISSION,
         expect_perfect_scores=False,
-        expect_codex_workspace=False,
     ),
-    "cli": AgentBenchmarkConfig(
-        agent_type="cli",
-        extra_args=("-a", "cli", "-m", "gpt-5.4-mini"),
-        diagnosis_agent="diagnosis_agent_cli",
-        submission_agent="submission_agent_cli",
+    "codex_cli": AgentBenchmarkConfig(
+        agent_type="codex_cli",
+        extra_args=("-a", "codex_cli", "-m", "gpt-5.4-mini"),
+        diagnosis_phase=DIAGNOSIS,
+        submission_phase=SUBMISSION,
         expect_perfect_scores=False,
-        expect_codex_workspace=True,
+        workspace_dir="codex_workspace",
+        subprocess_event_key="codex_event",
+    ),
+    "claude_cli": AgentBenchmarkConfig(
+        agent_type="claude_cli",
+        extra_args=("-a", "claude_cli", "-p", "anthropic"),
+        diagnosis_phase=DIAGNOSIS,
+        submission_phase=SUBMISSION,
+        expect_perfect_scores=False,
+        workspace_dir="claude_workspace",
+        subprocess_event_key="claude_event",
     ),
 }
 
@@ -234,10 +254,10 @@ def _make_benchmark_agent_test_class(config_key: str) -> type[CliIntegrationTest
             """messages.jsonl records both diagnosis and submission phases."""
             events = self._load_messages()
             agents_seen = {e["agent"] for e in events}
-            self.assertIn(config.diagnosis_agent, agents_seen)
-            self.assertIn(config.submission_agent, agents_seen)
+            self.assertIn(config.diagnosis_phase, agents_seen)
+            self.assertIn(config.submission_phase, agents_seen)
 
-            if config.agent_type == "cli":
+            if config.subprocess_event_key == "codex_event":
                 mcp_tools = {
                     (e.get("codex_event") or {}).get("item", {}).get("tool")
                     for e in events
@@ -246,6 +266,22 @@ def _make_benchmark_agent_test_class(config_key: str) -> type[CliIntegrationTest
                 mcp_tools.discard(None)
                 self.assertIn("list_avail_problems", mcp_tools)
                 self.assertIn("submit", mcp_tools)
+            elif config.subprocess_event_key == "claude_event":
+                tool_names: set[str] = set()
+                for e in events:
+                    if "claude_event" not in e:
+                        continue
+                    content = ((e.get("claude_event") or {}).get("message") or {}).get("content") or []
+                    for block in content:
+                        if not isinstance(block, dict) or block.get("type") != "tool_use":
+                            continue
+                        name = str(block.get("name", ""))
+                        if "list_avail_problems" in name:
+                            tool_names.add("list_avail_problems")
+                        if "submit" in name:
+                            tool_names.add("submit")
+                self.assertIn("list_avail_problems", tool_names)
+                self.assertIn("submit", tool_names)
             else:
                 tool_names = {
                     e["tool"]["name"]
@@ -262,17 +298,33 @@ def _make_benchmark_agent_test_class(config_key: str) -> type[CliIntegrationTest
             with self.assertRaises(FileNotFoundError):
                 SessionStore().get_session(self.session_id)
 
-        def test_codex_workspace_when_applicable(self) -> None:
-            """Cli agent runs must leave an isolated codex_workspace directory."""
-            workspace = self.session_dir / "codex_workspace"
-            if config.expect_codex_workspace:
-                self.assertTrue(workspace.is_dir(), "codex_workspace/ must exist for cli agent")
+        def test_agent_workspace_when_applicable(self) -> None:
+            """Subprocess CLI agents must leave an isolated workspace directory."""
+            if config.workspace_dir is None:
+                for name in ("codex_workspace", "claude_workspace"):
+                    self.assertFalse(
+                        (self.session_dir / name).exists(),
+                        f"unexpected {name}/ for {config.agent_type}",
+                    )
+                return
+
+            workspace = self.session_dir / config.workspace_dir
+            self.assertTrue(workspace.is_dir(), f"{config.workspace_dir}/ must exist for {config.agent_type}")
+
+            if config.agent_type == "codex_cli":
                 self.assertTrue((workspace / ".codex_home").is_dir())
+            elif config.agent_type == "claude_cli":
+                self.assertTrue((workspace / "diagnosis_mcp_config.json").exists())
+                self.assertTrue((workspace / "submission_mcp_config.json").exists())
+
+            if config.subprocess_event_key:
                 events = self._load_messages()
-                codex_events = [e for e in events if "codex_event" in e]
-                self.assertGreater(len(codex_events), 0, "cli agent must log codex exec --json events")
-            else:
-                self.assertFalse(workspace.exists(), f"unexpected codex_workspace/ for {config.agent_type}")
+                subprocess_events = [e for e in events if config.subprocess_event_key in e]
+                self.assertGreater(
+                    len(subprocess_events),
+                    0,
+                    f"{config.agent_type} agent must log {config.subprocess_event_key} events",
+                )
 
     AgentBenchmarkTest.__name__ = f"{config_key.title()}AgentBenchmarkTest"
     AgentBenchmarkTest.__qualname__ = AgentBenchmarkTest.__name__
@@ -285,10 +337,14 @@ ReactAgentBenchmarkTest = unittest.skipUnless(
     _deepseek_api_key_available(),
     "DEEPSEEK_API_KEY required for react benchmark (deepseek-chat)",
 )(_make_benchmark_agent_test_class("react"))
-CliAgentBenchmarkTest = unittest.skipUnless(
+CodexCliAgentBenchmarkTest = unittest.skipUnless(
     _codex_cli_available(),
     "Codex CLI and OpenAI credentials required",
-)(_make_benchmark_agent_test_class("cli"))
+)(_make_benchmark_agent_test_class("codex_cli"))
+ClaudeCliAgentBenchmarkTest = unittest.skipUnless(
+    _claude_cli_available(),
+    f"Claude Code CLI and credentials required (model from env: {default_claude_model()!r})",
+)(_make_benchmark_agent_test_class("claude_cli"))
 
 
 if __name__ == "__main__":

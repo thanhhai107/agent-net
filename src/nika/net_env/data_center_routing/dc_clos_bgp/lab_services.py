@@ -442,16 +442,3 @@ class DCClosService(NetworkEnvBase):
         for pod_idx in range(self.super_spine_count):
             for web_idx in range(self.leaf_count - 1):
                 self.web_urls.append(f"http://web{web_idx}.pod{pod_idx}")
-
-
-if __name__ == "__main__":
-    dc_clos_service = DCClosService(topo_size="s")
-    print("lab net summary:", dc_clos_service.get_info())
-    if dc_clos_service.lab_exists():
-        print("Lab exists, undeploying it...")
-        dc_clos_service.undeploy()
-        print("Lab undeployed")
-
-    print("Deploying lab...")
-    dc_clos_service.deploy()
-    print("Lab deployed")

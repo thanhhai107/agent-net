@@ -1,15 +1,18 @@
 """Claude / Codex SDK agents (planned).
 
 Direct integration with vendor SDKs, bypassing LangChain chat models:
-- Anthropic SDK for Claude
-- Cursor SDK (``cursor-sdk`` / ``@cursor/sdk``) for Codex
+- Anthropic SDK for Claude (`agent.claude_sdk`, planned)
+- Cursor SDK (``cursor-sdk`` / ``@cursor/sdk``) for Codex (`agent.codex_sdk`, planned)
 
 Expected layout::
 
     sdk/
-      agent.py          # SdkAgent entry point
-      claude_agent.py   # optional split by vendor
-      codex_agent.py
+      claude_sdk/       # Claude SDK agent (planned)
+      codex_sdk/        # Codex SDK agent (planned)
+
+CLI-based agents live in sibling packages:
+- ``agent.claude_cli`` — Claude Code CLI subprocess workers
+- ``agent.codex_cli`` — Codex CLI subprocess workers
 
 Both phases (diagnosis → submission) should still write to
 ``{session_dir}/messages.jsonl`` via ``AgentCallbackLogger`` or an SDK-specific

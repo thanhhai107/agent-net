@@ -172,9 +172,3 @@ class DHCPServiceDownRCA(DHCPServiceDownBase, RCATask):
         task_level=TaskLevel.RCA,
         description=TaskDescription.RCA,
     )
-
-
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    problem = DHCPServiceDownBase()
-    # problem.inject_fault()

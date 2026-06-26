@@ -542,16 +542,3 @@ class OSPFEnterpriseStatic(NetworkEnvBase):
 
         # add DNS
         self.dns_servers = [dns.ip_address for dns in tot_dns]
-
-
-if __name__ == "__main__":
-    ospf_enterprise = OSPFEnterpriseStatic(topo_size="l")
-    print("lab net summary:", ospf_enterprise.get_info())
-    if ospf_enterprise.lab_exists():
-        print("Lab exists, undeploying it...")
-        ospf_enterprise.undeploy()
-        print("Lab undeployed")
-
-    # print("Deploying lab...")
-    # ospf_enterprise.deploy()
-    # print("Lab deployed")

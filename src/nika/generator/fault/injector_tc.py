@@ -99,11 +99,3 @@ class FaultInjectorTC:
             intf_name=intf_name,
         )
         self.logger.info(f"Recovered bandwidth limit (via clearing TC rules) on {host_name}:{intf_name}")
-
-
-if __name__ == "__main__":
-    # Example usage
-    injector = FaultInjectorTC("dc_clos_service")
-    injector.inject_delay("dns_pod0", "eth0", 1000)
-    # print(injector.kathara_api.tc_show_intf("leaf_0_1", "eth0"))
-    # injector.recover_bandwidth_limit("dns_pod0", "eth0")

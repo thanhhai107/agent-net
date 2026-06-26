@@ -250,8 +250,3 @@ class ReceiverResourceContentionRCA(ReceiverResourceContentionBase, RCATask):
         task_level=TaskLevel.RCA,
         description=TaskDescription.RCA,
     )
-
-
-if __name__ == "__main__":
-    problem = ReceiverResourceContentionBase(scenario_name="ospf_enterprise_dhcp")
-    problem.inject_fault()

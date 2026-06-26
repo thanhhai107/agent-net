@@ -17,3 +17,5 @@ notebooks/
 uv.lock
 .agents/
 .cursor/
+.claude/
+.pytest_cache/

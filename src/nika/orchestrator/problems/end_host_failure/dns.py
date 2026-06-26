@@ -139,9 +139,3 @@ class DNSRecordErrorRCA(DNSRecordErrorBase, RCATask):
         task_level=TaskLevel.RCA,
         description=TaskDescription.RCA,
     )
-
-
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    dns_error = DNSRecordErrorBase(scenario_name="ospf_enterprise_dhcp")
-    dns_error.inject_fault()

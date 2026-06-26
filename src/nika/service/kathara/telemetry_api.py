@@ -96,12 +96,3 @@ class KatharaTelemetryAPI(KatharaBaseAPI, TelemetryAPIMixin):
     """
 
     pass
-
-
-if __name__ == "__main__":
-    lab_name = "p4_int"
-    kathara_api = KatharaTelemetryAPI(lab_name)
-    # print(kathara_api.influx_list_buckets())
-    # print(kathara_api.get_measurements())
-    print(kathara_api.count_measurements("flow_hop_latency"))
-    print(kathara_api.query_measurement("flow_hop_latency", limit=1))

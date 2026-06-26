@@ -19,11 +19,11 @@ def env_list() -> None:
 @env_app.command("run")
 def env_run(
     name: str = typer.Argument(..., metavar="NAME", help="Scenario id (see `nika env list`)."),
-    tier: str | None = typer.Option(
+    size: str | None = typer.Option(
         None,
-        "-t",
-        "--tier",
-        help="Topology tier s, m, or l (required only for scalable scenarios).",
+        "-s",
+        "--size",
+        help="Topology size s, m, or l (required only for scalable scenarios).",
     ),
     no_redeploy: bool = typer.Option(False, "--no-redeploy", help="If set, do not redeploy when the lab already exists."),
     instance_tag: str | None = typer.Option(
@@ -35,7 +35,7 @@ def env_run(
     """Deploy one scenario and start a new session."""
     from nika.workflows.env.start import start_net_env
 
-    session_id = start_net_env(name, tier, redeploy=not no_redeploy, instance_tag=instance_tag)
+    session_id = start_net_env(name, size, redeploy=not no_redeploy, instance_tag=instance_tag)
     typer.echo(f"session_id={session_id}")
 
 
@@ -50,8 +50,8 @@ def env_ps() -> None:
     \b
     Columns
     -------
-    ENV ID      short ID derived from the deployed lab instance
-    TOPOLOGY    scenario name, with tier appended when applicable (e.g. dc_clos_bgp/m)
+    ENV ID      scenario name plus instance suffix (e.g. simple_bgp_a1b2c3)
+    SIZE        topology size when applicable (s, m, l), — otherwise
     STATUS      running | finished
     AGE         time elapsed since the env was created
     SESSIONS    number of active sessions bound to this env
@@ -66,7 +66,7 @@ def env_ps() -> None:
 
     # Deduplicate by lab_name — one env row per distinct deployed lab.
     seen_labs: set[str] = set()
-    headers = ["ENV ID", "TOPOLOGY", "STATUS", "AGE", "SESSIONS", "ENDPOINT"]
+    headers = ["ENV ID", "SIZE", "STATUS", "AGE", "SESSIONS", "ENDPOINT"]
     rows: list[list[str]] = []
 
     for item in sessions:
@@ -77,9 +77,7 @@ def env_ps() -> None:
 
         env_id = env_id_from_lab(lab_name)
 
-        scenario = item.get("scenario_name", "—")
-        tier = item.get("scenario_topo_size")
-        topology = f"{scenario}/{tier}" if tier else scenario
+        size = item.get("scenario_topo_size") or "—"
 
         status = item.get("status", "—")
         age = human_age(item.get("created_at"))
@@ -93,6 +91,6 @@ def env_ps() -> None:
 
         endpoint = item.get("endpoint", "—")
 
-        rows.append([env_id, topology, status, age, sessions_col, endpoint])
+        rows.append([env_id, size, status, age, sessions_col, endpoint])
 
     typer.echo(fmt_table(headers, rows))

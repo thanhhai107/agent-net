@@ -175,9 +175,3 @@ class FaultInjectorHost:
             f"arp -d {ip_address}",
         )
         self.logger.info(f"Recovered ARP misconfiguration on {host_name}.")
-
-
-if __name__ == "__main__":
-    # Example usage
-    injector = FaultInjectorHost("dc_clos_service")
-    injector.recover_dns_misconfiguration("client_0", original_dns_ip="10.0.0.2")

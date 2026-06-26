@@ -97,6 +97,17 @@ LANGFUSE_HOST="https://cloud.langfuse.com"
 DEEPSEEK_API_KEY=<>
 OPENAI_API_KEY=<>
 
+# Claude Code agent (-a claude_cli): pick one auth mode
+# Native Anthropic:
+# ANTHROPIC_API_KEY=sk-ant-...
+# Anthropic-compatible proxy (e.g. DeepSeek):
+# ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic
+# ANTHROPIC_AUTH_TOKEN=sk-...
+# Model defaults when -m is omitted:
+# ANTHROPIC_MODEL=deepseek-v4-pro[1m]
+# CLAUDE_CODE_SUBAGENT_MODEL=deepseek-v4-flash
+# Or authenticate once: claude auth login
+
 # if use ollama for llm 
 OLLAMA_API_URL=<>
 ```
@@ -110,8 +121,8 @@ Each `nika env run` creates a **session** (printed as `session_id=…`). Session
 
    ```shell
    nika env list
-   nika env run <scenario>                    # scenarios without topology tiers (e.g. simple_bgp)
-   nika env run <scenario> -t s             # scalable scenarios (tier: s, m, or l)
+   nika env run <scenario>                    # scenarios without topology sizes (e.g. simple_bgp)
+   nika env run <scenario> -s s             # scalable scenarios (size: s, m, or l)
    nika env ps                                # running lab instances (grouped by deployed env)
    ```
 
@@ -122,7 +133,7 @@ Each `nika env run` creates a **session** (printed as `session_id=…`). Session
    nika session ps -a                         # include finished sessions
    nika session inspect [SESSION_ID]          # full session JSON + failure summary
    nika session close [SESSION_ID]            # undeploy lab and clear runtime state
-   nika session close all -y                  # close every running session
+   nika session wipe -y                       # close every running session and wipe Kathara
    ```
 
 3. **List problems and inject faults**
@@ -146,24 +157,25 @@ Each `nika env run` creates a **session** (printed as `session_id=…`). Session
 
    ```shell
    nika agent list
-   nika agent run -a react -b openai -m gpt-5-mini -n 20   # LangGraph + LangChain ReAct
-   nika agent run -a cli -m gpt-5.4-mini                    # Codex CLI subprocess worker
-   nika agent run -a cli -m gpt-5.4-mini -e medium        # optional Codex reasoning effort
+   nika agent run -a react -p openai -m gpt-5-mini -n 20   # LangGraph + LangChain ReAct
+   nika agent run -a codex_cli -m gpt-5.4-mini                    # Codex CLI subprocess worker
+   nika agent run -a claude_cli                                 # Claude Code CLI (model from .env)
+   nika agent run -a codex_cli -m gpt-5.4-mini -e medium        # optional Codex reasoning effort
    nika agent run -a mock -n 5                             # no LLM; useful for pipeline testing
    ```
 
    See **[Troubleshooting Agents](#troubleshooting-agents)** below for architecture notes and a full walkthrough example.
 
-6. **Close the session, then evaluate the run** (metrics, judge, publish, and CSV summary are separate steps)
+6. **Close the session, then evaluate the run** (metrics, judge, and CSV summary are separate steps)
 
    ```shell
    nika session close [SESSION_ID] -y           # undeploy lab and clear runtime state first
    nika eval metrics
-   nika eval judge -b openai -m gpt-5-mini
-   nika eval publish
+   nika eval judge -p openai -m gpt-5-mini
    nika eval summary                              # all finished sessions → default CSV
    nika eval summary -p link_down -e simple_bgp   # filter by problem and scenario
    nika eval summary -o results/0_summary/my_run.csv
+   nika eval clean -y                              # wipe results/, session JSON, and SQLite index
    ```
 
 Full CLI documentation (benchmark batch mode, traffic types, parameter tables, and conventions) lives in **[src/nika/codex_cli/README.md](src/nika/codex_cli/README.md)**.
@@ -172,8 +184,8 @@ Full CLI documentation (benchmark batch mode, traffic types, parameter tables, a
 
 ```shell
 nika benchmark run
-nika benchmark run dc_clos_bgp --problem bgp_asn_misconfig -t s
-nika benchmark run --judge --judge-backend openai --judge-model gpt-5-mini
+nika benchmark run dc_clos_bgp --problem bgp_asn_misconfig -s s
+nika benchmark run --judge --judge-provider openai --judge-model gpt-5-mini
 nika traffic list
 nika traffic run od --all-to-host pc1 --mbps 20 --interval 300 --background
 ```
@@ -197,12 +209,13 @@ uv run --with pytest pytest tests/test_session.py -v
 
 Agent implementations live under [`src/agent/`](src/agent/). For architecture, directory layout, and extension notes, see **[src/agent/README.md](src/agent/README.md)**.
 
-NIKA ships two LLM-backed agents for real troubleshooting runs, plus a deterministic mock for CI:
+NIKA ships three LLM-backed agents for real troubleshooting runs, plus a deterministic mock for CI:
 
 | Agent | CLI flag | How it works | Prerequisites |
 | ----- | -------- | ------------ | ------------- |
 | **ReAct** | `-a react` | LangGraph orchestrates two LangChain ReAct workers (diagnosis → submission) | LLM API key in `.env` (`OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, or Ollama URL) |
-| **Codex CLI** | `-a cli` | Same two-phase LangGraph flow, but each phase runs `codex exec` as a subprocess with Kathara MCP servers | [Codex CLI](https://developers.openai.com/codex) installed and authenticated (`codex login` or `OPENAI_API_KEY`) |
+| **Codex CLI** | `-a codex_cli` | Same two-phase LangGraph flow, but each phase runs `codex exec` as a subprocess with Kathara MCP servers | [Codex CLI](https://developers.openai.com/codex) installed and authenticated (`codex login` or `OPENAI_API_KEY`) |
+| **Claude Code CLI** | `-a claude_cli` | Same two-phase LangGraph flow via `claude -p` subprocess with Kathara MCP servers | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) installed; `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` + `ANTHROPIC_BASE_URL`, or `claude auth login` |
 | **Mock** | `-a mock` | Fixed tool-call script; no LLM | None |
 
 Both LLM agents (and the mock agent) write structured traces to `results/{session_id}/messages.jsonl` and produce `submission.json` via the task MCP server.
@@ -211,16 +224,16 @@ Both LLM agents (and the mock agent) write structured traces to `results/{sessio
 
 ```shell
 nika agent list
-nika agent run -a react -b openai -m gpt-5-mini -n 20
-nika agent run -a react -b deepseek -m deepseek-chat -n 20
+nika agent run -a react -p openai -m gpt-5-mini -n 20
+nika agent run -a react -p deepseek -m deepseek-chat -n 20
 ```
 
-- **`-b` / `--backend`**: `openai`, `ollama`, or `deepseek`
-- **`-m` / `--model`**: model id for the chosen backend
+- **`-p` / `--provider`**: `openai`, `ollama`, or `deepseek`
+- **`-m` / `--model`**: model id for the chosen provider
 - **`-n` / `--max-steps`**: max ReAct recursion steps per phase
 - Tracing: Langfuse + LangSmith (configure keys in `.env`)
 
-### Codex CLI agent (`-a cli`)
+### Codex CLI agent (`-a codex_cli`)
 
 Requires [Codex CLI](https://developers.openai.com/codex); follow the [official installation guide](https://developers.openai.com/codex/quickstart) to install and authenticate.
 
@@ -229,15 +242,39 @@ Requires [Codex CLI](https://developers.openai.com/codex); follow the [official 
 codex login
 
 # run on the current session task
-nika agent run -a cli -m gpt-5.4-mini
+nika agent run -a codex_cli -m gpt-5.4-mini
 ```
 
 - Uses `codex exec --json` under the hood; reasoning steps stream to the terminal in real time (MCP tool calls, agent messages, turn progress) and are logged to `messages.jsonl`.
-- The `-b` backend flag is accepted for CLI parity but ignored — Codex always uses OpenAI models.
+- The `-p` provider flag is accepted for CLI parity but ignored — Codex always uses OpenAI models.
 - **`-e` / `--reasoning-effort`**: Codex `model_reasoning_effort` (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`).
 - Per-session Codex workspace: `results/{session_id}/codex_workspace/`
 
 See **[src/nika/codex_cli/README.md](src/nika/codex_cli/README.md)** for full `nika agent` flags and conventions.
+
+### Claude Code CLI agent (`-a claude_cli`)
+
+Requires [Claude Code](https://docs.anthropic.com/en/docs/claude-code) on `PATH`. Configure credentials in `.env` or via `claude auth login` — see **[src/agent/README.md](src/agent/README.md#5-langgraph--claude-code-cli-path--a-claude_cli)** for details.
+
+```shell
+# DeepSeek via Anthropic-compatible API (.env)
+ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic
+ANTHROPIC_AUTH_TOKEN=sk-...
+ANTHROPIC_MODEL=deepseek-v4-pro[1m]
+
+# or native Anthropic
+# ANTHROPIC_API_KEY=sk-ant-...
+
+# or OAuth (no .env keys)
+# claude auth login
+
+nika agent run -a claude_cli                     # model from ANTHROPIC_MODEL
+nika agent run -a claude_cli -m deepseek-v4-flash
+```
+
+- Uses `claude -p --output-format stream-json`; events stream to the terminal and are logged to `messages.jsonl`.
+- The `-p` provider flag is accepted for CLI parity but ignored.
+- Per-session workspace: `results/{session_id}/claude_workspace/`
 
 ### Example: `simple_bgp` with `link_down`
 
@@ -259,10 +296,10 @@ nika exec pc2 ping -c 3 195.11.14.2
 
 # 4. Run a troubleshooting agent on the session task
 # Option A — LangGraph + LangChain ReAct
-nika agent run -a react -b openai -m gpt-5-mini -n 20
+nika agent run -a react -p openai -m gpt-5-mini -n 20
 
 # Option B — Codex CLI (streams step-by-step output to the terminal)
-nika agent run -a cli -m gpt-5.4-mini
+nika agent run -a codex_cli -m gpt-5.4-mini
 
 # 5. Inspect session state and artifacts
 nika session inspect
@@ -272,8 +309,7 @@ ls results/<session_id>/
 # 6. Close the lab, then evaluate
 nika session close -y
 nika eval metrics
-nika eval judge -b openai -m gpt-5-mini
-nika eval publish
+nika eval judge -p openai -m gpt-5-mini
 ```
 
 When multiple sessions are running, pass `--session-id <id>` to `failure inject`, `agent run`, and other session-scoped commands.
@@ -398,8 +434,9 @@ Agent message logging is built on `MessageLogger` in `src/agent/utils/loggers.py
 
 ```python
 from agent.utils.loggers import AgentCallbackLogger
+from agent.utils.phases import DIAGNOSIS
 
-callback = AgentCallbackLogger(agent="diagnosis_agent", session_dir=session_dir)
+callback = AgentCallbackLogger(agent=DIAGNOSIS, session_dir=session_dir)
 result = await agent.ainvoke(
     {"messages": messages},
     config={"callbacks": [callback]},

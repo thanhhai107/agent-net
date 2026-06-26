@@ -29,10 +29,10 @@ from nika.orchestrator.problems.misconfigurations.ospf import (
 from nika.orchestrator.problems.misconfigurations.p4 import (
     P4AggressiveDetectionThresholdsDetection,
 )
-from tests.integration_base import FailureInjectVerifyTestCase
+from tests.integration_base import PerTestEnvTestCase
 
 
-class OSPFMisconfigVerifyTest(FailureInjectVerifyTestCase):
+class OSPFMisconfigVerifyTest(PerTestEnvTestCase):
     SCENARIO = "ospf_enterprise_static"
     ENV_RUN_ARGS = ["-t", "s"]
 
@@ -52,7 +52,7 @@ class OSPFMisconfigVerifyTest(FailureInjectVerifyTestCase):
         self.assertGreater(result["details"]["commented_network_count"], 0)
 
 
-class BGPMisconfigVerifyTest(FailureInjectVerifyTestCase):
+class BGPMisconfigVerifyTest(PerTestEnvTestCase):
     SCENARIO = "simple_bgp"
 
     def test_bgp_asn_misconfig_verify(self):
@@ -92,7 +92,7 @@ class BGPMisconfigVerifyTest(FailureInjectVerifyTestCase):
         self.assertTrue(result["verified"], f"Expected BGP hijacking: {result}")
 
 
-class MacMisconfigVerifyTest(FailureInjectVerifyTestCase):
+class MacMisconfigVerifyTest(PerTestEnvTestCase):
     SCENARIO = "ospf_enterprise_static"
     ENV_RUN_ARGS = ["-t", "s"]
 
@@ -105,7 +105,7 @@ class MacMisconfigVerifyTest(FailureInjectVerifyTestCase):
         self.assertEqual(result["details"]["mac_0"].lower(), result["details"]["mac_1"].lower())
 
 
-class DHCPMisconfigVerifyTest(FailureInjectVerifyTestCase):
+class DHCPMisconfigVerifyTest(PerTestEnvTestCase):
     SCENARIO = "ospf_enterprise_dhcp"
     ENV_RUN_ARGS = ["-t", "s"]
 
@@ -118,7 +118,7 @@ class DHCPMisconfigVerifyTest(FailureInjectVerifyTestCase):
         self.assertIn("absent", result["details"]["grep_result"])
 
 
-class ACLBlockVerifyTest(FailureInjectVerifyTestCase):
+class ACLBlockVerifyTest(PerTestEnvTestCase):
     SCENARIO = "simple_bgp"
 
     def test_bgp_acl_block_verify_true_after_inject(self):
@@ -150,7 +150,7 @@ class ACLBlockVerifyTest(FailureInjectVerifyTestCase):
         self.assertTrue(result["verified"], f"Expected ARP ACL block: {result}")
 
 
-class P4MisconfigVerifyTest(FailureInjectVerifyTestCase):
+class P4MisconfigVerifyTest(PerTestEnvTestCase):
     SCENARIO = "p4_bloom_filter"
 
     def test_p4_aggressive_detection_thresholds_verify_true_after_inject(self):

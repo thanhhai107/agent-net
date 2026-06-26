@@ -1,4 +1,3 @@
-import asyncio
 from typing import List
 
 from nika.service.kathara.base_api import KatharaBaseAPI, _SupportsBase
@@ -292,18 +291,3 @@ class KatharaBMv2API(KatharaBaseAPI, BMv2APIMixin):
     """
 
     pass
-
-
-async def main():
-    lab_name = "p4_counter"
-    kathara_api = KatharaBMv2API(lab_name)
-    # result = await kathara_api.get_reachability()
-    # print(result)
-
-    # result = kathara_api.bmv2_table_dump("switch_1", "MyIngress.mpls_tbl")
-    result = kathara_api.read_p4_program("s1")
-    print(result)
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
