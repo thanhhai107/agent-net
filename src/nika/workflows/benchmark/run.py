@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import subprocess
 import sys
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -14,6 +15,7 @@ from nika.workflows.agent.run import start_agent
 from nika.workflows.env.start import start_net_env
 from nika.workflows.eval.session import eval_results
 from nika.workflows.failure.inject import inject_failure
+from nika.workflows.session.close import close_session
 
 _BENCHMARK_DONE_PREFIX = "benchmark_done "
 
@@ -33,6 +35,10 @@ def _benchmark_row_cli_args(
     run_judge: bool,
     judge_llm_backend: str | None,
     judge_model: str | None,
+    oracle_routing: bool,
+    tool_evolution_enabled: bool,
+    tool_library_id: str,
+    tool_evolution_mode: str,
 ) -> list[str]:
     args = [
         row["scenario"],
@@ -49,8 +55,18 @@ def _benchmark_row_cli_args(
         "-r",
         str(max_attempts),
     ]
+    if oracle_routing:
+        args.append("--oracle-routing")
+    if tool_evolution_enabled:
+        args += [
+            "--tool-evolution",
+            "--tool-library",
+            tool_library_id,
+            "--evolution-mode",
+            tool_evolution_mode,
+        ]
     topo = row.get("topo_size") or ""
-    if topo:
+    if topo and topo != "-":
         args += ["-t", topo]
     if run_judge:
         args += ["--judge", "--judge-backend", judge_llm_backend, "--judge-model", judge_model]
@@ -68,6 +84,10 @@ def _run_benchmark_row_subprocess(
     run_judge: bool,
     judge_llm_backend: str | None,
     judge_model: str | None,
+    oracle_routing: bool,
+    tool_evolution_enabled: bool,
+    tool_library_id: str,
+    tool_evolution_mode: str,
 ) -> None:
     """Run one CSV row via a subprocess for thread-safe parallel batch execution."""
     cli_args = _benchmark_row_cli_args(
@@ -80,6 +100,10 @@ def _run_benchmark_row_subprocess(
         run_judge=run_judge,
         judge_llm_backend=judge_llm_backend,
         judge_model=judge_model,
+        oracle_routing=oracle_routing,
+        tool_evolution_enabled=tool_evolution_enabled,
+        tool_library_id=tool_library_id,
+        tool_evolution_mode=tool_evolution_mode,
     )
     proc = subprocess.run(
         [sys.executable, "-m", "nika.codex_cli.main", "benchmark", "run", *cli_args],
@@ -113,6 +137,13 @@ def run_single_benchmark(
     run_judge: bool = False,
     judge_llm_backend: str | None = None,
     judge_model: str | None = None,
+    oracle_routing: bool = False,
+    tool_evolution_enabled: bool = False,
+    tool_library_id: str = "default",
+    tool_evolution_mode: str = "dual",
+    evolution_stream: str | None = None,
+    evolution_split: str | None = None,
+    evolution_sequence_index: int | None = None,
 ) -> str:
     """
     Run a single benchmark case.
@@ -130,25 +161,49 @@ def run_single_benchmark(
 
     session_id = start_net_env(scenario, tier, redeploy=True)
     session_dir = Path(RESULTS_DIR) / session_id
+    from nika.utils.session import Session
+
+    session = Session().load_running_session(session_id=session_id)
+    if evolution_stream is not None:
+        session.update_session("evolution_stream", evolution_stream)
+    if evolution_split is not None:
+        session.update_session("evolution_split", evolution_split)
+        session.update_session(
+            "tool_evolution_update_enabled",
+            evolution_split == "evolution",
+        )
+    if evolution_sequence_index is not None:
+        session.update_session("evolution_sequence_index", evolution_sequence_index)
 
     inject_failure(problem_names=[problem], session_id=session_id)
 
-    start_agent(
-        agent_type=agent_type,
-        llm_backend=llm_backend,
-        model=model,
-        max_steps=max_steps,
-        max_attempts=max_attempts,
-        session_id=session_id,
-        stream_output=False,
-    )
+    try:
+        start_agent(
+            agent_type=agent_type,
+            llm_backend=llm_backend,
+            model=model,
+            max_steps=max_steps,
+            max_attempts=max_attempts,
+            session_id=session_id,
+            stream_output=False,
+            oracle_routing=oracle_routing,
+            tool_evolution_enabled=tool_evolution_enabled,
+            tool_library_id=tool_library_id,
+            tool_evolution_mode=tool_evolution_mode,
+        )
 
-    eval_results(
-        session_id=session_id,
-        run_judge=run_judge,
-        judge_llm_backend=judge_llm_backend,
-        judge_model=judge_model,
-    )
+        eval_results(
+            session_id=session_id,
+            run_judge=run_judge,
+            judge_llm_backend=judge_llm_backend,
+            judge_model=judge_model,
+        )
+    except Exception:
+        try:
+            close_session(session_id=session_id, undeploy=True)
+        except (FileNotFoundError, ValueError):
+            pass
+        raise
 
     print(
         f"{_BENCHMARK_DONE_PREFIX}session_id={session_id} scenario={scenario} "
@@ -169,6 +224,10 @@ def run_benchmark_from_csv(
     run_judge: bool = False,
     judge_llm_backend: str | None = None,
     judge_model: str | None = None,
+    oracle_routing: bool = False,
+    tool_evolution_enabled: bool = False,
+    tool_library_id: str | None = None,
+    tool_evolution_mode: str = "dual",
 ) -> None:
     """
     Run benchmark cases defined in a CSV file.
@@ -180,6 +239,11 @@ def run_benchmark_from_csv(
     """
     if parallel < 1:
         raise ValueError("parallel must be >= 1")
+    if tool_evolution_enabled and parallel != 1:
+        raise ValueError(
+            "Tool Evolution benchmark streams must run sequentially so library "
+            "updates are observed in sequence."
+        )
 
     with open(benchmark_file, newline="", encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
@@ -187,13 +251,27 @@ def run_benchmark_from_csv(
     if not rows:
         print(f"No benchmark rows found in {benchmark_file}")
         return
+    resolved_library_id = tool_library_id or (
+        f"{Path(benchmark_file).stem}-{uuid.uuid4().hex[:8]}"
+        if tool_evolution_enabled
+        else "default"
+    )
+    if tool_evolution_enabled:
+        print(
+            f"tool_evolution_library id={resolved_library_id} "
+            f"mode={tool_evolution_mode}"
+        )
 
     if parallel == 1:
-        for row in rows:
+        for index, row in enumerate(rows):
             run_single_benchmark(
                 problem=row["problem"],
                 scenario=row["scenario"],
-                topo_size=row.get("topo_size") or "",
+                topo_size=(
+                    ""
+                    if (row.get("topo_size") or "") == "-"
+                    else (row.get("topo_size") or "")
+                ),
                 agent_type=agent_type,
                 llm_backend=llm_backend,
                 model=model,
@@ -202,6 +280,15 @@ def run_benchmark_from_csv(
                 run_judge=run_judge,
                 judge_llm_backend=judge_llm_backend,
                 judge_model=judge_model,
+                oracle_routing=oracle_routing,
+                tool_evolution_enabled=tool_evolution_enabled,
+                tool_library_id=resolved_library_id,
+                tool_evolution_mode=tool_evolution_mode,
+                evolution_stream=row.get("stream_id") or row.get("stream") or None,
+                evolution_split=row.get("split") or None,
+                evolution_sequence_index=int(
+                    row.get("sequence_index") or index
+                ),
             )
         return
 
@@ -218,6 +305,10 @@ def run_benchmark_from_csv(
                 run_judge=run_judge,
                 judge_llm_backend=judge_llm_backend,
                 judge_model=judge_model,
+                oracle_routing=oracle_routing,
+                tool_evolution_enabled=tool_evolution_enabled,
+                tool_library_id=resolved_library_id,
+                tool_evolution_mode=tool_evolution_mode,
             )
             for row in rows
         ]

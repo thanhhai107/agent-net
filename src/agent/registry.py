@@ -19,15 +19,33 @@ def create_agent(
     max_attempts: int = 3,
     reasoning_effort: str | None = None,
     stream_output: bool = True,
+    oracle_routing: bool = False,
+    tool_evolution_enabled: bool = False,
+    tool_library_id: str = "default",
+    tool_evolution_mode: str = "dual",
 ) -> Any:
     """Instantiate an agent for ``agent_type``."""
-    match agent_type.lower():
+    normalized_type = agent_type.lower()
+    if tool_evolution_enabled and normalized_type not in {
+        "react",
+        "plan-execute",
+        "reflexion",
+    }:
+        raise ValueError(
+            "Tool Evolution supports react, plan-execute, and reflexion workflows."
+        )
+
+    match normalized_type:
         case "react":
             return BasicReActAgent(
                 session_id=session_id,
                 llm_backend=llm_backend,
                 model=model,
                 max_steps=max_steps,
+                oracle_routing=oracle_routing,
+                tool_evolution_enabled=tool_evolution_enabled,
+                tool_library_id=tool_library_id,
+                tool_evolution_mode=tool_evolution_mode,
             )
         case "plan-execute":
             return PlanExecuteAgent(
@@ -35,6 +53,10 @@ def create_agent(
                 llm_backend=llm_backend,
                 model=model,
                 max_steps=max_steps,
+                oracle_routing=oracle_routing,
+                tool_evolution_enabled=tool_evolution_enabled,
+                tool_library_id=tool_library_id,
+                tool_evolution_mode=tool_evolution_mode,
             )
         case "reflexion":
             return ReflexionAgent(
@@ -43,6 +65,10 @@ def create_agent(
                 model=model,
                 max_steps=max_steps,
                 max_attempts=max_attempts,
+                oracle_routing=oracle_routing,
+                tool_evolution_enabled=tool_evolution_enabled,
+                tool_library_id=tool_library_id,
+                tool_evolution_mode=tool_evolution_mode,
             )
         case "mock":
             return MockAgent(
@@ -61,6 +87,7 @@ def create_agent(
                 session_id=session_id,
                 model=model,
                 reasoning_effort=reasoning_effort,
+                oracle_routing=oracle_routing,
                 stream_output=stream_output,
             )
         case _:

@@ -21,6 +21,8 @@ from agent.langgraph.workflow_models import (
     StepResult,
 )
 from agent.llm.model_factory import (
+    DEFAULT_LLM_BACKEND,
+    DEFAULT_MODEL,
     NETMIND_BASE_URL,
     NETMIND_MAX_RETRIES,
     NETMIND_SUPPORTED_MODELS,
@@ -66,13 +68,20 @@ class WorkflowRegistrationTest(unittest.TestCase):
     def test_cli_lists_all_agent_types(self) -> None:
         self.assertEqual(
             SUPPORTED_AGENT_TYPES,
-            ("react", "plan-execute", "reflexion", "mock", "cli"),
+            (
+                "react",
+                "plan-execute",
+                "reflexion",
+                "mock",
+                "cli",
+            ),
         )
 
     def test_registry_constructs_new_agent_types(self) -> None:
         with (
             patch("agent.registry.PlanExecuteAgent") as plan_agent,
             patch("agent.registry.ReflexionAgent") as reflexion_agent,
+            patch("agent.registry.BasicReActAgent") as react_agent,
         ):
             create_agent(
                 "plan-execute",
@@ -89,12 +98,26 @@ class WorkflowRegistrationTest(unittest.TestCase):
                 max_steps=9,
                 max_attempts=4,
             )
+            create_agent(
+                "react",
+                session_id="session",
+                llm_backend="openai",
+                model="model",
+                max_steps=11,
+                tool_evolution_enabled=True,
+                tool_library_id="experiment-a",
+                tool_evolution_mode="mastery",
+            )
 
         plan_agent.assert_called_once_with(
             session_id="session",
             llm_backend="openai",
             model="model",
             max_steps=7,
+            oracle_routing=False,
+            tool_evolution_enabled=False,
+            tool_library_id="default",
+            tool_evolution_mode="dual",
         )
         reflexion_agent.assert_called_once_with(
             session_id="session",
@@ -102,6 +125,20 @@ class WorkflowRegistrationTest(unittest.TestCase):
             model="model",
             max_steps=9,
             max_attempts=4,
+            oracle_routing=False,
+            tool_evolution_enabled=False,
+            tool_library_id="default",
+            tool_evolution_mode="dual",
+        )
+        react_agent.assert_called_once_with(
+            session_id="session",
+            llm_backend="openai",
+            model="model",
+            max_steps=11,
+            oracle_routing=False,
+            tool_evolution_enabled=True,
+            tool_library_id="experiment-a",
+            tool_evolution_mode="mastery",
         )
 
     def test_cli_lists_netmind_backend(self) -> None:
@@ -109,18 +146,56 @@ class WorkflowRegistrationTest(unittest.TestCase):
         self.assertEqual(
             NETMIND_SUPPORTED_MODELS,
             (
-                "Qwen/Qwen3-30B-A3B-Instruct-2507-FP8",
-                "Qwen/Qwen3.5-35B-A3B-FP8",
-                "openai/gpt-oss-20b",
                 "MiniMax/MiniMax-M2.7",
+                "Qwen/Qwen3.5-122B-A10B-FP8",
+                "openai/gpt-oss-120b",
+                "openai/gpt-oss-20b",
+                "zai-org/GLM-4.7",
             ),
         )
 
+    def test_tool_evolution_rejects_non_langgraph_workflows(self) -> None:
+        with self.assertRaisesRegex(ValueError, "supports react"):
+            create_agent(
+                "mock",
+                session_id="session",
+                llm_backend="openai",
+                model="model",
+                tool_evolution_enabled=True,
+            )
+
+    def test_tool_evolve_is_not_an_agent_type(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Unsupported agent type"):
+            create_agent(
+                "tool-evolve",
+                session_id="session",
+                llm_backend="openai",
+                model="model",
+            )
+
+
 class ModelFactoryTest(unittest.TestCase):
+    def test_default_model_is_netmind_gpt_oss_120b(self) -> None:
+        self.assertEqual(DEFAULT_LLM_BACKEND, "netmind")
+        self.assertEqual(DEFAULT_MODEL, "openai/gpt-oss-120b")
+
     @patch.dict("os.environ", {}, clear=True)
     def test_netmind_requires_api_key(self) -> None:
         with self.assertRaisesRegex(ValueError, "NETMIND_API_KEY"):
             load_model("netmind", "NetMind/NetMind-X1")
+
+    @patch.dict(
+        "os.environ",
+        {"NETMIND_API_KEY": "test-key"},
+        clear=True,
+    )
+    @patch("agent.llm.model_factory.ChatOpenAI")
+    def test_load_model_defaults_to_netmind_gpt_oss_120b(self, chat_openai) -> None:
+        load_model()
+
+        self.assertEqual(chat_openai.call_args.kwargs["model"], DEFAULT_MODEL)
+        self.assertEqual(chat_openai.call_args.kwargs["api_key"], "test-key")
+        self.assertEqual(chat_openai.call_args.kwargs["base_url"], NETMIND_BASE_URL)
 
     @patch.dict(
         "os.environ",
@@ -150,7 +225,7 @@ class ModelFactoryTest(unittest.TestCase):
     )
     @patch("agent.llm.model_factory.ChatOpenAI")
     def test_netmind_uses_default_base_url(self, chat_openai) -> None:
-        load_model("netmind", "Qwen/Qwen3.5-35B-A3B-FP8")
+        load_model("netmind", "Qwen/Qwen3.5-122B-A10B-FP8")
 
         self.assertEqual(chat_openai.call_args.kwargs["base_url"], NETMIND_BASE_URL)
         self.assertEqual(

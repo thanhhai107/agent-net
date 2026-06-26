@@ -14,6 +14,7 @@ src/agent/
 │   ├── reflexion_agent.py
 │   ├── workflow_models.py
 │   └── domain_agents/    # LangChain create_agent subgraphs
+├── tool_evolution/       # Persistent mastery + validated composite tools
 ├── mock/                 # [implemented] Deterministic mock without an LLM
 │   └── mock_agent.py
 ├── sdk/                  # [planned] Direct Claude / Codex SDK integration
@@ -76,8 +77,7 @@ flowchart LR
 - Tracing: Langfuse + LangSmith. Logging: `AgentCallbackLogger`.
 
 ```bash
-nika agent run -a react -b openai -m gpt-5-mini -n 20
-nika agent run -a react -b netmind -m Qwen/Qwen3-30B-A3B-Instruct-2507-FP8 -n 20
+nika agent run -a react -b netmind -m openai/gpt-oss-120b -n 20
 nika agent run -a react -b deepseek -m deepseek-chat -n 20
 ```
 
@@ -94,7 +94,7 @@ The NetMind backend is restricted to the verified models printed by
 - `--max-steps` limits both each executor invocation and total executed plan items.
 
 ```bash
-nika agent run -a plan-execute -b openai -m gpt-5-mini -n 20
+nika agent run -a plan-execute -b netmind -m openai/gpt-oss-120b -n 20
 ```
 
 ## 3. Reflexion Path (`-a reflexion`)
@@ -108,7 +108,7 @@ nika agent run -a plan-execute -b openai -m gpt-5-mini -n 20
 - Stops when the evaluator accepts an attempt or `--max-attempts` is reached.
 
 ```bash
-nika agent run -a reflexion -b openai -m gpt-5-mini -n 20 -r 3
+nika agent run -a reflexion -b netmind -m openai/gpt-oss-120b -n 20 -r 3
 ```
 
 ## 4. Mock Path (`-a mock`)
@@ -123,7 +123,39 @@ nika agent run -a reflexion -b openai -m gpt-5-mini -n 20 -r 3
 nika agent run -a mock -n 5
 ```
 
-## 5. SDK Path (`-a sdk`, planned)
+## 5. Tool Evolution module (`--tool-evolution`)
+
+**Integration point**: `DiagnosisAgent`, shared by ReAct, Plan-Execute, and
+Reflexion. The module enriches tool descriptions, retrieval, synthesis, and
+post-incident curation without owning workflow orchestration or submission.
+
+- **DRAFT-like mastery** keeps MCP implementations immutable while versioned
+  Tool Cards rewrite their model-facing preconditions, parameter guidance,
+  output interpretation, and failure semantics from real execution feedback.
+- **TTE-like synthesis** records a capability gap, creates an ephemeral
+  declarative workflow, and requires structural, runtime, and output-contract
+  verification before persistence.
+- **Alita-G-like distillation** removes failed and duplicate calls, generalizes
+  repeated concrete values into shared parameters, and stores successful
+  workflows as reusable candidates.
+- Composite tools use a stricter composable-primitive policy than the live
+  diagnosis surface: they exclude file reads, traffic generators, unrestricted
+  command arguments, and service/config changes.
+- Libraries live under `runtime/tool_evolution/{library_id}/`.
+- A source trajectory does not count as validation. Candidates require solved
+  incidents in two distinct scenario/topology contexts before promotion;
+  benchmark development/transfer splits are fully read-only.
+- Library capacity defaults to 250 and overflow is pruned by status and
+  observed utility.
+
+```bash
+nika agent run -a react -b netmind -m openai/gpt-oss-120b --tool-evolution \
+  --tool-library experiment-a --evolution-mode dual
+nika benchmark run --csv benchmark/tool_evolution_stream.csv \
+  -a react --tool-evolution --tool-library experiment-a
+```
+
+## 6. SDK Path (`-a sdk`, planned)
 
 **Placeholder**: `agent.sdk.agent.SdkAgent`
 
@@ -135,7 +167,7 @@ Design notes:
 
 Register the `"sdk"` branch in `registry.create_agent()` once implemented.
 
-## 6. LangGraph + CLI Path (`-a cli`)
+## 7. LangGraph + CLI Path (`-a cli`)
 
 **Entry point**: `agent.cli.agent.CliAgent`
 
@@ -180,6 +212,8 @@ nika agent list                              # List agent types and LLM backends
 nika agent run -a react -b openai -m ...   # ReAct baseline
 nika agent run -a plan-execute -b openai -m ...
 nika agent run -a reflexion -b openai -m ...
+nika agent run -a react -b openai -m ... --tool-evolution \
+  --tool-library experiment-a
 nika agent run -a cli -m gpt-5.4-mini      # Codex CLI path
 nika agent run -a mock                       # Mock path (no LLM required)
 # nika agent run -a sdk                      # Not yet implemented

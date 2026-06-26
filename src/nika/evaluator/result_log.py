@@ -38,6 +38,33 @@ class EvalResult:
     steps: int = None
     tool_calls: int = None
     tool_errors: int = None
+    primitive_calls: int = None
+    composite_calls: int = None
+    evolved_tools_created: int = None
+    mastery_updates: int = None
+    tool_evolution_enabled: bool | None = None
+    tool_library_id: str = None
+    tool_evolution_mode: str = None
+    evolution_stream: str = None
+    evolution_split: str = None
+    evolution_sequence_index: int = None
+    tool_selection_recall: float = None
+    argument_validity: float = None
+    error_recovery_count: int = None
+    tool_reuse_count: int = None
+    tool_promotion_count: int = None
+    tool_regression_count: int = None
+    library_candidates: int = None
+    library_promoted: int = None
+    library_mastered_primitives: int = None
+    tool_card_revisions: int = None
+    capability_gaps: int = None
+    verified_composites: int = None
+    unverified_ephemeral_tools: int = None
+    cross_model_reused_tools: int = None
+    incident_success: bool = None
+    efficiency_evolution_rate: float = None
+    evolutionary_gain: float = None
     time_taken: float = None
     llm_judge_relevance_score: int = None
     llm_judge_correctness_score: int = None
@@ -137,6 +164,10 @@ def build_eval_result_from_session_dir(session_dir: Path) -> EvalResult:
         "steps": metrics_blob.get("steps"),
         "tool_calls": metrics_blob.get("tool_calls"),
         "tool_errors": metrics_blob.get("tool_errors"),
+        "primitive_calls": metrics_blob.get("primitive_calls"),
+        "composite_calls": metrics_blob.get("composite_calls"),
+        "evolved_tools_created": metrics_blob.get("evolved_tools_created"),
+        "mastery_updates": metrics_blob.get("mastery_updates"),
     }
     if not any(v is not None for v in trace_metrics.values()):
         trace_path = session_dir / MESSAGES_FILENAME
@@ -167,6 +198,44 @@ def build_eval_result_from_session_dir(session_dir: Path) -> EvalResult:
         steps=trace_metrics.get("steps"),
         tool_calls=trace_metrics.get("tool_calls"),
         tool_errors=trace_metrics.get("tool_errors"),
+        primitive_calls=trace_metrics.get("primitive_calls"),
+        composite_calls=trace_metrics.get("composite_calls"),
+        evolved_tools_created=trace_metrics.get("evolved_tools_created"),
+        mastery_updates=trace_metrics.get("mastery_updates"),
+        tool_evolution_enabled=bool(run_meta.get("tool_evolution_enabled", False)),
+        tool_library_id=metrics_blob.get("tool_library_id")
+        or run_meta.get("tool_library_id"),
+        tool_evolution_mode=metrics_blob.get("tool_evolution_mode")
+        or run_meta.get("tool_evolution_mode"),
+        evolution_stream=run_meta.get("evolution_stream"),
+        evolution_split=run_meta.get("evolution_split"),
+        evolution_sequence_index=run_meta.get("evolution_sequence_index"),
+        tool_selection_recall=metrics_blob.get("tool_selection_recall"),
+        argument_validity=metrics_blob.get("argument_validity"),
+        error_recovery_count=metrics_blob.get("error_recovery_count"),
+        tool_reuse_count=metrics_blob.get("tool_reuse_count"),
+        tool_promotion_count=metrics_blob.get("tool_promotion_count"),
+        tool_regression_count=metrics_blob.get("tool_regression_count"),
+        library_candidates=metrics_blob.get("library_candidates"),
+        library_promoted=metrics_blob.get("library_promoted"),
+        library_mastered_primitives=metrics_blob.get(
+            "library_mastered_primitives"
+        ),
+        tool_card_revisions=metrics_blob.get("tool_card_revisions"),
+        capability_gaps=metrics_blob.get("capability_gaps"),
+        verified_composites=metrics_blob.get("verified_composites"),
+        unverified_ephemeral_tools=metrics_blob.get(
+            "unverified_ephemeral_tools"
+        ),
+        cross_model_reused_tools=metrics_blob.get("cross_model_reused_tools"),
+        incident_success=all(
+            metrics_blob.get(key) == 1.0
+            for key in (
+                "detection_score",
+                "localization_accuracy",
+                "rca_accuracy",
+            )
+        ),
         time_taken=_session_duration_seconds(run_meta.get("start_time"), run_meta.get("end_time")),
         llm_judge_relevance_score=relevance_score,
         llm_judge_correctness_score=correctness_score,

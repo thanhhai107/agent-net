@@ -17,3 +17,5 @@ notebooks/
 uv.lock
 .agents/
 .cursor/
+.ruff_cache
+.pytest_cache

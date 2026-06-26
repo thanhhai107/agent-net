@@ -49,6 +49,7 @@ class CliDiagnosisAgent:
         timeout: int = 600,
         scenario_name: str = "",
         problem_names: list[str] | None = None,
+        oracle_routing: bool = False,
         *,
         stream_output: bool = True,
     ) -> None:
@@ -61,6 +62,7 @@ class CliDiagnosisAgent:
             timeout=timeout,
             scenario_name=scenario_name,
             problem_names=problem_names or [],
+            oracle_routing=oracle_routing,
             stream_output=stream_output,
         )
 

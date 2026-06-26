@@ -43,12 +43,15 @@ This flag is reused on **`nika benchmark run`** and **`nika traffic run`** when 
 
 Aligned with `nika agent run`:
 
-- **`-a` / `--agent`**: `react`, `plan-execute`, or `reflexion` (LangGraph + LangChain), `cli` (LangGraph + Codex CLI subprocess), or `mock` (pipeline testing without an LLM).
+- **`-a` / `--agent`**: `react`, `plan-execute`, or `reflexion` (LangGraph + LangChain), `cli` (LangGraph + Codex CLI subprocess), or `mock`.
 - **`-b` / `--backend`**: LLM provider for `react`, `plan-execute`, `reflexion`, and `mock` (`openai`, `ollama`, `deepseek`, `netmind`). Ignored for `cli` (Codex uses OpenAI models).
 - **`-m` / `--model`**: model id.
 - **`-n` / `--max-steps`**: per-worker recursion limit for LangGraph agents; also caps executed plan items for `plan-execute`.
 - **`-r` / `--max-attempts`**: maximum Reflexion attempts for `reflexion` (default: `3`).
 - **`-e` / `--reasoning-effort`**: Codex `model_reasoning_effort` (`cli` only): `none`, `minimal`, `low`, `medium`, `high`, `xhigh`.
+- **`--oracle-routing`**: allow hidden problem labels to select MCP servers; intended only for an oracle baseline.
+- **`--tool-evolution`**: enable the Tool Evolution module for a LangGraph workflow. Persisted composites use a stricter composable-tool policy than the live diagnostic surface.
+- **`--tool-library` / `--evolution-mode`**: persistent library id and ablation mode for the module.
 
 `nika eval judge` uses **`-b`** and **`-m`** for the judge only (no agent in that command).
 
@@ -107,7 +110,7 @@ Example: `nika exec pc1 ping -c 3 10.0.0.2 --timeout 30`
 
 ## `nika agent`
 
-- **`nika agent list`**: supported agent types (`react`, `cli`, `mock`), LLM backends, and Codex reasoning-effort levels.
+- **`nika agent list`**: supported agent types, LLM backends, and Codex reasoning-effort levels.
 - **`nika agent run`**: run the agent on one selected session.
 
   | Flag | Applies to | Meaning |
@@ -119,14 +122,19 @@ Example: `nika exec pc1 ping -c 3 10.0.0.2 --timeout 30`
   | `-r` / `--max-attempts` | `reflexion` | Maximum attempt → evaluate → reflect cycles |
   | `-e` / `--reasoning-effort` | `cli` | Codex reasoning effort level |
   | `--session-id` | all | target session |
+  | `--tool-evolution` | LangGraph workflows | enable Tool Evolution |
+  | `--tool-library` | Tool Evolution | persistent diagnostic tool library id |
+  | `--evolution-mode` | Tool Evolution | `mastery`, `distill`, `dual`, `dual-no-validation`, or `dual-no-dedup` |
+  | `--oracle-routing` | LLM agents | hidden-label MCP routing baseline |
 
   Examples:
 
   ```shell
-  nika agent run -a react -b openai -m gpt-5-mini -n 20
-  nika agent run -a react -b netmind -m Qwen/Qwen3-30B-A3B-Instruct-2507-FP8 -n 20
-  nika agent run -a plan-execute -b openai -m gpt-5-mini -n 20
-  nika agent run -a reflexion -b openai -m gpt-5-mini -n 20 -r 3
+  nika agent run -a react -b netmind -m openai/gpt-oss-120b -n 20
+  nika agent run -a plan-execute -b netmind -m openai/gpt-oss-120b -n 20
+  nika agent run -a reflexion -b netmind -m openai/gpt-oss-120b -n 20 -r 3
+  nika agent run -a react -b netmind -m openai/gpt-oss-120b --tool-evolution \
+    --tool-library experiment-a --evolution-mode dual
   nika agent run -a cli -m gpt-5.4-mini -e medium
   nika agent run -a mock -n 5
   ```
@@ -174,10 +182,17 @@ Omit the `SCENARIO` positional argument. Rows are read from a CSV file.
 ```shell
 nika benchmark run
 nika benchmark run --csv benchmark/benchmark_selected.csv
+nika benchmark run --csv benchmark/tool_evolution_stream.csv \
+  -a react --tool-evolution --tool-library experiment-a --evolution-mode dual
 nika benchmark run -j 4
 ```
 
 **Default CSV path**: `benchmark/benchmark_selected.csv` under the repository root.
+
+Tool-Evolving CSVs may also contain `stream_id`, `split`, and
+`sequence_index`. Only `split=evolution` updates the library;
+`development` and `transfer` retrieve from a frozen library. Tool-Evolving
+streams must run sequentially (`--parallel 1`).
 
 **`-j` / `--parallel`**: run up to N CSV rows concurrently (default `1`). Applies to batch mode only.
 
@@ -188,6 +203,9 @@ nika benchmark run -j 4
 | `problem` | Problem id (same as `nika failure inject`) |
 | `scenario` | Scenario id (same as `nika env run`) |
 | `topo_size` | Tier `s`, `m`, or `l`; **empty** for scenarios without tiers (same values as `nika env run -t`) |
+| `stream_id` | Optional related-incident stream identifier |
+| `split` | Optional `evolution`, `development`, or `transfer` split |
+| `sequence_index` | Optional order within the evolving stream |
 
 Agent and judge options use the same flags as below (including `-a cli` and `-e` for Codex runs; `-n` applies to all agents except `cli`).
 
@@ -197,8 +215,8 @@ Pass **`SCENARIO`** as the first positional argument (like `nika env run NAME`),
 
 ```shell
 nika benchmark run dc_clos_bgp --problem bgp_asn_misconfig -t s \
-  -a react -b openai -m gpt-5-mini -n 20 \
-  --judge --judge-backend openai --judge-model gpt-5-mini
+  -a react -b netmind -m openai/gpt-oss-120b -n 20 \
+  --judge
 ```
 
 - **`-t` / `--tier`**: required only when `SCENARIO` is scalable.

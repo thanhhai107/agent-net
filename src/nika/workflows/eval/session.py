@@ -105,7 +105,51 @@ def run_eval_metrics(*, session_id: str | None = None) -> None:
         "steps": trace_metrics.get("steps"),
         "tool_calls": trace_metrics.get("tool_calls"),
         "tool_errors": trace_metrics.get("tool_errors"),
+        "primitive_calls": trace_metrics.get("primitive_calls"),
+        "composite_calls": trace_metrics.get("composite_calls"),
+        "evolved_tools_created": trace_metrics.get("evolved_tools_created"),
+        "mastery_updates": trace_metrics.get("mastery_updates"),
     }
+    if bool(getattr(session, "tool_evolution_enabled", False)):
+        from agent.tool_evolution.curator import finalize_tool_evolution_session
+
+        evolution = finalize_tool_evolution_session(
+            session_id=session.session_id,
+            metrics=payload,
+        )
+        payload.update(
+            {
+                "primitive_calls": (
+                    (evolution.get("primitive_calls") or 0)
+                    + (trace_metrics.get("primitive_calls") or 0)
+                ),
+                "composite_calls": evolution.get("composite_calls", 0),
+                "evolved_tools_created": len(evolution.get("created_tools", [])),
+                "mastery_updates": evolution.get("mastery_updates", 0),
+                "tool_library_id": evolution.get("library_id"),
+                "tool_evolution_mode": evolution.get("mode"),
+                "tool_selection_recall": evolution.get("tool_selection_recall"),
+                "argument_validity": evolution.get("argument_validity"),
+                "error_recovery_count": evolution.get("error_recovery_count"),
+                "tool_reuse_count": evolution.get("tool_reuse_count"),
+                "tool_promotion_count": len(evolution.get("promoted_tools", [])),
+                "tool_regression_count": len(evolution.get("regressed_tools", [])),
+                "library_candidates": evolution.get("library_candidates"),
+                "library_promoted": evolution.get("library_promoted"),
+                "library_mastered_primitives": evolution.get(
+                    "library_mastered_primitives"
+                ),
+                "tool_card_revisions": evolution.get("tool_card_revisions"),
+                "capability_gaps": evolution.get("capability_gaps"),
+                "verified_composites": evolution.get("verified_composites"),
+                "unverified_ephemeral_tools": evolution.get(
+                    "unverified_ephemeral_tools"
+                ),
+                "cross_model_reused_tools": evolution.get(
+                    "cross_model_reused_tools"
+                ),
+            }
+        )
     out_path = Path(session.session_dir) / EVAL_METRICS_FILENAME
     out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     session.update_run_meta("eval_metrics", payload)

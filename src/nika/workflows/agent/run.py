@@ -20,8 +20,20 @@ def start_agent(
     session_id: str | None = None,
     reasoning_effort: str | None = None,
     stream_output: bool = True,
+    oracle_routing: bool = False,
+    tool_evolution_enabled: bool = False,
+    tool_library_id: str = "default",
+    tool_evolution_mode: str = "dual",
 ) -> None:
     """Load the running session, run the agent on ``task_description``, then end the session."""
+    if tool_evolution_enabled and agent_type not in {
+        "react",
+        "plan-execute",
+        "reflexion",
+    }:
+        raise ValueError(
+            "Tool Evolution supports react, plan-execute, and reflexion workflows."
+        )
     session = Session()
     session.load_running_session(session_id=session_id)
     session.update_session("agent_type", agent_type)
@@ -31,6 +43,11 @@ def start_agent(
         session.update_session("max_attempts", max_attempts)
     if reasoning_effort is not None:
         session.update_session("reasoning_effort", reasoning_effort)
+    session.update_session("oracle_routing", oracle_routing)
+    session.update_session("tool_evolution_enabled", tool_evolution_enabled)
+    if tool_evolution_enabled:
+        session.update_session("tool_library_id", tool_library_id)
+        session.update_session("tool_evolution_mode", tool_evolution_mode)
     session.start_session()
 
     bind_session_dir(session.session_dir)
@@ -49,24 +66,29 @@ def start_agent(
             f"Results: {session.session_dir}\n",
             flush=True,
         )
-    agent = create_agent(
-        agent_type,
-        session_id=session.session_id,
-        llm_backend=llm_backend,
-        model=model,
-        max_steps=max_steps,
-        max_attempts=max_attempts,
-        reasoning_effort=reasoning_effort,
-        stream_output=stream_output,
-    )
-    asyncio.run(agent.run(task_description=session.task_description))
-
-    session.end_session()
-    log_event(
-        "agent_end",
-        f"Agent run completed for session {session.session_id}",
-        session_id=session.session_id,
-        agent_type=agent_type,
-    )
+    try:
+        agent = create_agent(
+            agent_type,
+            session_id=session.session_id,
+            llm_backend=llm_backend,
+            model=model,
+            max_steps=max_steps,
+            max_attempts=max_attempts,
+            reasoning_effort=reasoning_effort,
+            stream_output=stream_output,
+            oracle_routing=oracle_routing,
+            tool_evolution_enabled=tool_evolution_enabled,
+            tool_library_id=tool_library_id,
+            tool_evolution_mode=tool_evolution_mode,
+        )
+        asyncio.run(agent.run(task_description=session.task_description))
+    finally:
+        session.end_session()
+        log_event(
+            "agent_end",
+            f"Agent run ended for session {session.session_id}",
+            session_id=session.session_id,
+            agent_type=agent_type,
+        )
     if agent_type == "cli" and stream_output:
         print(f"\nDone. Results saved to {session.session_dir}\n", flush=True)

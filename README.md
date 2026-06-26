@@ -16,7 +16,7 @@
 ![alt text](./assets/images/nika_arch_gpt.png)
 
 This repository is a unified platform that can offer: 
-1. A benchmark suite of curated network incidents that covers 54 realistic network issues, ranging from link and host failures to resource contention, and includes five network scenarios, four of which can be instantiated at different topology sizes, spanning campus and data center networks. By combining these dimensions, the benchmark yields 640 distinct troubleshooting incidents for evaluating AI agents. The benchmark can be further extended by randomizing failure locations and composing multiple issues within a single incident. 
+1. A benchmark suite of curated network incidents that currently registers 55 realistic issue IDs (54 in the compact selected suite), ranging from link and host failures to resource contention, across multiple campus, data-center, SDN, and programmable-data-plane scenarios. The full compatibility matrix yields 640 troubleshooting incidents for evaluating AI agents. The benchmark can be further extended by randomizing failure locations and composing multiple issues within a single incident.
 2. A modular plug-and-play orchestration platform that connects AI agents with the network environment, enabling real-time troubleshooting in realistic conditions, and providing a human-facing interface to monitor agent performance.
 
 
@@ -28,7 +28,7 @@ This repository is a unified platform that can offer:
 - Unified `nika` CLI for env deploy, fault injection, agent runs, and evaluation
 - Session-based workflow with multi-session support (`nika session`, `--session-id`)
 - Parameterized fault injection (`nika failure describe`, `--set key=value`)
-- MCP-based tool support
+- MCP-based tool support and persistent Tool-Evolving experiments
 - Pre-built network scenarios and fault injection mechanisms
 - Reproducible evaluation framework with batch summary (`nika eval summary`)
 - Support for various network topologies and configurations
@@ -153,8 +153,10 @@ Each `nika env run` creates a **session** (printed as `session_id=…`). Session
 
    ```shell
    nika agent list
-   nika agent run -a react -b openai -m gpt-5-mini -n 20   # LangGraph + LangChain ReAct
+   nika agent run -a react -b netmind -m openai/gpt-oss-120b -n 20   # LangGraph + LangChain ReAct
    nika agent run -a cli -m gpt-5.4-mini                    # Codex CLI subprocess worker
+   nika agent run -a react -b netmind -m openai/gpt-oss-120b --tool-evolution \
+     --tool-library bgp-study --evolution-mode dual
    nika agent run -a cli -m gpt-5.4-mini -e medium        # optional Codex reasoning effort
    nika agent run -a mock -n 5                             # no LLM; useful for pipeline testing
    ```
@@ -166,7 +168,7 @@ Each `nika env run` creates a **session** (printed as `session_id=…`). Session
    ```shell
    nika session close [SESSION_ID] -y           # undeploy lab and clear runtime state first
    nika eval metrics
-   nika eval judge -b openai -m gpt-5-mini
+   nika eval judge
    nika eval publish
    nika eval summary                              # all finished sessions → default CSV
    nika eval summary -p link_down -e simple_bgp   # filter by problem and scenario
@@ -194,7 +196,7 @@ so it works for both running and completed sessions.
 ```shell
 nika benchmark run
 nika benchmark run dc_clos_bgp --problem bgp_asn_misconfig -t s
-nika benchmark run --judge --judge-backend openai --judge-model gpt-5-mini
+nika benchmark run --judge
 nika traffic list
 nika traffic run od --all-to-host pc1 --mbps 20 --interval 300 --background
 ```
@@ -218,7 +220,9 @@ uv run --with pytest pytest tests/test_session.py -v
 
 Agent implementations live under [`src/agent/`](src/agent/). For architecture, directory layout, and extension notes, see **[src/agent/README.md](src/agent/README.md)**.
 
-NIKA ships four LLM-backed agents for real troubleshooting runs, plus a deterministic mock for CI:
+NIKA ships three LangGraph troubleshooting workflows, a Codex CLI workflow,
+and a deterministic mock. Tool Evolution is an optional module applied to a
+workflow, not a separate workflow.
 
 | Agent | CLI flag | How it works | Prerequisites |
 | ----- | -------- | ------------ | ------------- |
@@ -234,13 +238,15 @@ All agents write structured traces to `results/{session_id}/messages.jsonl` and 
 
 ```shell
 nika agent list
-nika agent run -a react -b openai -m gpt-5-mini -n 20
+nika agent run -a react -b netmind -m openai/gpt-oss-120b -n 20
 nika agent run -a react -b deepseek -m deepseek-chat -n 20
-nika agent run -a plan-execute -b openai -m gpt-5-mini -n 20
-nika agent run -a reflexion -b openai -m gpt-5-mini -n 20 -r 3
+nika agent run -a plan-execute -b netmind -m openai/gpt-oss-120b -n 20
+nika agent run -a reflexion -b netmind -m openai/gpt-oss-120b -n 20 -r 3
+nika agent run -a react -b netmind -m openai/gpt-oss-120b --tool-evolution \
+  --tool-library experiment-a --evolution-mode dual
 ```
 
-- **`-b` / `--backend`**: `openai`, `ollama`, or `deepseek`
+- **`-b` / `--backend`**: `openai`, `ollama`, `deepseek`, or `netmind`
 - **`-m` / `--model`**: model id for the chosen backend
 - **`-n` / `--max-steps`**: recursion limit for each tool-enabled worker; for `plan-execute`, also the maximum number of executed plan items
 - **`-r` / `--max-attempts`**: maximum number of Reflexion attempts (default `3`; used only by `reflexion`)
@@ -252,6 +258,62 @@ Reflexion loop: each tool-enabled attempt is evaluated against strict evidence,
 failed attempts generate compact episodic memory, and the next attempt receives
 that memory as strategy guidance. The loop stops on evaluator success or after
 `--max-attempts`.
+
+### Tool Evolution module (`--tool-evolution`)
+
+The module can augment `react`, `plan-execute`, or `reflexion` and combines
+DRAFT-, TTE-, and Alita-G-inspired mechanisms:
+
+- **DRAFT-like Tool Cards** version agent-facing usage semantics for immutable
+  MCP primitives. Post-incident curation groups diverse invocations, contrasts
+  successful and failed executions, rewrites preconditions, argument guidance,
+  output interpretation, and failure semantics, and records convergence when
+  repeated evidence produces no semantic change.
+- **TTE-like test-time synthesis** requires the agent to identify a sanitized
+  capability gap before constructing an ephemeral workflow. The workflow must
+  pass schema, parameterization, composable-primitive allowlist, runtime, and output
+  contract checks before it can enter the persistent library as a candidate.
+- **Alita-G-like distillation** removes failed and duplicate calls from
+  successful traces, shares parameters for repeated concrete values, and
+  creates reusable declarative composite tools. The source trajectory is not
+  counted as validation evidence.
+
+Nika deliberately synthesizes declarative MCP workflows rather than arbitrary
+Python. This preserves actual tool execution while keeping every step within
+the composable diagnostic allowlist. Live diagnosis can still use broader
+diagnostic tools, but persisted composites exclude open-ended file reads,
+traffic generators, unrestricted command arguments, and service/config changes.
+
+```shell
+nika benchmark run --csv benchmark/tool_evolution_stream.csv \
+  -a react -b netmind -m openai/gpt-oss-120b --tool-evolution \
+  --tool-library bgp-study --evolution-mode dual
+
+nika tools libraries
+nika tools show bgp-study
+nika tools reset bgp-study
+```
+
+Generated tools start as ephemeral artifacts and become probationary candidates
+only after structural, runtime, and semantic verification. With validation
+enabled, a candidate is promoted only after successful use in at least two
+distinct scenario/topology contexts whose incidents are also solved correctly.
+Development and transfer rows retrieve tools but freeze library updates,
+preventing held-out leakage.
+
+The library tracks retrieval count, verification reports, utility, and
+regression. Capacity defaults to 250 tools and can be changed with
+`NIKA_TOOL_LIBRARY_CAPACITY`; overflow is pruned by status and observed utility.
+
+Available ablations are `mastery`, `distill`, `dual`,
+`dual-no-validation`, and `dual-no-dedup`. Add `--oracle-routing` only for the
+explicit oracle baseline; normal runs select diagnosis servers from public
+scenario metadata without consulting the injected problem label.
+
+Tool-Evolving sessions additionally write `tool_evolution.json` and expose
+selection recall, argument validity, recovery, reuse, promotion, Tool Card
+revisions, capability gaps, verified composites, library health, cross-model
+reuse, and sequential efficiency metrics.
 
 ### Codex CLI agent (`-a cli`)
 
@@ -292,7 +354,7 @@ nika exec pc2 ping -c 3 195.11.14.2
 
 # 4. Run a troubleshooting agent on the session task
 # Option A — LangGraph + LangChain ReAct
-nika agent run -a react -b openai -m gpt-5-mini -n 20
+nika agent run -a react -b netmind -m openai/gpt-oss-120b -n 20
 
 # Option B — Codex CLI (streams step-by-step output to the terminal)
 nika agent run -a cli -m gpt-5.4-mini
@@ -305,7 +367,7 @@ ls results/<session_id>/
 # 6. Close the lab, then evaluate
 nika session close -y
 nika eval metrics
-nika eval judge -b openai -m gpt-5-mini
+nika eval judge
 nika eval publish
 ```
 
@@ -337,7 +399,7 @@ Each scenario is defined in a Kathará `lab.py` file, which specifies the networ
 
 ## Network issues
 
-This framework provides a set of predefined issues that can be injected into the network environment. These issues are categorized into different types, each with specific root causes and key signals. By combining the issues with the network scenarios, randomlizing the failure locations, and composing multiple issues, this framework can generate multiple incidents based on a network issue (see # Incident column).
+This framework provides a set of predefined issues that can be injected into the network environment. These issues are categorized into different types, each with specific root causes and key signals. By combining the issues with the network scenarios, randomlizing the failure locations, and composing multiple issues, this framework can generate multiple incidents based on a network issue (see # Incident column). The current registry/full CSV contains 55 problem IDs; the compact `benchmark_selected.csv` intentionally selects 54 of them.
 The following table summarizes the issues available in this framework:
 
 | Category                               | Root Cause                              | Key Signals                                                     | # Incident |
@@ -409,6 +471,10 @@ This framework provides MCP servers under `src/nika/service/mcp_server`. These i
 - **Task management MCP server** (`task_mcp_server.py`): agent submissions, including
   - `list_avail_problems` to list injectable root-cause ids.
   - `submit` to write the agent's final detection/localization/RCA answer.
+- **Evolved diagnostic toolbox MCP server** (`tool_evolution_mcp_server.py`):
+  - `list_evolved_tools` to inspect promoted composites; probationary candidates are opt-in for inspection.
+  - `execute_evolved_tool` to run promoted composites over the composable diagnostic primitive allowlist.
+  - Selects the library through `NIKA_TOOL_LIBRARY_ID` and the live lab through `NIKA_SESSION_ID`.
 
 💡 More tools are coming soon...
 

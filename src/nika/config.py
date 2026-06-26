@@ -14,6 +14,7 @@ SESSIONS_DIR = RUNTIME_DIR / "sessions"
 RESULTS_DIR = _REPO_ROOT / "results"
 BENCHMARK_DIR = _REPO_ROOT / "benchmark"
 MCP_SERVER_DIR = _PKG_DIR / "service" / "mcp_server"
+TOOL_EVOLUTION_DIR = RUNTIME_DIR / "tool_evolution"
 
 
 def pkg_path(*parts: str) -> Path:

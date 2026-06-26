@@ -1,0 +1,13 @@
+problem,scenario,topo_size,stream_id,split,sequence_index
+link_down,dc_clos_bgp,s,correlated_link,evolution,0
+link_down,ospf_enterprise_dhcp,s,correlated_link,evolution,1
+link_down,dc_clos_bgp,m,correlated_link,development,2
+link_down,ospf_enterprise_dhcp,l,correlated_link,transfer,3
+bgp_asn_misconfig,dc_clos_bgp,s,bgp_protocol,evolution,4
+bgp_missing_route_advertisement,dc_clos_bgp,s,bgp_protocol,evolution,5
+bgp_blackhole_route_leak,dc_clos_bgp,m,bgp_protocol,development,6
+bgp_hijacking,dc_clos_bgp,l,bgp_protocol,transfer,7
+dns_service_down,ospf_enterprise_dhcp,s,orthogonal,evolution,8
+link_high_packet_corruption,dc_clos_bgp,s,orthogonal,development,9
+sdn_controller_crash,sdn_clos,s,orthogonal,transfer,10
+p4_table_entry_missing,p4_bloom_filter,,orthogonal,transfer,11

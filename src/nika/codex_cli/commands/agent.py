@@ -3,9 +3,20 @@
 import typer
 
 from agent.cli.codex_worker import REASONING_EFFORT_LEVELS
-from agent.llm.model_factory import NETMIND_SUPPORTED_MODELS
+from agent.llm.model_factory import (
+    DEFAULT_LLM_BACKEND,
+    DEFAULT_MODEL,
+    NETMIND_SUPPORTED_MODELS,
+)
+from agent.tool_evolution.models import ToolEvolutionMode
 
-SUPPORTED_AGENT_TYPES = ("react", "plan-execute", "reflexion", "mock", "cli")
+SUPPORTED_AGENT_TYPES = (
+    "react",
+    "plan-execute",
+    "reflexion",
+    "mock",
+    "cli",
+)
 SUPPORTED_LLM_BACKENDS = ("openai", "ollama", "deepseek", "netmind")
 
 agent_app = typer.Typer(help="Troubleshooting agents.")
@@ -23,6 +34,9 @@ def agent_list() -> None:
     typer.echo("netmind_models:")
     for model in NETMIND_SUPPORTED_MODELS:
         typer.echo(f"  {model}")
+    typer.echo("tool_evolution_modes:")
+    for mode in ToolEvolutionMode:
+        typer.echo(f"  {mode.value}")
     typer.echo("reasoning_effort (cli only):")
     for level in REASONING_EFFORT_LEVELS:
         typer.echo(f"  {level}")
@@ -32,12 +46,12 @@ def agent_list() -> None:
 def agent_run(
     agent_type: str = typer.Option("react", "-a", "--agent", help="Agent implementation."),
     llm_backend: str = typer.Option(
-        "openai",
+        DEFAULT_LLM_BACKEND,
         "-b",
         "--backend",
         help="LLM provider (openai, ollama, deepseek, netmind).",
     ),
-    model: str = typer.Option("gpt-5-mini", "-m", "--model", help="Model id for the chosen backend."),
+    model: str = typer.Option(DEFAULT_MODEL, "-m", "--model", help="Model id for the chosen backend."),
     max_steps: int = typer.Option(
         20,
         "-n",
@@ -61,6 +75,26 @@ def agent_run(
         help="Codex model_reasoning_effort (cli only): none, minimal, low, medium, high, xhigh.",
     ),
     session_id: str | None = typer.Option(None, "--session-id", help="Target session id (lab_hash)."),
+    oracle_routing: bool = typer.Option(
+        False,
+        "--oracle-routing",
+        help="Use hidden problem labels to select MCP servers (oracle baseline only).",
+    ),
+    tool_evolution: bool = typer.Option(
+        False,
+        "--tool-evolution/--no-tool-evolution",
+        help="Enable Tool Evolution as a module for a LangGraph workflow.",
+    ),
+    tool_library: str = typer.Option(
+        "default",
+        "--tool-library",
+        help="Persistent diagnostic tool library id used by Tool Evolution.",
+    ),
+    evolution_mode: str = typer.Option(
+        ToolEvolutionMode.DUAL.value,
+        "--evolution-mode",
+        help="Tool Evolution mode: mastery, distill, dual, dual-no-validation, dual-no-dedup.",
+    ),
 ) -> None:
     """Run the agent on the current session task."""
     from nika.workflows.agent.run import start_agent
@@ -69,6 +103,13 @@ def agent_run(
         raise typer.BadParameter(
             f"reasoning_effort must be one of {', '.join(REASONING_EFFORT_LEVELS)}"
         )
+    try:
+        ToolEvolutionMode(evolution_mode)
+    except ValueError as exc:
+        raise typer.BadParameter(
+            "evolution_mode must be one of "
+            + ", ".join(item.value for item in ToolEvolutionMode)
+        ) from exc
 
     try:
         start_agent(
@@ -79,6 +120,10 @@ def agent_run(
             max_attempts=max_attempts,
             session_id=session_id,
             reasoning_effort=reasoning_effort,
+            oracle_routing=oracle_routing,
+            tool_evolution_enabled=tool_evolution,
+            tool_library_id=tool_library,
+            tool_evolution_mode=evolution_mode,
         )
     except (FileNotFoundError, ValueError) as exc:
         raise typer.BadParameter(str(exc)) from exc

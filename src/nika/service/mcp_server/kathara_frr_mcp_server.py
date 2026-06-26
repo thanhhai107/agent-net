@@ -25,6 +25,21 @@ def frr_get_bgp_conf(router_name: str) -> str:
 
 @safe_tool
 @mcp.tool()
+def frr_show_bgp_summary(router_name: str) -> str:
+    """Get BGP neighbor and session-state summary from an FRR router.
+
+    Args:
+        router_name (str): The name of the router.
+
+    Returns:
+        str: BGP peers, session states, and prefix counters.
+    """
+    kathara_api = KatharaFRRAPI(lab_name=get_lab_name())
+    return kathara_api.frr_show_bgp_summary(router_name)
+
+
+@safe_tool
+@mcp.tool()
 def frr_show_running_config(router_name: str) -> str:
     """Get the running configuration from the FRR router.
 

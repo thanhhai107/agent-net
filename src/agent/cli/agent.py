@@ -65,6 +65,7 @@ class CliAgent:
         model: str = "gpt-5.4-mini",
         reasoning_effort: str | None = None,
         *,
+        oracle_routing: bool = False,
         stream_output: bool = True,
     ) -> None:
         self.session_id = session_id
@@ -87,6 +88,7 @@ class CliAgent:
             reasoning_effort=reasoning_effort,
             scenario_name=scenario_name,
             problem_names=problem_names,
+            oracle_routing=oracle_routing,
             stream_output=stream_output,
         )
         self._submission_agent = CliSubmissionAgent(

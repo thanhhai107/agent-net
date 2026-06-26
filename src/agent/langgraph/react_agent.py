@@ -7,13 +7,14 @@ from dotenv import load_dotenv
 from langchain_core.messages import BaseMessage, HumanMessage
 from langfuse import get_client
 from langfuse.langchain import CallbackHandler
-from langgraph.errors import GraphRecursionError
 from langgraph.graph import END, START, StateGraph
 from pydantic import Field, ValidationError
 from typing_extensions import TypedDict
 
 from agent.langgraph.domain_agents.diagnosis_agent import DiagnosisAgent
 from agent.langgraph.domain_agents.submission_agent import SubmissionAgent
+from agent.llm.model_factory import DEFAULT_LLM_BACKEND, DEFAULT_MODEL
+from agent.tool_evolution.integration import write_tool_evolution_session
 from agent.utils.loggers import AgentCallbackLogger
 from nika.utils.logger import system_logger
 from nika.utils.session import Session
@@ -42,9 +43,13 @@ class BasicReActAgent:
     def __init__(
         self,
         session_id: str,
-        llm_backend: str = "openai",
-        model: str = "gpt-5-mini",
+        llm_backend: str = DEFAULT_LLM_BACKEND,
+        model: str = DEFAULT_MODEL,
         max_steps: int = 20,
+        oracle_routing: bool = False,
+        tool_evolution_enabled: bool = False,
+        tool_library_id: str = "default",
+        tool_evolution_mode: str = "dual",
     ):
         self.session_id = session_id
         self.max_steps = max_steps
@@ -71,8 +76,14 @@ class BasicReActAgent:
             model=model,
             scenario_name=self.session.scenario_name,
             problem_names=self.session.problem_names,
+            oracle_routing=oracle_routing,
+            tool_evolution_enabled=tool_evolution_enabled,
+            tool_library_id=tool_library_id,
+            tool_evolution_mode=tool_evolution_mode,
         )
         asyncio.run(diagnosis_agent.load_tools())
+        self.llm = diagnosis_agent.llm
+        self.tool_evolution_runtime = diagnosis_agent.tool_evolution_runtime
         self.diagnosis_agent = diagnosis_agent.get_agent()
 
         submission_agent = SubmissionAgent(session_id=session_id, llm_backend=llm_backend, model=model)
@@ -109,13 +120,18 @@ class BasicReActAgent:
                 "model": self.session.model,
             },
         ):
-            result = await self.graph.ainvoke(
-                {
-                    "messages": [HumanMessage(content=task_description)],
-                },
-                config={"callbacks": [self.langfuse_handler]},
-            )
-            return result
+            try:
+                return await self.graph.ainvoke(
+                    {
+                        "messages": [HumanMessage(content=task_description)],
+                    },
+                    config={"callbacks": [self.langfuse_handler]},
+                )
+            finally:
+                write_tool_evolution_session(
+                    self.tool_evolution_runtime,
+                    self.session_dir,
+                )
 
     async def diagnosis_agent_builder(self, state: AgentState):
         try:
@@ -140,16 +156,6 @@ class BasicReActAgent:
                 "messages": [HumanMessage(content=f"Error: {e}")],
                 "diagnosis_report": "ERROR_VALIDATION",
                 "is_max_steps_reached": False,
-            }
-        except GraphRecursionError:
-            AgentCallbackLogger(agent="diagnosis_agent", session_dir=self.session_dir)._log(
-                "error",
-                {"message": "Diagnosis agent reached max recursion limit."},
-            )
-            return {
-                "messages": [HumanMessage(content="Error: diagnosis did not finish within max steps.")],
-                "diagnosis_report": "ERROR_MAX_STEPS_REACHED",
-                "is_max_steps_reached": True,
             }
 
     async def submission_agent_builder(self, state: AgentState):

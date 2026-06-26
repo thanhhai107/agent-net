@@ -3,24 +3,31 @@ from nika.config import MCP_SERVER_DIR
 # Keyword sets that trigger inclusion of each optional Kathara MCP server.
 _FRR_KEYWORDS = frozenset({"bgp", "ospf", "rip", "frr", "routing"})
 _BMV2_KEYWORDS = frozenset({"p4", "bmv2", "sdn", "bloom", "mpls", "int", "counter"})
-_TELEMETRY_KEYWORDS = frozenset({"telemetry"})
+_TELEMETRY_KEYWORDS = frozenset({"telemetry", "influx", "int"})
 
 
-def select_diagnosis_servers(scenario_name: str, problem_names: list[str]) -> list[str]:
+def select_diagnosis_servers(
+    scenario_name: str,
+    problem_names: list[str] | None = None,
+    *,
+    oracle: bool = False,
+) -> list[str]:
     """Return the minimal set of Kathara MCP server names needed for *scenario*.
 
     ``kathara_base_mcp_server`` is always included.  The three specialised
-    servers are added when keyword signals appear in the scenario or problem
-    names (tokens are split on ``_`` and ``-``).
+    servers are added from public scenario metadata. Hidden problem labels are
+    ignored by default so benchmark runs do not receive an oracle hint.
+    Set ``oracle=True`` only for the explicit oracle-routing baseline.
 
     Parameters
     ----------
     scenario_name:
         E.g. ``"dc_clos_bgp"`` or ``"p4_counter"``.
     problem_names:
-        E.g. ``["bgp_session_down"]``.
+        Hidden injected problem identifiers. Used only when ``oracle=True``.
     """
-    combined = (scenario_name + " " + " ".join(problem_names)).lower()
+    problem_text = " ".join(problem_names or []) if oracle else ""
+    combined = (scenario_name + " " + problem_text).lower()
     tokens = set(combined.replace("_", " ").replace("-", " ").split())
 
     servers = ["kathara_base_mcp_server"]
@@ -40,9 +47,10 @@ class MCPServerConfig:
         self.mcp_server_dir = str(MCP_SERVER_DIR)
         self.session_id = session_id
 
-    def _server_env(self) -> dict[str, str]:
+    def _server_env(self, **extra: str) -> dict[str, str]:
         return {
             "NIKA_SESSION_ID": self.session_id,
+            **extra,
         }
 
     def load_config(self, if_submit: bool = False) -> dict:
@@ -91,3 +99,18 @@ class MCPServerConfig:
         """
         full = self.load_config(if_submit=False)
         return {k: v for k, v in full.items() if k in server_names}
+
+    def load_toolbox_config(self, library_id: str) -> dict:
+        """Return the FastMCP adapter for one evolved diagnostic tool library."""
+        if not library_id:
+            raise ValueError("library_id is required for the diagnostic toolbox.")
+        return {
+            "nika_diagnostic_toolbox": {
+                "command": "python3",
+                "args": [
+                    f"{self.mcp_server_dir}/tool_evolution_mcp_server.py"
+                ],
+                "transport": "stdio",
+                "env": self._server_env(NIKA_TOOL_LIBRARY_ID=library_id),
+            }
+        }

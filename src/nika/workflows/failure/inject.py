@@ -48,6 +48,65 @@ def _extract_injection_params(problem: Any) -> dict[str, Any]:
     return params
 
 
+def _coerce_device_list(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item) for item in value]
+    if isinstance(value, tuple):
+        return [str(item) for item in value]
+    if isinstance(value, set):
+        return [str(item) for item in value]
+    if isinstance(value, str):
+        return [value]
+    return []
+
+
+def _sync_problem_runtime_from_params(problem: Any, fault_params: Any) -> None:
+    """Keep runtime task metadata aligned with typed injection overrides.
+
+    Many problem classes choose ``faulty_devices`` randomly in ``__init__`` and
+    later allow typed params such as ``host_name`` to override the actual target
+    used for injection. If we do not mirror the resolved target back onto each
+    task object, ``ground_truth.json`` can describe the random default while the
+    lab state was mutated on the requested host.
+    """
+    if not hasattr(fault_params, "model_dump"):
+        return
+
+    params = fault_params.model_dump(exclude_none=True)
+    devices = _coerce_device_list(getattr(problem, "faulty_devices", []))
+    changed_devices = False
+    for field_name, index in (("host_name", 0), ("host_name_2", 1)):
+        value = params.get(field_name)
+        if not isinstance(value, str) or not value:
+            continue
+        while len(devices) <= index:
+            devices.append(value)
+        devices[index] = value
+        changed_devices = True
+    if changed_devices and hasattr(problem, "faulty_devices"):
+        problem.faulty_devices = devices
+
+    if "intf_name" in params:
+        if hasattr(problem, "faulty_intf"):
+            problem.faulty_intf = params["intf_name"]
+        if hasattr(problem, "intf_name"):
+            problem.intf_name = params["intf_name"]
+
+    for field_name in (
+        "service_name",
+        "attacker_device",
+        "target_host",
+        "target_website",
+        "target_domain",
+        "p4_name",
+        "southbound_port",
+        "original_port",
+        "mismatched_port",
+    ):
+        if field_name in params and hasattr(problem, field_name):
+            setattr(problem, field_name, _json_safe(params[field_name]))
+
+
 def inject_failure(
     problem_names: list[str],
     *,
@@ -100,6 +159,8 @@ def inject_failure(
             fault_params = ParamsClass(**overrides) if overrides else ParamsClass()
         except ValidationError as exc:
             raise ValueError(f"Invalid parameters for '{problem_names[0]}': {exc}") from exc
+        for problem in tot_tasks:
+            _sync_problem_runtime_from_params(problem, fault_params)
 
     if len(problem_names) > 1 and hasattr(inject_problem, "sub_faults"):
         sub_faults = list(getattr(inject_problem, "sub_faults"))
@@ -201,7 +262,7 @@ def inject_failure(
         problems=problem_names,
         scenario=session.scenario_name,
     )
-    task_description = problem.get_task_description()
+    task_description = inject_problem.get_task_description()
     session.update_session("task_description", task_description)
 
     tot_gt = {}

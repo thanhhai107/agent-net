@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from collections import defaultdict
 
 from nika.evaluator.result_log import (
     RUN_FILENAME,
@@ -94,5 +95,47 @@ def run_eval_summary(
         selected.append(session_dir)
 
     eval_results = [build_eval_result_from_session_dir(session_dir) for session_dir in selected]
+    streams: dict[tuple[str | None, str | None], list] = defaultdict(list)
+    for result in eval_results:
+        streams[(result.tool_library_id, result.evolution_stream)].append(result)
+    for stream_results in streams.values():
+        stream_results.sort(
+            key=lambda item: (
+                item.evolution_sequence_index
+                if item.evolution_sequence_index is not None
+                else 10**9,
+                item.session_id or "",
+            )
+        )
+        if not stream_results:
+            continue
+        baseline = stream_results[0]
+        baseline_score = sum(
+            value or 0.0
+            for value in (
+                baseline.detection_score,
+                baseline.localization_accuracy,
+                baseline.rca_accuracy,
+            )
+        ) / 3
+        previous_tokens: int | None = None
+        for result in stream_results:
+            current_tokens = (result.in_tokens or 0) + (result.out_tokens or 0)
+            if previous_tokens and current_tokens:
+                result.efficiency_evolution_rate = round(
+                    (current_tokens - previous_tokens) / previous_tokens,
+                    4,
+                )
+            current_score = sum(
+                value or 0.0
+                for value in (
+                    result.detection_score,
+                    result.localization_accuracy,
+                    result.rca_accuracy,
+                )
+            ) / 3
+            result.evolutionary_gain = round(current_score - baseline_score, 4)
+            if current_tokens:
+                previous_tokens = current_tokens
     out_path = write_eval_summary_csv(eval_results, output_path or default_summary_csv_path())
     return out_path

@@ -11,11 +11,14 @@ load_dotenv()
 NETMIND_BASE_URL = "https://stream-netmind.viettel.vn/gateway/v1"
 NETMIND_TIMEOUT_SECONDS = 90.0
 NETMIND_MAX_RETRIES = 0
+DEFAULT_LLM_BACKEND = "netmind"
+DEFAULT_MODEL = "openai/gpt-oss-120b"
 NETMIND_SUPPORTED_MODELS = (
-    "Qwen/Qwen3-30B-A3B-Instruct-2507-FP8",
-    "Qwen/Qwen3.5-35B-A3B-FP8",
-    "openai/gpt-oss-20b",
     "MiniMax/MiniMax-M2.7",
+    "Qwen/Qwen3.5-122B-A10B-FP8",
+    "openai/gpt-oss-120b",
+    "openai/gpt-oss-20b",
+    "zai-org/GLM-4.7",
 )
 
 
@@ -45,7 +48,10 @@ def _env_non_negative_int(name: str, default: int) -> int:
     return parsed
 
 
-def load_model(llm_backend: str = "openai", model: str = "gpt-5-mini") -> BaseChatModel:
+def load_model(
+    llm_backend: str = DEFAULT_LLM_BACKEND,
+    model: str = DEFAULT_MODEL,
+) -> BaseChatModel:
     if llm_backend == "ollama":
         return ChatOllama(
             model=model,

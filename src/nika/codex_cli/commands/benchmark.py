@@ -4,6 +4,8 @@ from pathlib import Path
 
 import typer
 
+from agent.llm.model_factory import DEFAULT_LLM_BACKEND, DEFAULT_MODEL
+from agent.tool_evolution.models import ToolEvolutionMode
 from nika.net_env.net_env_pool import scenario_requires_topo_tier
 from nika.workflows.benchmark.run import (
     default_benchmark_csv_path,
@@ -39,12 +41,12 @@ def benchmark_run(
     ),
     agent_type: str = typer.Option("react", "-a", "--agent", help="Agent implementation."),
     llm_backend: str = typer.Option(
-        "openai",
+        DEFAULT_LLM_BACKEND,
         "-b",
         "--backend",
         help="LLM provider (openai, ollama, deepseek, netmind).",
     ),
-    model: str = typer.Option("gpt-5-mini", "-m", "--model", help="Model id for the agent."),
+    model: str = typer.Option(DEFAULT_MODEL, "-m", "--model", help="Model id for the agent."),
     max_steps: int = typer.Option(
         20,
         "-n",
@@ -75,20 +77,46 @@ def benchmark_run(
     judge_backend: str | None = typer.Option(
         None,
         "--judge-backend",
-        help="LLM provider for the judge (required with --judge).",
+        help="LLM provider for the judge (defaults to the global LLM backend when --judge is set).",
     ),
     judge_model: str | None = typer.Option(
         None,
         "--judge-model",
-        help="Model id for the judge (required with --judge).",
+        help="Model id for the judge (defaults to the global LLM model when --judge is set).",
+    ),
+    oracle_routing: bool = typer.Option(
+        False,
+        "--oracle-routing",
+        help="Use hidden problem labels for MCP server selection (oracle baseline).",
+    ),
+    tool_evolution: bool = typer.Option(
+        False,
+        "--tool-evolution/--no-tool-evolution",
+        help="Enable Tool Evolution as a module for the selected workflow.",
+    ),
+    tool_library: str | None = typer.Option(
+        None,
+        "--tool-library",
+        help="Persistent Tool Evolution library id; generated in batch mode when omitted.",
+    ),
+    evolution_mode: str = typer.Option(
+        ToolEvolutionMode.DUAL.value,
+        "--evolution-mode",
+        help="Tool Evolution mode: mastery, distill, dual, dual-no-validation, dual-no-dedup.",
     ),
 ) -> None:
     """Run one benchmark row from CSV, or a single case when SCENARIO and --problem are set."""
-    if run_judge:
-        if not judge_backend or not judge_model:
-            raise typer.BadParameter("--judge-backend and --judge-model are required when --judge is set.")
-    elif judge_backend is not None or judge_model is not None:
+    if not run_judge and (judge_backend is not None or judge_model is not None):
         raise typer.BadParameter("Pass --judge to enable LLM judge; omit --judge-backend/--judge-model otherwise.")
+    judge_backend = judge_backend or DEFAULT_LLM_BACKEND
+    judge_model = judge_model or DEFAULT_MODEL
+    try:
+        ToolEvolutionMode(evolution_mode)
+    except ValueError as exc:
+        raise typer.BadParameter(
+            "evolution_mode must be one of "
+            + ", ".join(item.value for item in ToolEvolutionMode)
+        ) from exc
 
     if scenario is not None and csv is not None:
         raise typer.BadParameter("Use either SCENARIO (single-case mode) or --csv (batch mode), not both.")
@@ -117,6 +145,10 @@ def benchmark_run(
             run_judge=run_judge,
             judge_llm_backend=judge_backend,
             judge_model=judge_model,
+            oracle_routing=oracle_routing,
+            tool_evolution_enabled=tool_evolution,
+            tool_library_id=tool_library or "default",
+            tool_evolution_mode=evolution_mode,
         )
         return
 
@@ -135,4 +167,8 @@ def benchmark_run(
         run_judge=run_judge,
         judge_llm_backend=judge_backend,
         judge_model=judge_model,
+        oracle_routing=oracle_routing,
+        tool_evolution_enabled=tool_evolution,
+        tool_library_id=tool_library,
+        tool_evolution_mode=evolution_mode,
     )

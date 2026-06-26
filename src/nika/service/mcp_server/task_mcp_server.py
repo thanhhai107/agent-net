@@ -31,7 +31,7 @@ class SubmissionFormat(BaseModel):
         description=(
             "The name(s) of the identified root cause(s) of the network anomaly. "
             "MUST be from the provided list of root cause names. "
-            "Get the names from the 'list_avail_problems()' tool.",
+            "Get the names from the 'list_avail_problems()' tool."
         ),
     )
 
@@ -62,6 +62,14 @@ def submit(
         faulty_devices: List of localized devices that are identified as faulty.
         root_cause_name: The name(s) of the identified root cause(s) of the network anomaly. MUST be selected from the result of 'list_avail_problems' tool.
     """
+    available = set(_list_avail_problems())
+    invalid = sorted(set(root_cause_name) - available)
+    if invalid:
+        return [
+            "Submission rejected: root_cause_name must use exact canonical IDs "
+            f"from list_avail_problems(). Invalid values: {invalid}"
+        ]
+
     submission_dict = {
         "is_anomaly": is_anomaly,
         "faulty_devices": faulty_devices,

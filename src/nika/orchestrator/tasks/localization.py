@@ -96,9 +96,19 @@ class LocalizationTask(TaskBase):
             gt = LocalizationSubmission.model_validate(gt)
         gt_components_raw = gt.faulty_devices if gt else []
 
-        # 4. Get normalized component sets
-        correct_components = set([c for c in gt_components_raw])
-        submitted_components_norm = set([c for c in submitted_components])
+        # 4. Get normalized component sets. Device identifiers in benchmark
+        # topology files are lower-case, while LLMs often emit display-cased
+        # variants such as ``PC2``. Treat those as the same component.
+        correct_components = {
+            str(component).strip().lower()
+            for component in gt_components_raw
+            if str(component).strip()
+        }
+        submitted_components_norm = {
+            str(component).strip().lower()
+            for component in submitted_components
+            if str(component).strip()
+        }
 
         # 5. Calculate precision, recall, F1 score
         tp = len(correct_components & submitted_components_norm)

@@ -2,6 +2,8 @@
 
 import typer
 
+from agent.llm.model_factory import DEFAULT_LLM_BACKEND, DEFAULT_MODEL
+
 eval_app = typer.Typer(help="Evaluate a completed agent session.")
 
 
@@ -21,12 +23,12 @@ def eval_metrics(
 @eval_app.command("judge")
 def eval_judge(
     judge_backend: str = typer.Option(
-        ...,
+        DEFAULT_LLM_BACKEND,
         "-b",
         "--backend",
         help="LLM provider for the judge (openai, ollama, deepseek, netmind).",
     ),
-    judge_model: str = typer.Option(..., "-m", "--model", help="Judge model id."),
+    judge_model: str = typer.Option(DEFAULT_MODEL, "-m", "--model", help="Judge model id."),
     session_id: str | None = typer.Option(None, "--session-id", help="Target session id (lab_hash)."),
 ) -> None:
     """Run LLM-as-judge on a closed session; write llm_judge.json."""

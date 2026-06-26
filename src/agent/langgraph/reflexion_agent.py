@@ -19,7 +19,8 @@ from typing_extensions import TypedDict
 from agent.langgraph.domain_agents.diagnosis_agent import DiagnosisAgent
 from agent.langgraph.domain_agents.submission_agent import SubmissionAgent
 from agent.langgraph.workflow_models import ReflexionEvaluation, ReflexionMemory
-from agent.llm.model_factory import load_model
+from agent.llm.model_factory import DEFAULT_LLM_BACKEND, DEFAULT_MODEL, load_model
+from agent.tool_evolution.integration import write_tool_evolution_session
 from agent.utils.loggers import AgentCallbackLogger
 from nika.utils.logger import system_logger
 from nika.utils.session import Session
@@ -92,10 +93,14 @@ class ReflexionAgent:
     def __init__(
         self,
         session_id: str,
-        llm_backend: str = "openai",
-        model: str = "gpt-5-mini",
+        llm_backend: str = DEFAULT_LLM_BACKEND,
+        model: str = DEFAULT_MODEL,
         max_steps: int = 20,
         max_attempts: int = 3,
+        oracle_routing: bool = False,
+        tool_evolution_enabled: bool = False,
+        tool_library_id: str = "default",
+        tool_evolution_mode: str = "dual",
     ) -> None:
         if max_steps < 1:
             raise ValueError("max_steps must be >= 1")
@@ -117,12 +122,17 @@ class ReflexionAgent:
             llm_backend=llm_backend,
             model=model,
             scenario_name=self.session.scenario_name,
-            problem_names=self.session.problem_names,
+            problem_names=getattr(self.session, "problem_names", []),
+            oracle_routing=oracle_routing,
+            tool_evolution_enabled=tool_evolution_enabled,
+            tool_library_id=tool_library_id,
+            tool_evolution_mode=tool_evolution_mode,
         )
         asyncio.run(diagnosis.load_tools())
+        self.tool_evolution_runtime = diagnosis.tool_evolution_runtime
         self.actor = create_agent(
             model=self.llm,
-            system_prompt=ACTOR_PROMPT,
+            system_prompt=ACTOR_PROMPT + diagnosis.prompt_suffix(),
             tools=diagnosis.tools,
             name="ReflexionActor",
         )
@@ -198,41 +208,49 @@ class ReflexionAgent:
         return trace
 
     async def run(self, task_description: str) -> dict[str, Any]:
+        problem_names = getattr(self.session, "problem_names", [])
         with ls.tracing_context(
             project_name=os.getenv("LANGSMITH_PROJECT", "NIKA"),
             metadata={
                 "scenario": self.session.scenario_name,
-                "problem": self.session.problem_names[0],
+                "problem": problem_names[0] if problem_names else "",
                 "topo_size": self.session.scenario_topo_size,
-                "model": self.session.model,
+                "model": getattr(self.session, "model", ""),
                 "agent": "reflexion",
                 "max_attempts": self.max_attempts,
             },
         ):
-            return await self.graph.ainvoke(
-                {
-                    "task_description": task_description,
-                    "attempt_count": 0,
-                    "attempt_report": "",
-                    "attempt_error": "",
-                    "attempt_trace": [],
-                    "diagnosis_report": "",
-                    "best_score": -1.0,
-                    "evaluation_failed": False,
-                    "memories": [],
-                },
-                config={
-                    "callbacks": [self.langfuse_handler],
-                    "recursion_limit": self.max_attempts * 4 + 4,
-                },
-            )
+            try:
+                return await self.graph.ainvoke(
+                    {
+                        "task_description": task_description,
+                        "attempt_count": 0,
+                        "attempt_report": "",
+                        "attempt_error": "",
+                        "attempt_trace": [],
+                        "diagnosis_report": "",
+                        "best_score": -1.0,
+                        "evaluation_failed": False,
+                        "memories": [],
+                    },
+                    config={
+                        "callbacks": [self.langfuse_handler],
+                        "recursion_limit": self.max_attempts * 4 + 4,
+                    },
+                )
+            finally:
+                write_tool_evolution_session(
+                    self.tool_evolution_runtime,
+                    self.session_dir,
+                )
 
     async def _attempt(self, state: ReflexionState) -> dict[str, Any]:
         attempt_count = state.get("attempt_count", 0) + 1
         callback = self._callback(f"attempt_{attempt_count}")
+        task_description = state.get("task_description", "")
         prompt = json.dumps(
             {
-                "task": state["task_description"],
+                "task": task_description,
                 "attempt": attempt_count,
                 "max_attempts": self.max_attempts,
                 "tool_step_limit": self.max_steps,
@@ -281,11 +299,12 @@ class ReflexionAgent:
             }
 
     async def _evaluate(self, state: ReflexionState) -> dict[str, Any]:
-        attempt_count = state["attempt_count"]
+        attempt_count = state.get("attempt_count", 0)
         callback = self._callback(f"evaluator_{attempt_count}")
+        task_description = state.get("task_description", "")
         payload = json.dumps(
             {
-                "task": state["task_description"],
+                "task": task_description,
                 "attempt": attempt_count,
                 "attempt_report": state.get("attempt_report", ""),
                 "attempt_error": state.get("attempt_error", ""),
@@ -325,43 +344,14 @@ class ReflexionAgent:
                 update["best_score"] = 0.0
             return update
 
-    def _fallback_memory(self, state: ReflexionState) -> ReflexionMemory:
-        evaluation = state.get("evaluation")
-        if evaluation is not None:
-            feedback = (
-                evaluation.failure_reasons
-                + evaluation.contradictions
-                + evaluation.missing_evidence
-            )
-        else:
-            feedback = []
-        attempt_error = state.get("attempt_error", "").strip()
-        if attempt_error:
-            feedback.append(attempt_error)
-        if not feedback:
-            feedback.append("The prior attempt could not be reliably evaluated.")
-        return ReflexionMemory(
-            summary="The previous attempt did not produce a verified complete diagnosis.",
-            lessons=feedback,
-            next_strategy=[
-                "Start from the strongest direct anomaly signal.",
-                "Use fault-specific tools and finish with an evidence-backed report.",
-            ],
-            evidence_to_collect=(
-                evaluation.missing_evidence if evaluation is not None else []
-            ),
-            avoid_repeating=[
-                "Do not infer whole-network health from one healthy subsystem."
-            ],
-        )
-
     async def _reflect(self, state: ReflexionState) -> dict[str, Any]:
-        attempt_count = state["attempt_count"]
+        attempt_count = state.get("attempt_count", 0)
         callback = self._callback(f"reflexion_{attempt_count}")
         evaluation = state.get("evaluation")
+        task_description = state.get("task_description", "")
         payload = json.dumps(
             {
-                "task": state["task_description"],
+                "task": task_description,
                 "attempt": attempt_count,
                 "attempt_report": state.get("attempt_report", ""),
                 "attempt_error": state.get("attempt_error", ""),
@@ -389,11 +379,11 @@ class ReflexionAgent:
                 {
                     "message": (
                         f"Reflexion memory generation failed on attempt {attempt_count}; "
-                        f"using deterministic fallback: {exc}"
+                        f"no memory was appended: {exc}"
                     )
                 },
             )
-            memory = self._fallback_memory(state)
+            return {"memories": state.get("memories", [])}
         return {"memories": [*state.get("memories", []), memory]}
 
     async def _submit(self, state: ReflexionState) -> dict[str, Any]:

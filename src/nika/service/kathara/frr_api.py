@@ -66,6 +66,11 @@ class FRRAPIMixin:
         command = "vtysh -c 'show ip bgp'"
         return self.exec_cmd(device_name, command)
 
+    def frr_show_bgp_summary(self: _SupportsBase, device_name: str) -> list[str]:
+        """Show BGP peers and session states without changing router state."""
+        command = "vtysh -c 'show bgp summary'"
+        return self.exec_cmd(device_name, command)
+
     def frr_conf(self: _SupportsBase, device_name: str, conf_commands: list[str]) -> list[str]:
         """
         Show the FRR configuration.

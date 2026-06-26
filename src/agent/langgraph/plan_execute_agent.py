@@ -24,7 +24,8 @@ from agent.langgraph.workflow_models import (
     ReplanDecision,
     StepResult,
 )
-from agent.llm.model_factory import load_model
+from agent.llm.model_factory import DEFAULT_LLM_BACKEND, DEFAULT_MODEL, load_model
+from agent.tool_evolution.integration import write_tool_evolution_session
 from agent.utils.loggers import AgentCallbackLogger
 from nika.utils.logger import system_logger
 from nika.utils.session import Session
@@ -79,9 +80,13 @@ class PlanExecuteAgent:
     def __init__(
         self,
         session_id: str,
-        llm_backend: str = "openai",
-        model: str = "gpt-5-mini",
+        llm_backend: str = DEFAULT_LLM_BACKEND,
+        model: str = DEFAULT_MODEL,
         max_steps: int = 20,
+        oracle_routing: bool = False,
+        tool_evolution_enabled: bool = False,
+        tool_library_id: str = "default",
+        tool_evolution_mode: str = "dual",
     ) -> None:
         if max_steps < 1:
             raise ValueError("max_steps must be >= 1")
@@ -101,11 +106,16 @@ class PlanExecuteAgent:
             model=model,
             scenario_name=self.session.scenario_name,
             problem_names=self.session.problem_names,
+            oracle_routing=oracle_routing,
+            tool_evolution_enabled=tool_evolution_enabled,
+            tool_library_id=tool_library_id,
+            tool_evolution_mode=tool_evolution_mode,
         )
         asyncio.run(diagnosis.load_tools())
+        self.tool_evolution_runtime = diagnosis.tool_evolution_runtime
         self.executor = create_agent(
             model=self.llm,
-            system_prompt=EXECUTOR_PROMPT,
+            system_prompt=EXECUTOR_PROMPT + diagnosis.prompt_suffix(),
             tools=diagnosis.tools,
             name="PlanExecutor",
         )
@@ -170,21 +180,27 @@ class PlanExecuteAgent:
                 "agent": "plan-execute",
             },
         ):
-            return await self.graph.ainvoke(
-                {
-                    "task_description": task_description,
-                    "plan": [],
-                    "completed_steps": [],
-                    "executed_steps": 0,
-                    "diagnosis_report": "",
-                    "planning_failed": False,
-                    "messages": [HumanMessage(content=task_description)],
-                },
-                config={
-                    "callbacks": [self.langfuse_handler],
-                    "recursion_limit": self.max_steps * 3 + 10,
-                },
-            )
+            try:
+                return await self.graph.ainvoke(
+                    {
+                        "task_description": task_description,
+                        "plan": [],
+                        "completed_steps": [],
+                        "executed_steps": 0,
+                        "diagnosis_report": "",
+                        "planning_failed": False,
+                        "messages": [HumanMessage(content=task_description)],
+                    },
+                    config={
+                        "callbacks": [self.langfuse_handler],
+                        "recursion_limit": self.max_steps * 3 + 10,
+                    },
+                )
+            finally:
+                write_tool_evolution_session(
+                    self.tool_evolution_runtime,
+                    self.session_dir,
+                )
 
     async def _plan(self, state: PlanExecuteState) -> dict[str, Any]:
         callback = self._callback("planner")

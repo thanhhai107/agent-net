@@ -3,8 +3,6 @@ import logging
 import random
 from typing import Iterable, Optional
 
-from nika.net_env.base import NetworkEnvBase
-from nika.net_env.intradomain_routing.ospf_enterprise.lab_static import OSPFEnterpriseStatic
 from nika.net_env.net_env_pool import get_net_env_instance
 from nika.service.kathara import KatharaAPIALL
 
@@ -12,7 +10,7 @@ from nika.service.kathara import KatharaAPIALL
 class WebBrowsingTrafficGenerator:
     def __init__(
         self,
-        scenario_name: NetworkEnvBase = OSPFEnterpriseStatic(),
+        scenario_name: str = "ospf_enterprise_static",
         request_delay_range: tuple[float, float] = (1.0, 5.0),
         pages_per_session_range: tuple[int, int] = (3, 10),
         loop_forever: bool = True,
@@ -88,8 +86,7 @@ class WebBrowsingTrafficGenerator:
 
 
 async def main():
-    net_env = OSPFEnterpriseStatic()
-    traffic_generator = WebBrowsingTrafficGenerator(net_env=net_env)
+    traffic_generator = WebBrowsingTrafficGenerator()
 
     traffic_task = asyncio.create_task(traffic_generator.generate_traffic())
     try:

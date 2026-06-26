@@ -127,13 +127,43 @@ class AgentCallbackLogger(BaseCallbackHandler):
             )
 
     def on_tool_start(self, serialized: dict[str, Any], input_str: str, **kwargs) -> None:
-        self._logger.log("tool_start", {"tool": serialized, "input": input_str})
+        self._logger.log(
+            "tool_start",
+            {
+                "tool": serialized,
+                "input": input_str,
+                "run_id": str(kwargs.get("run_id", "")),
+            },
+        )
 
     def on_tool_end(self, output: ToolMessage, **kwargs) -> None:
-        if output.status == "error":
-            self._logger.log("tool_error", {"output": output})
+        serialized_output = getattr(output, "content", output)
+        status = getattr(output, "status", None)
+        if status == "error":
+            self._logger.log(
+                "tool_error",
+                {
+                    "output": serialized_output,
+                    "status": status,
+                    "run_id": str(kwargs.get("run_id", "")),
+                },
+            )
             return
-        self._logger.log("tool_end", {"output": output, "output_type": type(output).__name__})
+        self._logger.log(
+            "tool_end",
+            {
+                "output": serialized_output,
+                "status": status,
+                "output_type": type(output).__name__,
+                "run_id": str(kwargs.get("run_id", "")),
+            },
+        )
 
     def on_tool_error(self, error, **kwargs) -> None:
-        self._logger.log("tool_error", {"error": str(error)})
+        self._logger.log(
+            "tool_error",
+            {
+                "error": str(error),
+                "run_id": str(kwargs.get("run_id", "")),
+            },
+        )

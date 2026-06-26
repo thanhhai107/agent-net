@@ -106,6 +106,7 @@ class CodexWorker:
         timeout: int = 600,
         scenario_name: str = "",
         problem_names: list[str] | None = None,
+        oracle_routing: bool = False,
         *,
         stream_output: bool = True,
     ) -> None:
@@ -123,6 +124,7 @@ class CodexWorker:
         self.timeout = timeout
         self.scenario_name = scenario_name
         self.problem_names = problem_names or []
+        self.oracle_routing = oracle_routing
 
         self.workspace = Path(session_dir) / "codex_workspace"
         self._codex_home = self.workspace / ".codex_home"
@@ -160,7 +162,11 @@ class CodexWorker:
         if self.phase == "submission":
             servers = mcp_cfg.load_config(if_submit=True)
         else:
-            server_names = select_diagnosis_servers(self.scenario_name, self.problem_names)
+            server_names = select_diagnosis_servers(
+                self.scenario_name,
+                self.problem_names,
+                oracle=self.oracle_routing,
+            )
             servers = mcp_cfg.load_filtered_config(server_names)
 
         self._logger.log(

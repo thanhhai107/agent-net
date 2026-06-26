@@ -5,9 +5,28 @@ from pathlib import Path
 from typing import Any
 
 from nika.config import RESULTS_DIR
-from nika.evaluator.result_log import RUN_FILENAME, is_finished_session, iter_session_dirs
 from nika.utils.session_resolve import resolve_running_session_id
 from nika.utils.session_store import SessionStore
+
+
+RUN_FILENAME = "run.json"
+
+
+def _is_finished_session(run_meta: dict[str, Any]) -> bool:
+    return run_meta.get("status") == "finished" or run_meta.get("end_time") is not None
+
+
+def _iter_session_dirs() -> list[Path]:
+    root = Path(RESULTS_DIR)
+    if not root.exists():
+        return []
+    return [
+        entry
+        for entry in sorted(root.iterdir())
+        if entry.is_dir()
+        and entry.name != "0_summary"
+        and (entry / RUN_FILENAME).exists()
+    ]
 
 
 class Session:
@@ -39,6 +58,7 @@ class Session:
                 "scenario_name": self.scenario_name,
                 "scenario_topo_size": self.scenario_topo_size,
                 "scenario_params": self.scenario_params,
+                "topology": self.topology,
                 "session_dir": self.session_dir,
                 "status": "running",
             }
@@ -58,10 +78,10 @@ class Session:
             return self._load_closed_session_from_id(session_id)
 
         candidates: list[tuple[float, dict]] = []
-        for session_dir in iter_session_dirs():
+        for session_dir in _iter_session_dirs():
             run_path = session_dir / RUN_FILENAME
             run_meta = json.loads(run_path.read_text(encoding="utf-8"))
-            if not is_finished_session(run_meta):
+            if not _is_finished_session(run_meta):
                 continue
             sid = run_meta.get("session_id") or session_dir.name
             if self._session_is_still_running(sid):
@@ -99,7 +119,7 @@ class Session:
             )
 
         run_meta = json.loads(run_path.read_text(encoding="utf-8"))
-        if not is_finished_session(run_meta):
+        if not _is_finished_session(run_meta):
             raise ValueError(
                 f"Session '{session_id}' is not closed. Run `nika session close` before running eval."
             )
@@ -132,20 +152,22 @@ class Session:
     def update_session(self, key: str, value: Any):
         setattr(self, key, value)
         if hasattr(self, "problem_names") and hasattr(self, "session_id"):
-            if len(self.problem_names) > 1:
+            problem_names = list(getattr(self, "problem_names", []) or [])
+            if len(problem_names) > 1:
                 self.root_cause_name = "multiple_faults"
-            else:
-                self.root_cause_name = self.problem_names[0]
+            elif problem_names:
+                self.root_cause_name = problem_names[0]
         self._write_session()
 
     def update_run_meta(self, key: str, value: Any):
         """Update ``run.json`` for a closed session (no runtime session document)."""
         setattr(self, key, value)
         if hasattr(self, "problem_names") and hasattr(self, "session_id"):
-            if len(self.problem_names) > 1:
+            problem_names = list(getattr(self, "problem_names", []) or [])
+            if len(problem_names) > 1:
                 self.root_cause_name = "multiple_faults"
-            else:
-                self.root_cause_name = self.problem_names[0]
+            elif problem_names:
+                self.root_cause_name = problem_names[0]
         self._write_run_json({k: v for k, v in self.__dict__.items() if k != "store"})
 
     def write_gt(self, gt: dict[str, Any]):
