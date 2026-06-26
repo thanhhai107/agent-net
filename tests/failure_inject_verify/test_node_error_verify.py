@@ -33,10 +33,10 @@ from nika.orchestrator.problems.network_node_error.swicth_router_failure import 
     FrrDownParams,
 )
 
-from tests.integration_base import FailureInjectVerifyTestCase
+from tests.integration_base import PerTestEnvTestCase
 
 
-class Bmv2SwitchDownVerifyTest(FailureInjectVerifyTestCase):
+class Bmv2SwitchDownVerifyTest(PerTestEnvTestCase):
     SCENARIO = "p4_counter"
 
     def test_bmv2_switch_down_verify_true_after_inject(self):
@@ -75,7 +75,7 @@ class Bmv2SwitchDownVerifyTest(FailureInjectVerifyTestCase):
         self.assertTrue(result["verified"], f"Expected P4 table misconfig to be verified: {result}")
 
 
-class P4MPLSVerifyTest(FailureInjectVerifyTestCase):
+class P4MPLSVerifyTest(PerTestEnvTestCase):
     SCENARIO = "p4_mpls"
 
     def test_p4_mpls_label_limit_exceeded_verify_true_after_inject(self):
@@ -87,7 +87,7 @@ class P4MPLSVerifyTest(FailureInjectVerifyTestCase):
         self.assertTrue(result["details"]["const_modified"])
 
 
-class FrrDownVerifyTest(FailureInjectVerifyTestCase):
+class FrrDownVerifyTest(PerTestEnvTestCase):
     SCENARIO = "simple_bgp"
 
     def test_frr_down_verify_true_after_inject(self):
@@ -98,7 +98,7 @@ class FrrDownVerifyTest(FailureInjectVerifyTestCase):
         self.assertTrue(result["verified"], f"Expected FRR down to be verified: {result}")
 
 
-class SDNControllerVerifyTest(FailureInjectVerifyTestCase):
+class SDNControllerVerifyTest(PerTestEnvTestCase):
     SCENARIO = "sdn_star"
     ENV_RUN_ARGS = ["-t", "s"]
 

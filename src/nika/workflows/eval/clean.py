@@ -8,6 +8,7 @@ from pathlib import Path
 
 from nika.config import RESULTS_DIR, SESSIONS_DIR
 from nika.utils.session import find_session_dir
+from nika.utils.session_index import SessionIndex
 from nika.utils.session_store import SessionStore
 
 
@@ -21,8 +22,10 @@ def remove_session_results(
     session_id: str,
     *,
     results_dir: str | Path | None = None,
+    db_path: str | Path | None = None,
 ) -> bool:
     """Remove a session result directory by id, including nested benchmark runs."""
+    SessionIndex(db_path).purge(session_id)
     try:
         session_results = find_session_dir(session_id, results_dir=results_dir)
     except FileNotFoundError:
@@ -35,13 +38,15 @@ def run_eval_clean(
     *,
     results_dir: str | Path | None = None,
     sessions_dir: str | Path | None = None,
+    db_path: str | Path | None = None,
     force: bool = False,
 ) -> EvalCleanReport:
-    """Delete all contents under ``results/`` and all session JSON files."""
+    """Delete all contents under ``results/``, session JSON files, and the index."""
     results_root = Path(results_dir or RESULTS_DIR)
     sessions_root = Path(sessions_dir or SESSIONS_DIR)
+    index = SessionIndex(db_path)
 
-    running = SessionStore(sessions_root).list_running_sessions()
+    running = SessionStore(sessions_root, db_path or index.db_path).list_running_sessions()
     if running and not force:
         ids = ", ".join(str(row.get("session_id", "?")) for row in running)
         raise ValueError(
@@ -63,6 +68,8 @@ def run_eval_clean(
             else:
                 path.unlink()
             results_entries_removed += 1
+
+    index.truncate()
 
     return EvalCleanReport(
         session_files_removed=session_files_removed,

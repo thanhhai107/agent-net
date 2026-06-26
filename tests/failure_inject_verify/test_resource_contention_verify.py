@@ -23,10 +23,10 @@ from nika.orchestrator.problems.resource_contention.tcp_issue import (
     ReceiverResourceContentionDetection,
     SenderResourceContentionDetection,
 )
-from tests.integration_base import FailureInjectVerifyTestCase
+from tests.integration_base import PerTestEnvTestCase
 
 
-class StressVerifyTest(FailureInjectVerifyTestCase):
+class StressVerifyTest(PerTestEnvTestCase):
     """Tests for stress-ng based faults."""
 
     SCENARIO = "ospf_enterprise_dhcp"
@@ -54,7 +54,7 @@ class StressVerifyTest(FailureInjectVerifyTestCase):
         self.assertTrue(result["verified"], f"Expected stress-ng running: {result}")
 
 
-class DNSLookupLatencyVerifyTest(FailureInjectVerifyTestCase):
+class DNSLookupLatencyVerifyTest(PerTestEnvTestCase):
     SCENARIO = "dc_clos_service"
     ENV_RUN_ARGS = ["-t", "s"]
 
@@ -68,7 +68,7 @@ class DNSLookupLatencyVerifyTest(FailureInjectVerifyTestCase):
         self.assertIn("delay", result["details"]["tc_output"])
 
 
-class LinkIssueVerifyTest(FailureInjectVerifyTestCase):
+class LinkIssueVerifyTest(PerTestEnvTestCase):
     SCENARIO = "simple_bgp"
 
     def test_link_high_packet_corruption_verify_true_after_inject(self):
@@ -90,7 +90,7 @@ class LinkIssueVerifyTest(FailureInjectVerifyTestCase):
         self.assertIn("tbf", result["details"]["tc_output"])
 
 
-class IncastTrafficLimitationVerifyTest(FailureInjectVerifyTestCase):
+class IncastTrafficLimitationVerifyTest(PerTestEnvTestCase):
     """Incast limitation targets web servers; requires dc_clos_service, not simple_bgp."""
 
     SCENARIO = "dc_clos_service"

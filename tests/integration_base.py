@@ -202,7 +202,3 @@ class OrderedPipelineTestCase(CliIntegrationTestCase):
             for line in (self.session_dir / filename).read_text(encoding="utf-8").splitlines()
             if line.strip()
         ]
-
-
-# Backward-compatible alias used by failure-inject verify tests.
-FailureInjectVerifyTestCase = PerTestEnvTestCase

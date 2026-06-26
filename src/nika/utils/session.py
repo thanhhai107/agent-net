@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from nika.config import RESULTS_DIR
+from nika.utils.session_index import extract_gt_fields, extract_index_fields
 from nika.utils.session_resolve import resolve_running_session_id
 from nika.utils.session_store import SessionStore
 
@@ -158,7 +159,9 @@ class Session:
         """Write/update run.json in the session results directory."""
         os.makedirs(self.session_dir, exist_ok=True)
         run_path = os.path.join(self.session_dir, "run.json")
-        serializable = {k: v for k, v in payload.items() if k != "store"}
+        serializable = {
+            k: v for k, v in payload.items() if k not in ("store", "failure_injections")
+        }
         with open(run_path, "w", encoding="utf-8") as f:
             json.dump(serializable, f, indent=2, default=str)
 
@@ -181,12 +184,22 @@ class Session:
                 self.root_cause_name = "multiple_faults"
             elif problem_names:
                 self.root_cause_name = problem_names[0]
-        self._write_run_json({k: v for k, v in self.__dict__.items() if k != "store"})
+        payload = {k: v for k, v in self.__dict__.items() if k != "store"}
+        self._write_run_json(payload)
+        if hasattr(self, "session_id"):
+            fields = extract_index_fields(payload)
+            fields["session_id"] = self.session_id
+            fields.setdefault("status", "finished")
+            self.store.index.upsert(fields)
 
     def write_gt(self, gt: dict[str, Any]):
         os.makedirs(self.session_dir, exist_ok=True)
         with open(self.session_dir + "/ground_truth.json", "w") as f:
             f.write(json.dumps(gt, indent=4))
+        if hasattr(self, "session_id"):
+            self.store.index.upsert(
+                {"session_id": self.session_id, **extract_gt_fields(gt)},
+            )
 
     def clear_session(self):
         if not hasattr(self, "session_id"):

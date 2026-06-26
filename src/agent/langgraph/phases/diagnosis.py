@@ -6,22 +6,15 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 from agent.llm.model_factory import DEFAULT_LLM_BACKEND, DEFAULT_MODEL, load_model
 from agent.tool_evolution.runtime import ToolEvolutionRuntime
 from agent.utils.mcp_servers import MCPServerConfig, select_diagnosis_servers
+from agent.utils.phases import DIAGNOSIS
+from agent.utils.template import OVERALL_DIAGNOSIS_PROMPT
 from nika.utils.session import Session
 
 load_dotenv()
 
-OVERALL_DIAGNOSIS_PROMPT = """\
-    You are a network troubleshooting expert.
-    Focus on (1) detecting if there is an anomaly, (2) localizing the faulty devices, and (3) identifying the root cause.
 
-    Basic requirements:
-    - Use the provided tools to gather necessary information.
-    - Do not provide mitigation unless explicitly required.
-"""
-
-
-class DiagnosisAgent:
-    """An agent that performs the total process of network diagnosis using the ReAct framework."""
+class DiagnosisPhase:
+    """LangChain ReAct worker for the diagnosis phase."""
 
     def __init__(
         self,
@@ -71,10 +64,9 @@ class DiagnosisAgent:
         return "\n".join(parts)
 
     def get_agent(self):
-        agent = create_agent(
+        return create_agent(
             model=self.llm,
             system_prompt=OVERALL_DIAGNOSIS_PROMPT + self.prompt_suffix(),
             tools=self.tools,
-            name="DiagnosisAgent",
+            name=DIAGNOSIS,
         )
-        return agent

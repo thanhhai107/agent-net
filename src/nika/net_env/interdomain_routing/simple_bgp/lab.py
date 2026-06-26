@@ -54,17 +54,3 @@ class SimpleBGP(NetworkEnvBase):
 
         # load machines
         self.load_machines()
-
-
-if __name__ == "__main__":
-    simple_bgp = SimpleBGP()
-    print(simple_bgp)
-    if simple_bgp.lab_exists():
-        print("Lab exists, undeploying it...")
-        simple_bgp.undeploy()
-        # simple_bgp.instance.undeploy_lab(lab_name=simple_bgp.lab.name, selected_machines=["router1"])
-        print("Lab undeployed")
-
-    print("Deploying lab...")
-    simple_bgp.deploy()
-    print("Lab deployed")

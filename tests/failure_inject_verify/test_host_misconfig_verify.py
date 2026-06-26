@@ -25,13 +25,13 @@ from nika.orchestrator.problems.end_host_failure.host_misconfig import (
     HostMissingIPParams,
 )
 
-from tests.integration_base import FailureInjectVerifyTestCase
+from tests.integration_base import PerTestEnvTestCase
 
 HOST = "pc1"
 HOST2 = "pc2"
 
 
-class HostMisconfigVerifyIntegrationTest(FailureInjectVerifyTestCase):
+class HostMisconfigVerifyIntegrationTest(PerTestEnvTestCase):
     """Verify that verify_fault correctly reflects real container network state."""
 
     SCENARIO = "simple_bgp"

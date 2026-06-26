@@ -14,12 +14,12 @@ class SdkAgent:
     def __init__(
         self,
         session_id: str,
-        llm_backend: str = "claude",
+        llm_provider: str = "claude",
         model: str = "claude-sonnet-4-20250514",
         max_steps: int = DEFAULT_MAX_STEPS,
     ) -> None:
         self.session_id = session_id
-        self.llm_backend = llm_backend
+        self.llm_provider = llm_provider
         self.model = model
         self.max_steps = max_steps
 

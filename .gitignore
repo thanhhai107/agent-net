@@ -21,3 +21,5 @@ uv.lock
 .pytest_cache
 .codex/
 .DS_Store
+.claude/
+.pytest_cache/

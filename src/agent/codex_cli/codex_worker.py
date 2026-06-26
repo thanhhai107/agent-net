@@ -18,7 +18,7 @@ isolated, per-session workspace.  It handles:
 * **Output capture** – the final assistant message is written by
   ``--output-last-message``; JSONL events emitted via ``--json`` are streamed
   line-by-line, logged to ``messages.jsonl`` in real time, and pretty-printed to
-  the terminal via :func:`~agent.cli.codex_display.format_codex_event`.
+  the terminal via :func:`~agent.codex_cli.codex_display.format_codex_event`.
 """
 
 import asyncio
@@ -28,9 +28,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-from agent.cli.codex_display import format_codex_event
+from agent.codex_cli.codex_display import format_codex_event
 from agent.utils.loggers import MessageLogger
 from agent.utils.mcp_servers import MCPServerConfig, select_diagnosis_servers
+from agent.utils.phases import DIAGNOSIS, PHASES, SUBMISSION
 
 REASONING_EFFORT_LEVELS = ("none", "minimal", "low", "medium", "high", "xhigh")
 
@@ -81,7 +82,7 @@ class CodexWorker:
     session_dir:
         Absolute path to the session results directory.
     phase:
-        ``"diagnosis"`` or ``"submission"``.
+        One of :data:`~agent.utils.phases.PHASES` (``diagnosis`` or ``submission``).
     model:
         Codex model name forwarded to ``codex exec -m``.
     reasoning_effort:
@@ -106,8 +107,8 @@ class CodexWorker:
         *,
         stream_output: bool = True,
     ) -> None:
-        if phase not in ("diagnosis", "submission"):
-            raise ValueError(f"phase must be 'diagnosis' or 'submission', got {phase!r}")
+        if phase not in PHASES:
+            raise ValueError(f"phase must be one of {PHASES}, got {phase!r}")
         if reasoning_effort is not None and reasoning_effort not in REASONING_EFFORT_LEVELS:
             raise ValueError(
                 f"reasoning_effort must be one of {REASONING_EFFORT_LEVELS}, got {reasoning_effort!r}"
@@ -122,7 +123,7 @@ class CodexWorker:
 
         self.workspace = Path(session_dir) / "codex_workspace"
         self._codex_home = self.workspace / ".codex_home"
-        self._logger = MessageLogger(agent=f"{phase}_agent_cli", session_dir=session_dir)
+        self._logger = MessageLogger(agent=phase, session_dir=session_dir)
         self._stream_output = stream_output
 
     # ------------------------------------------------------------------
@@ -153,7 +154,7 @@ class CodexWorker:
     def _write_mcp_config(self) -> None:
         mcp_cfg = MCPServerConfig(session_id=self.session_id)
 
-        if self.phase == "submission":
+        if self.phase == SUBMISSION:
             servers = mcp_cfg.load_config(if_submit=True)
         else:
             server_names = select_diagnosis_servers(self.scenario_name)
@@ -214,7 +215,7 @@ class CodexWorker:
             returncode, stderr_text = await self._stream_subprocess(proc)
         except asyncio.TimeoutError:
             self._logger.log("subprocess_timeout", {"phase": self.phase, "timeout_s": self.timeout})
-            return f"ERROR: {self.phase} agent timed out after {self.timeout}s"
+            return f"ERROR: {self.phase} phase timed out after {self.timeout}s"
         except FileNotFoundError:
             self._logger.log("subprocess_error", {"error": "codex binary not found in PATH"})
             return "ERROR: 'codex' not found in PATH — is Codex CLI installed?"
@@ -227,7 +228,7 @@ class CodexWorker:
             if self._stream_output and stderr_text.strip():
                 print(stderr_text, file=sys.stderr, flush=True)
             return (
-                f"ERROR: {self.phase} agent exited with code {returncode}. "
+                f"ERROR: {self.phase} phase exited with code {returncode}. "
                 f"stderr: {stderr_text[:400]}"
             )
 
@@ -237,7 +238,7 @@ class CodexWorker:
             return result
 
         self._logger.log("subprocess_error", {"error": "output file not created"})
-        return f"ERROR: {self.phase} agent produced no output"
+        return f"ERROR: {self.phase} phase produced no output"
 
     async def _stream_subprocess(self, proc: asyncio.subprocess.Process) -> tuple[int, str]:
         """Read Codex stdout line-by-line until the process exits."""

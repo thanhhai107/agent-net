@@ -94,9 +94,3 @@ class WebDoSRCA(WebDoSBase, RCATask):
         task_level=TaskLevel.RCA,
         description=TaskDescription.RCA,
     )
-
-
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    problem = WebDoSBase(scenario_name="dc_clos_service")
-    # problem.inject_fault()

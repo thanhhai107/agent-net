@@ -4,6 +4,7 @@ import asyncio
 import logging
 from dataclasses import replace
 
+from agent.claude_cli.config import resolve_claude_model
 from agent.composition import (
     AgentRunConfig,
     validate_agent_extensions,
@@ -16,12 +17,36 @@ from nika.utils.session import Session
 logging.basicConfig(level=logging.INFO)
 
 
-def start_agent(agent_config: AgentRunConfig, *, session_id: str | None = None) -> None:
+def _resolve_requested_model(
+    agent_config: AgentRunConfig,
+    *,
+    requested_model: str | None,
+) -> str:
+    if requested_model:
+        return requested_model
+    if agent_config.normalized_agent_type == "claude_cli":
+        return resolve_claude_model(None)
+    return agent_config.model
+
+
+def start_agent(
+    agent_config: AgentRunConfig,
+    *,
+    session_id: str | None = None,
+    requested_model: str | None = None,
+) -> None:
     """Load the running session, run the agent on ``task_description``, then end the session."""
     validate_agent_extensions(agent_config)
     session = Session()
     session.load_running_session(session_id=session_id)
-    agent_config = replace(agent_config, session_id=session.session_id)
+    agent_config = replace(
+        agent_config,
+        session_id=session.session_id,
+        model=_resolve_requested_model(
+            agent_config,
+            requested_model=requested_model,
+        ),
+    )
     validate_agent_composition(agent_config)
 
     session.update_session("agent_type", agent_config.agent_type)
@@ -49,7 +74,7 @@ def start_agent(agent_config: AgentRunConfig, *, session_id: str | None = None) 
         agent_type=agent_config.agent_type,
         model=agent_config.model,
     )
-    if agent_config.normalized_agent_type == "cli" and agent_config.stream_output:
+    if agent_config.normalized_agent_type in {"cli", "codex_cli"} and agent_config.stream_output:
         effort_line = (
             f" | Reasoning effort: {agent_config.reasoning_effort}"
             if agent_config.reasoning_effort
@@ -57,7 +82,7 @@ def start_agent(agent_config: AgentRunConfig, *, session_id: str | None = None) 
         )
         print(
             f"Session {session.session_id}\n"
-            f"Agent: cli | Model: {agent_config.model}{effort_line}\n"
+            f"Agent: {agent_config.agent_type} | Model: {agent_config.model}{effort_line}\n"
             f"Results: {session.session_dir}\n",
             flush=True,
         )
@@ -72,5 +97,5 @@ def start_agent(agent_config: AgentRunConfig, *, session_id: str | None = None) 
             session_id=session.session_id,
             agent_type=agent_config.agent_type,
         )
-    if agent_config.normalized_agent_type == "cli" and agent_config.stream_output:
+    if agent_config.normalized_agent_type in {"cli", "codex_cli"} and agent_config.stream_output:
         print(f"\nDone. Results saved to {session.session_dir}\n", flush=True)

@@ -258,13 +258,4 @@ async def exec_shell_dual(
 
 
 if __name__ == "__main__":
-    # Initialize and run the server
     mcp.run(transport="stdio")
-
-    # print(get_net_env_info())
-    # res = asyncio.run(get_reachability())
-    # print(res)
-    # res = exec_shell(host_name="pc1", command="ping -c 400 10.0.0.2")
-    # print(res)
-    # res = get_host_net_config("pc_2_1_1_1")
-    # print(res)

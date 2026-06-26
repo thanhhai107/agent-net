@@ -1,6 +1,7 @@
 """Troubleshooting agent implementations for NIKA."""
 
-from agent.cli.agent import CliAgent
+from agent.claude_cli.agent import ClaudeAgent
+from agent.codex_cli.agent import CodexCliAgent
 from agent.composition import (
     AgentRunConfig,
     HarnessConfig,
@@ -14,9 +15,10 @@ from agent.mock.mock_agent import MockAgent
 from agent.registry import create_agent
 
 __all__ = [
-    "BasicReActAgent",
     "AgentRunConfig",
-    "CliAgent",
+    "BasicReActAgent",
+    "ClaudeAgent",
+    "CodexCliAgent",
     "HarnessConfig",
     "MemoryConfig",
     "MockAgent",

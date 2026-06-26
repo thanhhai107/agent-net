@@ -123,18 +123,3 @@ class FRRAPIMixin:
 
 class KatharaFRRAPI(KatharaBaseAPI, FRRAPIMixin):
     pass
-
-
-if __name__ == "__main__":
-    lab_name = "simple_bgp"
-    kathara_api = KatharaFRRAPI(lab_name)
-    # print(kathara_api.frr_get_ospf_conf("bb0"))
-    # print(kathara_api.frr_show_route("bb0"))
-    # print(kathara_api.frr_show_ospf_route("bb1"))
-    # print(kathara_api.frr_show_ospf_neighbors("bb2"))
-    # print(kathara_api.frr_show_ospf_interfaces("bb3"))
-    # print(kathara_api.frr_show_ospf_database("bb4"))
-    # print(kathara_api.frr_show_ospf_database_router("bb0"))
-    # print(kathara_api.frr_show_bgp_conf("router1"))
-    # print(kathara_api.frr_conf("router1", ["router bgp 1", "bgp router-id 0.0.0.1"]))
-    print(kathara_api.frr_get_bgp_conf("router1"))

@@ -1,9 +1,9 @@
-"""File-based session store — replaces the previous SQLite backend.
+"""File-based session store with SQLite state index.
 
-Each session is persisted as ``runtime/sessions/{session_id}.json``.
+Each running session is persisted as ``runtime/sessions/{session_id}.json``.
 Failure injection records are stored inline under the ``failure_injections``
-list field of the same document, identified by a zero-based index within
-that list.
+list field of the same document. A SQLite index at ``runtime/sessions.db``
+tracks session state summaries for fast listing via ``nika session ps``.
 """
 
 import json
@@ -13,7 +13,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from nika.config import SESSIONS_DIR
+from nika.config import SESSIONS_DB, SESSIONS_DIR
+from nika.utils.session_index import SessionIndex
 
 
 def _now_iso() -> str:
@@ -21,9 +22,14 @@ def _now_iso() -> str:
 
 
 class SessionStore:
-    def __init__(self, sessions_dir: str | Path = SESSIONS_DIR) -> None:
+    def __init__(
+        self,
+        sessions_dir: str | Path = SESSIONS_DIR,
+        db_path: str | Path = SESSIONS_DB,
+    ) -> None:
         self.sessions_dir = Path(sessions_dir)
         os.makedirs(self.sessions_dir, exist_ok=True)
+        self.index = SessionIndex(db_path)
 
     def _path(self, session_id: str) -> Path:
         return Path(self.sessions_dir) / f"{session_id}.json"
@@ -50,6 +56,7 @@ class SessionStore:
         data.setdefault("updated_at", now)
         data.setdefault("failure_injections", [])
         self._write(data)
+        self.index.upsert_from_doc(data)
 
     def update_session(self, session_id: str, values: Mapping[str, Any]) -> None:
         data = self._read(session_id)
@@ -58,29 +65,29 @@ class SessionStore:
                 data[k] = v
         data["updated_at"] = _now_iso()
         self._write(data)
+        self.index.upsert_from_doc(data)
 
     def get_session(self, session_id: str) -> dict[str, Any]:
         return self._read(session_id)
 
     def delete_session(self, session_id: str) -> None:
         """Remove the runtime session document after results have been persisted."""
+        doc: dict[str, Any] | None = None
         path = self._path(session_id)
         if path.exists():
+            doc = json.loads(path.read_text(encoding="utf-8"))
             path.unlink()
+        if doc is not None:
+            doc["status"] = "finished"
+            self.index.mark_finished(session_id, doc=doc)
+        else:
+            self.index.mark_finished(session_id)
 
     def list_running_sessions(self) -> list[dict[str, Any]]:
-        result = []
-        sessions_path = Path(self.sessions_dir)
-        if not sessions_path.exists():
-            return result
-        for path in sorted(sessions_path.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
-            try:
-                data = json.loads(path.read_text(encoding="utf-8"))
-                if data.get("status") == "running":
-                    result.append(data)
-            except Exception:
-                pass
-        return result
+        return self.index.list_sessions(running_only=True)
+
+    def list_all_sessions(self) -> list[dict[str, Any]]:
+        return self.index.list_sessions(running_only=False)
 
     def get_unique_running_session(self) -> dict[str, Any]:
         rows = self.list_running_sessions()
@@ -112,6 +119,7 @@ class SessionStore:
         injections.append(record)
         data["updated_at"] = now
         self._write(data)
+        self.index.increment_failure_count(session_id)
         return idx
 
     def update_failure_injection(self, session_id: str, failure_idx: int, values: Mapping[str, Any]) -> None:

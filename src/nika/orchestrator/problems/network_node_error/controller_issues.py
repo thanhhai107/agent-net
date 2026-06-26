@@ -404,9 +404,3 @@ class FlowRuleLoopRCA(FlowRuleLoopBase, RCATask):
         task_level=TaskLevel.RCA,
         description=TaskDescription.RCA,
     )
-
-
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    problem = FlowRuleLoopBase()
-    problem.inject_fault()

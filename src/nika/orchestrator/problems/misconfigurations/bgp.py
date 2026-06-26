@@ -493,9 +493,3 @@ class BGPHijackingRCA(BGPHijackingBase, RCATask):
         task_level=TaskLevel.RCA,
         description=TaskDescription.RCA,
     )
-
-
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    task = BGPAsnMisconfigBase(scenario_name="dc_clos_bgp")
-    task.inject_fault()

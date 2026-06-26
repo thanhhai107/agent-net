@@ -130,9 +130,3 @@ def get_problem_instance(problem_names: list, task_level: TaskLevel, scenario_na
     # Single-fault scenario
     else:
         return _PROBLEMS[problem_names[0]][task_level](scenario_name=scenario_name, **kwargs)
-
-
-if __name__ == "__main__":
-    problems = list_avail_problem_names()
-
-    print(problems)

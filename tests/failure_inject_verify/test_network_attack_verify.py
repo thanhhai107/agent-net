@@ -15,10 +15,10 @@ from nika.orchestrator.problems.network_under_attack.dhcp import (
     DHCPSpoofedSubnetDetection,
 )
 from nika.orchestrator.problems.network_under_attack.web import WebDoSDetection
-from tests.integration_base import FailureInjectVerifyTestCase
+from tests.integration_base import PerTestEnvTestCase
 
 
-class WebDoSVerifyTest(FailureInjectVerifyTestCase):
+class WebDoSVerifyTest(PerTestEnvTestCase):
     SCENARIO = "dc_clos_service"
     ENV_RUN_ARGS = ["-t", "s"]
 
@@ -30,7 +30,7 @@ class WebDoSVerifyTest(FailureInjectVerifyTestCase):
         self.assertTrue(result["verified"], f"Expected ab attack running: {result}")
 
 
-class DHCPAttackVerifyTest(FailureInjectVerifyTestCase):
+class DHCPAttackVerifyTest(PerTestEnvTestCase):
     SCENARIO = "ospf_enterprise_dhcp"
     ENV_RUN_ARGS = ["-t", "s"]
 
@@ -56,7 +56,7 @@ class DHCPAttackVerifyTest(FailureInjectVerifyTestCase):
         self.assertTrue(result["verified"], f"Expected subnet deleted: {result}")
 
 
-class BGPHijackingVerifyTest(FailureInjectVerifyTestCase):
+class BGPHijackingVerifyTest(PerTestEnvTestCase):
     SCENARIO = "simple_bgp"
 
     def test_bgp_hijacking_verify_true_after_inject(self):

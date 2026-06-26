@@ -133,16 +133,3 @@ class P4INT(NetworkEnvBase):
                 ],
                 f"{switch.name}.startup",
             )
-
-
-if __name__ == "__main__":
-    p4_int_lab = P4INT()
-    print(p4_int_lab.get_info())
-    if p4_int_lab.lab_exists():
-        print("Lab exists, undeploying it...")
-        p4_int_lab.undeploy()
-        print("Lab undeployed")
-
-    # print("Deploying lab p4_int_lab...")
-    # p4_int_lab.deploy()
-    # print("Lab deployed")

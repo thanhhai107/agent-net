@@ -14,10 +14,10 @@ from nika.orchestrator.problems.end_host_failure.service_failure import (
     DNSServiceDownDetection,
 )
 from nika.orchestrator.problems.end_host_failure.vpn import HostIncorrectDNSDetection as VPNMembershipMissingDetection
-from tests.integration_base import FailureInjectVerifyTestCase
+from tests.integration_base import PerTestEnvTestCase
 
 
-class DNSRecordErrorVerifyTest(FailureInjectVerifyTestCase):
+class DNSRecordErrorVerifyTest(PerTestEnvTestCase):
     SCENARIO = "ospf_enterprise_dhcp"
     ENV_RUN_ARGS = ["-t", "s"]
 
@@ -32,7 +32,7 @@ class DNSRecordErrorVerifyTest(FailureInjectVerifyTestCase):
         self.assertTrue(result["details"]["dns_resolves_wrong"])
 
 
-class HostCrashVerifyTest(FailureInjectVerifyTestCase):
+class HostCrashVerifyTest(PerTestEnvTestCase):
     SCENARIO = "simple_bgp"
     HOST = "pc1"
 
@@ -46,7 +46,7 @@ class HostCrashVerifyTest(FailureInjectVerifyTestCase):
         self.assertEqual(result["details"]["container_status"], "paused")
 
 
-class VPNMembershipMissingVerifyTest(FailureInjectVerifyTestCase):
+class VPNMembershipMissingVerifyTest(PerTestEnvTestCase):
     SCENARIO = "rip_small_internet_vpn"
     ENV_RUN_ARGS = ["-t", "s"]
 
@@ -58,7 +58,7 @@ class VPNMembershipMissingVerifyTest(FailureInjectVerifyTestCase):
         self.assertTrue(result["verified"], f"Expected VPN membership missing to be verified: {result}")
 
 
-class ServiceDownVerifyTest(FailureInjectVerifyTestCase):
+class ServiceDownVerifyTest(PerTestEnvTestCase):
     """Tests for DNS/DHCP service down via pkill -9 (works in Kathara without systemd)."""
 
     SCENARIO = "ospf_enterprise_dhcp"

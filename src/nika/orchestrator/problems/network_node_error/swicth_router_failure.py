@@ -182,23 +182,3 @@ class FrrDownRCA(FrrDownBase, RCATask):
         task_level=TaskLevel.RCA,
         description=TaskDescription.RCA,
     )
-
-
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    random.seed(42)
-
-    problem = FrrDownBase(scenario_name="ospf_enterprise_dhcp", topo_size="l")
-    print(f"Faulty device: {problem.faulty_devices}")
-    print(problem.net_env.routers)
-    random.seed(42)
-
-    problem = FrrDownLocalization(scenario_name="ospf_enterprise_dhcp", topo_size="l")
-    print(f"Faulty device: {problem.faulty_devices}")
-    print(problem.net_env.routers)
-
-    problem = FrrDownDetection(scenario_name="ospf_enterprise_dhcp", topo_size="l")
-    print(f"Faulty device: {problem.faulty_devices}")
-    print(problem.net_env.routers)
-
-    # problem.inject_fault()

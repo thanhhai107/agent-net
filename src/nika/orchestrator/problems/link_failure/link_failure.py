@@ -402,9 +402,3 @@ class LinkFragRCA(LinkFragBase, RCATask):
         task_level=TaskLevel.RCA,
         description=TaskDescription.RCA,
     )
-
-
-if __name__ == "__main__":
-    task = LinkFailureDetection()
-    # task.inject_fault()
-    # Here you would typically run your detection logic

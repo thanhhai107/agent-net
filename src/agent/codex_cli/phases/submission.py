@@ -1,25 +1,16 @@
-"""Codex CLI-backed submission worker.
+"""Codex CLI-backed submission phase worker.
 
-Mirrors the role of :class:`~agent.langgraph.domain_agents.SubmissionAgent`
+Mirrors the role of :class:`~agent.langgraph.phases.SubmissionPhase`
 in the LangChain path: calls the task MCP server's ``submit`` tool to record
 a structured result based on the diagnosis report.
 """
 
-from textwrap import dedent
-
-from agent.cli.codex_worker import CodexWorker
-
-# Keep in sync with agent.langgraph.domain_agents.submission_agent.SUBMIT_PROMPT_TEMPLATE
-_SUBMISSION_SYSTEM = dedent("""\
-    You are an expert network engineer.
-    Your task is to submit the final solution for this network problem based on the diagnosis report provided.
-    Carefully review the diagnosis results and ensure that your submission is accurate and complete.
-    You must strictly follow the submission format and call the submit() MCP tool to submit your solution.
-    Rely only on the MCP tools available to you; do not execute arbitrary shell commands.\
-""")
+from agent.codex_cli.codex_worker import CodexWorker
+from agent.utils.template import SUBMIT_PROMPT_TEMPLATE
+from agent.utils.phases import SUBMISSION
 
 
-class CliSubmissionAgent:
+class CodexCliSubmissionPhase:
     """Calls the task MCP server's ``submit`` tool via a ``codex exec`` subprocess.
 
     Parameters
@@ -49,7 +40,7 @@ class CliSubmissionAgent:
         self._worker = CodexWorker(
             session_id=session_id,
             session_dir=session_dir,
-            phase="submission",
+            phase=SUBMISSION,
             model=model,
             reasoning_effort=reasoning_effort,
             timeout=timeout,
@@ -67,7 +58,7 @@ class CliSubmissionAgent:
             ``submit()``.
         """
         prompt = (
-            f"{_SUBMISSION_SYSTEM}\n\n"
+            f"{SUBMIT_PROMPT_TEMPLATE}\n\n"
             f"Based on the diagnosis report: {diagnosis_report}\n"
             "Please provide the submission. Do not submit if no report is available."
         )

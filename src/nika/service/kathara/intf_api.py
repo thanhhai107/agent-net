@@ -29,12 +29,3 @@ class KatharaIntfAPI(KatharaBaseAPI, IntfAPIMixin):
     """
 
     pass
-
-
-if __name__ == "__main__":
-    lab_name = "ospf_frr_single_area"
-    kathara_api = KatharaIntfAPI(lab_name)
-    kathara_api.intf_on_off("bb0", "eth0", "down")
-    print(kathara_api.intf_show("bb0", "eth0"))
-    kathara_api.intf_on_off("bb0", "eth0", "up")
-    print(kathara_api.intf_show("bb0", "eth0"))

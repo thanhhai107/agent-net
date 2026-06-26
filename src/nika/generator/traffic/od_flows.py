@@ -304,18 +304,3 @@ class ODFLowGenerator:
                 )
 
         return labels
-
-
-if __name__ == "__main__":
-    # Example usage
-    lab_name = "p4_bloom_filter"
-    mbps = 5
-    host_num = 2
-    od_dict = {}
-    for i in range(1, host_num + 1):
-        for j in range(1, host_num + 1):
-            if i != j:
-                od_dict.setdefault(f"pc{i}", {})[f"pc{j}"] = mbps
-    generator = ODFLowGenerator(lab_name=lab_name)
-    server_results = asyncio.run(generator.astart_generate_traffic(od_dicts=od_dict, unit="M", interval=5, udp=False))
-    print(json.dumps(server_results, indent=4))

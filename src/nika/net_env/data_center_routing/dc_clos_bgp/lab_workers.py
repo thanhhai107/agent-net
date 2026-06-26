@@ -311,17 +311,3 @@ class DCClosBGP(NetworkEnvBase):
             "Each leaf connects to one host via a /24 subnet (10.<pod>.<leaf>.0/24) and advertises this network via BGP. "
             "All inter-router links use /31 subnets from 172.16.0.0/16. Routing is entirely EBGP using FRR."
         )
-
-
-if __name__ == "__main__":
-    dc_clos_bgp = DCClosBGP(topo_size="s")
-    print("Lab description:", dc_clos_bgp.desc)
-    print("lab net summary:", dc_clos_bgp.get_info())
-    if dc_clos_bgp.lab_exists():
-        print("Lab exists, undeploying it...")
-        dc_clos_bgp.undeploy()
-        print("Lab undeployed")
-
-    # print("Deploying lab...")
-    # dc_clos_bgp.deploy()
-    # print("Lab deployed")

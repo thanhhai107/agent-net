@@ -160,8 +160,3 @@ class NetworkEnvBase:
             self.instance.undeploy_lab(lab_name=self.name)
         except Exception as e:
             print(f"Error undeploying lab {self.name}: {e}")
-
-
-if __name__ == "__main__":
-    net_env = NetworkEnvBase()
-    print(net_env)

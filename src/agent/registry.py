@@ -2,7 +2,8 @@
 
 from typing import Any
 
-from agent.cli.agent import CliAgent
+from agent.claude_cli.agent import ClaudeAgent
+from agent.codex_cli.agent import CodexCliAgent
 from agent.composition import (
     AgentRunConfig,
     validate_agent_composition,
@@ -39,11 +40,17 @@ def create_agent(config: AgentRunConfig) -> Any:
                 "Agent type 'sdk' is not implemented yet. "
                 "See docs/README.md for the current agent boundary."
             )
-        case "cli":
-            agent = CliAgent(
+        case "cli" | "codex_cli":
+            agent = CodexCliAgent(
                 session_id=config.session_id,
                 model=config.model,
                 reasoning_effort=config.reasoning_effort,
+                stream_output=config.stream_output,
+            )
+        case "claude_cli":
+            agent = ClaudeAgent(
+                session_id=config.session_id,
+                model=config.model,
                 stream_output=config.stream_output,
             )
         case _:

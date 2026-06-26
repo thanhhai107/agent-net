@@ -2,7 +2,7 @@
 
 import typer
 
-from agent.cli.codex_worker import REASONING_EFFORT_LEVELS
+from agent.codex_cli.codex_worker import REASONING_EFFORT_LEVELS
 from agent.composition import (
     AgentRunConfig,
     MemoryConfig,
@@ -21,6 +21,8 @@ SUPPORTED_AGENT_TYPES = (
     "reflexion",
     "mock",
     "cli",
+    "codex_cli",
+    "claude_cli",
 )
 SUPPORTED_LLM_BACKENDS = ("openai", "ollama", "deepseek", "netmind")
 
@@ -39,7 +41,7 @@ def agent_list() -> None:
     typer.echo("netmind_models:")
     for model in NETMIND_SUPPORTED_MODELS:
         typer.echo(f"  {model}")
-    typer.echo("reasoning_effort (cli only):")
+    typer.echo("reasoning_effort (cli/codex_cli only):")
     for level in REASONING_EFFORT_LEVELS:
         typer.echo(f"  {level}")
 
@@ -55,8 +57,8 @@ def agent_run(
         "--backend",
         help="LLM provider (openai, ollama, deepseek, netmind).",
     ),
-    model: str = typer.Option(
-        DEFAULT_MODEL, "-m", "--model", help="Model id for the chosen backend."
+    model: str | None = typer.Option(
+        None, "-m", "--model", help="Model id for the chosen backend or CLI agent."
     ),
     max_steps: int = typer.Option(
         DEFAULT_MAX_STEPS,
@@ -64,7 +66,7 @@ def agent_run(
         "--max-steps",
         help=(
             "Per-worker step limit for LangGraph agents; also the maximum "
-            "executed plan items for plan-execute. Ignored for cli."
+            "executed plan items for plan-execute. Ignored for cli/codex_cli/claude_cli."
         ),
     ),
     max_attempts: int = typer.Option(
@@ -78,7 +80,7 @@ def agent_run(
         None,
         "-e",
         "--reasoning-effort",
-        help="Codex model_reasoning_effort (cli only): none, minimal, low, medium, high, xhigh.",
+        help="Codex model_reasoning_effort (cli/codex_cli only): none, minimal, low, medium, high, xhigh.",
     ),
     session_id: str | None = typer.Option(
         None, "--session-id", help="Target session id (lab_hash)."
@@ -115,10 +117,13 @@ def agent_run(
     """Run the agent on the current session task."""
     from nika.workflows.agent.run import start_agent
 
+    normalized_agent = agent_type.lower()
     if reasoning_effort is not None and reasoning_effort not in REASONING_EFFORT_LEVELS:
         raise typer.BadParameter(
             f"reasoning_effort must be one of {', '.join(REASONING_EFFORT_LEVELS)}"
         )
+    if reasoning_effort is not None and normalized_agent not in {"cli", "codex_cli"}:
+        raise typer.BadParameter("--reasoning-effort is supported only for cli/codex_cli.")
     if memory is not None and memory_read is not None:
         raise typer.BadParameter("Use either --memory or --memory-read, not both.")
     memory_mode = "evolve" if memory is not None else "read" if memory_read else "off"
@@ -129,7 +134,7 @@ def agent_run(
             AgentRunConfig(
                 agent_type=agent_type,
                 llm_backend=llm_backend,
-                model=model,
+                model=model or DEFAULT_MODEL,
                 max_steps=max_steps,
                 max_attempts=max_attempts,
                 reasoning_effort=reasoning_effort,
@@ -145,6 +150,7 @@ def agent_run(
                 ),
             ),
             session_id=session_id,
+            requested_model=model,
         )
     except (FileNotFoundError, ValueError) as exc:
         raise typer.BadParameter(str(exc)) from exc

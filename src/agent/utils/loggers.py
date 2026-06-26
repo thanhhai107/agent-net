@@ -34,7 +34,7 @@ class MessageLogger:
     Parameters
     ----------
     agent:
-        Name tag written to every entry (e.g. ``"diagnosis_agent"``).
+        Name tag written to every entry (e.g. :data:`~agent.utils.phases.DIAGNOSIS`).
     session_dir:
         Path to the session results directory (must already exist or be
         creatable).
@@ -66,11 +66,7 @@ class MessageLogger:
 
 
 class AgentCallbackLogger(BaseCallbackHandler):
-    """LangChain callback handler that delegates to ``MessageLogger``.
-
-    Drop-in replacement for the former ``FileLoggerHandler`` with the same
-    ``_log(event_type, payload)`` interface for use in agent code.
-    """
+    """LangChain callback handler that delegates to ``MessageLogger``."""
 
     def __init__(
         self,
@@ -84,10 +80,6 @@ class AgentCallbackLogger(BaseCallbackHandler):
             session_dir=session_dir,
             extra_fields=extra_fields,
         )
-
-    # Compatibility shim used by MockAgent and tests.
-    def _log(self, event_type: str, payload: dict[str, Any]) -> None:
-        self._logger.log(event_type, payload)
 
     def on_chat_model_start(
         self,

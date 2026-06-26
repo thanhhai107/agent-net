@@ -1,3 +1,25 @@
+"""Shared prompt templates for domain agents and evaluation."""
+
+from textwrap import dedent
+
+OVERALL_DIAGNOSIS_PROMPT = """\
+You are a network troubleshooting expert.
+Focus on (1) detecting if there is an anomaly, (2) localizing the faulty devices, and (3) identifying the root cause.
+
+Basic requirements:
+- Use the provided MCP tools to gather necessary information.
+- Do not provide mitigation unless explicitly required.
+- Rely only on the MCP tools available to you; do not execute arbitrary shell commands.\
+"""
+
+SUBMIT_PROMPT_TEMPLATE = dedent("""\
+    You are an expert network engineer.
+    Your task is to submit the final solution for this network problem based on the diagnosis report provided.
+    Carefully review the diagnosis results and ensure that your submission is accurate and complete.
+    You must strictly follow the submission format and call the submit() MCP tool to submit your solution.
+    Rely only on the MCP tools available to you; do not execute arbitrary shell commands.\
+""").strip()
+
 LLM_JUDGE_PROMPT_TEMPLATE = """
 You are an expert networking engineer acting as a judge.  
 You will assess the performance of an autonomous agent given:

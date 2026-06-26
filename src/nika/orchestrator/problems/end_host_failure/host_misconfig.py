@@ -537,7 +537,3 @@ class HostIncorrectDNSRCA(HostIncorrectDNSBase, RCATask):
         task_level=TaskLevel.RCA,
         description=TaskDescription.RCA,
     )
-
-
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)

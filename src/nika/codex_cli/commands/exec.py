@@ -18,7 +18,7 @@ def _exit_with_message(message: str) -> None:
 def exec_command(
     host: str = typer.Argument(..., metavar="HOST", help="Target host/container name in the selected lab."),
     command_parts: list[str] = typer.Argument(..., metavar="COMMAND", help="Shell command to execute inside HOST."),
-    session_id: Optional[str] = typer.Option(None, "--session-id", help="Target session id (lab_hash)."),
+    session_id: Optional[str] = typer.Option(None, "--session-id", help="Target session id."),
     timeout: float = typer.Option(10.0, "--timeout", help="Execution timeout in seconds (default: 10)."),
 ) -> None:
     """Execute COMMAND inside HOST for one session-bound lab."""

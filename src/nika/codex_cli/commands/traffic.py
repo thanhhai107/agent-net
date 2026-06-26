@@ -11,7 +11,7 @@ import typer
 
 from nika.generator.traffic.od_flows import ODFLowGenerator
 from nika.generator.traffic.web_access import WebBrowsingTrafficGenerator
-from nika.net_env.net_env_pool import get_net_env_instance, scenario_requires_topo_tier
+from nika.net_env.net_env_pool import get_net_env_instance, scenario_requires_topo_size
 from nika.utils.session_resolve import resolve_running_session_id
 from nika.utils.session_store import SessionStore
 
@@ -23,19 +23,19 @@ _TRAFFIC_TYPE_HELP: dict[str, str] = {
 }
 
 
-def _net_env_kwargs_for_scenario(scenario: str, tier: str | None) -> dict[str, Any]:
-    if scenario_requires_topo_tier(scenario):
-        if not tier:
-            raise typer.BadParameter(f"Scenario '{scenario}' requires -t/--tier (s, m, or l).")
-        return {"topo_size": tier}
-    if tier is not None:
-        raise typer.BadParameter(f"Scenario '{scenario}' does not use topology tiers; omit -t/--tier.")
+def _net_env_kwargs_for_scenario(scenario: str, size: str | None) -> dict[str, Any]:
+    if scenario_requires_topo_size(scenario):
+        if not size:
+            raise typer.BadParameter(f"Scenario '{scenario}' requires -s/--size (s, m, or l).")
+        return {"topo_size": size}
+    if size is not None:
+        raise typer.BadParameter(f"Scenario '{scenario}' does not use topology sizes; omit -s/--size.")
     return {}
 
 
-def _resolve_lab_and_tier(
+def _resolve_lab_and_size(
     lab: str | None,
-    tier: str | None,
+    size: str | None,
 ) -> tuple[str, str | None]:
     try:
         resolved_id = resolve_running_session_id()
@@ -45,20 +45,20 @@ def _resolve_lab_and_tier(
             raise typer.BadParameter(
                 "No valid running session found. Run `nika env run <scenario>` first, or pass --lab."
             ) from None
-        return lab, tier
+        return lab, size
 
     resolved_lab = lab or meta.get("scenario_name")
-    resolved_tier = tier if tier is not None else meta.get("scenario_topo_size")
+    resolved_size = size if size is not None else meta.get("scenario_topo_size")
     if not resolved_lab:
         raise typer.BadParameter("Session has no scenario_name; run `nika env run` or pass --lab.")
-    return resolved_lab, resolved_tier
+    return resolved_lab, resolved_size
 
 
-def _normalize_tier(raw: str | None) -> str | None:
+def _normalize_size(raw: str | None) -> str | None:
     if raw is None or raw == "":
         return None
     if raw not in ("s", "m", "l"):
-        raise typer.BadParameter("Topology tier must be one of: s, m, l.")
+        raise typer.BadParameter("Topology size must be one of: s, m, l.")
     return raw
 
 
@@ -78,7 +78,7 @@ def traffic_run(
         help="Run traffic in the background where supported (od); web always blocks the CLI.",
     ),
     lab: str | None = typer.Option(None, "--lab", help="Kathará lab name (defaults to current session scenario)."),
-    tier: str | None = typer.Option(None, "-t", "--tier", help="Topology tier s, m, or l (when the scenario uses tiers)."),
+    size: str | None = typer.Option(None, "-s", "--size", help="Topology size s, m, or l (when the scenario uses sizes)."),
     # OD (iperf3) shared
     interval: int = typer.Option(5, "--interval", help="iperf3 duration per client run (seconds)."),
     unit: str = typer.Option("M", "--unit", help='OD matrix bitrate unit suffix: "K" or "M" (iperf -b).'),
@@ -105,8 +105,8 @@ def traffic_run(
     if t not in _TRAFFIC_TYPE_HELP:
         raise typer.BadParameter(f"Unknown TYPE {traffic_type!r}; try `nika traffic list`.")
 
-    tier_n = _normalize_tier(tier)
-    scenario, tier_resolved = _resolve_lab_and_tier(lab=lab, tier=tier_n)
+    size_n = _normalize_size(size)
+    scenario, size_resolved = _resolve_lab_and_size(lab=lab, size=size_n)
 
     if unit not in ("K", "M"):
         raise typer.BadParameter('--unit must be "K" or "M".')
@@ -117,7 +117,7 @@ def traffic_run(
             raise typer.BadParameter(
                 "`web` traffic always blocks this CLI until interrupted; do not pass `--background`."
             )
-        kwargs = _net_env_kwargs_for_scenario(scenario, tier_resolved)
+        kwargs = _net_env_kwargs_for_scenario(scenario, size_resolved)
         gen = WebBrowsingTrafficGenerator(
             scenario_name=scenario,
             request_delay_range=(request_delay_min, request_delay_max),
@@ -129,7 +129,7 @@ def traffic_run(
         return
 
     if t == "od":
-        kwargs = _net_env_kwargs_for_scenario(scenario, tier_resolved)
+        kwargs = _net_env_kwargs_for_scenario(scenario, size_resolved)
         net_env = get_net_env_instance(scenario, **kwargs)
         hosts = list(net_env.hosts)
 

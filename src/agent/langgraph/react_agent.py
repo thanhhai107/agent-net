@@ -10,12 +10,13 @@ from pydantic import Field, ValidationError
 from typing_extensions import TypedDict
 
 from agent.defaults import DEFAULT_MAX_STEPS
-from agent.langgraph.domain_agents.diagnosis_agent import DiagnosisAgent
-from agent.langgraph.domain_agents.submission_agent import SubmissionAgent
 from agent.langgraph.langfuse_tracing import callback_config, create_langfuse_callbacks
+from agent.langgraph.phases.diagnosis import DiagnosisPhase
+from agent.langgraph.phases.submission import SubmissionPhase
 from agent.llm.model_factory import DEFAULT_LLM_BACKEND, DEFAULT_MODEL
 from agent.tool_evolution.integration import write_tool_evolution_session
 from agent.utils.loggers import AgentCallbackLogger
+from agent.utils.phases import DIAGNOSIS, SUBMISSION
 from agent.utils.tracing import langsmith_tracing_context
 from nika.utils.session import Session
 
@@ -51,6 +52,7 @@ class BasicReActAgent:
         use_problem_tool_hints: bool = True,
     ):
         self.session_id = session_id
+        self.model = model
         self.max_steps = max_steps
         self.session = Session()
         self.session.load_running_session(session_id=session_id)
@@ -58,8 +60,7 @@ class BasicReActAgent:
 
         self.langfuse_callbacks = create_langfuse_callbacks()
 
-        # load agent and tools
-        diagnosis_agent = DiagnosisAgent(
+        diagnosis_phase = DiagnosisPhase(
             session_id=session_id,
             llm_backend=llm_backend,
             model=model,
@@ -68,38 +69,37 @@ class BasicReActAgent:
             tool_evolution_enabled=tool_evolution_enabled,
             tool_library_id=tool_library_id,
         )
-        asyncio.run(diagnosis_agent.load_tools())
-        self.llm = diagnosis_agent.llm
-        self.tool_evolution_runtime = diagnosis_agent.tool_evolution_runtime
+        asyncio.run(diagnosis_phase.load_tools())
+        self.llm = diagnosis_phase.llm
+        self.tool_evolution_runtime = diagnosis_phase.tool_evolution_runtime
         self.diagnosis_tool_names = [
-            tool.name for tool in (diagnosis_agent.tools or [])
+            tool.name for tool in (diagnosis_phase.tools or [])
         ]
-        self.diagnosis_agent = diagnosis_agent.get_agent()
+        self.diagnosis_agent = diagnosis_phase.get_agent()
 
-        submission_agent = SubmissionAgent(
-            session_id=session_id, llm_backend=llm_backend, model=model
+        submission_phase = SubmissionPhase(
+            session_id=session_id,
+            llm_backend=llm_backend,
+            model=model,
         )
-        asyncio.run(submission_agent.load_tools())
-        self.submission_agent = submission_agent.get_agent()
+        asyncio.run(submission_phase.load_tools())
+        self.submission_agent = submission_phase.get_agent()
 
-        # build the state graph
         worker_builder = StateGraph(AgentState)
-        worker_builder.add_node("diagnosis_agent", self.diagnosis_agent_builder)
-        worker_builder.add_node("submission_agent", self.submission_agent_builder)
+        worker_builder.add_node(DIAGNOSIS, self.diagnosis_agent_builder)
+        worker_builder.add_node(SUBMISSION, self.submission_agent_builder)
 
-        worker_builder.add_edge(START, "diagnosis_agent")
+        worker_builder.add_edge(START, DIAGNOSIS)
         worker_builder.add_conditional_edges(
-            "diagnosis_agent",
+            DIAGNOSIS,
             lambda state: state.get("is_max_steps_reached", False),
             {
                 True: END,
-                False: "submission_agent",
+                False: SUBMISSION,
             },
         )
 
-        worker_builder.add_edge("submission_agent", END)
-
-        # compile the graph
+        worker_builder.add_edge(SUBMISSION, END)
         self.graph = worker_builder.compile()
 
     async def run(self, task_description: str):
@@ -109,7 +109,7 @@ class BasicReActAgent:
                 "scenario": self.session.scenario_name,
                 "problem": self.session.problem_names[0],
                 "topo_size": self.session.scenario_topo_size,
-                "model": self.session.model,
+                "model": self.model,
             },
         ):
             try:
@@ -127,9 +127,7 @@ class BasicReActAgent:
 
     async def diagnosis_agent_builder(self, state: AgentState):
         try:
-            cb = AgentCallbackLogger(
-                agent="diagnosis_agent", session_dir=self.session_dir
-            )
+            cb = AgentCallbackLogger(agent=DIAGNOSIS, session_dir=self.session_dir)
             diagnosis_report = await self.diagnosis_agent.ainvoke(
                 {"messages": state["messages"]},
                 config={
@@ -144,7 +142,7 @@ class BasicReActAgent:
             }
         except ValidationError as e:
             AgentCallbackLogger(
-                agent="diagnosis_agent", session_dir=self.session_dir
+                agent=DIAGNOSIS, session_dir=self.session_dir
             )._log("error", {"message": f"Validation error: {e}"})
             return {
                 "messages": [HumanMessage(content=f"Error: {e}")],
@@ -153,10 +151,10 @@ class BasicReActAgent:
             }
         except GraphRecursionError:
             AgentCallbackLogger(
-                agent="diagnosis_agent", session_dir=self.session_dir
+                agent=DIAGNOSIS, session_dir=self.session_dir
             )._log(
                 "error",
-                {"message": "Diagnosis agent reached max recursion limit."},
+                {"message": "Diagnosis phase reached max recursion limit."},
             )
             return {
                 "messages": [
@@ -181,7 +179,7 @@ class BasicReActAgent:
             config={
                 "callbacks": [
                     AgentCallbackLogger(
-                        agent="submission_agent", session_dir=self.session_dir
+                        agent=SUBMISSION, session_dir=self.session_dir
                     )
                 ],
                 "recursion_limit": self.max_steps,
