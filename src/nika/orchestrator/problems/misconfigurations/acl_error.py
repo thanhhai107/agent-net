@@ -453,9 +453,3 @@ class DNSPortBlockedRCA(DNSPortBlockedBase, RCATask):
         task_level=TaskLevel.RCA,
         description=TaskDescription.RCA,
     )
-
-
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    problem = HttpAclBlockBase(scenario_name="rip_small_internet_vpn")
-    problem.inject_fault()

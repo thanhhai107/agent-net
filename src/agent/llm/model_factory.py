@@ -9,8 +9,8 @@ from langchain_openai import ChatOpenAI
 load_dotenv()
 
 
-def load_model(llm_backend: str = "openai", model: str = "gpt-5-mini") -> BaseChatModel:
-    if llm_backend == "ollama":
+def load_model(llm_provider: str = "openai", model: str = "gpt-5-mini") -> BaseChatModel:
+    if llm_provider == "ollama":
         return ChatOllama(
             model=model,
             temperature=0,
@@ -18,15 +18,15 @@ def load_model(llm_backend: str = "openai", model: str = "gpt-5-mini") -> BaseCh
             base_url=os.getenv("OLLAMA_API_URL"),
         )
 
-    if llm_backend == "openai":
+    if llm_provider == "openai":
         return ChatOpenAI(
             model_name=model,
         )
 
-    if llm_backend == "deepseek":
+    if llm_provider == "deepseek":
         return ChatDeepSeek(
             model=model,
             base_url="https://api.deepseek.com",
         )
 
-    raise ValueError(f"Unsupported llm backend: {llm_backend}")
+    raise ValueError(f"Unsupported llm provider: {llm_provider}")

@@ -18,3 +18,5 @@ uv.lock
 .agents/
 .cursor/
 .DS_Store
+.claude/
+.pytest_cache/

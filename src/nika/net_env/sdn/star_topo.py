@@ -165,17 +165,3 @@ class SDNStar(NetworkEnvBase):
 
         # load lab machines info
         self.load_machines()
-
-
-if __name__ == "__main__":
-    ospf_enterprise = SDNStar()
-    print("Lab description:", ospf_enterprise.desc)
-    print("lab net summary:", ospf_enterprise.get_info())
-    if ospf_enterprise.lab_exists():
-        print("Lab exists, undeploying it...")
-        ospf_enterprise.undeploy()
-        print("Lab undeployed")
-
-    # print("Deploying lab...")
-    # ospf_enterprise.deploy()
-    # print("Lab deployed")

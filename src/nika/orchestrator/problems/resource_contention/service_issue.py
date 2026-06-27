@@ -164,8 +164,3 @@ class LoadBalancerOverloadRCA(LoadBalancerOverloadBase, RCATask):
         task_level=TaskLevel.RCA,
         description=TaskDescription.RCA,
     )
-
-
-if __name__ == "__main__":
-    problem = LoadBalancerOverloadBase()
-    problem.inject_fault()

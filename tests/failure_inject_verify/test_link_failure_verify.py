@@ -21,13 +21,13 @@ from nika.orchestrator.problems.link_failure.link_failure import (
     LinkFragParams,
 )
 
-from tests.integration_base import FailureInjectVerifyTestCase
+from tests.integration_base import PerTestEnvTestCase
 
 HOST = "pc1"
 INTF = "eth0"
 
 
-class LinkFailureVerifyIntegrationTest(FailureInjectVerifyTestCase):
+class LinkFailureVerifyIntegrationTest(PerTestEnvTestCase):
     """Verify that verify_fault correctly reflects real container network state."""
 
     SCENARIO = "simple_bgp"

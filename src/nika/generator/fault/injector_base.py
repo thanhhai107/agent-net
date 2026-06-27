@@ -92,9 +92,3 @@ class FaultInjectorBase:
         cmd = f"./hostlab/{host_name}.startup"
         self.kathara_api.exec_cmd(host_name, cmd)
         self.logger.info(f"Recovered bmv2 down fault on {host_name}.")
-
-
-if __name__ == "__main__":
-    # Example usage
-    injector = FaultInjectorBase("simple_bgp")
-    injector.recover_intf_down("pc1", "eth0")

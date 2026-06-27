@@ -9,8 +9,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from nika.config import BENCHMARK_DIR, RESULTS_DIR
-from nika.net_env.net_env_pool import scenario_requires_topo_tier
-from nika.workflows.agent.run import start_agent
+from nika.net_env.net_env_pool import scenario_requires_topo_size
+from nika.workflows.agent.run import _resolve_agent_model, start_agent
 from nika.workflows.env.start import start_net_env
 from nika.workflows.eval.session import eval_results
 from nika.workflows.failure.inject import inject_failure
@@ -26,11 +26,11 @@ def _benchmark_row_cli_args(
     row: dict,
     *,
     agent_type: str,
-    llm_backend: str,
-    model: str,
+    llm_provider: str,
+    model: str | None,
     max_steps: int,
     run_judge: bool,
-    judge_llm_backend: str | None,
+    judge_llm_provider: str | None,
     judge_model: str | None,
 ) -> list[str]:
     args = [
@@ -39,10 +39,12 @@ def _benchmark_row_cli_args(
         row["problem"],
         "-a",
         agent_type,
-        "-b",
-        llm_backend,
-        "-m",
-        model,
+        "-p",
+        llm_provider,
+    ]
+    if model:
+        args += ["-m", model]
+    args += [
         "-n",
         str(max_steps),
     ]
@@ -50,7 +52,7 @@ def _benchmark_row_cli_args(
     if topo:
         args += ["-t", topo]
     if run_judge:
-        args += ["--judge", "--judge-backend", judge_llm_backend, "--judge-model", judge_model]
+        args += ["--judge", "--judge-provider", judge_llm_provider, "--judge-model", judge_model]
     return args
 
 
@@ -58,22 +60,22 @@ def _run_benchmark_row_subprocess(
     row: dict,
     *,
     agent_type: str,
-    llm_backend: str,
-    model: str,
+    llm_provider: str,
+    model: str | None,
     max_steps: int,
     run_judge: bool,
-    judge_llm_backend: str | None,
+    judge_llm_provider: str | None,
     judge_model: str | None,
 ) -> None:
     """Run one CSV row via a subprocess for thread-safe parallel batch execution."""
     cli_args = _benchmark_row_cli_args(
         row,
         agent_type=agent_type,
-        llm_backend=llm_backend,
+        llm_provider=llm_provider,
         model=model,
         max_steps=max_steps,
         run_judge=run_judge,
-        judge_llm_backend=judge_llm_backend,
+        judge_llm_provider=judge_llm_provider,
         judge_model=judge_model,
     )
     proc = subprocess.run(
@@ -95,41 +97,71 @@ def _run_benchmark_row_subprocess(
         print(output, end="" if output.endswith("\n") else "\n")
 
 
+def _run_benchmark_batch_parallel(
+    rows: list[dict],
+    *,
+    agent_type: str,
+    llm_provider: str,
+    model: str | None,
+    max_steps: int,
+    run_judge: bool,
+    judge_llm_provider: str | None,
+    judge_model: str | None,
+) -> None:
+    """Run all rows in *rows* simultaneously (one subprocess each), then return."""
+    with ThreadPoolExecutor(max_workers=len(rows)) as pool:
+        futures = [
+            pool.submit(
+                _run_benchmark_row_subprocess,
+                row,
+                agent_type=agent_type,
+                llm_provider=llm_provider,
+                model=model,
+                max_steps=max_steps,
+                run_judge=run_judge,
+                judge_llm_provider=judge_llm_provider,
+                judge_model=judge_model,
+            )
+            for row in rows
+        ]
+        for future in as_completed(futures):
+            future.result()
+
+
 def run_single_benchmark(
     problem: str,
     scenario: str,
     topo_size: str,
     agent_type: str,
-    llm_backend: str,
-    model: str,
+    llm_provider: str,
+    model: str | None,
     max_steps: int,
     *,
     run_judge: bool = False,
-    judge_llm_backend: str | None = None,
+    judge_llm_provider: str | None = None,
     judge_model: str | None = None,
 ) -> str:
-    """
-    Run a single benchmark case.
+    """Run a single benchmark case.
 
     Returns:
         The session id for the completed run.
     """
     print(f"Running benchmark for Problem: {problem}, Scenario: {scenario}, Topo Size: {topo_size}")
 
-    tier = topo_size if topo_size else None
-    if scenario_requires_topo_tier(scenario) and not tier:
-        raise ValueError(f"Scenario '{scenario}' requires a non-empty topology tier (-t s|m|l).")
-    if not scenario_requires_topo_tier(scenario):
-        tier = None
+    size = topo_size if topo_size else None
+    if scenario_requires_topo_size(scenario) and not size:
+        raise ValueError(f"Scenario '{scenario}' requires a non-empty topology size (-s s|m|l).")
+    if not scenario_requires_topo_size(scenario):
+        size = None
 
-    session_id = start_net_env(scenario, tier, redeploy=True)
+    session_id = start_net_env(scenario, size, redeploy=True)
     session_dir = Path(RESULTS_DIR) / session_id
 
     inject_failure(problem_names=[problem], session_id=session_id)
 
     start_agent(
         agent_type=agent_type,
-        llm_backend=llm_backend,
+        llm_provider=llm_provider,
         model=model,
         max_steps=max_steps,
         session_id=session_id,
@@ -139,7 +171,7 @@ def run_single_benchmark(
     eval_results(
         session_id=session_id,
         run_judge=run_judge,
-        judge_llm_backend=judge_llm_backend,
+        judge_llm_provider=judge_llm_provider,
         judge_model=judge_model,
     )
 
@@ -153,13 +185,13 @@ def run_single_benchmark(
 def run_benchmark_from_csv(
     benchmark_file: str,
     agent_type: str,
-    llm_backend: str,
-    model: str,
+    llm_provider: str,
+    model: str | None,
     max_steps: int,
     *,
-    parallel: int = 1,
+    batch_size: int = 1,
     run_judge: bool = False,
-    judge_llm_backend: str | None = None,
+    judge_llm_provider: str | None = None,
     judge_model: str | None = None,
 ) -> None:
     """
@@ -169,9 +201,14 @@ def run_benchmark_from_csv(
     - problem
     - scenario
     - topo_size (same values as ``nika env run -t``: s, m, l, or empty)
+
+    When ``batch_size == 1`` (default) rows are executed sequentially.
+    When ``batch_size > 1`` rows are chunked into groups of that size; every row in a
+    chunk runs in parallel (one subprocess each) and the next chunk starts only after
+    all rows in the current chunk have finished.
     """
-    if parallel < 1:
-        raise ValueError("parallel must be >= 1")
+    if batch_size < 1:
+        raise ValueError("batch_size must be >= 1")
 
     with open(benchmark_file, newline="", encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
@@ -180,36 +217,30 @@ def run_benchmark_from_csv(
         print(f"No benchmark rows found in {benchmark_file}")
         return
 
-    if parallel == 1:
+    _shared_kwargs = dict(
+        agent_type=agent_type,
+        llm_provider=llm_provider,
+        model=model,
+        max_steps=max_steps,
+        run_judge=run_judge,
+        judge_llm_provider=judge_llm_provider,
+        judge_model=judge_model,
+    )
+
+    if batch_size == 1:
         for row in rows:
             run_single_benchmark(
                 problem=row["problem"],
                 scenario=row["scenario"],
                 topo_size=row.get("topo_size") or "",
-                agent_type=agent_type,
-                llm_backend=llm_backend,
-                model=model,
-                max_steps=max_steps,
-                run_judge=run_judge,
-                judge_llm_backend=judge_llm_backend,
-                judge_model=judge_model,
+                **_shared_kwargs,
             )
         return
 
-    with ThreadPoolExecutor(max_workers=parallel) as pool:
-        futures = [
-            pool.submit(
-                _run_benchmark_row_subprocess,
-                row,
-                agent_type=agent_type,
-                llm_backend=llm_backend,
-                model=model,
-                max_steps=max_steps,
-                run_judge=run_judge,
-                judge_llm_backend=judge_llm_backend,
-                judge_model=judge_model,
-            )
-            for row in rows
-        ]
-        for future in as_completed(futures):
-            future.result()
+    for i in range(0, len(rows), batch_size):
+        chunk = rows[i : i + batch_size]
+        print(
+            f"[batch {i // batch_size + 1}] running {len(chunk)} session(s) in parallel "
+            f"(rows {i + 1}–{i + len(chunk)} of {len(rows)})"
+        )
+        _run_benchmark_batch_parallel(chunk, **_shared_kwargs)

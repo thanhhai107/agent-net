@@ -12,9 +12,10 @@ from langgraph.graph import END, START, StateGraph
 from pydantic import Field, ValidationError
 from typing_extensions import TypedDict
 
-from agent.langgraph.domain_agents.diagnosis_agent import DiagnosisAgent
-from agent.langgraph.domain_agents.submission_agent import SubmissionAgent
-from agent.utils.loggers import AgentCallbackLogger
+from agent.langgraph.phases.diagnosis import DiagnosisPhase
+from agent.langgraph.phases.submission import SubmissionPhase
+from agent.utils.loggers import AgentCallbackLogger, MessageLogger
+from agent.utils.phases import DIAGNOSIS, SUBMISSION
 from nika.utils.logger import system_logger
 from nika.utils.session import Session
 
@@ -42,7 +43,7 @@ class BasicReActAgent:
     def __init__(
         self,
         session_id: str,
-        llm_backend: str = "openai",
+        llm_provider: str = "openai",
         model: str = "gpt-5-mini",
         max_steps: int = 20,
     ):
@@ -64,37 +65,35 @@ class BasicReActAgent:
         else:
             system_logger.warning("Authentication to Langfuse failed. Please check your LANGFUSE_API_KEY.")
 
-        # load agent and tools
-        diagnosis_agent = DiagnosisAgent(
+        diagnosis_phase = DiagnosisPhase(
             session_id=session_id,
-            llm_backend=llm_backend,
+            llm_provider=llm_provider,
             model=model,
             scenario_name=self.session.scenario_name,
             problem_names=self.session.problem_names,
         )
-        asyncio.run(diagnosis_agent.load_tools())
-        self.diagnosis_agent = diagnosis_agent.get_agent()
+        asyncio.run(diagnosis_phase.load_tools())
+        self._diagnosis_runner = diagnosis_phase.get_agent()
 
-        submission_agent = SubmissionAgent(session_id=session_id, llm_backend=llm_backend, model=model)
-        asyncio.run(submission_agent.load_tools())
-        self.submission_agent = submission_agent.get_agent()
+        submission_phase = SubmissionPhase(session_id=session_id, llm_provider=llm_provider, model=model)
+        asyncio.run(submission_phase.load_tools())
+        self._submission_runner = submission_phase.get_agent()
 
-        # build the state graph
         worker_builder = StateGraph(AgentState)
-        worker_builder.add_node("diagnosis_agent", self.diagnosis_agent_builder)
-        worker_builder.add_node("submission_agent", self.submission_agent_builder)
+        worker_builder.add_node(DIAGNOSIS, self._run_diagnosis)
+        worker_builder.add_node(SUBMISSION, self._run_submission)
 
-        worker_builder.add_edge(START, "diagnosis_agent")
+        worker_builder.add_edge(START, DIAGNOSIS)
         worker_builder.add_conditional_edges(
-            "diagnosis_agent",
+            DIAGNOSIS,
             lambda state: state.get("is_max_steps_reached", False),
             {
                 True: END,
-                False: "submission_agent",
+                False: SUBMISSION,
             },
         )
 
-        worker_builder.add_edge("submission_agent", END)
+        worker_builder.add_edge(SUBMISSION, END)
 
         # compile the graph
         self.graph = worker_builder.compile()
@@ -117,10 +116,10 @@ class BasicReActAgent:
             )
             return result
 
-    async def diagnosis_agent_builder(self, state: AgentState):
+    async def _run_diagnosis(self, state: AgentState):
         try:
-            cb = AgentCallbackLogger(agent="diagnosis_agent", session_dir=self.session_dir)
-            diagnosis_report = await self.diagnosis_agent.ainvoke(
+            cb = AgentCallbackLogger(agent=DIAGNOSIS, session_dir=self.session_dir)
+            diagnosis_report = await self._diagnosis_runner.ainvoke(
                 {"messages": state["messages"]},
                 config={
                     "callbacks": [cb],
@@ -130,7 +129,7 @@ class BasicReActAgent:
             )
             return {"diagnosis_report": [diagnosis_report["messages"][-1].content], "is_max_steps_reached": False}
         except ValidationError as e:
-            AgentCallbackLogger(agent="diagnosis_agent", session_dir=self.session_dir)._log(
+            MessageLogger(agent=DIAGNOSIS, session_dir=self.session_dir).log(
                 "error", {"message": f"Validation error: {e}"}
             )
             return {
@@ -139,9 +138,9 @@ class BasicReActAgent:
                 "is_max_steps_reached": False,
             }
         except GraphRecursionError:
-            AgentCallbackLogger(agent="diagnosis_agent", session_dir=self.session_dir)._log(
+            MessageLogger(agent=DIAGNOSIS, session_dir=self.session_dir).log(
                 "error",
-                {"message": "Diagnosis agent reached max recursion limit."},
+                {"message": "Diagnosis phase reached max recursion limit."},
             )
             return {
                 "messages": [HumanMessage(content="Error: diagnosis did not finish within max steps.")],
@@ -149,9 +148,9 @@ class BasicReActAgent:
                 "is_max_steps_reached": True,
             }
 
-    async def submission_agent_builder(self, state: AgentState):
+    async def _run_submission(self, state: AgentState):
         diag_text = state["diagnosis_report"][-1]
-        result = await self.submission_agent.ainvoke(
+        result = await self._submission_runner.ainvoke(
             {
                 "messages": [
                     HumanMessage(
@@ -160,7 +159,7 @@ class BasicReActAgent:
                 ]
             },
             config={
-                "callbacks": [AgentCallbackLogger(agent="submission_agent", session_dir=self.session_dir)],
+                "callbacks": [AgentCallbackLogger(agent=SUBMISSION, session_dir=self.session_dir)],
                 "recursion_limit": self.max_steps,
             },
             debug=True,

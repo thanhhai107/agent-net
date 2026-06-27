@@ -1,4 +1,4 @@
-"""Session evaluation: numeric metrics, LLM judge, and publish on closed sessions."""
+"""Session evaluation: numeric metrics and LLM judge on closed sessions."""
 
 import json
 import os
@@ -110,9 +110,15 @@ def run_eval_metrics(*, session_id: str | None = None) -> None:
     out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     session.update_run_meta("eval_metrics", payload)
     log_event("eval_metrics_saved", f"Wrote numeric eval metrics to {out_path}", session_id=session.session_id)
+    log_event(
+        "eval_publish",
+        f"Published evaluation for session {session.session_id} (scenario {session.scenario_name}).",
+        session_id=session.session_id,
+        scenario=session.scenario_name,
+    )
 
 
-def run_llm_judge(judge_llm_backend: str, judge_model: str, *, session_id: str | None = None) -> None:
+def run_llm_judge(judge_llm_provider: str, judge_model: str, *, session_id: str | None = None) -> None:
     """Run LLM-as-judge only; writes ``llm_judge.json`` under the session dir."""
     session = Session()
     session.load_closed_session(session_id=session_id)
@@ -124,7 +130,7 @@ def run_llm_judge(judge_llm_backend: str, judge_model: str, *, session_id: str |
     trace_path = os.path.join(session.session_dir, MESSAGES_FILENAME)
     logger.info(f"Evaluating session {session.session_id} using LLM-as-Judge.")
 
-    llm_judge = LLMJudge(judge_llm_backend=judge_llm_backend, judge_model=judge_model)
+    llm_judge = LLMJudge(judge_llm_provider=judge_llm_provider, judge_model=judge_model)
     llm_judge.evaluate_agent(
         ground_truth=textwrap.dedent(
             f"""\
@@ -140,37 +146,17 @@ def run_llm_judge(judge_llm_backend: str, judge_model: str, *, session_id: str |
         session.update_run_meta("llm_judge", json.loads(judge_path.read_text(encoding="utf-8")))
 
 
-def publish_session_eval(*, session_id: str | None = None) -> None:
-    """Validate eval artifacts on a closed session and record publish completion."""
-    session = Session()
-    session.load_closed_session(session_id=session_id)
-    bind_session_dir(session.session_dir)
-
-    metrics_path = Path(session.session_dir) / EVAL_METRICS_FILENAME
-    if not metrics_path.exists():
-        raise FileNotFoundError(
-            f"eval_metrics.json not found under {session.session_dir}. Run `nika eval metrics` first."
-        )
-
-    log_event(
-        "eval_publish",
-        f"Published evaluation for session {session.session_id} (scenario {session.scenario_name}).",
-        session_id=session.session_id,
-        scenario=session.scenario_name,
-    )
-
-
 def eval_results(
     *,
     destroy_env: bool = True,
     session_id: str | None = None,
     run_judge: bool = False,
-    judge_llm_backend: str | None = None,
+    judge_llm_provider: str | None = None,
     judge_model: str | None = None,
 ) -> None:
-    """Close the session, then run metrics and publish; LLM judge runs only when ``run_judge`` is set."""
-    if run_judge and (not judge_llm_backend or not judge_model):
-        raise ValueError("--judge-backend and --judge-model are required when run_judge is enabled.")
+    """Close the session, then run metrics; LLM judge runs only when ``run_judge`` is set."""
+    if run_judge and (not judge_llm_provider or not judge_model):
+        raise ValueError("--judge-provider and --judge-model are required when run_judge is enabled.")
 
     session = Session()
     session.load_running_session(session_id=session_id)
@@ -178,5 +164,4 @@ def eval_results(
     close_session(session_id=resolved_session_id, undeploy=destroy_env)
     run_eval_metrics(session_id=resolved_session_id)
     if run_judge:
-        run_llm_judge(judge_llm_backend, judge_model, session_id=resolved_session_id)
-    publish_session_eval(session_id=resolved_session_id)
+        run_llm_judge(judge_llm_provider, judge_model, session_id=resolved_session_id)

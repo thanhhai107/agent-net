@@ -57,27 +57,9 @@ def list_all_net_envs() -> dict[str, NetworkEnvBase]:
     return _NET_ENVS
 
 
-def scenario_requires_topo_tier(scenario_name: str) -> bool:
-    """Return True if this scenario's lab expects an explicit topo tier (s/m/l)."""
+def scenario_requires_topo_size(scenario_name: str) -> bool:
+    """Return True if this scenario's lab expects an explicit topo size (s/m/l)."""
     if scenario_name not in _NET_ENVS:
         raise ValueError(f"Network environment '{scenario_name}' not found in the pool.")
     topo_size = getattr(_NET_ENVS[scenario_name], "TOPO_SIZE", None)
     return isinstance(topo_size, list)
-
-
-if __name__ == "__main__":
-    import json
-
-    res = {}
-    for env_name, env_class in _NET_ENVS.items():
-        env_instance = env_class()
-        res[env_name] = {
-            "resizeable": True,
-        }
-    print(json.dumps(res, indent=4))
-
-    lab = get_net_env_instance(
-        "dc_clos_bgp",
-        topo_size="l",
-    )
-    print(lab.routers)

@@ -1,21 +1,22 @@
-"""LangGraph + Codex CLI agent.
+"""LangGraph + Claude Code CLI agent.
 
 Reuses the same :class:`~langgraph.graph.StateGraph` structure as
 :class:`~agent.langgraph.react_agent.BasicReActAgent` but replaces the
-LangChain ReAct workers with Codex CLI subprocess wrappers:
+LangChain ReAct workers with Claude Code CLI subprocess wrappers:
 
-* **diagnosis node** → :class:`~agent.cli.domain_agents.CliDiagnosisAgent`
-  (``codex exec`` with Kathara MCP servers; server set chosen dynamically
+* **diagnosis phase** → :class:`~agent.claude_cli.phases.ClaudeDiagnosisPhase`
+  (``claude -p`` with Kathara MCP servers; server set chosen dynamically
   based on the session scenario)
-* **submission node** → :class:`~agent.cli.domain_agents.CliSubmissionAgent`
-  (``codex exec`` with the task MCP server; calls ``submit()`` to record
+* **submission phase** → :class:`~agent.claude_cli.phases.ClaudeSubmissionPhase`
+  (``claude -p`` with the task MCP server; calls ``submit()`` to record
   a structured result)
 
-Session ID propagation follows the same path as the LangChain path:
-``NIKA_SESSION_ID`` is injected into each MCP server's ``env`` block via
-:class:`~agent.utils.mcp_servers.MCPServerConfig`.
+Authentication supports environment API keys, third-party Anthropic-compatible
+endpoints (``ANTHROPIC_BASE_URL`` + ``ANTHROPIC_AUTH_TOKEN``), and
+``claude auth login``.  See :mod:`agent.claude_cli.config` and
+``src/agent/README.md``.
 
-Select with ``nika agent run -a cli``.
+Select with ``nika agent run -a claude_cli``.
 """
 
 import logging
@@ -29,9 +30,11 @@ from langgraph.graph import END, START, StateGraph
 from pydantic import Field
 from typing_extensions import TypedDict
 
-from agent.cli.domain_agents.diagnosis_agent import CliDiagnosisAgent
-from agent.cli.domain_agents.submission_agent import CliSubmissionAgent
+from agent.claude_cli.config import resolve_claude_model
+from agent.claude_cli.phases.diagnosis import ClaudeDiagnosisPhase
+from agent.claude_cli.phases.submission import ClaudeSubmissionPhase
 from agent.utils.loggers import MessageLogger
+from agent.utils.phases import DIAGNOSIS, SUBMISSION
 from nika.utils.session import Session
 
 logging.basicConfig(level=logging.INFO)
@@ -45,31 +48,27 @@ class AgentState(TypedDict):
     is_max_steps_reached: bool = Field(default=False)
 
 
-class CliAgent:
-    """Two-phase troubleshooting agent: LangGraph orchestration + Codex CLI workers.
+class ClaudeAgent:
+    """Two-phase troubleshooting agent: LangGraph orchestration + Claude Code CLI workers.
 
     Parameters
     ----------
     session_id:
         NIKA session identifier.
     model:
-        Codex model name forwarded to ``codex exec -m`` (default ``"gpt-5.4-mini"``).
-    reasoning_effort:
-        Codex ``model_reasoning_effort`` override (``none``, ``minimal``, ``low``,
-        ``medium``, ``high``, ``xhigh``).  When omitted, Codex uses its default.
+        Claude model name forwarded to ``claude --model``.  When omitted,
+        reads from environment (see :func:`~agent.claude_cli.config.default_claude_model`).
     """
 
     def __init__(
         self,
         session_id: str,
-        model: str = "gpt-5.4-mini",
-        reasoning_effort: str | None = None,
+        model: str | None = None,
         *,
         stream_output: bool = True,
     ) -> None:
         self.session_id = session_id
-        self.model = model
-        self.reasoning_effort = reasoning_effort
+        self.model = resolve_claude_model(model)
         self._stream_output = stream_output
 
         session = Session()
@@ -80,33 +79,31 @@ class CliAgent:
         scenario_name: str = getattr(session, "scenario_name", "")
         problem_names: list[str] = getattr(session, "problem_names", [])
 
-        self._diagnosis_agent = CliDiagnosisAgent(
+        self._diagnosis_phase = ClaudeDiagnosisPhase(
             session_id=session_id,
             session_dir=self.session_dir,
-            model=model,
-            reasoning_effort=reasoning_effort,
+            model=self.model,
             scenario_name=scenario_name,
             problem_names=problem_names,
             stream_output=stream_output,
         )
-        self._submission_agent = CliSubmissionAgent(
+        self._submission_phase = ClaudeSubmissionPhase(
             session_id=session_id,
             session_dir=self.session_dir,
-            model=model,
-            reasoning_effort=reasoning_effort,
+            model=self.model,
             stream_output=stream_output,
         )
 
         builder = StateGraph(AgentState)
-        builder.add_node("diagnosis_agent", self._run_diagnosis)
-        builder.add_node("submission_agent", self._run_submission)
-        builder.add_edge(START, "diagnosis_agent")
+        builder.add_node(DIAGNOSIS, self._run_diagnosis)
+        builder.add_node(SUBMISSION, self._run_submission)
+        builder.add_edge(START, DIAGNOSIS)
         builder.add_conditional_edges(
-            "diagnosis_agent",
+            DIAGNOSIS,
             lambda state: state.get("is_max_steps_reached", False),
-            {True: END, False: "submission_agent"},
+            {True: END, False: SUBMISSION},
         )
-        builder.add_edge("submission_agent", END)
+        builder.add_edge(SUBMISSION, END)
         self.graph = builder.compile()
 
     # ------------------------------------------------------------------
@@ -122,8 +119,7 @@ class CliAgent:
                 "problem": getattr(self.session, "problem_names", [""])[0],
                 "topo_size": getattr(self.session, "scenario_topo_size", ""),
                 "model": self.model,
-                "reasoning_effort": self.reasoning_effort,
-                "agent": "cli",
+                "agent": "claude_cli",
             },
         ):
             return await self.graph.ainvoke(
@@ -136,22 +132,22 @@ class CliAgent:
 
     async def _run_diagnosis(self, state: AgentState) -> dict[str, Any]:
         task_description: str = state["messages"][-1].content
-        logger = MessageLogger(agent="diagnosis_agent_cli", session_dir=self.session_dir)
-        self._print_phase("diagnosis", "starting network fault analysis")
-        logger.log("agent_start", {"phase": "diagnosis", "task_preview": task_description[:200]})
+        logger = MessageLogger(agent=DIAGNOSIS, session_dir=self.session_dir)
+        self._print_phase(DIAGNOSIS, "starting network fault analysis")
+        logger.log("agent_start", {"phase": DIAGNOSIS, "task_preview": task_description[:200]})
 
         try:
-            report = await self._diagnosis_agent.run(task_description)
+            report = await self._diagnosis_phase.run(task_description)
         except Exception as exc:
-            logger.log("agent_error", {"phase": "diagnosis", "error": str(exc)})
+            logger.log("agent_error", {"phase": DIAGNOSIS, "error": str(exc)})
             return {
                 "diagnosis_report": f"ERROR: {exc}",
                 "is_max_steps_reached": False,
             }
 
         is_error = report.startswith("ERROR:")
-        logger.log("agent_done", {"phase": "diagnosis", "is_error": is_error, "report_length": len(report)})
-        self._print_phase("diagnosis", "completed" if not is_error else f"finished with error ({report[:120]})")
+        logger.log("agent_done", {"phase": DIAGNOSIS, "is_error": is_error, "report_length": len(report)})
+        self._print_phase(DIAGNOSIS, "completed" if not is_error else f"finished with error ({report[:120]})")
         return {
             "diagnosis_report": report,
             "is_max_steps_reached": False,
@@ -159,18 +155,18 @@ class CliAgent:
 
     async def _run_submission(self, state: AgentState) -> dict[str, Any]:
         diagnosis_report: str = state["diagnosis_report"]
-        logger = MessageLogger(agent="submission_agent_cli", session_dir=self.session_dir)
-        self._print_phase("submission", "recording structured result")
-        logger.log("agent_start", {"phase": "submission"})
+        logger = MessageLogger(agent=SUBMISSION, session_dir=self.session_dir)
+        self._print_phase(SUBMISSION, "recording structured result")
+        logger.log("agent_start", {"phase": SUBMISSION})
 
         try:
-            result = await self._submission_agent.run(diagnosis_report)
+            result = await self._submission_phase.run(diagnosis_report)
         except Exception as exc:
-            logger.log("agent_error", {"phase": "submission", "error": str(exc)})
+            logger.log("agent_error", {"phase": SUBMISSION, "error": str(exc)})
             return {"messages": state["messages"]}
 
-        logger.log("agent_done", {"phase": "submission", "result_length": len(result)})
-        self._print_phase("submission", "completed")
+        logger.log("agent_done", {"phase": SUBMISSION, "result_length": len(result)})
+        self._print_phase(SUBMISSION, "completed")
         return {"messages": [*state["messages"], HumanMessage(content=result)]}
 
     def _print_phase(self, phase: str, message: str) -> None:

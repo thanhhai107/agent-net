@@ -1,4 +1,4 @@
-"""Commands for offline evaluation (metrics, judge, publish, summary)."""
+"""Commands for offline evaluation (metrics, judge, summary)."""
 
 import typer
 
@@ -7,7 +7,7 @@ eval_app = typer.Typer(help="Evaluate a completed agent session.")
 
 @eval_app.command("metrics")
 def eval_metrics(
-    session_id: str | None = typer.Option(None, "--session-id", help="Target session id (lab_hash)."),
+    session_id: str | None = typer.Option(None, "--session-id", help="Target session id."),
 ) -> None:
     """Compute rule-based scores and trace stats on a closed session; write eval_metrics.json."""
     from nika.workflows.eval.session import run_eval_metrics
@@ -20,33 +20,20 @@ def eval_metrics(
 
 @eval_app.command("judge")
 def eval_judge(
-    judge_backend: str = typer.Option(
+    judge_provider: str = typer.Option(
         ...,
-        "-b",
-        "--backend",
+        "-p",
+        "--provider",
         help="LLM provider for the judge (openai, ollama, deepseek).",
     ),
     judge_model: str = typer.Option(..., "-m", "--model", help="Judge model id."),
-    session_id: str | None = typer.Option(None, "--session-id", help="Target session id (lab_hash)."),
+    session_id: str | None = typer.Option(None, "--session-id", help="Target session id."),
 ) -> None:
     """Run LLM-as-judge on a closed session; write llm_judge.json."""
     from nika.workflows.eval.session import run_llm_judge
 
     try:
-        run_llm_judge(judge_backend, judge_model, session_id=session_id)
-    except (FileNotFoundError, ValueError) as exc:
-        raise typer.BadParameter(str(exc)) from exc
-
-
-@eval_app.command("publish")
-def eval_publish(
-    session_id: str | None = typer.Option(None, "--session-id", help="Target session id (lab_hash)."),
-) -> None:
-    """Validate eval artifacts on a closed session and record publish completion."""
-    from nika.workflows.eval.session import publish_session_eval
-
-    try:
-        publish_session_eval(session_id=session_id)
+        run_llm_judge(judge_provider, judge_model, session_id=session_id)
     except (FileNotFoundError, ValueError) as exc:
         raise typer.BadParameter(str(exc)) from exc
 
@@ -122,8 +109,8 @@ def eval_clean(
         help="Delete session files even when running sessions exist.",
     ),
 ) -> None:
-    """Delete historical results under results/ and runtime session JSON files."""
-    from nika.config import RESULTS_DIR, SESSIONS_DIR
+    """Delete results/, runtime session JSON files, and the SQLite session index."""
+    from nika.config import RESULTS_DIR, SESSIONS_DB, SESSIONS_DIR
     from nika.utils.session_store import SessionStore
     from nika.workflows.eval.clean import run_eval_clean
 
@@ -135,7 +122,10 @@ def eval_clean(
             "Close them with `nika session close` first, or pass --force."
         )
 
-    label = f"all files under {RESULTS_DIR} and session files under {SESSIONS_DIR}"
+    label = (
+        f"all files under {RESULTS_DIR}, session files under {SESSIONS_DIR}, "
+        f"and the SQLite index at {SESSIONS_DB}"
+    )
     if running and force:
         label += f" (including {len(running)} running session file(s))"
     if not yes:
@@ -150,5 +140,6 @@ def eval_clean(
 
     typer.echo(
         f"Removed {report.results_entries_removed} entr{'y' if report.results_entries_removed == 1 else 'ies'} "
-        f"under {RESULTS_DIR} and {report.session_files_removed} session file(s) under {SESSIONS_DIR}."
+        f"under {RESULTS_DIR}, {report.session_files_removed} session file(s) under {SESSIONS_DIR}, "
+        f"and cleared the SQLite index at {SESSIONS_DB}."
     )

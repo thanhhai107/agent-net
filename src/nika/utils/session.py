@@ -7,6 +7,7 @@ from typing import Any
 from nika.config import RESULTS_DIR
 from nika.evaluator.result_log import RUN_FILENAME, is_finished_session, iter_session_dirs
 from nika.utils.session_resolve import resolve_running_session_id
+from nika.utils.session_index import extract_gt_fields, extract_index_fields
 from nika.utils.session_store import SessionStore
 
 
@@ -144,12 +145,22 @@ class Session:
                 self.root_cause_name = "multiple_faults"
             else:
                 self.root_cause_name = self.problem_names[0]
-        self._write_run_json({k: v for k, v in self.__dict__.items() if k != "store"})
+        payload = {k: v for k, v in self.__dict__.items() if k != "store"}
+        self._write_run_json(payload)
+        if hasattr(self, "session_id"):
+            fields = extract_index_fields(payload)
+            fields["session_id"] = self.session_id
+            fields.setdefault("status", "finished")
+            self.store.index.upsert(fields)
 
     def write_gt(self, gt: dict[str, Any]):
         os.makedirs(self.session_dir, exist_ok=True)
         with open(self.session_dir + "/ground_truth.json", "w") as f:
             f.write(json.dumps(gt, indent=4))
+        if hasattr(self, "session_id"):
+            self.store.index.upsert(
+                {"session_id": self.session_id, **extract_gt_fields(gt)},
+            )
 
     def clear_session(self):
         if not hasattr(self, "session_id"):

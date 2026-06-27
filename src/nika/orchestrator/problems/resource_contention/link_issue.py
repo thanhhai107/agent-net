@@ -291,9 +291,3 @@ class IncastTrafficNetworkLimitationRCA(IncastTrafficNetworkLimitationBase, RCAT
         task_level=TaskLevel.RCA,
         description=TaskDescription.RCA,
     )
-
-
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    task = LinkBandwidthThrottlingBase(scenario_name="dc_clos_bgp", topo_size="m")
-    task.inject_fault()

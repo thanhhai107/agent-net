@@ -342,16 +342,3 @@ class RIPSmallInternetVPN(NetworkEnvBase):
             "establishing an encrypted tunnel to the external VPN server and allowing secure access to the external web services."
         )
         self.load_machines()
-
-
-if __name__ == "__main__":
-    rip_small_internet = RIPSmallInternetVPN(topo_size="l")
-    print("Lab description:", rip_small_internet.get_info())
-    if rip_small_internet.lab_exists():
-        print("Lab exists, undeploying it...")
-        rip_small_internet.undeploy()
-        print("Lab undeployed")
-
-    # print("Deploying lab...")
-    # rip_small_internet.deploy()
-    # print("Lab deployed")

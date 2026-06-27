@@ -1,25 +1,16 @@
-"""Codex CLI-backed diagnosis worker.
+"""Codex CLI-backed diagnosis phase worker.
 
-Mirrors the role of :class:`~agent.langgraph.domain_agents.DiagnosisAgent`
+Mirrors the role of :class:`~agent.langgraph.phases.DiagnosisPhase`
 in the LangChain path: wraps the same troubleshooting prompt and exposes an
 async ``run()`` that returns a free-text diagnosis report.
 """
 
-from agent.cli.codex_worker import CodexWorker
-
-# Keep in sync with agent.langgraph.domain_agents.diagnosis_agent.OVERALL_DIAGNOSIS_PROMPT
-_DIAGNOSIS_SYSTEM = """\
-You are a network troubleshooting expert.
-Focus on (1) detecting if there is an anomaly, (2) localizing the faulty devices, and (3) identifying the root cause.
-
-Basic requirements:
-- Use the provided MCP tools to gather necessary information.
-- Do not provide mitigation unless explicitly required.
-- Rely only on the MCP tools available to you; do not execute arbitrary shell commands.\
-"""
+from agent.codex_cli.codex_worker import CodexWorker
+from agent.utils.template import OVERALL_DIAGNOSIS_PROMPT
+from agent.utils.phases import DIAGNOSIS
 
 
-class CliDiagnosisAgent:
+class CodexCliDiagnosisPhase:
     """Runs network fault diagnosis via a ``codex exec`` subprocess.
 
     Parameters
@@ -55,7 +46,7 @@ class CliDiagnosisAgent:
         self._worker = CodexWorker(
             session_id=session_id,
             session_dir=session_dir,
-            phase="diagnosis",
+            phase=DIAGNOSIS,
             model=model,
             reasoning_effort=reasoning_effort,
             timeout=timeout,
@@ -66,5 +57,5 @@ class CliDiagnosisAgent:
 
     async def run(self, task_description: str) -> str:
         """Return a free-text diagnosis report produced by ``codex exec``."""
-        prompt = f"{_DIAGNOSIS_SYSTEM}\n\nTask: {task_description}"
+        prompt = f"{OVERALL_DIAGNOSIS_PROMPT}\n\nTask: {task_description}"
         return await self._worker.run(prompt)

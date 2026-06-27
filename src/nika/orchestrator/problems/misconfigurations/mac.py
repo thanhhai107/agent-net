@@ -98,9 +98,3 @@ class MacAddressConflictRCA(MacAddressConflictBase, RCATask):
         task_level=TaskLevel.RCA,
         description=TaskDescription.RCA,
     )
-
-
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    problem = MacAddressConflictBase(scenario_name="ospf_enterprise_static", topo_size="s")
-    # problem.inject_fault()

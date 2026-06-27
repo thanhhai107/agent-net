@@ -15,6 +15,7 @@ from typing import Any
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
 from agent.utils.mcp_servers import MCPServerConfig
+from agent.utils.phases import DIAGNOSIS, SUBMISSION
 from nika.utils.session import Session
 
 MOCK_DIAGNOSIS_TOOL_CALLS: list[tuple[str, dict[str, Any]]] = [
@@ -55,12 +56,12 @@ class MockAgent:
     def __init__(
         self,
         session_id: str,
-        llm_backend: str = "mock",
+        llm_provider: str = "mock",
         model: str = "mock-v1",
         max_steps: int = 20,
     ) -> None:
         self.session_id = session_id
-        self.llm_backend = llm_backend
+        self.llm_provider = llm_provider
         self.model = model
         self.max_steps = max_steps
         self.session = Session()
@@ -76,12 +77,12 @@ class MockAgent:
         return {"diagnosis_report": diagnosis_report}
 
     async def _run_diagnosis(self, task_description: str) -> str:
-        logger = self._make_logger("diagnosis_agent")
-        logger._log(
+        logger = self._make_logger(DIAGNOSIS)
+        logger.log(
             "llm_start",
             {
                 "messages": {"role": "user", "content": task_description},
-                "model": {"name": self.model, "backend": self.llm_backend},
+                "model": {"name": self.model, "provider": self.llm_provider},
             },
         )
 
@@ -96,12 +97,12 @@ class MockAgent:
         tools = {tool.name: tool for tool in await client.get_tools()}
 
         for tool_name, tool_input in MOCK_DIAGNOSIS_TOOL_CALLS:
-            logger._log(
+            logger.log(
                 "tool_start",
                 {"tool": {"name": tool_name}, "input": json.dumps(tool_input)},
             )
             tool_output = await tools[tool_name].ainvoke(tool_input)
-            logger._log(
+            logger.log(
                 "tool_end",
                 {
                     "output": str(tool_output),
@@ -109,13 +110,13 @@ class MockAgent:
                 },
             )
 
-        logger._log("llm_end", {"text": MOCK_DIAGNOSIS_REPORT})
+        logger.log("llm_end", {"text": MOCK_DIAGNOSIS_REPORT})
         return MOCK_DIAGNOSIS_REPORT
 
     async def _run_submission(self, diagnosis_report: str) -> None:
-        logger = self._make_logger("submission_agent")
+        logger = self._make_logger(SUBMISSION)
 
-        logger._log(
+        logger.log(
             "llm_start",
             {
                 "messages": {
@@ -125,7 +126,7 @@ class MockAgent:
                         "Please call list_avail_problems and then submit."
                     ),
                 },
-                "model": {"name": self.model, "backend": self.llm_backend},
+                "model": {"name": self.model, "provider": self.llm_provider},
             },
         )
 
@@ -134,7 +135,7 @@ class MockAgent:
         client = MultiServerMCPClient(connections=config)
         tools = {tool.name: tool for tool in await client.get_tools()}
 
-        logger._log("tool_start", {"tool": {"name": "list_avail_problems"}, "input": "{}"})
+        logger.log("tool_start", {"tool": {"name": "list_avail_problems"}, "input": "{}"})
         avail_raw = await tools["list_avail_problems"].ainvoke({})
         avail = _tool_text_list(avail_raw)
         session_root_cause = getattr(self.session, "root_cause_name", None)
@@ -142,7 +143,7 @@ class MockAgent:
             mock_root_cause = session_root_cause
         else:
             mock_root_cause = avail[0] if avail else "link_down"
-        logger._log(
+        logger.log(
             "tool_end",
             {"output": json.dumps(avail[:5]) + " ...", "output_type": "list"},
         )
@@ -152,23 +153,23 @@ class MockAgent:
             "faulty_devices": ["pc1"],
             "root_cause_name": [mock_root_cause],
         }
-        logger._log(
+        logger.log(
             "tool_start",
             {"tool": {"name": "submit"}, "input": json.dumps(submission)},
         )
         submit_result = await tools["submit"].ainvoke(submission)
-        logger._log(
+        logger.log(
             "tool_end",
             {"output": str(submit_result), "output_type": type(submit_result).__name__},
         )
 
-        logger._log(
+        logger.log(
             "llm_end",
             {"text": f"Submitted: root cause = {mock_root_cause}, faulty device = pc1"},
         )
 
     def _make_logger(self, agent_name: str):
-        """Return an AgentCallbackLogger for *agent_name*."""
-        from agent.utils.loggers import AgentCallbackLogger  # noqa: PLC0415
+        """Return a MessageLogger for *agent_name*."""
+        from agent.utils.loggers import MessageLogger  # noqa: PLC0415
 
-        return AgentCallbackLogger(agent=agent_name, session_dir=self.session.session_dir)
+        return MessageLogger(agent=agent_name, session_dir=self.session.session_dir)

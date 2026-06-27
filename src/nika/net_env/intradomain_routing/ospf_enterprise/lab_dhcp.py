@@ -673,17 +673,3 @@ class OSPFEnterpriseDHCP(NetworkEnvBase):
     def deploy(self):
         super().deploy()
         time.sleep(60)  # wait for a while to make sure dhcp works
-
-
-if __name__ == "__main__":
-    ospf_enterprise = OSPFEnterpriseDHCP(topo_size="s")
-    print("lab net summary:", ospf_enterprise.get_info())
-    if ospf_enterprise.lab_exists():
-        print("Lab exists, undeploying it...")
-        ospf_enterprise.undeploy()
-        print("Lab undeployed")
-    print(ospf_enterprise.web_urls)
-
-    print("Deploying lab...")
-    ospf_enterprise.deploy()
-    print("Lab deployed")

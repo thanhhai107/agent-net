@@ -10,16 +10,17 @@ from nika.utils.session_resolve import resolve_running_session_id, resolve_sessi
 def env_id_from_lab(lab_name: str | None) -> str:
     """Derive a short display ENV ID from a lab instance name.
 
-    Lab names follow the pattern ``{scenario}__{MMDDHHMMSS}-{6hex}``.
-    We extract the trailing hex token so the ID is stable and short.
+    Lab names follow ``{scenario}__{tag}`` where ``tag`` ends with a
+    6-character suffix shared with the session id.
     """
     if not lab_name:
         return "—"
     parts = lab_name.rsplit("__", 1)
     if len(parts) == 2:
-        hex_part = parts[1].rsplit("-", 1)[-1][:6]
-        return f"env_{hex_part}"
-    return f"env_{lab_name[:6]}"
+        scenario, tag = parts
+        suffix = tag.rsplit("-", 1)[-1][:6]
+        return f"{scenario}_{suffix}"
+    return lab_name[:12]
 
 
 def human_age(iso_str: str | None) -> str:

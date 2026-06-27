@@ -2,24 +2,24 @@
 
 import typer
 
-from agent.cli.codex_worker import REASONING_EFFORT_LEVELS
+from agent.codex_cli.codex_worker import REASONING_EFFORT_LEVELS
 
-SUPPORTED_AGENT_TYPES = ("react", "mock", "cli")
-SUPPORTED_LLM_BACKENDS = ("openai", "ollama", "deepseek")
+SUPPORTED_AGENT_TYPES = ("react", "mock", "codex_cli", "claude_cli")
+SUPPORTED_LLM_PROVIDERS = ("openai", "ollama", "deepseek")
 
 agent_app = typer.Typer(help="Troubleshooting agents.")
 
 
 @agent_app.command("list")
 def agent_list() -> None:
-    """Print supported agent types and LLM backends."""
+    """Print supported agent types and LLM providers."""
     typer.echo("agent_types:")
     for agent_type in SUPPORTED_AGENT_TYPES:
         typer.echo(f"  {agent_type}")
-    typer.echo("llm_backends:")
-    for backend in SUPPORTED_LLM_BACKENDS:
-        typer.echo(f"  {backend}")
-    typer.echo("reasoning_effort (cli only):")
+    typer.echo("llm_providers:")
+    for provider in SUPPORTED_LLM_PROVIDERS:
+        typer.echo(f"  {provider}")
+    typer.echo("reasoning_effort (codex_cli agent only):")
     for level in REASONING_EFFORT_LEVELS:
         typer.echo(f"  {level}")
 
@@ -27,8 +27,13 @@ def agent_list() -> None:
 @agent_app.command("run")
 def agent_run(
     agent_type: str = typer.Option("react", "-a", "--agent", help="Agent implementation."),
-    llm_backend: str = typer.Option("openai", "-b", "--backend", help="LLM provider (openai, ollama, deepseek)."),
-    model: str = typer.Option("gpt-5-mini", "-m", "--model", help="Model id for the chosen backend."),
+    llm_provider: str = typer.Option("openai", "-p", "--provider", help="LLM provider (openai, ollama, deepseek)."),
+    model: str | None = typer.Option(
+        None,
+        "-m",
+        "--model",
+        help="Model id for the chosen provider or agent (claude: defaults from ANTHROPIC_MODEL in .env).",
+    ),
     max_steps: int = typer.Option(
         20,
         "-n",
@@ -39,9 +44,9 @@ def agent_run(
         None,
         "-e",
         "--reasoning-effort",
-        help="Codex model_reasoning_effort (cli only): none, minimal, low, medium, high, xhigh.",
+        help="Codex model_reasoning_effort (cli agent only): none, minimal, low, medium, high, xhigh.",
     ),
-    session_id: str | None = typer.Option(None, "--session-id", help="Target session id (lab_hash)."),
+    session_id: str | None = typer.Option(None, "--session-id", help="Target session id."),
 ) -> None:
     """Run the agent on the current session task."""
     from nika.workflows.agent.run import start_agent
@@ -54,7 +59,7 @@ def agent_run(
     try:
         start_agent(
             agent_type,
-            llm_backend,
+            llm_provider,
             model,
             max_steps,
             session_id=session_id,

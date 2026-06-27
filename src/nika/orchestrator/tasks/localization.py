@@ -122,10 +122,3 @@ class LocalizationTask(TaskBase):
             self.faulty_devices = [self.faulty_devices]
         task = LocalizationSubmission(faulty_devices=self.faulty_devices)
         return task
-
-
-if __name__ == "__main__":
-    task = LocalizationSubmission(faulty_devices=["router_1", "switch_2"])
-    print(task.model_json_schema())
-
-    print(task)

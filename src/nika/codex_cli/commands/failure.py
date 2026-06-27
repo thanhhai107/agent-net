@@ -38,7 +38,7 @@ def failure_inject(
         metavar="PROBLEM",
         help="One or more problem ids (see `nika failure list`).",
     ),
-    session_id: str | None = typer.Option(None, "--session-id", help="Target session id (lab_hash)."),
+    session_id: str | None = typer.Option(None, "--session-id", help="Target session id."),
     sets: list[str] | None = typer.Option(
         None,
         "--set",
@@ -64,7 +64,6 @@ def failure_describe(
     """Describe supported parameters for one failure type."""
     from nika.orchestrator.problems.prob_pool import get_problem_class
     from nika.orchestrator.problems.problem_base import TaskLevel
-    from nika.utils.failure_params import get_failure_param_schema
 
     cls = get_problem_class(problem, TaskLevel.DETECTION)
     if cls is None:
@@ -72,36 +71,24 @@ def failure_describe(
         raise typer.Exit(1)
 
     ParamsClass = getattr(cls, "Params", None)
-    if ParamsClass is not None:
-        schema = ParamsClass.model_json_schema()
-        typer.echo(f"Problem: {problem}")
-        if schema.get("description"):
-            typer.echo(schema["description"])
-        typer.echo("\nParameter schema (JSON Schema):")
-        typer.echo(json.dumps(schema, indent=2))
-        params_hint = " ".join(f"--set {name}=<value>" for name in schema.get("properties", {}))
-        typer.echo(f"\nUsage example:\n  nika failure inject {problem} {params_hint}")
-        return
-
-    # Legacy path for failures that still use FailureParamSchema.
-    legacy_schema = get_failure_param_schema(problem)
-    if legacy_schema is None:
+    if ParamsClass is None:
         typer.echo(f"{problem}: no typed parameter schema yet.")
         typer.echo("You can still run injection without --set; defaults come from scenario runtime.")
         return
 
-    typer.echo(f"{legacy_schema.problem_name}: {legacy_schema.summary}")
-    typer.echo("Parameters:")
-    for field in legacy_schema.fields:
-        default_text = f"default={field.default!r}" if field.default is not None else "default=<runtime>"
-        required_text = "required" if field.required else "optional"
-        typer.echo(f"- {field.name} ({field.param_type}, {required_text}, {default_text}) - {field.description}")
-    typer.echo(f"Example:\n  {legacy_schema.example}")
+    schema = ParamsClass.model_json_schema()
+    typer.echo(f"Problem: {problem}")
+    if schema.get("description"):
+        typer.echo(schema["description"])
+    typer.echo("\nParameter schema (JSON Schema):")
+    typer.echo(json.dumps(schema, indent=2))
+    params_hint = " ".join(f"--set {name}=<value>" for name in schema.get("properties", {}))
+    typer.echo(f"\nUsage example:\n  nika failure inject {problem} {params_hint}")
 
 
 @failure_app.command("ps")
 def failure_ps(
-    session_id: str | None = typer.Option(None, "--session-id", help="Target session id (lab_hash)."),
+    session_id: str | None = typer.Option(None, "--session-id", help="Target session id."),
 ) -> None:
     """List persisted failure injection states for one session."""
     from nika.utils.session_store import SessionStore

@@ -33,6 +33,10 @@ class KatharaBaseAPI:
         if self.lab is None:
             raise ValueError(f"Lab {lab_name} not found.")
 
+    def _get_lab_link_stats(self) -> Dict[str, DockerLinkStats]:
+        """Get the link stats of the lab."""
+        return next(self.instance.get_links_stats(lab_name=self.lab.name))
+
     def exec_cmd(self, host_name: str, command: str, timeout: float = 10) -> str:
         """
         Run a command on a machine and return its output as a string.
@@ -93,7 +97,7 @@ class KatharaBaseAPI:
         """
         Get the list of devices connected to a host.
         """
-        links: Dict[str:DockerLinkStats] = next(self.instance.get_links_stats())
+        links: Dict[str:DockerLinkStats] = self._get_lab_link_stats()
         results = []
         for _, link in links.items():
             if link.name:
@@ -220,7 +224,7 @@ class KatharaBaseAPI:
         """
         Get the links of the network.
         """
-        links: Dict[str:DockerLinkStats] = next(self.instance.get_links_stats())
+        links: Dict[str:DockerLinkStats] = self._get_lab_link_stats()
         result = {}
         for _, link in links.items():
             if link.name:
@@ -554,18 +558,3 @@ class KatharaBaseAPI:
         """
         command = "cat /etc/resolv.conf"
         return self.exec_cmd(host_name, command)
-
-
-async def main():
-    api = KatharaBaseAPI(lab_name="ospf_enterprise_dhcp")
-    # result = api.get_connected_devices("super_spine_router_0")
-
-    # result = await api.get_reachability()
-    result = api.exec_cmd("load_balancer", "curl http://20.200.0.2")
-
-    # result = api.curl_web_test("pc_1_1_1_1", "http://web0.local", times=3)
-    print(result)
-
-
-if __name__ == "__main__":
-    asyncio.run(main())

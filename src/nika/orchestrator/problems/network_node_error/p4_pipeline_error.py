@@ -581,9 +581,3 @@ class P4MPLSLabelLimitExceededRCA(P4MPLSLabelLimitExceededBase, RCATask):
         task_level=TaskLevel.RCA,
         description=TaskDescription.RCA,
     )
-
-
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    problem = P4TableEntryMisconfigBase()
-    # problem.inject_fault()
