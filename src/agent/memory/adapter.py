@@ -7,7 +7,7 @@ import re
 from typing import Any
 
 from agent.memory.models import MemoryQuery
-from agent.memory.service import HybridMemoryModule
+from agent.memory.service import ProceduralMemoryModule
 from agent.protocols import TroubleshootingAgent
 from agent.utils.loggers import MessageLogger
 
@@ -33,7 +33,7 @@ class MemoryAugmentedAgent:
     def __init__(
         self,
         agent: TroubleshootingAgent,
-        memory: HybridMemoryModule,
+        memory: ProceduralMemoryModule,
         *,
         memory_mode: str,
         memory_top_k: int = 5,

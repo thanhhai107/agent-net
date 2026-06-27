@@ -1,4 +1,4 @@
-"""Unit tests for the persistent hybrid procedural-memory module."""
+"""Unit tests for the persistent atomic procedural-memory module."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 from qdrant_client import QdrantClient
 
@@ -17,10 +17,9 @@ from agent.memory.models import (
     MemoryCandidate,
     MemoryQuery,
     MemoryStatus,
-    MemoryType,
 )
-from agent.memory.service import HybridMemoryModule
-from agent.memory.store import SQLiteMemoryStore
+from agent.memory.service import ProceduralMemoryModule
+from agent.memory.store import SQLiteMemoryStore, create_memory_store
 from agent.memory.vector_index import QdrantMemoryIndex
 from agent.memory.workflow import evolve_session_memory
 from nika.workflows.benchmark.run import run_benchmark_from_csv
@@ -67,9 +66,8 @@ class FakeWorkflow:
         return {"ok": True}
 
 
-def learning_candidate(content: str | None = None) -> MemoryCandidate:
+def atomic_note(content: str | None = None) -> MemoryCandidate:
     return MemoryCandidate(
-        memory_type=MemoryType.LEARNING,
         content=content
         or (
             "Check routing adjacency and route propagation before concluding "
@@ -90,12 +88,40 @@ def learning_candidate(content: str | None = None) -> MemoryCandidate:
 
 
 class SQLiteMemoryStoreTest(unittest.TestCase):
+    def test_store_factory_defaults_to_postgres_unless_sqlite_is_forced(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            sqlite_path = Path(tmp) / "memory.sqlite3"
+            with patch("agent.memory.store.PostgreSQLMemoryStore") as postgres_store:
+                selected_default = create_memory_store(
+                    sqlite_path=sqlite_path,
+                )
+                selected_custom = create_memory_store(
+                    sqlite_path=sqlite_path,
+                    database_url="postgresql://example/db",
+                )
+                forced = create_memory_store(
+                    sqlite_path=sqlite_path,
+                    database_url="postgresql://example/db",
+                    force_sqlite=True,
+                )
+
+        self.assertEqual(
+            postgres_store.call_args_list,
+            [
+                call("postgresql://nika:nika@localhost:5432/nika_memory"),
+                call("postgresql://example/db"),
+            ],
+        )
+        self.assertEqual(selected_default, postgres_store.return_value)
+        self.assertEqual(selected_custom, postgres_store.return_value)
+        self.assertIsInstance(forced, SQLiteMemoryStore)
+
     def test_atomic_memory_is_canonical_and_fts_searchable(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = SQLiteMemoryStore(Path(tmp) / "memory.sqlite3")
             memory, created = store.add_or_corroborate(
                 bank_id="experiment",
-                candidate=learning_candidate(),
+                candidate=atomic_note(),
                 status=MemoryStatus.VALIDATED,
                 confidence=0.9,
                 source_session_id="episode-1",
@@ -112,14 +138,14 @@ class SQLiteMemoryStoreTest(unittest.TestCase):
         self.assertEqual(memory.status, MemoryStatus.VALIDATED)
         self.assertEqual(results[0][0].memory_id, memory.memory_id)
 
-    def test_repeated_validation_promotes_learning_to_instruction(self) -> None:
+    def test_repeated_validation_corroborates_atomic_note(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = SQLiteMemoryStore(Path(tmp) / "memory.sqlite3")
             memory = None
             for episode in range(3):
                 memory, _ = store.add_or_corroborate(
                     bank_id="experiment",
-                    candidate=learning_candidate(),
+                    candidate=atomic_note(),
                     status=MemoryStatus.VALIDATED,
                     confidence=0.8,
                     source_session_id=f"episode-{episode}",
@@ -127,18 +153,16 @@ class SQLiteMemoryStoreTest(unittest.TestCase):
                 )
 
         self.assertIsNotNone(memory)
-        self.assertEqual(memory.memory_type, MemoryType.INSTRUCTION)
         self.assertEqual(memory.validation_count, 3)
+        self.assertGreaterEqual(memory.confidence, 0.9)
+        self.assertNotIn("memory_type", memory.model_dump())
 
-    def test_success_can_promote_matching_staged_observation(self) -> None:
+    def test_success_can_validate_matching_staged_note(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = SQLiteMemoryStore(Path(tmp) / "memory.sqlite3")
-            observation = learning_candidate().model_copy(
-                update={"memory_type": MemoryType.OBSERVATION}
-            )
             staged, _ = store.add_or_corroborate(
                 bank_id="experiment",
-                candidate=observation,
+                candidate=atomic_note(),
                 status=MemoryStatus.STAGED,
                 confidence=0.4,
                 source_session_id="failed-episode",
@@ -146,7 +170,7 @@ class SQLiteMemoryStoreTest(unittest.TestCase):
             )
             promoted, created = store.add_or_corroborate(
                 bank_id="experiment",
-                candidate=learning_candidate(),
+                candidate=atomic_note(),
                 status=MemoryStatus.VALIDATED,
                 confidence=0.9,
                 source_session_id="successful-episode",
@@ -156,13 +180,12 @@ class SQLiteMemoryStoreTest(unittest.TestCase):
         self.assertFalse(created)
         self.assertEqual(promoted.memory_id, staged.memory_id)
         self.assertEqual(promoted.status, MemoryStatus.VALIDATED)
-        self.assertEqual(promoted.memory_type, MemoryType.LEARNING)
 
 
 class MemoryPolicyTest(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
-        self.module = HybridMemoryModule(
+        self.module = ProceduralMemoryModule(
             bank_id="test",
             store_path=Path(self.tmp.name) / "memory.sqlite3",
             vector_index=DisabledVectorIndex(),
@@ -171,12 +194,9 @@ class MemoryPolicyTest(unittest.TestCase):
     def tearDown(self) -> None:
         self.tmp.cleanup()
 
-    def test_success_promotes_observation_to_validated_learning(self) -> None:
-        observation = learning_candidate().model_copy(
-            update={"memory_type": MemoryType.OBSERVATION}
-        )
+    def test_success_validates_atomic_note(self) -> None:
         gated = self.module.validate(
-            [observation],
+            [atomic_note()],
             EvaluationEvidence(
                 detection_score=1,
                 localization_f1=1,
@@ -185,16 +205,13 @@ class MemoryPolicyTest(unittest.TestCase):
         )
 
         candidate, status, confidence = gated[0]
-        self.assertEqual(candidate.memory_type, MemoryType.LEARNING)
+        self.assertNotIn("memory_type", candidate.model_dump())
         self.assertEqual(status, MemoryStatus.VALIDATED)
         self.assertGreater(confidence, 0.8)
 
-    def test_single_episode_cannot_create_instruction_directly(self) -> None:
-        instruction = learning_candidate().model_copy(
-            update={"memory_type": MemoryType.INSTRUCTION}
-        )
+    def test_atomic_note_schema_has_no_instruction_type(self) -> None:
         gated = self.module.validate(
-            [instruction],
+            [atomic_note()],
             EvaluationEvidence(
                 detection_score=1,
                 localization_f1=1,
@@ -202,17 +219,17 @@ class MemoryPolicyTest(unittest.TestCase):
             ),
         )
 
-        self.assertEqual(gated[0][0].memory_type, MemoryType.LEARNING)
+        self.assertNotIn("memory_type", gated[0][0].model_dump())
 
-    def test_failure_only_stages_observations_and_errors(self) -> None:
-        observation = learning_candidate().model_copy(
-            update={"memory_type": MemoryType.OBSERVATION}
-        )
-        unsafe_learning = learning_candidate(
-            "Always classify this symptom as one fixed benchmark answer."
+    def test_failure_only_stages_cautious_checkable_notes(self) -> None:
+        cautious_note = atomic_note()
+        unsafe_claim = MemoryCandidate(
+            content="Always classify this symptom as one fixed benchmark answer.",
+            applicability=["A vague symptom resembles a previous episode."],
+            attributes=MemoryAttributes(protocols=["bgp"]),
         )
         gated = self.module.validate(
-            [observation, unsafe_learning],
+            [cautious_note, unsafe_claim],
             EvaluationEvidence(
                 detection_score=1,
                 localization_f1=0,
@@ -221,13 +238,14 @@ class MemoryPolicyTest(unittest.TestCase):
         )
 
         self.assertEqual(len(gated), 1)
+        self.assertEqual(gated[0][0].content, cautious_note.content)
         self.assertEqual(gated[0][1], MemoryStatus.STAGED)
 
     def test_retrieval_respects_top_k_and_token_budget(self) -> None:
         for index in range(4):
             self.module.store.add_or_corroborate(
                 bank_id="test",
-                candidate=learning_candidate(
+                candidate=atomic_note(
                     f"Check BGP neighbor evidence using diagnostic sequence {index} "
                     "before localizing the affected routing role."
                 ),
@@ -283,7 +301,7 @@ class MemoryPolicyTest(unittest.TestCase):
     def test_snapshot_is_jsonl_audit_artifact(self) -> None:
         self.module.store.add_or_corroborate(
             bank_id="test",
-            candidate=learning_candidate(),
+            candidate=atomic_note(),
             status=MemoryStatus.VALIDATED,
             confidence=0.9,
             source_session_id="episode-1",
@@ -339,12 +357,31 @@ class QdrantMemoryIndexTest(unittest.TestCase):
         },
         clear=False,
     )
+    def test_qdrant_readiness_reports_server_and_index_config(self) -> None:
+        index = QdrantMemoryIndex(provider=FixedEmbeddingProvider())
+        index._client = QdrantClient(":memory:")
+
+        report = index.readiness()
+
+        self.assertTrue(report["server_reachable"])
+        self.assertTrue(report["ready"])
+        self.assertFalse(report["collection_exists"])
+
+    @patch.dict(
+        "os.environ",
+        {
+            "QDRANT_URL": "http://unused",
+            "QDRANT_COLLECTION": "memory-test",
+            "EMBEDDING_DIMENSION": "3",
+        },
+        clear=False,
+    )
     def test_qdrant_stores_vectors_as_secondary_index(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = SQLiteMemoryStore(Path(tmp) / "memory.sqlite3")
             memory, _ = store.add_or_corroborate(
                 bank_id="experiment",
-                candidate=learning_candidate(),
+                candidate=atomic_note(),
                 status=MemoryStatus.VALIDATED,
                 confidence=0.9,
                 source_session_id="episode-1",
@@ -387,7 +424,7 @@ class OnlineEvolutionWorkflowTest(unittest.IsolatedAsyncioTestCase):
             module.snapshot.return_value = session_dir / "memory_snapshot.jsonl"
 
             with patch(
-                "agent.memory.workflow.HybridMemoryModule",
+                "agent.memory.workflow.ProceduralMemoryModule",
                 return_value=module,
             ):
                 await evolve_session_memory(

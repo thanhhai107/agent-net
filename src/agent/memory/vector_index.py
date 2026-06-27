@@ -6,7 +6,7 @@ import json
 import logging
 import os
 import urllib.request
-from typing import Protocol
+from typing import Any, Protocol
 
 from openai import OpenAI
 
@@ -95,6 +95,60 @@ class QdrantMemoryIndex:
             self.provider and self.url and self.collection and self.dimension > 0
         )
 
+    def readiness(self) -> dict[str, Any]:
+        """Return a read-only health report for the optional Qdrant index."""
+        report: dict[str, Any] = {
+            "configured": bool(self.url and self.collection),
+            "url": self.url or None,
+            "collection": self.collection or None,
+            "embedding_provider_configured": self.provider is not None,
+            "embedding_dimension": self.dimension,
+            "server_reachable": False,
+            "collection_exists": False,
+            "ready": False,
+            "reason": "",
+        }
+        if not self.url:
+            report["reason"] = "QDRANT_URL is not set"
+            return report
+        try:
+            from qdrant_client import QdrantClient
+        except ImportError:
+            report["reason"] = "qdrant-client is not installed"
+            return report
+
+        try:
+            client = self._client or QdrantClient(
+                url=self.url,
+                api_key=self.api_key,
+                check_compatibility=False,
+            )
+            client.get_collections()
+            report["server_reachable"] = True
+            if self.collection:
+                report["collection_exists"] = bool(
+                    client.collection_exists(self.collection)
+                )
+        except Exception as exc:
+            report["reason"] = f"Qdrant is not reachable: {exc}"
+            return report
+
+        missing: list[str] = []
+        if not self.collection:
+            missing.append("QDRANT_COLLECTION")
+        if self.provider is None:
+            missing.append("EMBEDDING_MODEL/provider")
+        if self.dimension <= 0:
+            missing.append("EMBEDDING_DIMENSION")
+        report["ready"] = report["server_reachable"] and not missing
+        if missing:
+            report["reason"] = "Missing semantic-index config: " + ", ".join(missing)
+        elif not report["collection_exists"]:
+            report["reason"] = "Ready; collection will be created on first upsert"
+        else:
+            report["reason"] = "Ready"
+        return report
+
     def _client_or_none(self):
         if not self.enabled:
             return None
@@ -104,7 +158,11 @@ class QdrantMemoryIndex:
             from qdrant_client import QdrantClient
         except ImportError:
             return None
-        self._client = QdrantClient(url=self.url, api_key=self.api_key)
+        self._client = QdrantClient(
+            url=self.url,
+            api_key=self.api_key,
+            check_compatibility=False,
+        )
         return self._client
 
     def _ensure_collection(self, vector_size: int) -> bool:
@@ -144,7 +202,6 @@ class QdrantMemoryIndex:
                     vector=vectors[0],
                     payload={
                         "bank_id": memory.bank_id,
-                        "memory_type": memory.memory_type.value,
                         "status": memory.status.value,
                         "scenario": memory.attributes.scenarios,
                         "topology_class": memory.attributes.topology_classes,

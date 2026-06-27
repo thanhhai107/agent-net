@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from agent.memory.models import EvaluationEvidence
-from agent.memory.service import HybridMemoryModule
+from agent.memory.service import ProceduralMemoryModule
 
 
 async def evolve_session_memory(
@@ -22,7 +22,7 @@ async def evolve_session_memory(
 
     bank_id = str(run_meta.get("memory_bank") or "default")
     session_id = str(run_meta["session_id"])
-    module = HybridMemoryModule(
+    module = ProceduralMemoryModule(
         bank_id=bank_id,
         llm_backend=str(run_meta.get("llm_backend") or "openai"),
         model=str(run_meta.get("model") or "gpt-5-mini"),

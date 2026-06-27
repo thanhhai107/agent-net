@@ -83,13 +83,26 @@ DEEPSEEK_API_KEY=
 OPENAI_API_KEY=
 OLLAMA_API_URL=http://localhost:11434
 
+NETMIND_API_KEY=
+NETMIND_BASE_URL=https://stream-netmind.viettel.vn/gateway/v1
+NETMIND_TIMEOUT_SECONDS=90
+NETMIND_MAX_RETRIES=0
+
+MEMORY_DATABASE_URL=postgresql://nika:nika@localhost:5432/nika_memory
+
 QDRANT_URL=http://localhost:6333
 QDRANT_API_KEY=
-QDRANT_COLLECTION=
+QDRANT_COLLECTION=nika_memory
 
-# Embedding model
-EMBEDDING_MODEL=
+# Embedding model for Qdrant semantic retrieval.
+# Leave EMBEDDING_MODEL empty to disable Qdrant semantic search and use
+# PostgreSQL lexical/full-text retrieval only.
+# NetMind exposes this through an OpenAI-compatible embeddings API.
+EMBEDDING_PROVIDER=openai
+EMBEDDING_MODEL=result-embed-dr
 EMBEDDING_DIMENSION=1024
+EMBEDDING_API_KEY=${NETMIND_API_KEY}
+EMBEDDING_BASE_URL=${NETMIND_BASE_URL}
 
 LANGSMITH_TRACING=false
 LANGSMITH_ENDPOINT=https://api.smith.langchain.com
@@ -102,9 +115,10 @@ LANGFUSE_BASE_URL=https://cloud.langfuse.com
 ```
 
 At least one LLM configuration is required for LangChain agents:
-`OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, or `OLLAMA_API_URL`. Qdrant and embedding
-settings are required only by features that use vector storage. Langfuse is the
-default tracing path; LangSmith is optional and used only when
+`OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, or `OLLAMA_API_URL`. PostgreSQL is the
+canonical runtime store for procedural memory; Qdrant and embedding settings are
+required only by features that use vector storage. Langfuse is the default
+tracing path; LangSmith is optional and used only when
 `LANGSMITH_TRACING=true`.
 
 ## Step by step guide
@@ -324,18 +338,26 @@ procedural lessons before calling the selected workflow. After `nika eval
 metrics` produces detection, localization, and RCA scores, the shared
 post-evaluation hook can evolve the same memory bank.
 
-- SQLite + FTS5 under `runtime/memory/` is the canonical typed memory store.
-- Qdrant is an optional semantic index; the agent falls back to FTS5 when it is
-  unavailable.
+- PostgreSQL is the canonical atomic-note store. The default configuration uses
+  the self-hosted Docker service at
+  `postgresql://nika:nika@localhost:5432/nika_memory`.
+- Qdrant is the optional rebuildable semantic index. The agent falls back to
+  lexical full-text search when Qdrant or embeddings are unavailable.
 - The extractor sees the diagnosis trajectory but never ground-truth text.
-- Failed episodes may stage only observations/errors. Fully successful episodes
-  can validate learnings; repeated validation promotes them to instructions.
+- The module follows three pillars: MemInsight-style context attributes,
+  LightMem-style offline consolidation, and A-Mem-style atomic notes plus links.
+- Failed or partial episodes may stage only cautious, checkable notes. Fully
+  successful episodes validate atomic procedural notes; repeated validation
+  increases confidence instead of creating a separate instruction type.
 - Each evaluated episode writes `memory_update.json` and
   `memory_snapshot.jsonl` under its result directory.
 
 Online evolution must be sequential:
 
 ```shell
+docker compose up -d postgres qdrant
+nika memory health --bank experiment-01
+
 nika benchmark run --csv benchmark/benchmark_selected.csv \
   -a react --memory-mode evolve --memory-bank experiment-01 -j 1
 

@@ -3,18 +3,25 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import typer
 
-from agent.memory.service import HybridMemoryModule
+from agent.memory.service import ProceduralMemoryModule
+from agent.memory.vector_index import QdrantMemoryIndex
 from nika.config import MEMORY_DIR
 
 memory_app = typer.Typer(help="Manage procedural-memory experiment banks.")
 
 
-def _module(bank: str) -> HybridMemoryModule:
-    return HybridMemoryModule(bank_id=bank)
+def _module(bank: str) -> ProceduralMemoryModule:
+    return ProceduralMemoryModule(bank_id=bank)
+
+
+def _safe_error(exc: Exception) -> str:
+    text = str(exc)
+    return re.sub(r"(postgres(?:ql)?://[^:\s]+:)[^@\s/]+@", r"\1<redacted>@", text)
 
 
 @memory_app.command("inspect")
@@ -29,6 +36,32 @@ def memory_inspect(
             indent=2,
         )
     )
+
+
+@memory_app.command("health")
+def memory_health(
+    bank: str = typer.Option("default", "--bank", help="Memory-bank id."),
+) -> None:
+    """Check PostgreSQL store connectivity and optional Qdrant readiness."""
+    report = {
+        "bank_id": bank,
+        "store": {
+            "backend": "PostgreSQLMemoryStore",
+            "ready": False,
+        },
+        "qdrant": QdrantMemoryIndex().readiness(),
+    }
+    try:
+        module = _module(bank)
+        report["store"] = {
+            "backend": type(module.store).__name__,
+            "ready": True,
+            "stats": module.store.bank_stats(bank),
+        }
+        report["qdrant"] = module.vector_index.readiness()
+    except Exception as exc:
+        report["store"]["reason"] = _safe_error(exc)
+    typer.echo(json.dumps(report, ensure_ascii=False, indent=2))
 
 
 @memory_app.command("snapshot")
@@ -52,7 +85,7 @@ def memory_clear(
     bank: str = typer.Option("default", "--bank", help="Memory-bank id."),
     yes: bool = typer.Option(False, "-y", "--yes", help="Skip confirmation."),
 ) -> None:
-    """Delete one experiment bank from SQLite and its optional Qdrant index."""
+    """Delete one experiment bank from the memory store and optional Qdrant index."""
     if not yes and not typer.confirm(f"Clear memory bank '{bank}'?", default=False):
         raise typer.Abort()
     _module(bank).clear()

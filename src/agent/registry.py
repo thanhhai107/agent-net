@@ -7,7 +7,7 @@ from agent.langgraph.plan_execute_agent import PlanExecuteAgent
 from agent.langgraph.react_agent import BasicReActAgent
 from agent.langgraph.reflexion_agent import ReflexionAgent
 from agent.memory.adapter import MemoryAugmentedAgent
-from agent.memory.service import HybridMemoryModule
+from agent.memory.service import ProceduralMemoryModule
 from agent.mock.mock_agent import MockAgent
 
 MEMORY_COMPATIBLE_AGENT_TYPES = frozenset({"react", "plan-execute", "reflexion"})
@@ -116,7 +116,7 @@ def create_agent(
         return agent
     return MemoryAugmentedAgent(
         agent,
-        HybridMemoryModule(
+        ProceduralMemoryModule(
             bank_id=memory_bank,
             llm_backend=llm_backend,
             model=model,

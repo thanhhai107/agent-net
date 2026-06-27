@@ -82,7 +82,7 @@ class WorkflowRegistrationTest(unittest.TestCase):
             patch("agent.registry.BasicReActAgent") as react_agent,
             patch("agent.registry.PlanExecuteAgent") as plan_agent,
             patch("agent.registry.ReflexionAgent") as reflexion_agent,
-            patch("agent.registry.HybridMemoryModule") as memory_module,
+            patch("agent.registry.ProceduralMemoryModule") as memory_module,
             patch("agent.registry.MemoryAugmentedAgent") as memory_adapter,
         ):
             create_agent(
@@ -206,7 +206,7 @@ class WorkflowRegistrationTest(unittest.TestCase):
             with self.subTest(agent_type=agent_type):
                 with (
                     patch(target) as workflow,
-                    patch("agent.registry.HybridMemoryModule") as memory_module,
+                    patch("agent.registry.ProceduralMemoryModule") as memory_module,
                     patch("agent.registry.MemoryAugmentedAgent") as adapter,
                 ):
                     result = create_agent(

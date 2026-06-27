@@ -9,15 +9,13 @@ from agent.memory.models import (
     MemoryLinkType,
     MemoryQuery,
     MemoryStatus,
-    MemoryType,
     RetrievedMemory,
     StoredMemory,
 )
-from agent.memory.service import HybridMemoryModule
+from agent.memory.service import ProceduralMemoryModule
 
 __all__ = [
     "EvaluationEvidence",
-    "HybridMemoryModule",
     "MemoryAugmentedAgent",
     "MemoryAttributes",
     "MemoryCandidate",
@@ -25,7 +23,7 @@ __all__ = [
     "MemoryLinkType",
     "MemoryQuery",
     "MemoryStatus",
-    "MemoryType",
+    "ProceduralMemoryModule",
     "RetrievedMemory",
     "StoredMemory",
 ]

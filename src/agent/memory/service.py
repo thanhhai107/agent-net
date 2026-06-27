@@ -1,12 +1,12 @@
-"""Extraction, validation, consolidation, retrieval, and snapshot orchestration."""
+"""Extraction, retrieval, and LightMem-style consolidation orchestration."""
 
 from __future__ import annotations
 
 import json
 import logging
 import math
+import os
 import re
-from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -22,11 +22,10 @@ from agent.memory.models import (
     MemoryQuery,
     MemoryRelationDecision,
     MemoryStatus,
-    MemoryType,
     RetrievedMemory,
     StoredMemory,
 )
-from agent.memory.store import SQLiteMemoryStore
+from agent.memory.store import create_memory_store
 from agent.memory.vector_index import QdrantMemoryIndex
 from nika.config import MEMORY_DIR
 
@@ -34,15 +33,8 @@ logger = logging.getLogger(__name__)
 
 EXTRACTION_PROMPT = """\
 You extract reusable procedural memory from a network-troubleshooting trajectory.
-Return at most six atomic memories. Each memory must contain exactly one general
-lesson that can improve a future investigation.
-
-Allowed types:
-- observation: an evidence pattern worth checking, without claiming a diagnosis;
-- error: a reasoning or tool-selection mistake to avoid;
-- learning: a strategy supported by the completed investigation;
-- instruction: a repeatedly useful procedural rule. Prefer learning for a lesson
-  observed in only this episode.
+Return at most six A-Mem-style atomic notes. Each note must contain exactly one
+general procedural lesson that can improve a future investigation.
 
 Strict safety requirements:
 - Generalize device names, addresses, interface identifiers, and topology-specific
@@ -52,6 +44,7 @@ Strict safety requirements:
 - Do not invent observations that are absent from the trajectory.
 - Keep tool names when they make the procedure reproducible.
 - Ground truth and benchmark scores are intentionally unavailable.
+- Do not classify notes into observation/error/learning/instruction types.
 """
 
 RELATION_PROMPT = """\
@@ -101,8 +94,8 @@ def _terms(text: str) -> set[str]:
     return set(re.findall(r"[a-z0-9_-]{3,}", text.lower()))
 
 
-class HybridMemoryModule:
-    """Backend-agnostic procedural memory with SQLite as source of truth."""
+class ProceduralMemoryModule:
+    """Atomic procedural memory backed by PostgreSQL and optional Qdrant."""
 
     def __init__(
         self,
@@ -117,8 +110,10 @@ class HybridMemoryModule:
         if not safe_bank:
             raise ValueError("memory bank id must contain at least one safe character")
         self.bank_id = safe_bank
-        self.store = SQLiteMemoryStore(
-            store_path or (Path(MEMORY_DIR) / f"{safe_bank}.sqlite3")
+        self.store = create_memory_store(
+            sqlite_path=store_path or (Path(MEMORY_DIR) / f"{safe_bank}.sqlite3"),
+            database_url=os.getenv("MEMORY_DATABASE_URL", "").strip() or None,
+            force_sqlite=store_path is not None,
         )
         self.vector_index = vector_index or QdrantMemoryIndex()
         self.llm_backend = llm_backend
@@ -232,20 +227,11 @@ class HybridMemoryModule:
         candidates: list[MemoryCandidate],
         evidence: EvaluationEvidence,
     ) -> list[tuple[MemoryCandidate, MemoryStatus, float]]:
-        """Apply numeric score gates without exposing oracle text to the LLM."""
+        """LightMem-style numeric score gates without oracle text."""
         accepted: list[tuple[MemoryCandidate, MemoryStatus, float]] = []
         if evidence.fully_successful:
             for candidate in candidates:
-                if candidate.memory_type in {
-                    MemoryType.OBSERVATION,
-                    MemoryType.INSTRUCTION,
-                }:
-                    candidate = candidate.model_copy(
-                        update={"memory_type": MemoryType.LEARNING}
-                    )
                 confidence = 0.72 + 0.18 * evidence.aggregate_score
-                if candidate.memory_type == MemoryType.ERROR:
-                    confidence -= 0.08
                 accepted.append(
                     (
                         candidate,
@@ -256,10 +242,10 @@ class HybridMemoryModule:
             return accepted
 
         for candidate in candidates:
-            if candidate.memory_type not in {
-                MemoryType.OBSERVATION,
-                MemoryType.ERROR,
-            }:
+            # Failed/partial episodes can still teach cautious notes, but not
+            # validated procedural rules. Require explicit evidence or avoid
+            # clauses so the staged note remains checkable in future episodes.
+            if not (candidate.evidence_required or candidate.avoid):
                 continue
             confidence = 0.30 + 0.25 * evidence.aggregate_score
             accepted.append((candidate, MemoryStatus.STAGED, confidence))
@@ -380,24 +366,8 @@ class HybridMemoryModule:
             logger.warning("Qdrant memory retrieval skipped: %s", exc)
 
         query_attrs = query.attributes().flat_values()
-        candidate_terms = {
-            memory_id: _terms(memory.embedding_text())
-            for memory_id, memory in candidates.items()
-        }
-        document_frequency = Counter(
-            term for terms in candidate_terms.values() for term in terms
-        )
-        candidate_count = max(1, len(candidates))
-        raw_information: dict[str, float] = {}
-        for memory_id, terms in candidate_terms.items():
-            if not terms:
-                raw_information[memory_id] = 0.0
-                continue
-            raw_information[memory_id] = sum(
-                math.log2((candidate_count + 1) / (document_frequency[term] + 1)) + 1
-                for term in terms
-            ) / len(terms)
-        max_information = max(raw_information.values(), default=1.0) or 1.0
+        link_counts = self.store.link_counts(self.bank_id, list(candidates))
+        max_links = max(link_counts.values(), default=1) or 1
 
         ranked: list[RetrievedMemory] = []
         for memory in candidates.values():
@@ -407,10 +377,7 @@ class HybridMemoryModule:
                 if query_attrs
                 else 0.0
             )
-            distinctiveness = (
-                raw_information.get(memory.memory_id, 0.0) / max_information
-            )
-            structural_information = min(
+            structural_score = min(
                 1.0,
                 (
                     len(memory.evidence_required)
@@ -419,15 +386,18 @@ class HybridMemoryModule:
                 )
                 / 8,
             )
-            information_score = 0.8 * distinctiveness + 0.2 * structural_information
+            graph_score = (
+                0.65 * min(1.0, link_counts.get(memory.memory_id, 0) / max_links)
+                + 0.35 * structural_score
+            )
             lexical_score = lexical_scores.get(memory.memory_id, 0.0)
             semantic_score = semantic_scores.get(memory.memory_id, 0.0)
             relevance = max(lexical_score, semantic_score)
             score = (
-                0.45 * relevance
-                + 0.20 * attribute_score
+                0.40 * relevance
+                + 0.30 * attribute_score
                 + 0.20 * memory.confidence
-                + 0.15 * information_score
+                + 0.10 * graph_score
             )
             ranked.append(
                 RetrievedMemory(
@@ -436,7 +406,7 @@ class HybridMemoryModule:
                     lexical_score=lexical_score,
                     semantic_score=semantic_score,
                     attribute_score=attribute_score,
-                    information_score=information_score,
+                    graph_score=graph_score,
                 )
             )
 
@@ -529,8 +499,7 @@ class HybridMemoryModule:
         for index, item in enumerate(memories, start=1):
             memory = item.memory
             lines.append(
-                f"{index}. [{memory.memory_type.value}; confidence="
-                f"{memory.confidence:.2f}] {memory.content}"
+                f"{index}. [confidence={memory.confidence:.2f}] {memory.content}"
             )
             if memory.applicability:
                 lines.append("   Applies when: " + "; ".join(memory.applicability))

@@ -29,7 +29,7 @@ src/agent/
 ├── memory/               # Composable cross-session procedural memory
 │   ├── adapter.py        # Wraps an existing workflow
 │   ├── service.py        # Extract, validate, consolidate, retrieve
-│   ├── store.py          # SQLite/FTS5 canonical store
+│   ├── store.py          # PostgreSQL canonical store
 │   └── vector_index.py   # Optional Qdrant embedding index
 └── utils/                # Shared utilities across implementations
     ├── mcp_servers.py    # Kathara / task MCP configuration
@@ -120,13 +120,16 @@ nika agent run -a reflexion -b netmind -m openai/gpt-oss-120b -n 20 -r 3
 ## Composable Memory Module
 
 `MemoryAugmentedAgent` is a composition wrapper around `react`,
-`plan-execute`, or `reflexion`. It adds cross-session typed procedural memory
+`plan-execute`, or `reflexion`. It adds cross-session atomic procedural memory
 without changing the selected workflow's graph.
 
 - Canonical records, versions, links, provenance, and validation state live in
-  SQLite; Qdrant stores only rebuildable embedding vectors and filter metadata.
-- Retrieval uses lexical/semantic relevance, attributes, confidence,
-  information content, diversity, and a token budget.
+  PostgreSQL; Qdrant stores only rebuildable embedding vectors and filter
+  metadata.
+- Retrieval uses MemInsight-style lexical/semantic relevance, attributes,
+  confidence, A-Mem graph support, diversity, and a token budget.
+- Updates run after numeric evaluation in a LightMem-style offline
+  consolidation phase.
 - Memory extraction and consolidation run after numeric evaluation. Ground
   truth is never included in the extractor prompt.
 - Use a unique `--memory-bank` per experimental condition and seed.

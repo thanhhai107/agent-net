@@ -1,4 +1,10 @@
-"""Typed models used by the hybrid procedural-memory module."""
+"""Models for atomic procedural memory.
+
+The module is intentionally organized around three ideas:
+- MemInsight-style context attributes for retrieval.
+- LightMem-style post-episode validation/consolidation.
+- A-Mem-style atomic notes and graph links.
+"""
 
 from __future__ import annotations
 
@@ -6,13 +12,6 @@ from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, Field, model_validator
-
-
-class MemoryType(StrEnum):
-    OBSERVATION = "observation"
-    ERROR = "error"
-    LEARNING = "learning"
-    INSTRUCTION = "instruction"
 
 
 class MemoryStatus(StrEnum):
@@ -30,11 +29,12 @@ class MemoryLinkType(StrEnum):
 
 
 class MemoryAttributes(BaseModel):
-    """Searchable, non-oracle attributes attached to one memory."""
+    """MemInsight-style searchable, non-oracle attributes."""
 
     scenarios: list[str] = Field(default_factory=list)
     topology_classes: list[str] = Field(default_factory=list)
     protocols: list[str] = Field(default_factory=list)
+    services: list[str] = Field(default_factory=list)
     task_stages: list[str] = Field(default_factory=list)
     symptoms: list[str] = Field(default_factory=list)
     tools: list[str] = Field(default_factory=list)
@@ -62,9 +62,8 @@ class MemoryAttributes(BaseModel):
 
 
 class MemoryCandidate(BaseModel):
-    """One atomic procedural lesson proposed by the extractor."""
+    """One A-Mem-style atomic procedural note proposed by the extractor."""
 
-    memory_type: MemoryType
     content: str = Field(min_length=12, max_length=1200)
     applicability: list[str] = Field(default_factory=list, max_length=8)
     evidence_required: list[str] = Field(default_factory=list, max_length=8)
@@ -73,12 +72,7 @@ class MemoryCandidate(BaseModel):
 
     @model_validator(mode="after")
     def ensure_procedural_value(self) -> "MemoryCandidate":
-        if not (
-            self.applicability
-            or self.evidence_required
-            or self.avoid
-            or self.memory_type == MemoryType.OBSERVATION
-        ):
+        if not (self.applicability or self.evidence_required or self.avoid):
             raise ValueError(
                 "a procedural memory requires applicability, evidence, or an avoid rule"
             )
@@ -152,8 +146,7 @@ class StoredMemory(MemoryCandidate):
     def embedding_text(self) -> str:
         attrs = self.attributes.normalized()
         sections = [
-            f"Type: {self.memory_type.value}",
-            f"Lesson: {self.content}",
+            f"Atomic procedural note: {self.content}",
         ]
         if self.applicability:
             sections.append("Applies when: " + "; ".join(self.applicability))
@@ -163,6 +156,7 @@ class StoredMemory(MemoryCandidate):
             sections.append("Avoid: " + "; ".join(self.avoid))
         for label, values in (
             ("Protocols", attrs.protocols),
+            ("Services", attrs.services),
             ("Task stages", attrs.task_stages),
             ("Symptoms", attrs.symptoms),
             ("Tools", attrs.tools),
@@ -178,7 +172,7 @@ class RetrievedMemory(BaseModel):
     lexical_score: float = 0.0
     semantic_score: float = 0.0
     attribute_score: float = 0.0
-    information_score: float = 0.0
+    graph_score: float = 0.0
 
 
 class MemoryRelationDecision(BaseModel):

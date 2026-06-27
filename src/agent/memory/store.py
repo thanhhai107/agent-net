@@ -1,4 +1,4 @@
-"""SQLite source-of-truth store for typed procedural memories."""
+"""Canonical stores for atomic procedural memories."""
 
 from __future__ import annotations
 
@@ -9,15 +9,16 @@ import sqlite3
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from agent.memory.models import (
     MemoryCandidate,
     MemoryLinkType,
     MemoryStatus,
-    MemoryType,
     StoredMemory,
 )
+
+DEFAULT_MEMORY_DATABASE_URL = "postgresql://nika:nika@localhost:5432/nika_memory"
 
 
 def _now_iso() -> str:
@@ -34,7 +35,7 @@ def _content_hash(candidate: MemoryCandidate) -> str:
 
 
 class SQLiteMemoryStore:
-    """Canonical memory store; vectors are rebuildable secondary indexes."""
+    """Explicit compatibility/test store; runtime defaults to PostgreSQL."""
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
@@ -73,7 +74,9 @@ class SQLiteMemoryStore:
                 CREATE TABLE IF NOT EXISTS memories (
                     memory_id TEXT PRIMARY KEY,
                     bank_id TEXT NOT NULL,
-                    memory_type TEXT NOT NULL,
+                    -- Legacy/internal compatibility column. Public memory no
+                    -- longer exposes a taxonomy such as observation/learning.
+                    memory_type TEXT NOT NULL DEFAULT 'atomic',
                     content TEXT NOT NULL,
                     applicability_json TEXT NOT NULL,
                     evidence_required_json TEXT NOT NULL,
@@ -210,24 +213,14 @@ class SQLiteMemoryStore:
                     ),
                 )
                 new_status = existing["status"]
-                memory_type = existing["memory_type"]
                 validations = int(existing["validation_count"]) + validation_delta
                 if successful_episode and new_status == MemoryStatus.STAGED.value:
                     new_status = MemoryStatus.VALIDATED.value
-                if successful_episode and memory_type != MemoryType.INSTRUCTION.value:
-                    memory_type = candidate.memory_type.value
-                if (
-                    successful_episode
-                    and validations >= 3
-                    and memory_type == MemoryType.LEARNING.value
-                ):
-                    memory_type = MemoryType.INSTRUCTION.value
                 conn.execute(
                     """
                     UPDATE memories SET
                         confidence=?,
                         status=?,
-                        memory_type=?,
                         validation_count=?,
                         failure_count=failure_count+?
                     WHERE memory_id=?
@@ -235,7 +228,6 @@ class SQLiteMemoryStore:
                     (
                         new_confidence,
                         new_status,
-                        memory_type,
                         validations,
                         failure_delta,
                         existing["memory_id"],
@@ -264,7 +256,7 @@ class SQLiteMemoryStore:
                 (
                     memory_id,
                     bank_id,
-                    candidate.memory_type.value,
+                    "atomic",
                     candidate.content.strip(),
                     _json(candidate.applicability),
                     _json(candidate.evidence_required),
@@ -480,6 +472,29 @@ class SQLiteMemoryStore:
                 ),
             )
 
+    def link_counts(self, bank_id: str, memory_ids: list[str]) -> dict[str, int]:
+        if not memory_ids:
+            return {}
+        placeholders = ",".join("?" for _ in memory_ids)
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT memory_id, COUNT(*) AS count
+                FROM (
+                    SELECT source_id AS memory_id
+                    FROM memory_links
+                    WHERE bank_id=? AND source_id IN ({placeholders})
+                    UNION ALL
+                    SELECT target_id AS memory_id
+                    FROM memory_links
+                    WHERE bank_id=? AND target_id IN ({placeholders})
+                )
+                GROUP BY memory_id
+                """,
+                [bank_id, *memory_ids, bank_id, *memory_ids],
+            ).fetchall()
+        return {str(row["memory_id"]): int(row["count"]) for row in rows}
+
     def export_bank(self, bank_id: str) -> tuple[list[dict], list[dict]]:
         with self._connect() as conn:
             memories = [
@@ -497,6 +512,7 @@ class SQLiteMemoryStore:
                 ).fetchall()
             ]
         for memory in memories:
+            memory.pop("memory_type", None)
             for field in (
                 "applicability_json",
                 "evidence_required_json",
@@ -541,11 +557,10 @@ class SQLiteMemoryStore:
             conn.execute("DELETE FROM memories WHERE bank_id=?", (bank_id,))
 
     @staticmethod
-    def _row_to_memory(row: sqlite3.Row) -> StoredMemory:
+    def _row_to_memory(row: Mapping[str, Any]) -> StoredMemory:
         return StoredMemory(
             memory_id=row["memory_id"],
             bank_id=row["bank_id"],
-            memory_type=row["memory_type"],
             content=row["content"],
             applicability=json.loads(row["applicability_json"]),
             evidence_required=json.loads(row["evidence_required_json"]),
@@ -561,3 +576,558 @@ class SQLiteMemoryStore:
             superseded_at=row["superseded_at"],
             superseded_by=row["superseded_by"],
         )
+
+
+class PostgreSQLMemoryStore:
+    """Canonical PostgreSQL store for procedural-memory banks."""
+
+    def __init__(self, database_url: str) -> None:
+        self.database_url = database_url
+        self._initialize()
+
+    def _connect(self):
+        try:
+            import psycopg
+            from psycopg.rows import dict_row
+        except ImportError as exc:
+            raise RuntimeError(
+                "PostgreSQL memory store requires the 'psycopg[binary]' dependency."
+            ) from exc
+        return psycopg.connect(
+            self.database_url,
+            autocommit=False,
+            row_factory=dict_row,
+        )
+
+    def _initialize(self) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS memory_schema_meta (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                )
+                """
+            )
+            conn.execute(
+                """
+                INSERT INTO memory_schema_meta(key, value)
+                VALUES ('schema_version', '1')
+                ON CONFLICT (key) DO NOTHING
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS memory_episodes (
+                    bank_id TEXT NOT NULL,
+                    session_id TEXT NOT NULL,
+                    started_at TEXT NOT NULL,
+                    evaluated_at TEXT,
+                    snapshot_path TEXT,
+                    metrics_json TEXT,
+                    PRIMARY KEY (bank_id, session_id)
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS memory_memories (
+                    memory_id TEXT PRIMARY KEY,
+                    bank_id TEXT NOT NULL,
+                    memory_type TEXT NOT NULL DEFAULT 'atomic',
+                    content TEXT NOT NULL,
+                    applicability_json TEXT NOT NULL,
+                    evidence_required_json TEXT NOT NULL,
+                    avoid_json TEXT NOT NULL,
+                    attributes_json TEXT NOT NULL,
+                    confidence DOUBLE PRECISION NOT NULL,
+                    status TEXT NOT NULL,
+                    source_session_id TEXT NOT NULL,
+                    version INTEGER NOT NULL DEFAULT 1,
+                    validation_count INTEGER NOT NULL DEFAULT 0,
+                    failure_count INTEGER NOT NULL DEFAULT 0,
+                    content_hash TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    superseded_at TEXT,
+                    superseded_by TEXT
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_memory_memories_bank_status
+                ON memory_memories(bank_id, status)
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_memory_memories_hash
+                ON memory_memories(bank_id, content_hash)
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS memory_links (
+                    bank_id TEXT NOT NULL,
+                    source_id TEXT NOT NULL REFERENCES memory_memories(memory_id),
+                    target_id TEXT NOT NULL REFERENCES memory_memories(memory_id),
+                    relation TEXT NOT NULL,
+                    reason TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    PRIMARY KEY(source_id, target_id, relation)
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS memory_retrieval_events (
+                    event_id TEXT PRIMARY KEY,
+                    bank_id TEXT NOT NULL,
+                    session_id TEXT NOT NULL,
+                    query_text TEXT NOT NULL,
+                    memory_ids_json TEXT NOT NULL,
+                    scores_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+
+    def record_episode_start(self, bank_id: str, session_id: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO memory_episodes(bank_id, session_id, started_at)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (bank_id, session_id) DO NOTHING
+                """,
+                (bank_id, session_id, _now_iso()),
+            )
+
+    def record_episode_evaluation(
+        self,
+        bank_id: str,
+        session_id: str,
+        metrics: dict[str, Any],
+        snapshot_path: str | None = None,
+    ) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO memory_episodes(
+                    bank_id, session_id, started_at, evaluated_at,
+                    snapshot_path, metrics_json
+                )
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (bank_id, session_id) DO UPDATE SET
+                    evaluated_at=EXCLUDED.evaluated_at,
+                    snapshot_path=EXCLUDED.snapshot_path,
+                    metrics_json=EXCLUDED.metrics_json
+                """,
+                (
+                    bank_id,
+                    session_id,
+                    _now_iso(),
+                    _now_iso(),
+                    snapshot_path,
+                    _json(metrics),
+                ),
+            )
+
+    def episode_is_evaluated(self, bank_id: str, session_id: str) -> bool:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT evaluated_at FROM memory_episodes
+                WHERE bank_id=%s AND session_id=%s
+                """,
+                (bank_id, session_id),
+            ).fetchone()
+        return bool(row and row["evaluated_at"])
+
+    def add_or_corroborate(
+        self,
+        *,
+        bank_id: str,
+        candidate: MemoryCandidate,
+        status: MemoryStatus,
+        confidence: float,
+        source_session_id: str,
+        successful_episode: bool,
+    ) -> tuple[StoredMemory, bool]:
+        digest = _content_hash(candidate)
+        with self._connect() as conn:
+            existing = conn.execute(
+                """
+                SELECT * FROM memory_memories
+                WHERE bank_id=%s AND content_hash=%s AND status != %s
+                ORDER BY version DESC LIMIT 1
+                """,
+                (bank_id, digest, MemoryStatus.SUPERSEDED.value),
+            ).fetchone()
+            if existing is not None:
+                validation_delta = 1 if successful_episode else 0
+                failure_delta = 0 if successful_episode else 1
+                new_confidence = max(
+                    0.0,
+                    min(
+                        1.0,
+                        float(existing["confidence"])
+                        + (0.08 if successful_episode else -0.08),
+                    ),
+                )
+                new_status = existing["status"]
+                validations = int(existing["validation_count"]) + validation_delta
+                if successful_episode and new_status == MemoryStatus.STAGED.value:
+                    new_status = MemoryStatus.VALIDATED.value
+                conn.execute(
+                    """
+                    UPDATE memory_memories SET
+                        confidence=%s,
+                        status=%s,
+                        validation_count=%s,
+                        failure_count=failure_count+%s
+                    WHERE memory_id=%s
+                    """,
+                    (
+                        new_confidence,
+                        new_status,
+                        validations,
+                        failure_delta,
+                        existing["memory_id"],
+                    ),
+                )
+                row = conn.execute(
+                    "SELECT * FROM memory_memories WHERE memory_id=%s",
+                    (existing["memory_id"],),
+                ).fetchone()
+                return self._row_to_memory(row), False
+
+            memory_id = str(uuid.uuid4())
+            created_at = _now_iso()
+            conn.execute(
+                """
+                INSERT INTO memory_memories(
+                    memory_id, bank_id, memory_type, content,
+                    applicability_json, evidence_required_json, avoid_json,
+                    attributes_json, confidence, status, source_session_id,
+                    validation_count, failure_count, content_hash, created_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    memory_id,
+                    bank_id,
+                    "atomic",
+                    candidate.content.strip(),
+                    _json(candidate.applicability),
+                    _json(candidate.evidence_required),
+                    _json(candidate.avoid),
+                    _json(candidate.attributes.normalized().model_dump()),
+                    confidence,
+                    status.value,
+                    source_session_id,
+                    1 if successful_episode else 0,
+                    0 if successful_episode else 1,
+                    digest,
+                    created_at,
+                ),
+            )
+            row = conn.execute(
+                "SELECT * FROM memory_memories WHERE memory_id=%s",
+                (memory_id,),
+            ).fetchone()
+            return self._row_to_memory(row), True
+
+    def get(self, memory_id: str) -> StoredMemory | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT * FROM memory_memories WHERE memory_id=%s",
+                (memory_id,),
+            ).fetchone()
+        return self._row_to_memory(row) if row else None
+
+    def get_many(self, memory_ids: list[str]) -> list[StoredMemory]:
+        if not memory_ids:
+            return []
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM memory_memories
+                WHERE memory_id = ANY(%s)
+                """,
+                (memory_ids,),
+            ).fetchall()
+        by_id = {row["memory_id"]: self._row_to_memory(row) for row in rows}
+        return [by_id[memory_id] for memory_id in memory_ids if memory_id in by_id]
+
+    def search_fts(
+        self,
+        *,
+        bank_id: str,
+        query: str,
+        limit: int,
+        statuses: tuple[MemoryStatus, ...] = (MemoryStatus.VALIDATED,),
+        exclude_id: str | None = None,
+        fallback: bool = True,
+    ) -> list[tuple[StoredMemory, float]]:
+        terms = " ".join(
+            term.lower() for term in re.findall(r"[A-Za-z][A-Za-z0-9_-]{2,}", query)
+        )
+        status_values = [status.value for status in statuses]
+        rows: list[Mapping[str, Any]] = []
+        with self._connect() as conn:
+            if terms:
+                sql = """
+                    WITH q AS (SELECT websearch_to_tsquery('simple', %s) AS query)
+                    SELECT m.*,
+                           ts_rank_cd(
+                               to_tsvector(
+                                   'simple',
+                                   m.content || ' ' ||
+                                   m.applicability_json || ' ' ||
+                                   m.evidence_required_json || ' ' ||
+                                   m.avoid_json || ' ' ||
+                                   m.attributes_json
+                               ),
+                               q.query
+                           ) AS rank
+                    FROM memory_memories m, q
+                    WHERE q.query @@ to_tsvector(
+                            'simple',
+                            m.content || ' ' ||
+                            m.applicability_json || ' ' ||
+                            m.evidence_required_json || ' ' ||
+                            m.avoid_json || ' ' ||
+                            m.attributes_json
+                          )
+                      AND m.bank_id=%s
+                      AND m.status = ANY(%s)
+                """
+                params: list[Any] = [terms, bank_id, status_values]
+                if exclude_id:
+                    sql += " AND m.memory_id != %s"
+                    params.append(exclude_id)
+                sql += " ORDER BY rank DESC LIMIT %s"
+                params.append(limit)
+                rows = conn.execute(sql, params).fetchall()
+                if rows:
+                    max_rank = max(float(row["rank"]) for row in rows) or 1.0
+                    return [
+                        (self._row_to_memory(row), float(row["rank"]) / max_rank)
+                        for row in rows
+                    ]
+
+            if not fallback:
+                return []
+
+            sql = """
+                SELECT * FROM memory_memories
+                WHERE bank_id=%s AND status = ANY(%s)
+            """
+            params = [bank_id, status_values]
+            if exclude_id:
+                sql += " AND memory_id != %s"
+                params.append(exclude_id)
+            sql += " ORDER BY confidence DESC, created_at DESC LIMIT %s"
+            params.append(limit)
+            rows = conn.execute(sql, params).fetchall()
+            return [(self._row_to_memory(row), 0.0) for row in rows]
+
+    def add_link(
+        self,
+        *,
+        bank_id: str,
+        source_id: str,
+        target_id: str,
+        relation: MemoryLinkType,
+        reason: str = "",
+    ) -> None:
+        if source_id == target_id:
+            return
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO memory_links(
+                    bank_id, source_id, target_id, relation, reason, created_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (source_id, target_id, relation) DO NOTHING
+                """,
+                (
+                    bank_id,
+                    source_id,
+                    target_id,
+                    relation.value,
+                    reason,
+                    _now_iso(),
+                ),
+            )
+
+    def supersede(self, memory_id: str, replacement_id: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE memory_memories
+                SET version=GREATEST(
+                    version,
+                    COALESCE(
+                        (SELECT version + 1 FROM memory_memories WHERE memory_id=%s),
+                        1
+                    )
+                )
+                WHERE memory_id=%s
+                """,
+                (memory_id, replacement_id),
+            )
+            conn.execute(
+                """
+                UPDATE memory_memories
+                SET status=%s, superseded_at=%s, superseded_by=%s
+                WHERE memory_id=%s
+                """,
+                (
+                    MemoryStatus.SUPERSEDED.value,
+                    _now_iso(),
+                    replacement_id,
+                    memory_id,
+                ),
+            )
+
+    def record_retrieval(
+        self,
+        *,
+        bank_id: str,
+        session_id: str,
+        query_text: str,
+        memory_ids: list[str],
+        scores: list[float],
+    ) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO memory_retrieval_events(
+                    event_id, bank_id, session_id, query_text,
+                    memory_ids_json, scores_json, created_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    str(uuid.uuid4()),
+                    bank_id,
+                    session_id,
+                    query_text,
+                    _json(memory_ids),
+                    _json(scores),
+                    _now_iso(),
+                ),
+            )
+
+    def link_counts(self, bank_id: str, memory_ids: list[str]) -> dict[str, int]:
+        if not memory_ids:
+            return {}
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT memory_id, COUNT(*) AS count
+                FROM (
+                    SELECT source_id AS memory_id
+                    FROM memory_links
+                    WHERE bank_id=%s AND source_id = ANY(%s)
+                    UNION ALL
+                    SELECT target_id AS memory_id
+                    FROM memory_links
+                    WHERE bank_id=%s AND target_id = ANY(%s)
+                ) linked
+                GROUP BY memory_id
+                """,
+                (bank_id, memory_ids, bank_id, memory_ids),
+            ).fetchall()
+        return {str(row["memory_id"]): int(row["count"]) for row in rows}
+
+    def export_bank(self, bank_id: str) -> tuple[list[dict], list[dict]]:
+        with self._connect() as conn:
+            memories = [
+                dict(row)
+                for row in conn.execute(
+                    """
+                    SELECT * FROM memory_memories
+                    WHERE bank_id=%s ORDER BY created_at
+                    """,
+                    (bank_id,),
+                ).fetchall()
+            ]
+            links = [
+                dict(row)
+                for row in conn.execute(
+                    """
+                    SELECT * FROM memory_links
+                    WHERE bank_id=%s ORDER BY created_at
+                    """,
+                    (bank_id,),
+                ).fetchall()
+            ]
+        for memory in memories:
+            memory.pop("memory_type", None)
+            for field in (
+                "applicability_json",
+                "evidence_required_json",
+                "avoid_json",
+                "attributes_json",
+            ):
+                memory[field.removesuffix("_json")] = json.loads(memory.pop(field))
+        return memories, links
+
+    def bank_stats(self, bank_id: str) -> dict[str, Any]:
+        with self._connect() as conn:
+            status_rows = conn.execute(
+                """
+                SELECT status, COUNT(*) AS count
+                FROM memory_memories
+                WHERE bank_id=%s GROUP BY status
+                """,
+                (bank_id,),
+            ).fetchall()
+            episode_count = conn.execute(
+                "SELECT COUNT(*) AS count FROM memory_episodes WHERE bank_id=%s",
+                (bank_id,),
+            ).fetchone()["count"]
+            retrieval_count = conn.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM memory_retrieval_events WHERE bank_id=%s
+                """,
+                (bank_id,),
+            ).fetchone()["count"]
+        return {
+            "bank_id": bank_id,
+            "memories_by_status": {
+                row["status"]: int(row["count"]) for row in status_rows
+            },
+            "episodes": int(episode_count),
+            "retrievals": int(retrieval_count),
+        }
+
+    def clear_bank(self, bank_id: str) -> None:
+        with self._connect() as conn:
+            conn.execute("DELETE FROM memory_links WHERE bank_id=%s", (bank_id,))
+            conn.execute(
+                "DELETE FROM memory_retrieval_events WHERE bank_id=%s",
+                (bank_id,),
+            )
+            conn.execute("DELETE FROM memory_episodes WHERE bank_id=%s", (bank_id,))
+            conn.execute("DELETE FROM memory_memories WHERE bank_id=%s", (bank_id,))
+
+    @staticmethod
+    def _row_to_memory(row: Mapping[str, Any]) -> StoredMemory:
+        return SQLiteMemoryStore._row_to_memory(row)
+
+
+def create_memory_store(
+    *,
+    sqlite_path: str | Path,
+    database_url: str | None = None,
+    force_sqlite: bool = False,
+) -> SQLiteMemoryStore | PostgreSQLMemoryStore:
+    if force_sqlite:
+        return SQLiteMemoryStore(sqlite_path)
+    return PostgreSQLMemoryStore(database_url or DEFAULT_MEMORY_DATABASE_URL)
