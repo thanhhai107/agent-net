@@ -1,0 +1,37 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: word-ingress
+  namespace: word-ns
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: datacenter.com
+    http:
+      paths:
+      - backend:
+          service:
+            name: word
+            port:
+              number: 5001
+        path: /word
+        pathType: Prefix
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: weather-ingress
+  namespace: weather-ns
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: datacenter.com
+    http:
+      paths:
+      - backend:
+          service:
+            name: weather
+            port:
+              number: 5001
+        path: /weather
+        pathType: Prefix

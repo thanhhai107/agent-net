@@ -7,6 +7,8 @@ from nika.net_env.interdomain_routing.simple_bgp.lab import SimpleBGP
 from nika.net_env.intradomain_routing.ospf_enterprise.lab_dhcp import OSPFEnterpriseDHCP
 from nika.net_env.intradomain_routing.ospf_enterprise.lab_static import OSPFEnterpriseStatic
 from nika.net_env.intradomain_routing.rip_vpn.lab import RIPSmallInternetVPN
+from nika.net_env.kubernetes.k8s_lab.lab import K8sFatTreeBGP
+from nika.net_env.kubernetes.llmd_lab.lab import LLMDInferenceCluster
 from nika.net_env.p4.p4_bloom_filter.lab import P4BloomFilter
 from nika.net_env.p4.p4_counter.lab import P4Counter
 from nika.net_env.p4.p4_int.lab import P4INT
@@ -27,6 +29,8 @@ _NET_ENVS: Dict[str, NetworkEnvBase] = {
     P4INT.LAB_NAME: P4INT,
     P4_MPLS.LAB_NAME: P4_MPLS,
     SimpleBGP.LAB_NAME: SimpleBGP,
+    K8sFatTreeBGP.LAB_NAME: K8sFatTreeBGP,
+    LLMDInferenceCluster.LAB_NAME: LLMDInferenceCluster,
 }
 
 

@@ -1,0 +1,79 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: llm-d-epp
+  namespace: llm-d
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: llm-d-epp
+rules:
+- apiGroups: ["inference.networking.k8s.io"]
+  resources: ["inferencepools", "inferencemodels"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["inference.networking.x-k8s.io"]
+  resources: ["inferencepools", "inferencemodels"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["llm-d.ai"]
+  resources: ["inferenceobjectives", "inferencemodelrewrites"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["authentication.k8s.io"]
+  resources: ["tokenreviews"]
+  verbs: ["create"]
+- apiGroups: ["authorization.k8s.io"]
+  resources: ["subjectaccessreviews"]
+  verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: llm-d-epp
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: llm-d-epp
+subjects:
+- kind: ServiceAccount
+  name: llm-d-epp
+  namespace: llm-d
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kgateway-inference-extension
+rules:
+- apiGroups:
+  - inference.networking.k8s.io
+  resources:
+  - inferencepools
+  - inferencemodels
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - inference.networking.x-k8s.io
+  resources:
+  - inferencepools
+  - inferencemodels
+  verbs:
+  - get
+  - list
+  - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kgateway-inference-extension
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kgateway-inference-extension
+subjects:
+- kind: ServiceAccount
+  name: kgateway
+  namespace: kgateway-system
