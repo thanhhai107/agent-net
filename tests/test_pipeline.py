@@ -25,10 +25,12 @@ from nika.codex_cli.main import app
 from nika.codex_cli.utils import env_id_from_lab
 from nika.utils.session_index import SessionIndex
 from nika.utils.session_store import SESSIONS_DIR, SessionStore
+from nika.workflows.session.containers import list_session_containers
 from tests.integration_base import OrderedPipelineTestCase
 
 SCENARIO = "simple_bgp"
 PROBLEM = "link_down"
+SIMPLE_BGP_MACHINES = frozenset({"pc1", "pc2", "router1", "router2"})
 
 
 def _tool_text_list(result: object) -> list[str]:
@@ -77,6 +79,32 @@ class PipelineIntegrationTest(OrderedPipelineTestCase):
 
         inspect_output = self._invoke_ok(["session", "inspect"])
         self.assertIn(self.session_id, inspect_output)
+
+        resolved_id, resolved_lab, container_rows = list_session_containers(self.session_id)
+        self.assertEqual(resolved_id, self.session_id)
+        self.assertEqual(resolved_lab, lab_name)
+        self.assertEqual(len(container_rows), len(SIMPLE_BGP_MACHINES))
+        self.assertEqual({row["name"] for row in container_rows}, SIMPLE_BGP_MACHINES)
+        for row in container_rows:
+            self.assertEqual(row["status"], "running")
+            self.assertRegex(row["container_id"], r"^[0-9a-f]{12}$")
+            self.assertTrue(row["container_name"])
+            self.assertIn("kathara", row["image"].lower())
+
+        containers_output = self._invoke_ok(["session", "containers", self.session_id])
+        self.assertIn(f"session_id={self.session_id}", containers_output)
+        self.assertIn(f"lab={lab_name}", containers_output)
+        self.assertIn("CONTAINER ID", containers_output)
+        for name in SIMPLE_BGP_MACHINES:
+            self.assertIn(name, containers_output)
+        self.assertIn("running", containers_output)
+
+        inspect_containers_output = self._invoke_ok(
+            ["session", "inspect", self.session_id, "--containers"],
+        )
+        self.assertIn(f"containers  ({len(SIMPLE_BGP_MACHINES)} running)", inspect_containers_output)
+        for name in SIMPLE_BGP_MACHINES:
+            self.assertIn(name, inspect_containers_output)
 
         self._invoke_ok(["failure", "ps"])
         self._invoke_ok(["exec", "pc1", "hostname"])
@@ -285,8 +313,6 @@ class PipelineIntegrationTest(OrderedPipelineTestCase):
                 "agent",
                 "run",
                 "--agent",
-                "mock",
-                "--provider",
                 "mock",
                 "--model",
                 "mock-v1",

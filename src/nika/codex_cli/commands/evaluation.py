@@ -2,6 +2,8 @@
 
 import typer
 
+from nika.utils.agent_config import ENV_JUDGE_MODEL, ENV_JUDGE_PROVIDER
+
 eval_app = typer.Typer(help="Evaluate a completed agent session.")
 
 
@@ -20,17 +22,28 @@ def eval_metrics(
 
 @eval_app.command("judge")
 def eval_judge(
-    judge_provider: str = typer.Option(
-        ...,
+    judge_provider: str | None = typer.Option(
+        None,
         "-p",
         "--provider",
+        envvar=ENV_JUDGE_PROVIDER,
         help="LLM provider for the judge (openai, ollama, deepseek).",
     ),
-    judge_model: str = typer.Option(..., "-m", "--model", help="Judge model id."),
+    judge_model: str | None = typer.Option(
+        None,
+        "-m",
+        "--model",
+        envvar=ENV_JUDGE_MODEL,
+        help="Judge model id.",
+    ),
     session_id: str | None = typer.Option(None, "--session-id", help="Target session id."),
 ) -> None:
     """Run LLM-as-judge on a closed session; write llm_judge.json."""
+    from nika.utils.agent_config import resolve_judge_model, resolve_judge_provider
     from nika.workflows.eval.session import run_llm_judge
+
+    judge_provider = resolve_judge_provider(judge_provider)
+    judge_model = resolve_judge_model(judge_model)
 
     try:
         run_llm_judge(judge_provider, judge_model, session_id=session_id)

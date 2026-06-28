@@ -3,6 +3,13 @@
 import typer
 
 from agent.codex_cli.codex_worker import REASONING_EFFORT_LEVELS
+from nika.utils.agent_config import (
+    ENV_AGENT_TYPE,
+    ENV_CODEX_REASONING_EFFORT,
+    ENV_LLM_PROVIDER,
+    ENV_MAX_STEPS,
+    ENV_MODEL,
+)
 
 SUPPORTED_AGENT_TYPES = ("react", "mock", "codex_cli", "claude_cli")
 SUPPORTED_LLM_PROVIDERS = ("openai", "ollama", "deepseek")
@@ -16,7 +23,7 @@ def agent_list() -> None:
     typer.echo("agent_types:")
     for agent_type in SUPPORTED_AGENT_TYPES:
         typer.echo(f"  {agent_type}")
-    typer.echo("llm_providers:")
+    typer.echo("llm_providers (react only):")
     for provider in SUPPORTED_LLM_PROVIDERS:
         typer.echo(f"  {provider}")
     typer.echo("reasoning_effort (codex_cli agent only):")
@@ -26,24 +33,39 @@ def agent_list() -> None:
 
 @agent_app.command("run")
 def agent_run(
-    agent_type: str = typer.Option("react", "-a", "--agent", help="Agent implementation."),
-    llm_provider: str = typer.Option("openai", "-p", "--provider", help="LLM provider (openai, ollama, deepseek)."),
+    agent_type: str | None = typer.Option(
+        None,
+        "-a",
+        "--agent",
+        envvar=ENV_AGENT_TYPE,
+        help="Agent implementation (required unless NIKA_AGENT_TYPE is in .env).",
+    ),
+    llm_provider: str | None = typer.Option(
+        None,
+        "-p",
+        "--provider",
+        envvar=ENV_LLM_PROVIDER,
+        help="LLM provider for react only: openai, ollama, deepseek.",
+    ),
     model: str | None = typer.Option(
         None,
         "-m",
         "--model",
-        help="Model id for the chosen provider or agent (claude: defaults from ANTHROPIC_MODEL in .env).",
+        envvar=ENV_MODEL,
+        help="Model id (required unless agent-specific NIKA_*_MODEL or NIKA_MODEL is in .env).",
     ),
-    max_steps: int = typer.Option(
-        20,
+    max_steps: int | None = typer.Option(
+        None,
         "-n",
         "--max-steps",
-        help="Max ReAct steps (react and mock only; ignored for cli).",
+        envvar=ENV_MAX_STEPS,
+        help="Max ReAct steps (required unless NIKA_MAX_STEPS is in .env; react/mock only).",
     ),
     reasoning_effort: str | None = typer.Option(
         None,
         "-e",
         "--reasoning-effort",
+        envvar=ENV_CODEX_REASONING_EFFORT,
         help="Codex model_reasoning_effort (cli agent only): none, minimal, low, medium, high, xhigh.",
     ),
     session_id: str | None = typer.Option(None, "--session-id", help="Target session id."),

@@ -44,7 +44,7 @@ This flag is reused on **`nika benchmark run`** and **`nika traffic run`** when 
 Aligned with `nika agent run`:
 
 - **`-a` / `--agent`**: `react` (LangGraph + LangChain ReAct), `codex_cli` (LangGraph + Codex CLI subprocess), `claude_cli` (LangGraph + Claude Code CLI subprocess), or `mock` (pipeline testing without an LLM).
-- **`-p` / `--provider`**: LLM provider for `react` and `mock` (`openai`, `ollama`, `deepseek`). Ignored for `codex_cli` (Codex uses OpenAI models).
+- **`-p` / `--provider`**: LLM provider for `react` only (`openai`, `ollama`, `deepseek`).
 - **`-m` / `--model`**: model id.
 - **`-n` / `--max-steps`**: max ReAct recursion steps per phase (`react` and `mock` only).
 - **`-e` / `--reasoning-effort`**: Codex `model_reasoning_effort` (`codex_cli` only): `none`, `minimal`, `low`, `medium`, `high`, `xhigh`.
@@ -66,7 +66,8 @@ Both judge options are required when **`--judge`** is set.
 ## `nika session`
 
 - **`nika session ps [-a]`**: list sessions. Default: running only; **`-a` / `--all`** includes finished sessions. Columns: session id, env id, status, failure count, agent summary.
-- **`nika session inspect [SESSION_ID]`**: print the session document as JSON plus a table of `failure_injections`. Auto-selects when only one session is running.
+- **`nika session inspect [SESSION_ID] [-c]`**: print the session document as JSON plus a table of `failure_injections`. Pass **`-c` / `--containers`** to also list running lab containers (docker-ps style). Auto-selects when only one session is running.
+- **`nika session containers [SESSION_ID]`**: list Kathara containers in the session lab (CONTAINER ID, NAME, IMAGE, STATUS, NAMES). Auto-selects when only one session is running.
 - **`nika session close [SESSION_ID] [-y]`**: undeploy the lab, mark failure records ended, and remove the runtime session file. When SESSION_ID is omitted and only one session is running it is selected automatically; **`-y`** skips the confirmation prompt.
 - **`nika session wipe [-y]`**: close every running session and run ``kathara wipe`` to remove leftover containers and networks.
 
@@ -113,7 +114,7 @@ Example: `nika exec pc1 ping -c 3 10.0.0.2 --timeout 30`
   | Flag | Applies to | Meaning |
   |------|------------|---------|
   | `-a` / `--agent` | all | `react`, `codex_cli`, `claude_cli`, or `mock` |
-  | `-p` / `--provider` | `react`, `mock` | `openai`, `ollama`, or `deepseek` |
+  | `-p` / `--provider` | `react` | `openai`, `ollama`, or `deepseek` |
   | `-m` / `--model` | all | model id |
   | `-n` / `--max-steps` | `react`, `mock` | ReAct step cap per phase |
   | `-e` / `--reasoning-effort` | `codex_cli` | Codex reasoning effort level |

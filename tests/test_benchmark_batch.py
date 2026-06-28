@@ -109,8 +109,6 @@ class ParallelBenchmarkIntegrationTest(CliIntegrationTestCase):
                     str(len(SCENARIO_CASES)),
                     "--agent",
                     "mock",
-                    "--provider",
-                    "mock",
                     "--model",
                     "mock-v1",
                 ],

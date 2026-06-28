@@ -12,8 +12,8 @@ def create_agent(
     agent_type: str,
     *,
     session_id: str,
-    llm_provider: str,
     model: str,
+    llm_provider: str | None = None,
     max_steps: int = 20,
     reasoning_effort: str | None = None,
     stream_output: bool = True,
@@ -21,6 +21,10 @@ def create_agent(
     """Instantiate an agent for ``agent_type``."""
     match agent_type.lower():
         case "react":
+            if not llm_provider:
+                raise ValueError(
+                    "react agent requires an LLM provider: set NIKA_LLM_PROVIDER in .env or pass -p/--provider."
+                )
             return BasicReActAgent(
                 session_id=session_id,
                 llm_provider=llm_provider,
@@ -30,7 +34,6 @@ def create_agent(
         case "mock":
             return MockAgent(
                 session_id=session_id,
-                llm_provider=llm_provider,
                 model=model,
                 max_steps=max_steps,
             )

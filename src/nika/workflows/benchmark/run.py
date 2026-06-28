@@ -10,7 +10,7 @@ from pathlib import Path
 
 from nika.config import BENCHMARK_DIR, RESULTS_DIR
 from nika.net_env.net_env_pool import scenario_requires_topo_size
-from nika.workflows.agent.run import _resolve_agent_model, start_agent
+from nika.workflows.agent.run import start_agent
 from nika.workflows.env.start import start_net_env
 from nika.workflows.eval.session import eval_results
 from nika.workflows.failure.inject import inject_failure
@@ -26,7 +26,7 @@ def _benchmark_row_cli_args(
     row: dict,
     *,
     agent_type: str,
-    llm_provider: str,
+    llm_provider: str | None,
     model: str | None,
     max_steps: int,
     run_judge: bool,
@@ -39,9 +39,9 @@ def _benchmark_row_cli_args(
         row["problem"],
         "-a",
         agent_type,
-        "-p",
-        llm_provider,
     ]
+    if llm_provider:
+        args += ["-p", llm_provider]
     if model:
         args += ["-m", model]
     args += [
@@ -60,7 +60,7 @@ def _run_benchmark_row_subprocess(
     row: dict,
     *,
     agent_type: str,
-    llm_provider: str,
+    llm_provider: str | None,
     model: str | None,
     max_steps: int,
     run_judge: bool,
@@ -101,7 +101,7 @@ def _run_benchmark_batch_parallel(
     rows: list[dict],
     *,
     agent_type: str,
-    llm_provider: str,
+    llm_provider: str | None,
     model: str | None,
     max_steps: int,
     run_judge: bool,
@@ -133,7 +133,7 @@ def run_single_benchmark(
     scenario: str,
     topo_size: str,
     agent_type: str,
-    llm_provider: str,
+    llm_provider: str | None,
     model: str | None,
     max_steps: int,
     *,
@@ -185,7 +185,7 @@ def run_single_benchmark(
 def run_benchmark_from_csv(
     benchmark_file: str,
     agent_type: str,
-    llm_provider: str,
+    llm_provider: str | None,
     model: str | None,
     max_steps: int,
     *,

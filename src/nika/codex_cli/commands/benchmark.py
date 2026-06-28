@@ -5,6 +5,14 @@ from pathlib import Path
 import typer
 
 from nika.net_env.net_env_pool import scenario_requires_topo_size
+from nika.utils.agent_config import (
+    ENV_AGENT_TYPE,
+    ENV_JUDGE_MODEL,
+    ENV_JUDGE_PROVIDER,
+    ENV_LLM_PROVIDER,
+    ENV_MAX_STEPS,
+    ENV_MODEL,
+)
 from nika.workflows.benchmark.run import (
     default_benchmark_csv_path,
     run_benchmark_from_csv,
@@ -37,19 +45,33 @@ def benchmark_run(
         "--size",
         help="Topology size s, m, or l (required only for scalable scenarios).",
     ),
-    agent_type: str = typer.Option("react", "-a", "--agent", help="Agent implementation."),
-    llm_provider: str = typer.Option("openai", "-p", "--provider", help="LLM provider (openai, ollama, deepseek)."),
+    agent_type: str | None = typer.Option(
+        None,
+        "-a",
+        "--agent",
+        envvar=ENV_AGENT_TYPE,
+        help="Agent implementation (required unless NIKA_AGENT_TYPE is in .env).",
+    ),
+    llm_provider: str | None = typer.Option(
+        None,
+        "-p",
+        "--provider",
+        envvar=ENV_LLM_PROVIDER,
+        help="LLM provider for react only: openai, ollama, deepseek.",
+    ),
     model: str | None = typer.Option(
         None,
         "-m",
         "--model",
-        help="Model id for the agent (claude: defaults from ANTHROPIC_MODEL in .env).",
+        envvar=ENV_MODEL,
+        help="Model id (required unless agent-specific NIKA_*_MODEL or NIKA_MODEL is in .env).",
     ),
-    max_steps: int = typer.Option(
-        20,
+    max_steps: int | None = typer.Option(
+        None,
         "-n",
         "--max-steps",
-        help="Max ReAct steps (react and mock only; ignored for cli).",
+        envvar=ENV_MAX_STEPS,
+        help="Max ReAct steps (required unless NIKA_MAX_STEPS is in .env; react/mock only).",
     ),
     batch_size: int = typer.Option(
         1,
@@ -68,18 +90,22 @@ def benchmark_run(
     judge_provider: str | None = typer.Option(
         None,
         "--judge-provider",
-        help="LLM provider for the judge (required with --judge).",
+        envvar=ENV_JUDGE_PROVIDER,
+        help="LLM provider for the judge (required with --judge unless set in .env).",
     ),
     judge_model: str | None = typer.Option(
         None,
         "--judge-model",
-        help="Model id for the judge (required with --judge).",
+        envvar=ENV_JUDGE_MODEL,
+        help="Model id for the judge (required with --judge unless set in .env).",
     ),
 ) -> None:
     """Run one benchmark row from CSV, or a single case when SCENARIO and --problem are set."""
     if run_judge:
-        if not judge_provider or not judge_model:
-            raise typer.BadParameter("--judge-provider and --judge-model are required when --judge is set.")
+        from nika.utils.agent_config import resolve_judge_model, resolve_judge_provider
+
+        judge_provider = resolve_judge_provider(judge_provider)
+        judge_model = resolve_judge_model(judge_model)
     elif judge_provider is not None or judge_model is not None:
         raise typer.BadParameter("Pass --judge to enable LLM judge; omit --judge-provider/--judge-model otherwise.")
 

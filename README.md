@@ -77,7 +77,46 @@ newgrp docker
 
 ## Configure environment variables
 
-Create a `.env` file under the base directory and set the following environment variables:
+Copy the template and fill in values. **NIKA does not ship hard-coded agent defaults** — every `nika agent run` / `nika benchmark run` needs either a configured `.env` or explicit CLI flags.
+
+```shell
+cp .env.example .env
+```
+
+CLI flags override `.env` when both are set.
+
+### Agent and judge settings
+
+| Setting | `.env` variable | CLI flag |
+|---------|-----------------|----------|
+| Agent type | `NIKA_AGENT_TYPE` | `-a` / `--agent` |
+| LLM provider (react) | `NIKA_LLM_PROVIDER` | `-p` / `--provider` |
+| Max ReAct steps (react/mock) | `NIKA_MAX_STEPS` | `-n` / `--max-steps` |
+| Model (any agent) | `NIKA_MODEL` | `-m` / `--model` |
+| ReAct model | `NIKA_REACT_MODEL` | `-m` (when `-a react`) |
+| Mock model | `NIKA_MOCK_MODEL` | `-m` (when `-a mock`) |
+| Codex model | `NIKA_CODEX_MODEL` | `-m` (when `-a codex_cli`) |
+| Codex reasoning effort | `NIKA_CODEX_REASONING_EFFORT` | `-e` / `--reasoning-effort` |
+| Claude model | `ANTHROPIC_MODEL` (etc.) | `-m` (when `-a claude_cli`) |
+| Judge provider | `NIKA_JUDGE_PROVIDER` | `-p` on `nika eval judge` |
+| Judge model | `NIKA_JUDGE_MODEL` | `-m` on `nika eval judge` |
+
+Example runs (equivalent to filling `.env.example`):
+
+```shell
+nika agent run -a react -p deepseek -m deepseek-chat -n 20
+nika agent run -a codex_cli -m gpt-5.4-mini -e medium
+nika agent run -a claude_cli -m deepseek-v4-flash
+```
+
+Or with `.env` configured, omit flags that are already set:
+
+```shell
+nika agent run          # uses NIKA_* from .env
+nika agent run -m gpt-5.4-mini   # overrides model only
+```
+
+Other variables (API keys, observability):
 
 ```shell
 # if use Langsmith for observability
@@ -132,6 +171,8 @@ Each `nika env run` creates a **session** (printed as `session_id=…`). Session
    nika session ps                            # running sessions (status, failures, agents)
    nika session ps -a                         # include finished sessions
    nika session inspect [SESSION_ID]          # full session JSON + failure summary
+   nika session inspect -c                    # also list lab containers (docker-ps style)
+   nika session containers [SESSION_ID]       # list containers in the session lab
    nika session close [SESSION_ID]            # undeploy lab and clear runtime state
    nika session wipe -y                       # close every running session and wipe Kathara
    ```
