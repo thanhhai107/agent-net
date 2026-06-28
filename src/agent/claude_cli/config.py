@@ -12,7 +12,7 @@ NIKA drives ``claude -p`` as a subprocess.  Authentication supports:
 Model selection reads from env when ``-m`` / ``--model`` is not passed:
 
 ``ANTHROPIC_MODEL`` → ``CLAUDE_CODE_SUBAGENT_MODEL`` →
-``ANTHROPIC_DEFAULT_SONNET_MODEL`` → ``claude-sonnet-4-20250514``.
+``ANTHROPIC_DEFAULT_SONNET_MODEL``. If none are set, pass ``-m/--model`` or configure ``.env``.
 """
 
 from __future__ import annotations
@@ -28,15 +28,15 @@ _CLAUDE_MODEL_ENV_KEYS = (
     "CLAUDE_CODE_SUBAGENT_MODEL",
     "ANTHROPIC_DEFAULT_SONNET_MODEL",
 )
-_FALLBACK_CLAUDE_MODEL = "claude-sonnet-4-20250514"
-
-
 def default_claude_model() -> str:
-    """Return the default Claude model id from environment variables."""
+    """Return the Claude model id from environment variables."""
     for key in _CLAUDE_MODEL_ENV_KEYS:
         if value := os.environ.get(key, "").strip():
             return value
-    return _FALLBACK_CLAUDE_MODEL
+    raise ValueError(
+        "Missing Claude model: set ANTHROPIC_MODEL (or CLAUDE_CODE_SUBAGENT_MODEL / "
+        "ANTHROPIC_DEFAULT_SONNET_MODEL) in .env or pass -m/--model."
+    )
 
 
 def resolve_claude_model(model: str | None) -> str:

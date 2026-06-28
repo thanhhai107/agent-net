@@ -7,6 +7,8 @@ Unit tests (no Docker/LLM required)
 ------------------------------------
 * :class:`BuildMcpTomlTest`  — Codex CLI MCP TOML config generation
 * :class:`BuildMcpJsonTest`  — Claude Code MCP JSON config generation
+* :class:`AgentConfigTest` — agent CLI env resolution (``nika.utils.agent_config``)
+* :class:`ClaudeConfigTest`  — Claude env model and auth helpers
 * :class:`CodexDisplayTest`  — ``codex exec --json`` event formatter
 * :class:`ClaudeDisplayTest` — ``claude --output-format stream-json`` event formatter
 
@@ -45,6 +47,8 @@ Run
 
     # Fast unit tests only:
     uv run python -m unittest tests.test_integration_agents.BuildMcpTomlTest -v
+    uv run python -m unittest tests.test_integration_agents.AgentConfigTest -v
+    uv run python -m unittest tests.test_integration_agents.ClaudeConfigTest -v
     uv run python -m unittest tests.test_integration_agents.BuildMcpJsonTest -v
     uv run python -m unittest tests.test_integration_agents.CodexDisplayTest -v
     uv run python -m unittest tests.test_integration_agents.ClaudeDisplayTest -v
@@ -88,6 +92,23 @@ from agent.utils.mcp_servers import MCPServerConfig
 from agent.utils.phases import DIAGNOSIS, SUBMISSION
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from nika.codex_cli.main import app
+from nika.utils.agent_config import (
+    ENV_AGENT_TYPE,
+    ENV_CODEX_MODEL,
+    ENV_JUDGE_MODEL,
+    ENV_JUDGE_PROVIDER,
+    ENV_LLM_PROVIDER,
+    ENV_MAX_STEPS,
+    ENV_MOCK_MODEL,
+    ENV_REACT_MODEL,
+    resolve_agent_model,
+    resolve_agent_type,
+    resolve_judge_model,
+    resolve_judge_provider,
+    resolve_llm_provider,
+    resolve_max_steps,
+    resolve_reasoning_effort,
+)
 from nika.utils.session_index import SessionIndex
 from nika.utils.session_store import SessionStore
 from tests.integration_base import OrderedPipelineTestCase
@@ -162,6 +183,83 @@ class BuildMcpTomlTest(unittest.TestCase):
         self.assertEqual(toml.count('default_tools_approval_mode = "approve"'), 2)
 
 
+class AgentConfigTest(unittest.TestCase):
+    """Unit tests for agent CLI env resolution."""
+
+    def test_cli_overrides_env(self) -> None:
+        with unittest.mock.patch.dict(
+            os.environ,
+            {ENV_AGENT_TYPE: "mock", ENV_LLM_PROVIDER: "deepseek", ENV_MAX_STEPS: "99"},
+            clear=False,
+        ):
+            self.assertEqual(resolve_agent_type("react"), "react")
+            self.assertEqual(resolve_llm_provider("openai", agent_type="react"), "openai")
+            self.assertEqual(resolve_max_steps(20), 20)
+
+    def test_env_fallback(self) -> None:
+        with unittest.mock.patch.dict(
+            os.environ,
+            {
+                ENV_AGENT_TYPE: "codex_cli",
+                ENV_LLM_PROVIDER: "deepseek",
+                ENV_MAX_STEPS: "30",
+                ENV_CODEX_MODEL: "gpt-5.4-mini",
+                "NIKA_CODEX_REASONING_EFFORT": "medium",
+            },
+            clear=False,
+        ):
+            self.assertEqual(resolve_agent_type(None), "codex_cli")
+            self.assertIsNone(resolve_llm_provider(None, agent_type="codex_cli"))
+            self.assertEqual(resolve_max_steps(None), 30)
+            self.assertEqual(resolve_reasoning_effort(None), "medium")
+
+    def test_missing_config_raises(self) -> None:
+        with unittest.mock.patch.dict(os.environ, {}, clear=True):
+            with self.assertRaises(ValueError):
+                resolve_agent_type(None)
+            with self.assertRaises(ValueError):
+                resolve_llm_provider(None, agent_type="react")
+            with self.assertRaises(ValueError):
+                resolve_max_steps(None)
+
+    def test_llm_provider_optional_for_non_react(self) -> None:
+        with unittest.mock.patch.dict(os.environ, {}, clear=True):
+            self.assertIsNone(resolve_llm_provider(None, agent_type="mock"))
+            self.assertIsNone(resolve_llm_provider(None, agent_type="codex_cli"))
+            self.assertIsNone(resolve_llm_provider(None, agent_type="claude_cli"))
+
+    def test_agent_model_per_type(self) -> None:
+        with unittest.mock.patch.dict(
+            os.environ,
+            {
+                ENV_REACT_MODEL: "deepseek-chat",
+                ENV_CODEX_MODEL: "gpt-5.4-mini",
+                ENV_MOCK_MODEL: "mock-v1",
+                "ANTHROPIC_MODEL": "deepseek-v4-pro[1m]",
+            },
+            clear=False,
+        ):
+            self.assertEqual(resolve_agent_model("react", None), "deepseek-chat")
+            self.assertEqual(resolve_agent_model("codex_cli", None), "gpt-5.4-mini")
+            self.assertEqual(resolve_agent_model("mock", None), "mock-v1")
+            self.assertEqual(resolve_agent_model("claude_cli", None), "deepseek-v4-pro[1m]")
+            self.assertEqual(resolve_agent_model("react", "override"), "override")
+
+    def test_judge_from_env(self) -> None:
+        with unittest.mock.patch.dict(
+            os.environ,
+            {ENV_JUDGE_PROVIDER: "deepseek", ENV_JUDGE_MODEL: "deepseek-chat"},
+            clear=False,
+        ):
+            self.assertEqual(resolve_judge_provider(None), "deepseek")
+            self.assertEqual(resolve_judge_model(None), "deepseek-chat")
+
+    def test_judge_missing_raises(self) -> None:
+        with unittest.mock.patch.dict(os.environ, {}, clear=True):
+            with self.assertRaises(ValueError):
+                resolve_judge_provider(None)
+
+
 class ClaudeConfigTest(unittest.TestCase):
     """Unit tests for Claude env model and auth helpers."""
 
@@ -172,6 +270,11 @@ class ClaudeConfigTest(unittest.TestCase):
             clear=False,
         ):
             self.assertEqual(default_claude_model(), "model-a")
+
+    def test_default_model_missing_raises(self) -> None:
+        with unittest.mock.patch.dict(os.environ, {}, clear=True):
+            with self.assertRaises(ValueError):
+                default_claude_model()
 
     def test_resolve_claude_model_prefers_explicit(self) -> None:
         self.assertEqual(resolve_claude_model("custom-model"), "custom-model")
@@ -579,7 +682,7 @@ class MockAgentPipelineTest(_CommonPipelineSteps, OrderedPipelineTestCase):
         """Mock agent completes the full diagnosis + submission pipeline."""
         self.assertIsNotNone(self.session_id)
         self._invoke_ok(
-            ["agent", "run", "--agent", "mock", "--provider", "mock", "--model", "mock-v1",
+            ["agent", "run", "--agent", "mock", "--model", "mock-v1",
              "--session-id", self.session_id]
         )
 
@@ -648,7 +751,7 @@ class CodexCliAgentPipelineTest(_CommonPipelineSteps, OrderedPipelineTestCase):
         self.assertIsNotNone(self.session_id)
         result = self.runner.invoke(
             app,
-            ["agent", "run", "--agent", "codex_cli", "--provider", "openai",
+            ["agent", "run", "--agent", "codex_cli",
              "--model", CODEX_MODEL, "--session-id", self.session_id],
         )
         self.assertEqual(
@@ -792,7 +895,7 @@ class ClaudeAgentPipelineTest(_CommonPipelineSteps, OrderedPipelineTestCase):
         self.assertIsNotNone(self.session_id)
         result = self.runner.invoke(
             app,
-            ["agent", "run", "--agent", "claude_cli", "--provider", "anthropic",
+            ["agent", "run", "--agent", "claude_cli",
              "--session-id", self.session_id],
         )
         self.assertEqual(

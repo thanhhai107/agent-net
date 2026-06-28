@@ -1,6 +1,6 @@
 # Agent Architecture
 
-`src/agent` hosts multiple troubleshooting agent implementations for NIKA. All implementations share the same entry contract (`protocols.TroubleshootingAgent`) and produce the same session artifacts (`messages.jsonl`, `submission.json`, etc.).
+`src/agent` hosts multiple troubleshooting agent implementations for NIKA. All share the same entry contract (`protocols.TroubleshootingAgent`) and produce the same session artifacts (`messages.jsonl`, `submission.json`, etc.).
 
 ## Directory Layout
 
@@ -8,173 +8,208 @@
 src/agent/
 ├── protocols.py          # Shared Protocol interface
 ├── registry.py           # Type registry and factory for `nika agent run`
-├── langgraph/            # [implemented] LangGraph + LangChain ReAct
-│   ├── react_agent.py    # StateGraph orchestration: diagnosis → submission
-│   └── phases/           # LangChain create_agent workers per pipeline phase
-├── mock/                 # [implemented] Deterministic mock without an LLM
+├── langgraph/            # LangGraph + LangChain ReAct
+│   ├── react_agent.py
+│   └── phases/
+├── mock/                 # Deterministic mock without an LLM
 │   └── mock_agent.py
-├── sdk/                  # [planned] Direct Claude / Codex SDK integration
+├── sdk/                  # [planned] Claude / Codex SDK
 │   └── agent.py
-├── codex_cli/            # [implemented] LangGraph + Codex CLI
-│   ├── agent.py          # CodexCliAgent — StateGraph orchestrator
-│   ├── codex_worker.py   # CodexWorker — codex exec subprocess adapter
-│   ├── codex_display.py  # Terminal formatting for codex --json events
-│   └── phases/           # Codex CLI workers per pipeline phase
-├── claude_cli/           # [implemented] LangGraph + Claude Code CLI
-│   ├── agent.py          # ClaudeAgent — StateGraph orchestrator
-│   ├── config.py         # Model defaults and auth from environment
-│   ├── claude_worker.py  # ClaudeWorker — claude -p subprocess adapter
-│   ├── claude_display.py # Terminal formatting for stream-json events
-│   └── phases/           # Claude CLI workers per pipeline phase
-├── llm/                  # LangChain model factory for the LangGraph path
-│   └── model_factory.py
-└── utils/                # Shared utilities across implementations
-    ├── mcp_servers.py    # Kathara / task MCP configuration
-    ├── phases.py         # Pipeline phase identifiers (diagnosis / submission)
-    └── loggers.py        # Structured logging to messages.jsonl
+├── codex_cli/            # LangGraph + Codex CLI
+├── claude_cli/           # LangGraph + Claude Code CLI
+├── llm/                  # LangChain model factory (react path)
+└── utils/                # MCP config, phases, loggers
 ```
 
-## Implementation Paths
+## Agent Types
 
-| Type | CLI name | Orchestration | LLM access | Status |
-|------|----------|---------------|------------|--------|
-| LangGraph | `react` | LangGraph `StateGraph` | LangChain ReAct + `load_model()` | Implemented |
-| Mock | `mock` | Hand-written two-phase flow | No LLM; fixed tool sequence | Implemented |
-| Codex SDK | `codex_sdk` | TBD (recommended: same two phases) | Cursor SDK / Codex SDK | Planned |
-| Claude SDK | `claude_sdk` | TBD (recommended: same two phases) | Anthropic SDK | Planned |
-| Codex CLI | `codex_cli` | LangGraph `StateGraph` | `codex exec` subprocess | Implemented |
-| Claude CLI | `claude_cli` | LangGraph `StateGraph` | `claude -p` subprocess | Implemented |
+| CLI name | Orchestration | LLM access | Status |
+|----------|---------------|------------|--------|
+| `react` | LangGraph `StateGraph` | LangChain ReAct + `load_model()` | Implemented |
+| `mock` | Hand-written two-phase flow | No LLM; fixed tool sequence | Implemented |
+| `codex_cli` | LangGraph `StateGraph` | `codex exec` subprocess | Implemented |
+| `claude_cli` | LangGraph `StateGraph` | `claude -p` subprocess | Implemented |
+| `sdk` | TBD | Claude / Codex SDK | Planned |
 
-## Shared Two-Phase Flow
+## Shared Pipeline
 
-Every implementation follows the same troubleshooting pipeline:
+Every agent runs **diagnosis** (Kathara MCP, `if_submit=False`) then **submission** (task MCP, `if_submit=True` → `list_avail_problems` + `submit`).
 
-```mermaid
-flowchart LR
-    Task[task_description] --> Diagnosis[diagnosis]
-    Diagnosis -->|diagnosis_report| Submission[submission]
-    Submission --> Done[submission.json]
+## CLI & Environment
 
-    subgraph diagnosis_tools [Diagnosis MCP]
-        Kathara[kathara_* servers]
-    end
+`nika agent run` resolves options from CLI flags first, then `.env`. See [`.env.example`](../../.env.example) for a full template.
 
-    subgraph submission_tools [Submission MCP]
-        TaskMCP[task_mcp_server]
-    end
+### Shared (all agents)
 
-    Diagnosis --> diagnosis_tools
-    Submission --> submission_tools
-```
+| Flag | Env | Required | Notes |
+|------|-----|----------|-------|
+| `-a` / `--agent` | `NIKA_AGENT_TYPE` | Yes | `react`, `mock`, `codex_cli`, `claude_cli` |
+| `-p` / `--provider` | `NIKA_LLM_PROVIDER` | react only | `openai`, `ollama`, `deepseek` |
+| `-n` / `--max-steps` | `NIKA_MAX_STEPS` | Yes | Limits ReAct steps in `react` / `mock` only |
+| `-m` / `--model` | `NIKA_MODEL` | No | Overrides agent-specific model env when set |
+| `--session-id` | — | No | Target session (default: current running session) |
 
-- **Diagnosis**: Connects to Kathara MCP servers (`if_submit=False`) to detect anomalies, localize faulty devices, and identify root causes.
-- **Submission**: Connects to the task MCP server (`if_submit=True`) and calls `list_avail_problems` + `submit`.
+Model resolution order: `-m` → `NIKA_MODEL` → agent-specific env (below).
 
-## 1. LangGraph Path (`-a react`)
+### Observability (react, codex_cli, claude_cli)
 
-**Entry point**: `agent.langgraph.react_agent.BasicReActAgent`
+LangSmith: `LANGSMITH_TRACING`, `LANGSMITH_API_KEY`, `LANGSMITH_PROJECT` (default `NIKA`).
 
-- Top-level orchestration uses a LangGraph `StateGraph` with two nodes.
-- Each node is a LangChain `create_agent` ReAct worker (`DiagnosisPhase` / `SubmissionPhase`).
-- LLMs are loaded via `agent.llm.model_factory.load_model()` (openai / ollama / deepseek).
-- Tracing: Langfuse + LangSmith. Logging: `AgentCallbackLogger`.
+Langfuse (react only): `LANGFUSE_SECRET_KEY`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_HOST`.
+
+---
+
+## react
+
+LangGraph orchestration + LangChain ReAct workers per phase.
+
+**Entry**: `agent.langgraph.react_agent.BasicReActAgent`
+
+**Requires**: API key for the chosen provider.
+
+| Provider | API key / URL |
+|----------|---------------|
+| `openai` | `OPENAI_API_KEY` |
+| `deepseek` | `DEEPSEEK_API_KEY` |
+| `ollama` | `OLLAMA_API_URL` (default `http://localhost:11434`) |
+
+| Env | Default in `.env.example` |
+|-----|-------------------------|
+| `NIKA_REACT_MODEL` | `gpt-5-mini` |
 
 ```bash
-nika agent run -a react -p openai -m gpt-5-mini -n 20
+# .env
+NIKA_AGENT_TYPE=react
+NIKA_LLM_PROVIDER=openai
+NIKA_MAX_STEPS=20
+NIKA_REACT_MODEL=gpt-5-mini
+OPENAI_API_KEY=sk-...
+
+nika agent run                              # all from .env
 nika agent run -a react -p deepseek -m deepseek-chat -n 20
 ```
 
-## 2. Mock Path (`-a mock`)
+### Local deployment (Ollama)
 
-**Entry point**: `agent.mock.mock_agent.MockAgent`
+ReAct requires a tool-calling model — see [Ollama tool calling](https://github.com/ollama/ollama/blob/main/docs/capabilities/tool-calling.mdx). Install, pull, and server setup: [Ollama FAQ](https://docs.ollama.com/faq).
 
-- Skips LangGraph and LangChain; calls MCP tools from a fixed script.
-- Matches the `BasicReActAgent.run()` interface for CI and parallel benchmark tests.
-- Writes the same `messages.jsonl` event schema as the LangGraph path.
+Common small models: `qwen2.5:7b`, `llama3.2:3b`, `llama3.1:8b`.
 
 ```bash
+# .env
+NIKA_AGENT_TYPE=react
+NIKA_LLM_PROVIDER=ollama
+NIKA_MAX_STEPS=20
+NIKA_REACT_MODEL=qwen2.5:7b
+OLLAMA_API_URL=http://localhost:11434
+
+nika agent run -a react -p ollama -m qwen2.5:7b -n 20
+```
+
+No API key. `load_model()` validates the model at init — run `ollama pull` first. For a remote host, set `OLLAMA_API_URL` to the server base URL.
+
+---
+
+## mock
+
+Fixed MCP tool sequence; no LLM. For CI and integration tests.
+
+**Entry**: `agent.mock.mock_agent.MockAgent`
+
+`-n` is accepted but does not change behaviour.
+
+| Env | Default in `.env.example` |
+|-----|-------------------------|
+| `NIKA_MOCK_MODEL` | `mock-v1` |
+
+```bash
+# .env
+NIKA_AGENT_TYPE=mock
+NIKA_MAX_STEPS=5
+NIKA_MOCK_MODEL=mock-v1
+
 nika agent run -a mock -n 5
 ```
 
-## 3. SDK Paths (`-a codex_sdk` / `-a claude_sdk`, planned)
+---
 
-**Placeholder**: `agent.sdk`
+## codex_cli
 
-Design notes:
+LangGraph orchestration + `codex exec` subprocess per phase. Workspace: `results/{session_id}/codex_workspace/`. MCP config written to an isolated `CODEX_HOME` (does not touch `~/.codex/`).
 
-- Bypass LangChain and use Claude / Codex SDK tool-use APIs directly.
-- Expose MCP tools to the model via SDK MCP configuration or an adapter.
-- Keep the diagnosis → submission flow and the same logging format.
+**Entry**: `agent.codex_cli.agent.CodexCliAgent`
 
-Register the `"codex_sdk"` and `"claude_sdk"` branches in `registry.create_agent()` once implemented.
+**Requires**: [Codex CLI](https://github.com/openai/codex) on `PATH`. Auth via `codex login` or `OPENAI_API_KEY`.
 
-## 4. LangGraph + Codex CLI Path (`-a codex_cli`)
-
-**Entry point**: `agent.codex_cli.agent.CodexCliAgent`
-
-- Mirrors the same two-node `StateGraph` structure as `BasicReActAgent` (implemented in `codex_cli/agent.py`).
-- Replaces LangChain workers with `CodexWorker` subprocess wrappers (`codex exec`).
-- Each phase runs in an isolated per-session workspace under `results/{session_id}/codex_workspace/`.
-- MCP servers are written to a private `CODEX_HOME` so the global `~/.codex/` config is not touched.
-- `codex exec --json` events are streamed line-by-line to `messages.jsonl` and pretty-printed to the terminal.
+| Flag | Env | Notes |
+|------|-----|-------|
+| `-m` / `--model` | `NIKA_CODEX_MODEL` | Default `gpt-5.4-mini` |
+| `-e` / `--reasoning-effort` | `NIKA_CODEX_REASONING_EFFORT` | `none`, `minimal`, `low`, `medium`, `high`, `xhigh`; optional |
 
 ```bash
-# authenticate once
-codex login
+codex login   # once
+
+# .env
+NIKA_AGENT_TYPE=codex_cli
+NIKA_MAX_STEPS=20
+NIKA_CODEX_MODEL=gpt-5.4-mini
+# NIKA_CODEX_REASONING_EFFORT=medium
 
 nika agent run -a codex_cli -m gpt-5.4-mini -e medium
 ```
 
-The `-p` / `--provider` flag applies to ``react`` and ``mock`` only; Codex CLI always uses OpenAI models.
-Use `-e` / `--reasoning-effort` to set Codex ``model_reasoning_effort`` (``none``, ``minimal``, ``low``, ``medium``, ``high``, ``xhigh``).
+---
 
-## 5. LangGraph + Claude Code CLI Path (`-a claude_cli`)
+## claude_cli
 
-**Entry point**: `agent.claude_cli.agent.ClaudeAgent`
+LangGraph orchestration + `claude -p` subprocess per phase. Workspace: `results/{session_id}/claude_workspace/`. MCP config: `{phase}_mcp_config.json`.
 
-- Same two-node `StateGraph` structure as `BasicReActAgent` and `CodexCliAgent`.
-- Each phase runs `claude -p` in an isolated per-session workspace under `results/{session_id}/claude_workspace/`.
-- MCP servers are written per phase as `{phase}_mcp_config.json` in the workspace.
-- `claude --output-format stream-json` events are logged to `messages.jsonl` and pretty-printed to the terminal.
+**Entry**: `agent.claude_cli.agent.ClaudeAgent`
 
-### Prerequisites
+**Requires**: [Claude Code](https://docs.anthropic.com/en/docs/claude-code) on `PATH`.
 
-1. Install [Claude Code](https://docs.anthropic.com/en/docs/claude-code) so `claude` is on `PATH`.
-2. Configure credentials using **one** of the following:
+**Auth** (pick one):
 
-| Mode | Setup | Notes |
-|------|-------|-------|
-| **Anthropic API key** | `ANTHROPIC_API_KEY=sk-ant-...` in `.env` | Native Anthropic API |
-| **Anthropic-compatible proxy** | `ANTHROPIC_BASE_URL=...` and `ANTHROPIC_AUTH_TOKEN=...` in `.env` | e.g. DeepSeek's Anthropic endpoint |
-| **Claude Code login** | `claude auth login` | OAuth; no `.env` keys required |
+| Mode | Setup |
+|------|-------|
+| Anthropic API | `ANTHROPIC_API_KEY` |
+| Compatible proxy | `ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN` |
+| OAuth | `claude auth login` |
 
-When credentials come from environment variables, NIKA runs `claude` with `--bare` (isolated subprocess auth). With `claude auth login` only, OAuth/keychain credentials are used instead.
+When credentials come from env vars, NIKA runs `claude` with `--bare`. With OAuth only, keychain credentials are used.
 
-### Model selection
-
-If `-m` / `--model` is omitted, the model is read from `.env` in this order:
+**Model** (when `-m` omitted, first non-empty wins):
 
 1. `ANTHROPIC_MODEL`
 2. `CLAUDE_CODE_SUBAGENT_MODEL`
 3. `ANTHROPIC_DEFAULT_SONNET_MODEL`
-4. Fallback: `claude-sonnet-4-20250514`
 
-Example `.env` for a DeepSeek-backed setup:
+If none are set, pass `-m` or configure `.env`.
 
 ```bash
+# .env — DeepSeek via Anthropic-compatible API
 ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic
 ANTHROPIC_AUTH_TOKEN=sk-...
 ANTHROPIC_MODEL=deepseek-v4-pro[1m]
-ANTHROPIC_DEFAULT_HAIKU_MODEL=deepseek-v4-flash
-CLAUDE_CODE_SUBAGENT_MODEL=deepseek-v4-flash
+
+NIKA_AGENT_TYPE=claude_cli
+NIKA_MAX_STEPS=20
+
+nika agent run -a claude_cli
+nika agent run -a claude_cli -m deepseek-v4-flash
 ```
+
+---
+
+## sdk (planned)
+
+**Entry**: `agent.sdk.agent.SdkAgent` — not implemented.
 
 ```bash
-nika agent run -a claude_cli                    # model from ANTHROPIC_MODEL
-nika agent run -a claude_cli -m deepseek-v4-flash   # explicit override
+# nika agent run -a sdk   # raises ValueError
 ```
 
-The `-p` / `--provider` flag is accepted for CLI parity but ignored — Claude Code uses Anthropic-compatible APIs configured via environment or login.
+---
 
 ## Example Workflow
 
@@ -186,24 +221,17 @@ nika session close -y
 nika eval metrics
 ```
 
-See the root [README.md](../../README.md#troubleshooting-agents) for a longer walkthrough including ReAct and evaluation steps.
+See the root [README.md](../../README.md#troubleshooting-agents) for a longer walkthrough.
 
 ## Adding a New Agent
 
-1. Implement a class in the appropriate subpackage with `async def run(task_description) -> dict`.
-2. Add a branch in `registry.create_agent()`.
-3. Ensure `MessageLogger` (or `AgentCallbackLogger` for LangChain paths) writes to `{session_dir}/messages.jsonl`.
+1. Implement `async def run(task_description) -> dict` in a subpackage.
+2. Register in `agent.registry.create_agent()`.
+3. Write events to `{session_dir}/messages.jsonl` via `MessageLogger` or `AgentCallbackLogger`.
 
-## CLI Usage
+## CLI Reference
 
 ```bash
-nika agent list                              # List agent types and LLM providers
-nika agent run -a react -p openai -m ...   # LangGraph path
-nika agent run -a codex_cli -m gpt-5.4-mini      # Codex CLI path
-nika agent run -a claude_cli                   # Claude Code CLI (model from .env)
-nika agent run -a mock                       # Mock path (no LLM required)
-# nika agent run -a codex_sdk                  # Not yet implemented
-# nika agent run -a claude_sdk                 # Not yet implemented
+nika agent list          # agent types, LLM providers, reasoning-effort levels
+nika agent run [options] # dispatch via nika/workflows/agent/run.py → registry.create_agent()
 ```
-
-Registration and dispatch live in `nika/workflows/agent/run.py` → `agent.registry.create_agent()`.

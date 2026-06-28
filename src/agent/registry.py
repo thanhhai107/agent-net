@@ -31,7 +31,6 @@ def create_agent(config: AgentRunConfig) -> Any:
         case "mock":
             agent = MockAgent(
                 session_id=config.session_id,
-                llm_backend=config.llm_backend,
                 model=config.model,
                 max_steps=config.max_steps,
             )

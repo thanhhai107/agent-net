@@ -44,6 +44,35 @@ def _agent_summary(session: dict) -> str:
     return "—"
 
 
+def _container_rows(containers: list[dict]) -> list[list[str]]:
+    rows: list[list[str]] = []
+    for item in containers:
+        image = str(item.get("image", "—"))
+        if len(image) > 40:
+            image = image[:37] + "..."
+        rows.append(
+            [
+                str(item.get("container_id", "—")),
+                str(item.get("name", "—")),
+                image,
+                str(item.get("status", "—")),
+                str(item.get("container_name", "—")),
+            ]
+        )
+    return rows
+
+
+def _echo_containers_table(containers: list[dict], *, prefix: str = "") -> None:
+    if not containers:
+        typer.echo(f"{prefix}containers  (none running)")
+        return
+    hdr = ["CONTAINER ID", "NAME", "IMAGE", "STATUS", "NAMES"]
+    label = f"containers  ({len(containers)} running)"
+    typer.echo(f"{prefix}{label}:")
+    for line in fmt_table(hdr, _container_rows(containers)).splitlines():
+        typer.echo(f"{prefix}  {line}")
+
+
 @session_app.command("ps")
 def session_ps(
     all_sessions: bool = typer.Option(False, "--all", "-a", help="Include finished sessions."),
@@ -89,12 +118,20 @@ def session_ps(
 @session_app.command("inspect")
 def session_inspect(
     session_id: str | None = typer.Argument(None, help="Session ID. Auto-selects when only one is running."),
+    containers: bool = typer.Option(
+        False,
+        "--containers",
+        "-c",
+        help="Include a docker-ps-like table of lab containers.",
+    ),
 ) -> None:
     """Show detailed information about a session.
 
     Prints the full session document as formatted JSON, with failure
-    injection records summarised below the main body.
+    injection records summarised below the main body. Pass ``--containers``
+    to also list running Kathara devices in the session lab.
     """
+    from nika.workflows.session.containers import list_session_containers
     from nika.workflows.session.inspect import inspect_session
 
     try:
@@ -125,6 +162,45 @@ def session_inspect(
             typer.echo("  " + line)
     else:
         typer.echo("\nfailure_injections  (none)")
+
+    if containers:
+        try:
+            _, _, container_rows = list_session_containers(session_id)
+        except (FileNotFoundError, ValueError) as exc:
+            raise typer.BadParameter(str(exc)) from exc
+        typer.echo("")
+        _echo_containers_table(container_rows)
+
+
+@session_app.command("containers")
+def session_containers(
+    session_id: str | None = typer.Argument(None, help="Session ID. Auto-selects when only one is running."),
+) -> None:
+    """List Kathara containers running in the session lab (docker-ps style).
+
+    \b
+    Columns
+    -------
+    CONTAINER ID  short Docker container id
+    NAME          device name inside the lab topology
+    IMAGE         Kathara Docker image
+    STATUS        container status (running, exited, …)
+    NAMES         full Docker container name
+    """
+    from nika.workflows.session.containers import list_session_containers
+
+    try:
+        resolved_id, lab_name, container_rows = list_session_containers(session_id)
+    except (FileNotFoundError, ValueError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+    typer.echo(f"session_id={resolved_id}  lab={lab_name}")
+    if not container_rows:
+        typer.echo("No containers running for this session.")
+        return
+
+    headers = ["CONTAINER ID", "NAME", "IMAGE", "STATUS", "NAMES"]
+    typer.echo(fmt_table(headers, _container_rows(container_rows)))
 
 
 @session_app.command("close")

@@ -55,7 +55,7 @@ from typing import ClassVar
 
 from dotenv import load_dotenv
 
-from agent.claude_cli.config import claude_credentials_available, default_claude_model
+from agent.claude_cli.config import claude_credentials_available
 from agent.utils.phases import DIAGNOSIS, SUBMISSION
 from nika.utils.session_store import SESSIONS_DIR, SessionStore
 from tests.integration_base import CliIntegrationTestCase
@@ -343,7 +343,7 @@ CodexCliAgentBenchmarkTest = unittest.skipUnless(
 )(_make_benchmark_agent_test_class("codex_cli"))
 ClaudeCliAgentBenchmarkTest = unittest.skipUnless(
     _claude_cli_available(),
-    f"Claude Code CLI and credentials required (model from env: {default_claude_model()!r})",
+    f"Claude Code CLI and credentials required (set ANTHROPIC_MODEL in .env or pass -m)",
 )(_make_benchmark_agent_test_class("claude_cli"))
 
 

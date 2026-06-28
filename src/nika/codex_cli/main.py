@@ -1,5 +1,7 @@
 """Root Typer application for the ``nika`` console script (``nika.codex_cli``)."""
 
+import nika.config  # noqa: F401 — load .env before Typer reads envvar defaults
+
 import typer
 
 from nika.codex_cli.commands.agent import agent_app

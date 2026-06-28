@@ -57,12 +57,10 @@ class MockAgent:
     def __init__(
         self,
         session_id: str,
-        llm_provider: str = "mock",
         model: str = "mock-v1",
         max_steps: int = DEFAULT_MAX_STEPS,
     ) -> None:
         self.session_id = session_id
-        self.llm_provider = llm_provider
         self.model = model
         self.max_steps = max_steps
         self.session = Session()
@@ -83,7 +81,7 @@ class MockAgent:
             "llm_start",
             {
                 "messages": {"role": "user", "content": task_description},
-                "model": {"name": self.model, "provider": self.llm_provider},
+                "model": {"name": self.model},
             },
         )
 
@@ -127,7 +125,7 @@ class MockAgent:
                         "Please call list_avail_problems and then submit."
                     ),
                 },
-                "model": {"name": self.model, "provider": self.llm_provider},
+                "model": {"name": self.model},
             },
         )
 

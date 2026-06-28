@@ -32,17 +32,48 @@ class KatharaBaseAPI:
         self.lab = self.instance.get_lab_from_api(lab_name=lab_name)
         if self.lab is None:
             raise ValueError(f"Lab {lab_name} not found.")
+        self._resolved_shell_cache: dict[str, str] = {}
 
     def _get_lab_link_stats(self) -> Dict[str, DockerLinkStats]:
         """Get the link stats of the lab."""
         return next(self.instance.get_links_stats(lab_name=self.lab.name))
+
+    @staticmethod
+    def _escape_for_shell_c(command: str) -> str:
+        return command.replace("'", "'\\''").replace('"', '\\"')
+
+    def _wrap_shell_command(self, shell: str, command: str) -> str:
+        escaped = self._escape_for_shell_c(command)
+        return f"{shell} -c '{escaped}'"
+
+    def _resolve_shell(self, host_name: str) -> str:
+        """Pick bash or sh for ``host_name`` (cached per API instance)."""
+        cached = self._resolved_shell_cache.get(host_name)
+        if cached is not None:
+            return cached
+
+        machine = self.lab.machines.get(host_name)
+        if machine is not None and "shell" in machine.meta:
+            shell = machine.get_shell()
+            self._resolved_shell_cache[host_name] = shell
+            return shell
+
+        probe_cmd = (
+            "/bin/sh -c 'if [ -x /bin/bash ]; then echo /bin/bash; "
+            "elif [ -x /bin/sh ]; then echo /bin/sh; else echo /bin/sh; fi'"
+        )
+        probed = self._run_cmd(host_name, probe_cmd).strip()
+        shell = probed if probed in ("/bin/bash", "/bin/sh") else "/bin/sh"
+        self._resolved_shell_cache[host_name] = shell
+        return shell
 
     def exec_cmd(self, host_name: str, command: str, timeout: float = 10) -> str:
         """
         Run a command on a machine and return its output as a string.
         """
         cmd_timeout = timeout
-        cmd = "/bin/bash -c '{}'".format(command.replace("'", "'\\''").replace('"', '\\"'))
+        shell = self._resolve_shell(host_name)
+        cmd = self._wrap_shell_command(shell, command)
         try:
             return func_timeout(cmd_timeout, self._run_cmd, args=(host_name, cmd))
         except FunctionTimedOut:
