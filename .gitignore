@@ -10,9 +10,10 @@ tmp/
 .env
 /.venv
 *.egg-info/
+/results/
 /runtime/
 /.vscode/
-/figs/
+/docs/
 notebooks/
 uv.lock
 .agents/
