@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import csv
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -11,6 +10,8 @@ from pathlib import Path
 from nika.config import BENCHMARK_DIR, RESULTS_DIR
 from nika.net_env.net_env_pool import scenario_requires_topo_size
 from nika.workflows.agent.run import start_agent
+from nika.workflows.benchmark.inject_defaults import resolve_inject_params
+from nika.workflows.benchmark.load_config import load_benchmark_yaml
 from nika.workflows.env.start import start_net_env
 from nika.workflows.eval.session import eval_results
 from nika.workflows.failure.inject import inject_failure
@@ -18,8 +19,8 @@ from nika.workflows.failure.inject import inject_failure
 _BENCHMARK_DONE_PREFIX = "benchmark_done "
 
 
-def default_benchmark_csv_path() -> str:
-    return str(BENCHMARK_DIR / "benchmark_selected.csv")
+def default_benchmark_yaml_path() -> str:
+    return str(BENCHMARK_DIR / "benchmark_selected.yaml")
 
 
 def _benchmark_row_cli_args(
@@ -50,7 +51,10 @@ def _benchmark_row_cli_args(
     ]
     topo = row.get("topo_size") or ""
     if topo:
-        args += ["-t", topo]
+        args += ["-s", topo]
+    inject = row.get("inject") or {}
+    for key, value in inject.items():
+        args += ["--set", f"{key}={value}"]
     if run_judge:
         args += ["--judge", "--judge-provider", judge_llm_provider, "--judge-model", judge_model]
     return args
@@ -67,7 +71,7 @@ def _run_benchmark_row_subprocess(
     judge_llm_provider: str | None,
     judge_model: str | None,
 ) -> None:
-    """Run one CSV row via a subprocess for thread-safe parallel batch execution."""
+    """Run one YAML row via a subprocess for thread-safe parallel batch execution."""
     cli_args = _benchmark_row_cli_args(
         row,
         agent_type=agent_type,
@@ -79,7 +83,7 @@ def _run_benchmark_row_subprocess(
         judge_model=judge_model,
     )
     proc = subprocess.run(
-        [sys.executable, "-m", "nika.codex_cli.main", "benchmark", "run", *cli_args],
+        [sys.executable, "-m", "nika.cli.main", "benchmark", "run", *cli_args],
         capture_output=True,
         text=True,
     )
@@ -137,6 +141,7 @@ def run_single_benchmark(
     model: str | None,
     max_steps: int,
     *,
+    inject_params: dict[str, str] | None = None,
     run_judge: bool = False,
     judge_llm_provider: str | None = None,
     judge_model: str | None = None,
@@ -154,10 +159,12 @@ def run_single_benchmark(
     if not scenario_requires_topo_size(scenario):
         size = None
 
+    params = dict(inject_params or resolve_inject_params(problem, scenario, topo_size or ""))
+
     session_id = start_net_env(scenario, size, redeploy=True)
     session_dir = Path(RESULTS_DIR) / session_id
 
-    inject_failure(problem_names=[problem], session_id=session_id)
+    inject_failure(problem_names=[problem], session_id=session_id, param_overrides=params)
 
     start_agent(
         agent_type=agent_type,
@@ -182,7 +189,7 @@ def run_single_benchmark(
     return session_id
 
 
-def run_benchmark_from_csv(
+def run_benchmark_from_yaml(
     benchmark_file: str,
     agent_type: str,
     llm_provider: str | None,
@@ -195,12 +202,9 @@ def run_benchmark_from_csv(
     judge_model: str | None = None,
 ) -> None:
     """
-    Run benchmark cases defined in a CSV file.
+    Run benchmark cases defined in a YAML file.
 
-    The CSV file must contain the following columns:
-    - problem
-    - scenario
-    - topo_size (same values as ``nika env run -t``: s, m, l, or empty)
+    Each case must include scenario, problem, optional topo_size, and inject params.
 
     When ``batch_size == 1`` (default) rows are executed sequentially.
     When ``batch_size > 1`` rows are chunked into groups of that size; every row in a
@@ -210,8 +214,7 @@ def run_benchmark_from_csv(
     if batch_size < 1:
         raise ValueError("batch_size must be >= 1")
 
-    with open(benchmark_file, newline="", encoding="utf-8") as f:
-        rows = list(csv.DictReader(f))
+    rows = load_benchmark_yaml(benchmark_file)
 
     if not rows:
         print(f"No benchmark rows found in {benchmark_file}")
@@ -233,6 +236,7 @@ def run_benchmark_from_csv(
                 problem=row["problem"],
                 scenario=row["scenario"],
                 topo_size=row.get("topo_size") or "",
+                inject_params=row.get("inject"),
                 **_shared_kwargs,
             )
         return

@@ -1,7 +1,7 @@
 """Inject configured faults for the current session and write ground truth."""
 
 import json
-import random
+import time
 from datetime import datetime
 from enum import Enum
 from typing import Any
@@ -13,6 +13,9 @@ from nika.orchestrator.problems.problem_base import TaskLevel
 from nika.utils.logger import bind_session_dir, log_event
 from nika.utils.session import Session
 from nika.utils.session_store import SessionStore
+
+VERIFY_MAX_ATTEMPTS = 3
+VERIFY_RETRY_DELAY_SEC = 2
 
 
 def _json_safe(value: Any) -> Any:
@@ -42,10 +45,26 @@ def _extract_injection_params(problem: Any) -> dict[str, Any]:
         "southbound_port",
         "original_port",
         "mismatched_port",
+        "deleted_subnet",
     ):
         if hasattr(problem, attr):
             params[attr] = _json_safe(getattr(problem, attr))
     return params
+
+
+def _verify_with_retry(inject_problem: Any, fault_params: Any | None) -> dict[str, Any]:
+    """Run verify_fault with retries for transient container state."""
+    last_result: dict[str, Any] = {"verified": False}
+    for attempt in range(1, VERIFY_MAX_ATTEMPTS + 1):
+        if fault_params is not None:
+            last_result = inject_problem.verify_fault(params=fault_params)
+        else:
+            last_result = inject_problem.verify_fault()
+        if last_result.get("verified", False):
+            return last_result
+        if attempt < VERIFY_MAX_ATTEMPTS:
+            time.sleep(VERIFY_RETRY_DELAY_SEC)
+    return last_result
 
 
 def inject_failure(
@@ -59,7 +78,6 @@ def inject_failure(
     session.load_running_session(session_id=session_id)
     session.update_session("problem_names", problem_names)
 
-    # Bind per-session logging now that session_dir is set.
     bind_session_dir(session.session_dir)
 
     store = SessionStore()
@@ -75,7 +93,6 @@ def inject_failure(
 
     tot_tasks = []
     for task_level in TaskLevel:
-        random.seed(session.session_id[-4:])
         problem = get_problem_instance(
             problem_names=problem_names,
             task_level=task_level,
@@ -97,9 +114,16 @@ def inject_failure(
     fault_params = None
     if ParamsClass is not None:
         try:
-            fault_params = ParamsClass(**overrides) if overrides else ParamsClass()
+            fault_params = ParamsClass(**overrides)
         except ValidationError as exc:
-            raise ValueError(f"Invalid parameters for '{problem_names[0]}': {exc}") from exc
+            raise ValueError(
+                f"Invalid or missing parameters for '{problem_names[0]}': {exc}. "
+                f"Run `nika failure describe {problem_names[0]}` for required fields."
+            ) from exc
+    elif overrides:
+        raise ValueError(
+            f"Problem '{problem_names[0]}' does not accept --set parameters yet."
+        )
 
     if len(problem_names) > 1 and hasattr(inject_problem, "sub_faults"):
         sub_faults = list(getattr(inject_problem, "sub_faults"))
@@ -149,12 +173,31 @@ def inject_failure(
     else:
         inject_problem.inject_fault()
 
+    _sync_attrs = (
+        "faulty_devices",
+        "faulty_intf",
+        "intf_name",
+        "victim_device",
+        "target_host",
+        "target_website",
+        "target_domain",
+        "attacker_device",
+        "service_name",
+        "p4_name",
+        "southbound_port",
+        "original_port",
+        "mismatched_port",
+        "deleted_subnet",
+    )
+    for prob in tot_tasks:
+        for attr in _sync_attrs:
+            if hasattr(inject_problem, attr):
+                setattr(prob, attr, getattr(inject_problem, attr))
+
     if not hasattr(inject_problem, "verify_fault"):
         raise RuntimeError(f"Problem {problem_names} does not implement verify_fault")
-    if fault_params is not None:
-        verify_result = inject_problem.verify_fault(params=fault_params)
-    else:
-        verify_result = inject_problem.verify_fault()
+
+    verify_result = _verify_with_retry(inject_problem, fault_params)
     verify_payload = _json_safe(verify_result)
     if not verify_result.get("verified", False):
         for failure_id, _problem_name in failure_rows:
@@ -201,7 +244,7 @@ def inject_failure(
         problems=problem_names,
         scenario=session.scenario_name,
     )
-    task_description = problem.get_task_description()
+    task_description = inject_problem.get_task_description()
     session.update_session("task_description", task_description)
 
     tot_gt = {}

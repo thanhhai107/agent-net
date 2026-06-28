@@ -16,7 +16,7 @@
 ![alt text](./assets/images/nika_arch_gpt.png)
 
 This repository is a unified platform that can offer: 
-1. A benchmark suite of curated network incidents that covers 54 realistic network issues, ranging from link and host failures to resource contention, and includes five network scenarios, four of which can be instantiated at different topology sizes, spanning campus and data center networks. By combining these dimensions, the benchmark yields 640 distinct troubleshooting incidents for evaluating AI agents. The benchmark can be further extended by randomizing failure locations and composing multiple issues within a single incident. 
+1. A benchmark suite of curated network incidents that covers 56 realistic network issues, ranging from link and host failures to resource contention, and includes fourteen network scenarios (including Kubernetes labs), ten of which can be instantiated at different topology sizes, spanning campus, data center, and cloud-native networks. By combining these dimensions, the benchmark yields 685 distinct troubleshooting incidents for evaluating AI agents. Each incident specifies deterministic inject parameters (device names, etc.); IP and netmask values are derived from the live lab at inject time.
 2. A modular plug-and-play orchestration platform that connects AI agents with the network environment, enabling real-time troubleshooting in realistic conditions, and providing a human-facing interface to monitor agent performance.
 
 
@@ -181,9 +181,8 @@ Each `nika env run` creates a **session** (printed as `session_id=…`). Session
 
    ```shell
    nika failure list
-   nika failure describe <problem_id>         # parameter schema and usage hints
-   nika failure inject <problem_id> [<problem_id> ...]
-   nika failure inject link_down --set host_name=pc1 --set intf_name=eth0
+   nika failure describe <problem_id>         # required parameter schema
+   nika failure inject <problem_id> --set host_name=pc1 --set intf_name=eth0
    nika failure ps [--session-id ID]          # persisted injection records
    ```
 
@@ -219,7 +218,7 @@ Each `nika env run` creates a **session** (printed as `session_id=…`). Session
    nika eval clean -y                              # wipe results/, session JSON, and SQLite index
    ```
 
-Full CLI documentation (benchmark batch mode, traffic types, parameter tables, and conventions) lives in **[src/nika/codex_cli/README.md](src/nika/codex_cli/README.md)**.
+Full CLI documentation (benchmark batch mode, traffic types, parameter tables, and conventions) lives in **[src/nika/cli/README.md](src/nika/cli/README.md)**.
 
 ### Optional: benchmark or traffic from the CLI
 
@@ -291,7 +290,7 @@ nika agent run -a codex_cli -m gpt-5.4-mini
 - **`-e` / `--reasoning-effort`**: Codex `model_reasoning_effort` (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`).
 - Per-session Codex workspace: `results/{session_id}/codex_workspace/`
 
-See **[src/nika/codex_cli/README.md](src/nika/codex_cli/README.md)** for full `nika agent` flags and conventions.
+See **[src/nika/cli/README.md](src/nika/cli/README.md)** for full `nika agent` flags and conventions.
 
 ### Claude Code CLI agent (`-a claude_cli`)
 
@@ -381,7 +380,7 @@ Each scenario is defined in a Kathará `lab.py` file, which specifies the networ
 
 ## Network issues
 
-This framework provides a set of predefined issues that can be injected into the network environment. These issues are categorized into different types, each with specific root causes and key signals. By combining the issues with the network scenarios, randomlizing the failure locations, and composing multiple issues, this framework can generate multiple incidents based on a network issue (see # Incident column).
+This framework provides a set of predefined issues that can be injected into the network environment. These issues are categorized into different types, each with specific root causes and key signals. By combining the issues with the network scenarios and composing multiple issues, this framework can generate multiple incidents based on a network issue (see # Incident column). Inject parameters must be specified explicitly (see `nika failure describe`); network addresses are read from the target host at inject time.
 The following table summarizes the issues available in this framework:
 
 | Category                               | Root Cause                              | Key Signals                                                     | # Incident |
@@ -427,7 +426,7 @@ The following table summarizes the issues available in this framework:
 | Network under attack                   | DNS spoofing                            | DNS points to wrong addresses                                   | 12         |
 | Network under attack                   | ARP cache poisoning                     | Abnormal traffic redirection                                    | 26         |
 | Network under attack                   | Misaligned sketch thresholds            | False-positive cardinality alerts (e.g., DoS); packet drops     | 1          |
-| **Total**                              | -                                       | -                                                               | **640**    |
+| **Total**                              | -                                       | -                                                               | **685**    |
 
 Based on the above issues, we disclose a large public dataset of AI agents’ behavior for network troubleshooting, with more than 900 reasoning traces. See the [![Zenodo Dataset](https://img.shields.io/badge/Zenodo-17971675-blue?logo=zenodo)](https://zenodo.org/records/17971675).
 

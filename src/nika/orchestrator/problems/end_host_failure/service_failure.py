@@ -1,6 +1,4 @@
 import logging
-import random
-from typing import Optional
 
 from pydantic import BaseModel, Field
 
@@ -24,7 +22,7 @@ logger = system_logger
 class DNSServiceDownParams(BaseModel):
     """Parameters for injecting a DNS service down fault."""
 
-    host_name: Optional[str] = Field(default=None, description="Target DNS server host name. Defaults to runtime selection.")
+    host_name: str = Field(description="Target DNS server host name.")
     service_name: str = Field(default="named", description="Service name.")
 
 
@@ -43,20 +41,17 @@ class DNSServiceDownBase:
         self.net_env = get_net_env_instance(scenario_name, **kwargs)
         self.kathara_api = KatharaBaseAPI(lab_name=self.net_env.lab.name)
         self.injector = FaultInjectorBase(lab_name=self.net_env.lab.name)
-        self.faulty_devices = [random.choice(self.net_env.servers["dns"])]
+        self.faulty_devices: list[str] = []
         self.service_name = "named"
 
-    def inject_fault(self, params: DNSServiceDownParams | None = None):
-        if params is None:
-            params = DNSServiceDownParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+    def inject_fault(self, params: DNSServiceDownParams):
+        host = params.host_name
+        self.faulty_devices = [host]
         self.injector.inject_process_kill(host_name=host, process_name="named")
 
-    def verify_fault(self, params: DNSServiceDownParams | None = None) -> dict:
+    def verify_fault(self, params: DNSServiceDownParams) -> dict:
         """Verify named process is not running."""
-        if params is None:
-            params = DNSServiceDownParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        host = params.host_name
         service = params.service_name
         pgrep_output = self.kathara_api.exec_cmd(host, "pgrep -a named 2>/dev/null || echo NONE").strip()
         verified = "named" not in pgrep_output or pgrep_output == "NONE"
@@ -103,7 +98,7 @@ class DNSServiceDownRCA(DNSServiceDownBase, RCATask):
 class DHCPServiceDownParams(BaseModel):
     """Parameters for injecting a DHCP service down fault."""
 
-    host_name: Optional[str] = Field(default=None, description="Target DHCP server host name. Defaults to runtime selection.")
+    host_name: str = Field(description="Target DHCP server host name.")
     service_name: str = Field(default="isc-dhcp-server", description="Service name.")
 
 
@@ -120,20 +115,17 @@ class DHCPServiceDownBase:
         self.net_env = get_net_env_instance(scenario_name, **kwargs)
         self.kathara_api = KatharaBaseAPI(lab_name=self.net_env.lab.name)
         self.injector = FaultInjectorBase(lab_name=self.net_env.lab.name)
-        self.faulty_devices = [random.choice(self.net_env.servers["dhcp"])]
+        self.faulty_devices: list[str] = []
         self.service_name = "isc-dhcp-server"
 
-    def inject_fault(self, params: DHCPServiceDownParams | None = None):
-        if params is None:
-            params = DHCPServiceDownParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+    def inject_fault(self, params: DHCPServiceDownParams):
+        host = params.host_name
+        self.faulty_devices = [host]
         self.injector.inject_process_kill(host_name=host, process_name="dhcpd")
 
-    def verify_fault(self, params: DHCPServiceDownParams | None = None) -> dict:
+    def verify_fault(self, params: DHCPServiceDownParams) -> dict:
         """Verify DHCP server process is not running."""
-        if params is None:
-            params = DHCPServiceDownParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        host = params.host_name
         service = params.service_name
         pgrep_output = self.kathara_api.exec_cmd(
             host, "pgrep -a dhcpd 2>/dev/null || echo NONE"

@@ -1,6 +1,4 @@
-import random
 import shlex
-from typing import Optional
 
 from pydantic import BaseModel, Field
 
@@ -21,10 +19,7 @@ from nika.utils.logger import system_logger
 class LinkFailureParams(BaseModel):
     """Parameters for injecting a link-down fault."""
 
-    host_name: Optional[str] = Field(
-        default=None,
-        description="Target host name. Defaults to a randomly selected host when not set.",
-    )
+    host_name: str = Field(description="Target host name.")
     intf_name: str = Field(default="eth0", description="Target interface name.")
 
 
@@ -42,25 +37,23 @@ class LinkFailureBase:
         self.net_env = get_net_env_instance(scenario_name, **kwargs)
         self.kathara_api = KatharaBaseAPI(lab_name=self.net_env.lab.name)
         self.injector = FaultInjectorBase(lab_name=self.net_env.lab.name)
-        self.faulty_devices = [random.choice(self.net_env.hosts)]
+        self.faulty_devices: list[str] = []
         self.faulty_intf = "eth0"
         self.down_time = 1
         self.up_time = 1
 
-    def inject_fault(self, params: LinkFailureParams | None = None):
-        if params is None:
-            params = LinkFailureParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+    def inject_fault(self, params: LinkFailureParams):
+        host = params.host_name
+        self.faulty_devices = [host]
+        self.faulty_intf = params.intf_name
         self.injector.inject_intf_down(
             host_name=host,
             intf_name=params.intf_name,
         )
 
-    def verify_fault(self, params: LinkFailureParams | None = None) -> dict:
+    def verify_fault(self, params: LinkFailureParams) -> dict:
         """Verify the link-down fault is active by reading the interface operstate from the container."""
-        if params is None:
-            params = LinkFailureParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        host = params.host_name
         intf = params.intf_name
         output = self.kathara_api.exec_cmd(host, f"cat /sys/class/net/{shlex.quote(intf)}/operstate")
         operstate = output.strip().lower()
@@ -107,10 +100,7 @@ class LinkFailureRCA(LinkFailureBase, RCATask):
 class LinkFlapParams(BaseModel):
     """Parameters for injecting a link-flap fault."""
 
-    host_name: Optional[str] = Field(
-        default=None,
-        description="Target host name. Defaults to a randomly selected host when not set.",
-    )
+    host_name: str = Field(description="Target host name.")
     intf_name: str = Field(default="eth0", description="Target interface name.")
     down_time: int = Field(default=1, description="Down duration in seconds.")
     up_time: int = Field(default=1, description="Up duration in seconds.")
@@ -129,13 +119,13 @@ class LinkFlapBase:
         super().__init__()
         self.net_env = get_net_env_instance(scenario_name, **kwargs)
         self.kathara_api = KatharaBaseAPI(lab_name=self.net_env.lab.name)
-        self.faulty_devices = [random.choice(self.net_env.hosts)]
+        self.faulty_devices: list[str] = []
         self.faulty_intf = "eth0"
 
-    def inject_fault(self, params: LinkFlapParams | None = None):
-        if params is None:
-            params = LinkFlapParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+    def inject_fault(self, params: LinkFlapParams):
+        host = params.host_name
+        self.faulty_devices = [host]
+        self.faulty_intf = params.intf_name
         intf_name = params.intf_name
         down_time = params.down_time
         up_time = params.up_time
@@ -146,8 +136,6 @@ class LinkFlapBase:
         pid_path = f"/tmp/link_flap_{intf_name}.pid"
         log_path = f"/tmp/link_flap_{intf_name}.log"
 
-        # Avoid double quotes in the script body: exec_cmd escapes " when wrapping
-        # commands for bash -c, which would corrupt a heredoc-written script.
         script = f"""#!/bin/bash
 IFACE={shlex.quote(intf_name)}
 DOWN_TIME={int(down_time)}
@@ -183,11 +171,9 @@ done
         self.kathara_api.exec_cmd(host, start_cmd)
         system_logger.info(f"Injected link flap on {host}:{intf_name} (down_time={down_time}, up_time={up_time})")
 
-    def verify_fault(self, params: LinkFlapParams | None = None) -> dict:
+    def verify_fault(self, params: LinkFlapParams) -> dict:
         """Verify the link-flap script is running by checking the pid file and process liveness."""
-        if params is None:
-            params = LinkFlapParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        host = params.host_name
         intf = params.intf_name
         pid_path = shlex.quote(f"/tmp/link_flap_{intf}.pid")
         check_cmd = (
@@ -238,10 +224,7 @@ class LinkFlapRCA(LinkFlapBase, RCATask):
 class LinkDetachParams(BaseModel):
     """Parameters for injecting a link-detach fault."""
 
-    host_name: Optional[str] = Field(
-        default=None,
-        description="Target host name. Defaults to a randomly selected host when not set.",
-    )
+    host_name: str = Field(description="Target host name.")
     intf_name: str = Field(default="eth0", description="Target interface name.")
 
 
@@ -258,22 +241,20 @@ class LinkDetachBase:
         super().__init__()
         self.net_env = get_net_env_instance(scenario_name, **kwargs)
         self.kathara_api = KatharaBaseAPI(lab_name=self.net_env.lab.name)
-        self.faulty_devices = [random.choice(self.net_env.hosts)]
+        self.faulty_devices: list[str] = []
         self.faulty_intf = "eth0"
 
-    def inject_fault(self, params: LinkDetachParams | None = None):
-        if params is None:
-            params = LinkDetachParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+    def inject_fault(self, params: LinkDetachParams):
+        host = params.host_name
+        self.faulty_devices = [host]
+        self.faulty_intf = params.intf_name
         intf_name = params.intf_name
         self.kathara_api.exec_cmd(host, f"ip link del {intf_name}")
         system_logger.info(f"Injected link detach on {host}:{intf_name}")
 
-    def verify_fault(self, params: LinkDetachParams | None = None) -> dict:
+    def verify_fault(self, params: LinkDetachParams) -> dict:
         """Verify the link-detach fault is active by confirming the interface no longer exists in the container."""
-        if params is None:
-            params = LinkDetachParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        host = params.host_name
         intf = params.intf_name
         output = self.kathara_api.exec_cmd(host, f"ip link show {shlex.quote(intf)} 2>&1")
         detached = "does not exist" in output.lower() or "no such device" in output.lower()
@@ -320,10 +301,7 @@ class LinkDetachRCA(LinkDetachBase, RCATask):
 class LinkFragParams(BaseModel):
     """Parameters for injecting a link-fragmentation-disabled fault."""
 
-    host_name: Optional[str] = Field(
-        default=None,
-        description="Target host name. Defaults to a randomly selected host when not set.",
-    )
+    host_name: str = Field(description="Target host name.")
     mtu: int = Field(default=10, description="Packet size threshold.")
 
 
@@ -340,29 +318,27 @@ class LinkFragBase:
         super().__init__()
         self.net_env = get_net_env_instance(scenario_name, **kwargs)
         self.kathara_api = KatharaBaseAPI(lab_name=self.net_env.lab.name)
-        self.faulty_devices = [random.choice(self.net_env.hosts)]
+        self.faulty_devices: list[str] = []
         self.mtu = 10
 
     @staticmethod
     def _frag_drop_rule_args(mtu: int) -> str:
         return f"-m length --length {int(mtu)}:65535 -j DROP"
 
-    def inject_fault(self, params: LinkFragParams | None = None):
-        if params is None:
-            params = LinkFragParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+    def inject_fault(self, params: LinkFragParams):
+        host = params.host_name
+        self.faulty_devices = [host]
         mtu = params.mtu
+        self.mtu = mtu
         self.kathara_api.exec_cmd(
             host,
             f"iptables -A OUTPUT {self._frag_drop_rule_args(mtu)}",
         )
         system_logger.info(f"Injected fragmentation disabled on {host} with MTU {mtu}")
 
-    def verify_fault(self, params: LinkFragParams | None = None) -> dict:
+    def verify_fault(self, params: LinkFragParams) -> dict:
         """Verify the fragmentation-disabled fault is active via the exact length-based DROP rule."""
-        if params is None:
-            params = LinkFragParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        host = params.host_name
         mtu = params.mtu
         rule_args = self._frag_drop_rule_args(mtu)
         check_cmd = f"iptables -C OUTPUT {rule_args} >/dev/null 2>&1 && echo present || echo absent"

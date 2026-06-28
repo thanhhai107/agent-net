@@ -14,7 +14,7 @@ import unittest
 
 from typer.testing import CliRunner
 
-from nika.codex_cli.main import app
+from nika.cli.main import app
 from nika.net_env.net_env_pool import get_net_env_instance, list_all_net_envs
 
 

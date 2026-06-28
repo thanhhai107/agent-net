@@ -1,6 +1,4 @@
 import logging
-import random
-from typing import Optional
 
 from pydantic import BaseModel, Field
 
@@ -23,7 +21,7 @@ logger = system_logger
 class Bmv2SwitchDownParams(BaseModel):
     """Parameters for injecting a BMv2 switch down fault."""
 
-    host_name: Optional[str] = Field(default=None, description="Target BMv2 switch name. Defaults to runtime selection.")
+    host_name: str = Field(description="Target BMv2 switch name.")
 
 
 class Bmv2SwitchDownBase:
@@ -38,19 +36,16 @@ class Bmv2SwitchDownBase:
         self.net_env = get_net_env_instance(scenario_name, **kwargs)
         self.kathara_api = KatharaAPIALL(lab_name=self.net_env.lab.name)
         self.injector = FaultInjectorBase(lab_name=self.net_env.lab.name)
-        self.faulty_devices = [random.choice(self.net_env.bmv2_switches)]
+        self.faulty_devices: list[str] = []
 
-    def inject_fault(self, params: Bmv2SwitchDownParams | None = None):
-        if params is None:
-            params = Bmv2SwitchDownParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+    def inject_fault(self, params: Bmv2SwitchDownParams):
+        host = params.host_name
+        self.faulty_devices = [host]
         self.injector.inject_bmv2_down(host_name=host)
 
-    def verify_fault(self, params: Bmv2SwitchDownParams | None = None) -> dict:
+    def verify_fault(self, params: Bmv2SwitchDownParams) -> dict:
         """Verify simple_switch process is NOT running on the BMv2 switch."""
-        if params is None:
-            params = Bmv2SwitchDownParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        host = params.host_name
         pgrep_output = self.kathara_api.exec_cmd(host, "pgrep -a simple_switch 2>/dev/null || echo NONE").strip()
         verified = pgrep_output == "NONE" or "simple_switch" not in pgrep_output
         return build_verify_result(
@@ -96,7 +91,7 @@ class Bmv2SwitchDownRCA(Bmv2SwitchDownBase, RCATask):
 class FrrDownParams(BaseModel):
     """Parameters for injecting an FRR service down fault."""
 
-    host_name: Optional[str] = Field(default=None, description="Target router host name. Defaults to a randomly selected router.")
+    host_name: str = Field(description="Target router host name.")
     service_name: str = Field(default="frr", description="Service name.")
 
 
@@ -116,23 +111,19 @@ class FrrDownBase:
         self.net_env = get_net_env_instance(scenario_name, **kwargs)
         self.kathara_api = KatharaBaseAPI(lab_name=self.net_env.lab.name)
         self.injector = FaultInjectorBase(lab_name=self.net_env.lab.name)
-        self.faulty_devices = [random.choice(self.net_env.routers)]
-        self.service_name = "frr"
+        self.faulty_devices: list[str] = []
 
-    def inject_fault(self, params: FrrDownParams | None = None):
-        if params is None:
-            params = FrrDownParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+    def inject_fault(self, params: FrrDownParams):
+        host = params.host_name
+        self.faulty_devices = [host]
         # systemctl is a no-op in Kathara; kill FRR daemons directly with pkill.
         # watchfrr must be killed first so it does not restart the routing daemons.
         for daemon in ("watchfrr", "zebra", "mgmtd", "ospfd", "bgpd", "staticd", "ospf6d", "ripd"):
             self.injector.inject_process_kill(host_name=host, process_name=daemon)
 
-    def verify_fault(self, params: FrrDownParams | None = None) -> dict:
+    def verify_fault(self, params: FrrDownParams) -> dict:
         """Verify FRR is down by checking zebra is not running and routing is unavailable."""
-        if params is None:
-            params = FrrDownParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        host = params.host_name
         zebra_output = self.kathara_api.exec_cmd(host, "pgrep -a zebra 2>/dev/null || echo NONE").strip()
         # show version still succeeds in FRR 9.x when zebra is down; use show ip route instead.
         vtysh_output = self.kathara_api.exec_cmd(

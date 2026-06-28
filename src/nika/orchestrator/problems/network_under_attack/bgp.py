@@ -1,5 +1,4 @@
 import ipaddress
-import random
 from typing import Optional
 
 from pydantic import BaseModel, Field
@@ -20,7 +19,7 @@ from nika.utils.logger import system_logger
 class BGPHijackingParams(BaseModel):
     """Parameters for injecting a BGP hijacking fault."""
 
-    host_name: Optional[str] = Field(default=None, description="Target router host name. Defaults to a randomly selected router.")
+    host_name: str = Field(description="Target router host name.")
     target_network: Optional[str] = Field(default=None, description="Network prefix to advertise. Defaults to runtime selection.")
 
 
@@ -36,20 +35,19 @@ class BGPHijackingBase:
         self.net_env = get_net_env_instance(scenario_name, **kwargs)
         self.kathara_api = KatharaAPIALL(lab_name=self.net_env.lab.name)
         self.logger = system_logger
-        self.faulty_devices = [random.choice(self.net_env.routers)]
+        self.faulty_devices: list[str] = []
+
+    def _default_target_network(self) -> str:
         web_servers = self.net_env.servers.get("web", [])
         target_host = web_servers[-1] if web_servers else self.net_env.hosts[-1]
-        self.target_network = self.kathara_api.get_host_ip(target_host, with_prefix=True)
-        self.target_network = str(
-            ipaddress.ip_network(self.target_network, strict=False).subnets(new_prefix=25).__next__()
-        )
+        target_network = self.kathara_api.get_host_ip(target_host, with_prefix=True)
+        return str(ipaddress.ip_network(target_network, strict=False).subnets(new_prefix=25).__next__())
 
-    def inject_fault(self, params: BGPHijackingParams | None = None):
-        if params is None:
-            params = BGPHijackingParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
-        target_network = params.target_network if params.target_network is not None else self.target_network
-        asn_number = self.kathara_api.frr_get_bgp_asn_number(self.faulty_devices[0])
+    def inject_fault(self, params: BGPHijackingParams):
+        host = params.host_name
+        self.faulty_devices = [host]
+        target_network = params.target_network if params.target_network is not None else self._default_target_network()
+        asn_number = self.kathara_api.frr_get_bgp_asn_number(host)
         self.kathara_api.exec_cmd(
             host,
             f"vtysh -c 'configure terminal' -c 'interface lo' -c 'ip address {target_network}' ",
@@ -61,12 +59,10 @@ class BGPHijackingBase:
         self.kathara_api.exec_cmd(host, "systemctl restart frr")
         self.logger.info(f"Injected BGP hijacking on {host}: {target_network}.")
 
-    def verify_fault(self, params: BGPHijackingParams | None = None) -> dict:
+    def verify_fault(self, params: BGPHijackingParams) -> dict:
         """Verify the router is advertising the hijacked network via BGP."""
-        if params is None:
-            params = BGPHijackingParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
-        target_network = params.target_network if params.target_network is not None else self.target_network
+        host = params.host_name
+        target_network = params.target_network if params.target_network is not None else self._default_target_network()
         running_config = self.kathara_api.exec_cmd(
             host, "vtysh -c 'show running-config' 2>/dev/null"
         ).strip()

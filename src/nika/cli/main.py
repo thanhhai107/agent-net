@@ -1,17 +1,17 @@
-"""Root Typer application for the ``nika`` console script (``nika.codex_cli``)."""
+"""Root Typer application for the ``nika`` console script (``nika.cli``)."""
 
 import nika.config  # noqa: F401 — load .env before Typer reads envvar defaults
 
 import typer
 
-from nika.codex_cli.commands.agent import agent_app
-from nika.codex_cli.commands.benchmark import benchmark_app
-from nika.codex_cli.commands.env import env_app
-from nika.codex_cli.commands.evaluation import eval_app
-from nika.codex_cli.commands.exec import exec_command
-from nika.codex_cli.commands.failure import failure_app
-from nika.codex_cli.commands.session import session_app
-from nika.codex_cli.commands.traffic import traffic_app
+from nika.cli.commands.agent import agent_app
+from nika.cli.commands.benchmark import benchmark_app
+from nika.cli.commands.env import env_app
+from nika.cli.commands.evaluation import eval_app
+from nika.cli.commands.exec import exec_command
+from nika.cli.commands.failure import failure_app
+from nika.cli.commands.session import session_app
+from nika.cli.commands.traffic import traffic_app
 
 app = typer.Typer(help="NIKA network troubleshooting pipeline CLI.")
 app.add_typer(session_app, name="session")

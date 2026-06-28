@@ -1,6 +1,6 @@
-# Codex CLI reference
+# NIKA CLI reference
 
-Python package: `nika.codex_cli` (directory `src/nika/codex_cli/`). A separate Claude CLI front-end may be added alongside this module later.
+Python package: `nika.cli` (directory `src/nika/cli/`).
 
 Entry point: `nika` (see `[project.scripts]` in `pyproject.toml`). During development use `uv run nika …`.
 
@@ -16,7 +16,7 @@ Runtime paths (`runtime/`, `results/`, `benchmark/`) resolve from the repository
 | `nika exec` | Run a shell command inside a lab host container |
 | `nika agent` | Run a troubleshooting agent on one selected session task |
 | `nika eval` | Metrics, LLM judge, and offline summary CSV for closed sessions |
-| `nika benchmark` | Full pipeline for benchmark CSV rows or a single `(scenario, problem)` case |
+| `nika benchmark` | Full pipeline for benchmark YAML rows or a single `(scenario, problem)` case |
 | `nika traffic` | Synthetic traffic (`od`, `web`) against the running lab |
 
 Use `nika <group> --help` and `nika <group> <command> --help` for generated option text.
@@ -163,25 +163,26 @@ Implements the end-to-end benchmark pipeline: start env → inject → agent →
 
 ### Batch mode (default)
 
-Omit the `SCENARIO` positional argument. Rows are read from a CSV file.
+Omit the `SCENARIO` positional argument. Rows are read from a YAML file.
 
 ```shell
 nika benchmark run
-nika benchmark run --csv benchmark/benchmark_selected.csv
+nika benchmark run --config benchmark/benchmark_selected.yaml
 nika benchmark run --batch-size 4
 ```
 
-**Default CSV path**: `benchmark/benchmark_selected.csv` under the repository root.
+**Default config path**: `benchmark/benchmark_selected.yaml` under the repository root.
 
-**`--batch-size`**: number of CSV rows to run simultaneously per batch (default `1`). Rows are chunked into groups of this size; each group runs fully in parallel (one subprocess per row) and the next group starts only after all rows in the current group have finished. Applies to batch mode only.
+**`--batch-size`**: number of YAML rows to run simultaneously per batch (default `1`). Rows are chunked into groups of this size; each group runs fully in parallel (one subprocess per row) and the next group starts only after all rows in the current group have finished. Applies to batch mode only.
 
-**CSV columns** (header row):
+**YAML case fields**:
 
-| Column | Meaning |
-|--------|---------|
+| Field | Meaning |
+|-------|---------|
 | `problem` | Problem id (same as `nika failure inject`) |
 | `scenario` | Scenario id (same as `nika env run`) |
-| `topo_size` | Size `s`, `m`, or `l`; **empty** for scenarios without sizes (same values as `nika env run -s`) |
+| `topo_size` | Size `s`, `m`, or `l`; **null/empty** for scenarios without sizes |
+| `inject` | Map of `--set key=value` pairs passed to `nika failure inject` |
 
 Agent and judge options use the same flags as below (including `-a codex_cli` and `-e` for Codex runs; `-n` applies only to `react` and `mock`).
 
@@ -248,4 +249,4 @@ Options:
 
 - Runtime sessions: `runtime/sessions/*.json` (cleared when a session is finished)
 - Eval summary CSV default: `results/0_summary/evaluation_summary.csv`
-- Benchmark data: `benchmark/*.csv` under the repo root
+- Benchmark data: `benchmark/*.yaml` under the repo root

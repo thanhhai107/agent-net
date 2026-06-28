@@ -1,7 +1,3 @@
-import logging
-import random
-from typing import Optional
-
 from pydantic import BaseModel, Field
 
 from nika.generator.fault.injector_service import FaultInjectorService
@@ -22,8 +18,8 @@ from nika.utils.logger import system_logger
 class WebDoSParams(BaseModel):
     """Parameters for injecting a web DoS attack fault."""
 
-    host_name: Optional[str] = Field(default=None, description="Target web server host name. Defaults to runtime selection.")
-    attacker_device: Optional[str] = Field(default=None, description="Attacker host name. Defaults to the last host.")
+    host_name: str = Field(description="Target web server host name.")
+    attacker_device: str = Field(description="Attacker host name.")
 
 
 class WebDoSBase:
@@ -40,24 +36,19 @@ class WebDoSBase:
         self.net_env = get_net_env_instance(scenario_name, **kwargs)
         self.kathara_api = KatharaAPIALL(lab_name=self.net_env.lab.name)
         self.injector = FaultInjectorService(lab_name=self.net_env.lab.name)
-        self.faulty_devices = [random.choice(self.net_env.servers["web"])]
-        self.attacker_device = self.net_env.hosts[-1]
-        self.target_website = self.kathara_api.get_host_ip(self.faulty_devices[0], with_prefix=False)
+        self.faulty_devices: list[str] = []
 
-    def inject_fault(self, params: WebDoSParams | None = None):
-        if params is None:
-            params = WebDoSParams()
-        web_server = params.host_name if params.host_name is not None else self.faulty_devices[0]
-        attacker = params.attacker_device if params.attacker_device is not None else self.attacker_device
+    def inject_fault(self, params: WebDoSParams):
+        web_server = params.host_name
+        attacker = params.attacker_device
+        self.faulty_devices = [web_server]
         target_ip = self.kathara_api.get_host_ip(web_server, with_prefix=False)
         self.injector.inject_ab_attack(attacker_host=attacker, website=target_ip)
 
-    def verify_fault(self, params: WebDoSParams | None = None) -> dict:
+    def verify_fault(self, params: WebDoSParams) -> dict:
         """Verify the ab attack process is running on the attacker device."""
-        if params is None:
-            params = WebDoSParams()
-        web_server = params.host_name if params.host_name is not None else self.faulty_devices[0]
-        attacker = params.attacker_device if params.attacker_device is not None else self.attacker_device
+        web_server = params.host_name
+        attacker = params.attacker_device
         target_ip = self.kathara_api.get_host_ip(web_server, with_prefix=False)
         pgrep_output = self.kathara_api.exec_cmd(attacker, "pgrep -a ab 2>/dev/null || echo NONE").strip()
         verified = "ab" in pgrep_output and pgrep_output != "NONE"

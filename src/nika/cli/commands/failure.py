@@ -4,7 +4,7 @@ import json
 
 import typer
 
-from nika.codex_cli.utils import require_running_session_id
+from nika.cli.utils import require_running_session_id
 
 failure_app = typer.Typer(help="Inject faults into the running lab.")
 
@@ -73,7 +73,7 @@ def failure_describe(
     ParamsClass = getattr(cls, "Params", None)
     if ParamsClass is None:
         typer.echo(f"{problem}: no typed parameter schema yet.")
-        typer.echo("You can still run injection without --set; defaults come from scenario runtime.")
+        typer.echo("Injection does not accept --set for this problem yet.")
         return
 
     schema = ParamsClass.model_json_schema()

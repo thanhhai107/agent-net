@@ -1,4 +1,3 @@
-import random
 from typing import Optional
 
 from pydantic import BaseModel, Field
@@ -23,7 +22,7 @@ logger = system_logger
 class P4AggressiveDetectionThresholdsParams(BaseModel):
     """Parameters for injecting a P4 aggressive detection thresholds fault."""
 
-    host_name: Optional[str] = Field(default=None, description="Target BMv2 switch name. Defaults to a randomly selected switch.")
+    host_name: str = Field(description="Target BMv2 switch name.")
     p4_name: Optional[str] = Field(default=None, description="P4 program name (without suffix). Defaults to runtime detection.")
 
 
@@ -39,12 +38,11 @@ class P4AggressiveDetectionThresholdsBase:
         self.net_env = get_net_env_instance(scenario_name, **kwargs)
         self.kathara_api = KatharaAPIALL(lab_name=self.net_env.lab.name)
         self.injector = FaultInjectorBase(lab_name=self.net_env.lab.name)
-        self.faulty_devices = [random.choice(self.net_env.bmv2_switches)]
+        self.faulty_devices: list[str] = []
 
-    def inject_fault(self, params: P4AggressiveDetectionThresholdsParams | None = None):
-        if params is None:
-            params = P4AggressiveDetectionThresholdsParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+    def inject_fault(self, params: P4AggressiveDetectionThresholdsParams):
+        host = params.host_name
+        self.faulty_devices = [host]
         p4_name = params.p4_name if params.p4_name is not None else getattr(self, "p4_name", None)
         if p4_name is None:
             p4_name = self.kathara_api.exec_cmd(host, "echo *.p4 | sed 's/\\.p4//'").strip()
@@ -57,11 +55,10 @@ class P4AggressiveDetectionThresholdsBase:
         self.kathara_api.exec_cmd(host, "pkill -f simple_switch")
         self.kathara_api.exec_cmd(host, f"./hostlab/{host}.startup")
 
-    def verify_fault(self, params: P4AggressiveDetectionThresholdsParams | None = None) -> dict:
+    def verify_fault(self, params: P4AggressiveDetectionThresholdsParams) -> dict:
         """Verify PACKET_THRESHOLD was changed to 100 in the P4 source."""
-        if params is None:
-            params = P4AggressiveDetectionThresholdsParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        host = params.host_name
+        self.faulty_devices = [host]
         p4_name = params.p4_name if params.p4_name is not None else getattr(self, "p4_name", None)
         if p4_name is None:
             p4_name = self.kathara_api.exec_cmd(host, "echo *.p4 | sed 's/\\.p4//'").strip()

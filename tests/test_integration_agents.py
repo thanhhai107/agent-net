@@ -91,7 +91,7 @@ from agent.claude_cli.claude_worker import ClaudeWorker, _build_mcp_json
 from agent.utils.mcp_servers import MCPServerConfig
 from agent.utils.phases import DIAGNOSIS, SUBMISSION
 from langchain_mcp_adapters.client import MultiServerMCPClient
-from nika.codex_cli.main import app
+from nika.cli.main import app
 from nika.utils.agent_config import (
     ENV_AGENT_TYPE,
     ENV_CODEX_MODEL,

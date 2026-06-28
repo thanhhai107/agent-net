@@ -1,7 +1,5 @@
 import io
-import random
 import tarfile
-from typing import Optional
 
 from nika.config import pkg_path
 from nika.generator.fault.injector_host import FaultInjectorHost
@@ -24,7 +22,7 @@ from pydantic import BaseModel, Field
 class SenderResourceContentionParams(BaseModel):
     """Parameters for injecting a sender resource contention fault."""
 
-    host_name: Optional[str] = Field(default=None, description="Target sender host name. Defaults to runtime selection.")
+    host_name: str = Field(description="Target sender host name.")
     duration: int = Field(default=600, description="Stress duration in seconds.")
 
 
@@ -40,21 +38,17 @@ class SenderResourceContentionBase:
         self.net_env = get_net_env_instance(scenario_name, **kwargs)
         self.kathara_api = KatharaAPIALL(lab_name=self.net_env.lab.name)
         self.injector = FaultInjectorHost(lab_name=self.net_env.lab.name)
-        self.faulty_devices = [random.choice(self.net_env.servers["web"])]
-        self.duration = 600
+        self.faulty_devices: list[str] = []
 
-    def inject_fault(self, params: SenderResourceContentionParams | None = None):
-        if params is None:
-            params = SenderResourceContentionParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+    def inject_fault(self, params: SenderResourceContentionParams):
+        host = params.host_name
+        self.faulty_devices = [host]
         self.injector.inject_stress_all(host_name=host, duration=params.duration)
         system_logger.info(f"Injected TCP slow sender issue on host {host}")
 
-    def verify_fault(self, params: SenderResourceContentionParams | None = None) -> dict:
+    def verify_fault(self, params: SenderResourceContentionParams) -> dict:
         """Verify stress-ng is running on the sender host."""
-        if params is None:
-            params = SenderResourceContentionParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        host = params.host_name
         pgrep_output = self.kathara_api.exec_cmd(host, "pgrep -a stress-ng 2>/dev/null || echo NONE").strip()
         verified = "stress-ng" in pgrep_output and pgrep_output != "NONE"
         return build_verify_result(
@@ -100,7 +94,7 @@ class SenderResourceContentionRCA(SenderResourceContentionBase, RCATask):
 class SenderApplicationDelayParams(BaseModel):
     """Parameters for injecting a sender application delay fault."""
 
-    host_name: Optional[str] = Field(default=None, description="Target sender host name. Defaults to runtime selection.")
+    host_name: str = Field(description="Target sender host name.")
 
 
 class SenderApplicationDelayBase:
@@ -115,12 +109,11 @@ class SenderApplicationDelayBase:
         self.net_env = get_net_env_instance(scenario_name, **kwargs)
         self.kathara_api = KatharaAPIALL(lab_name=self.net_env.lab.name)
         self.injector = FaultInjectorTC(lab_name=self.net_env.lab.name)
-        self.faulty_devices = [random.choice(self.net_env.servers["web"])]
+        self.faulty_devices: list[str] = []
 
-    def inject_fault(self, params: SenderApplicationDelayParams | None = None):
-        if params is None:
-            params = SenderApplicationDelayParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+    def inject_fault(self, params: SenderApplicationDelayParams):
+        host = params.host_name
+        self.faulty_devices = [host]
         self.kathara_api.exec_cmd(host_name=host, command="cp web_server.py web_server.py.bak")
         container = get_machine_container(lab_name=self.net_env.lab.name, host_name=host)
         src_path = str(pkg_path("net_env/utils/web/slow_sender_server.py"))
@@ -132,15 +125,13 @@ class SenderApplicationDelayBase:
         self.kathara_api.exec_cmd(host_name=host, command="systemctl restart web_server.service")
         system_logger.info(f"Injected TCP sender application delay issue on host {host}")
 
-    def verify_fault(self, params: SenderApplicationDelayParams | None = None) -> dict:
+    def verify_fault(self, params: SenderApplicationDelayParams) -> dict:
         """Verify the web_server.py has a sleep call injected."""
-        if params is None:
-            params = SenderApplicationDelayParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        host = params.host_name
         has_sleep = self.kathara_api.exec_cmd(
             host, "grep -l 'time.sleep' /web_server.py 2>/dev/null && echo yes || echo no"
         ).strip()
-        verified = has_sleep == "yes"
+        verified = has_sleep.endswith("yes") or has_sleep == "yes"
         return build_verify_result(
             root_cause_name=self.root_cause_name,
             faulty_devices=self.faulty_devices,
@@ -184,7 +175,7 @@ class SenderApplicationDelayRCA(SenderApplicationDelayBase, RCATask):
 class ReceiverResourceContentionParams(BaseModel):
     """Parameters for injecting a receiver resource contention fault."""
 
-    host_name: Optional[str] = Field(default=None, description="Target receiver host name. Defaults to a randomly selected host.")
+    host_name: str = Field(description="Target receiver host name.")
     duration: int = Field(default=600, description="Stress duration in seconds.")
 
 
@@ -200,21 +191,17 @@ class ReceiverResourceContentionBase:
         self.net_env = get_net_env_instance(scenario_name, **kwargs)
         self.kathara_api = KatharaAPIALL(lab_name=self.net_env.lab.name)
         self.injector = FaultInjectorHost(lab_name=self.net_env.lab.name)
-        self.faulty_devices = [random.choice(self.net_env.hosts)]
-        self.duration = 600
+        self.faulty_devices: list[str] = []
 
-    def inject_fault(self, params: ReceiverResourceContentionParams | None = None):
-        if params is None:
-            params = ReceiverResourceContentionParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+    def inject_fault(self, params: ReceiverResourceContentionParams):
+        host = params.host_name
+        self.faulty_devices = [host]
         self.injector.inject_stress_all(host_name=host, duration=params.duration)
         system_logger.info(f"Injected TCP receiver resource contention on host {host}")
 
-    def verify_fault(self, params: ReceiverResourceContentionParams | None = None) -> dict:
+    def verify_fault(self, params: ReceiverResourceContentionParams) -> dict:
         """Verify stress-ng is running on the receiver host."""
-        if params is None:
-            params = ReceiverResourceContentionParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        host = params.host_name
         pgrep_output = self.kathara_api.exec_cmd(host, "pgrep -a stress-ng 2>/dev/null || echo NONE").strip()
         verified = "stress-ng" in pgrep_output and pgrep_output != "NONE"
         return build_verify_result(

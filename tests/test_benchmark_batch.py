@@ -1,6 +1,6 @@
 """Parallel benchmark integration test via --batch-size.
 
-Verifies that ``nika benchmark run --batch-size N`` runs N CSV rows simultaneously,
+Verifies that ``nika benchmark run --batch-size N`` runs N YAML rows simultaneously,
 each using the mock agent for Diagnosis, followed by per-session eval—all without
 cross-contamination between sessions.
 
@@ -26,7 +26,6 @@ Prerequisites:
   - Run via: uv run python -m unittest tests/test_benchmark_batch.py -v
 """
 
-import csv
 import json
 import re
 import subprocess
@@ -34,6 +33,8 @@ import tempfile
 import unittest
 from pathlib import Path
 from typing import NamedTuple
+
+import yaml
 
 from agent.utils.phases import DIAGNOSIS, SUBMISSION
 from nika.utils.session_store import SESSIONS_DIR, SessionStore
@@ -67,7 +68,7 @@ SCENARIO_CASES: list[ScenarioCase] = [
 
 
 class ParallelBenchmarkIntegrationTest(CliIntegrationTestCase):
-    """Run all benchmark CSV rows as one parallel batch, then verify per-session results."""
+    """Run all benchmark YAML rows as one parallel batch, then verify per-session results."""
 
     _pipeline_results: dict[str, tuple[str, Path] | BaseException]
 
@@ -78,22 +79,21 @@ class ParallelBenchmarkIntegrationTest(CliIntegrationTestCase):
 
         with tempfile.NamedTemporaryFile(
             mode="w",
-            suffix=".csv",
+            suffix=".yaml",
             delete=False,
             encoding="utf-8",
-            newline="",
         ) as handle:
-            writer = csv.DictWriter(handle, fieldnames=["problem", "scenario", "topo_size"])
-            writer.writeheader()
+            cases = []
             for case in SCENARIO_CASES:
-                writer.writerow(
-                    {
-                        "problem": case.problem,
-                        "scenario": case.scenario,
-                        "topo_size": case.size or "",
-                    }
-                )
-            csv_path = handle.name
+                row = {
+                    "scenario": case.scenario,
+                    "problem": case.problem,
+                    "topo_size": case.size,
+                    "inject": case.set_params,
+                }
+                cases.append(row)
+            yaml.dump({"cases": cases}, handle, sort_keys=False, allow_unicode=True)
+            yaml_path = handle.name
 
         try:
             proc = subprocess.run(
@@ -103,8 +103,8 @@ class ParallelBenchmarkIntegrationTest(CliIntegrationTestCase):
                     "nika",
                     "benchmark",
                     "run",
-                    "--csv",
-                    csv_path,
+                    "--config",
+                    yaml_path,
                     "--batch-size",
                     str(len(SCENARIO_CASES)),
                     "--agent",
@@ -139,7 +139,7 @@ class ParallelBenchmarkIntegrationTest(CliIntegrationTestCase):
                 else:
                     cls._pipeline_results[key] = parsed[key]
         finally:
-            Path(csv_path).unlink(missing_ok=True)
+            Path(yaml_path).unlink(missing_ok=True)
 
     @classmethod
     def tearDownClass(cls) -> None:

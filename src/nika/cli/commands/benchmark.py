@@ -13,13 +13,27 @@ from nika.utils.agent_config import (
     ENV_MAX_STEPS,
     ENV_MODEL,
 )
+from nika.workflows.benchmark.inject_defaults import resolve_inject_params
 from nika.workflows.benchmark.run import (
-    default_benchmark_csv_path,
-    run_benchmark_from_csv,
+    default_benchmark_yaml_path,
+    run_benchmark_from_yaml,
     run_single_benchmark,
 )
 
 benchmark_app = typer.Typer(help="Run curated benchmark cases (env → fault → agent → eval).")
+
+
+def _parse_set_options(raw_items: list[str] | None) -> dict[str, str]:
+    overrides: dict[str, str] = {}
+    for raw in raw_items or []:
+        if "=" not in raw:
+            raise typer.BadParameter(f"Invalid --set value {raw!r}. Use key=value.")
+        key, value = raw.split("=", 1)
+        key = key.strip()
+        if not key:
+            raise typer.BadParameter(f"Invalid --set value {raw!r}. Key cannot be empty.")
+        overrides[key] = value.strip()
+    return overrides
 
 
 @benchmark_app.command("run")
@@ -27,12 +41,12 @@ def benchmark_run(
     scenario: str | None = typer.Argument(
         default=None,
         metavar="SCENARIO",
-        help="Scenario id for a single case (omit for CSV batch mode).",
+        help="Scenario id for a single case (omit for YAML batch mode).",
     ),
-    csv: Path | None = typer.Option(
+    config: Path | None = typer.Option(
         None,
-        "--csv",
-        help="Benchmark CSV path (batch mode). Defaults to benchmark/benchmark_selected.csv under the repo root.",
+        "--config",
+        help="Benchmark YAML path (batch mode). Defaults to benchmark/benchmark_selected.yaml under the repo root.",
     ),
     problem: str | None = typer.Option(
         None,
@@ -44,6 +58,11 @@ def benchmark_run(
         "-s",
         "--size",
         help="Topology size s, m, or l (required only for scalable scenarios).",
+    ),
+    sets: list[str] | None = typer.Option(
+        None,
+        "--set",
+        help="Override inject parameters as key=value (single-case mode).",
     ),
     agent_type: str | None = typer.Option(
         None,
@@ -77,7 +96,7 @@ def benchmark_run(
         1,
         "--batch-size",
         help=(
-            "CSV batch mode: number of rows to run simultaneously per batch. "
+            "YAML batch mode: number of rows to run simultaneously per batch. "
             "Rows are chunked into groups of this size; each group runs fully in "
             "parallel before the next group starts (default: 1)."
         ),
@@ -100,7 +119,7 @@ def benchmark_run(
         help="Model id for the judge (required with --judge unless set in .env).",
     ),
 ) -> None:
-    """Run one benchmark row from CSV, or a single case when SCENARIO and --problem are set."""
+    """Run one benchmark row from YAML, or a single case when SCENARIO and --problem are set."""
     if run_judge:
         from nika.utils.agent_config import resolve_judge_model, resolve_judge_provider
 
@@ -109,14 +128,14 @@ def benchmark_run(
     elif judge_provider is not None or judge_model is not None:
         raise typer.BadParameter("Pass --judge to enable LLM judge; omit --judge-provider/--judge-model otherwise.")
 
-    if scenario is not None and csv is not None:
-        raise typer.BadParameter("Use either SCENARIO (single-case mode) or --csv (batch mode), not both.")
+    if scenario is not None and config is not None:
+        raise typer.BadParameter("Use either SCENARIO (single-case mode) or --config (batch mode), not both.")
 
     single_mode = scenario is not None
 
     if single_mode:
         if batch_size != 1:
-            raise typer.BadParameter("--batch-size applies to CSV batch mode only; omit it for a single case.")
+            raise typer.BadParameter("--batch-size applies to YAML batch mode only; omit it for a single case.")
         if not problem:
             raise typer.BadParameter("--problem is required when SCENARIO is given.")
         if scenario_requires_topo_size(scenario) and not size:
@@ -124,6 +143,9 @@ def benchmark_run(
         if not scenario_requires_topo_size(scenario) and size is not None:
             raise typer.BadParameter(f"Scenario '{scenario}' does not use sizes; omit -s/--size.")
         topo = size or ""
+        inject_overrides = _parse_set_options(sets)
+        inject_params = resolve_inject_params(problem, scenario, topo)
+        inject_params.update(inject_overrides)
         run_single_benchmark(
             problem=problem,
             scenario=scenario,
@@ -132,6 +154,7 @@ def benchmark_run(
             llm_provider=llm_provider,
             model=model,
             max_steps=max_steps,
+            inject_params=inject_params,
             run_judge=run_judge,
             judge_llm_provider=judge_provider,
             judge_model=judge_model,
@@ -139,10 +162,10 @@ def benchmark_run(
         return
 
     if problem is not None:
-        raise typer.BadParameter("--problem without SCENARIO is invalid; pass SCENARIO or use batch mode with --csv.")
+        raise typer.BadParameter("--problem without SCENARIO is invalid; pass SCENARIO or use batch mode with --config.")
 
-    benchmark_path = str(csv) if csv is not None else default_benchmark_csv_path()
-    run_benchmark_from_csv(
+    benchmark_path = str(config) if config is not None else default_benchmark_yaml_path()
+    run_benchmark_from_yaml(
         benchmark_file=benchmark_path,
         agent_type=agent_type,
         llm_provider=llm_provider,
