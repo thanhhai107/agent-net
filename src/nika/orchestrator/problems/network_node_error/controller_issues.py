@@ -1,6 +1,4 @@
 import logging
-import random
-from typing import Optional
 
 from pydantic import BaseModel, Field
 
@@ -24,7 +22,7 @@ logger = system_logger
 class SDNControllerCrashParams(BaseModel):
     """Parameters for injecting an SDN controller crash fault."""
 
-    host_name: Optional[str] = Field(default=None, description="Target SDN controller host name. Defaults to runtime selection.")
+    host_name: str = Field(description="Target SDN controller host name.")
 
 
 class SDNControllerCrashBase:
@@ -39,19 +37,16 @@ class SDNControllerCrashBase:
         self.net_env = get_net_env_instance(scenario_name, **kwargs)
         self.kathara_api = KatharaAPIALL(lab_name=self.net_env.lab.name)
         self.injector = FaultInjectorBase(lab_name=self.net_env.lab.name)
-        self.faulty_devices = [random.choice(self.net_env.sdn_controllers)]
+        self.faulty_devices: list[str] = []
 
-    def inject_fault(self, params: SDNControllerCrashParams | None = None):
-        if params is None:
-            params = SDNControllerCrashParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+    def inject_fault(self, params: SDNControllerCrashParams):
+        host = params.host_name
+        self.faulty_devices = [host]
         self.kathara_api.exec_cmd(host, "pkill -f pox.py")
 
-    def verify_fault(self, params: SDNControllerCrashParams | None = None) -> dict:
+    def verify_fault(self, params: SDNControllerCrashParams) -> dict:
         """Verify POX controller is NOT running on the SDN controller."""
-        if params is None:
-            params = SDNControllerCrashParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        host = params.host_name
         pgrep_output = self.kathara_api.exec_cmd(
             host, "pgrep -af pox 2>/dev/null | grep -v 'pgrep\\|bash\\|grep' | grep . || echo NONE"
         ).strip()
@@ -99,7 +94,7 @@ class SDNControllerCrashRCA(SDNControllerCrashBase, RCATask):
 class SouthboundPortBlockParams(BaseModel):
     """Parameters for injecting a southbound port block fault."""
 
-    host_name: Optional[str] = Field(default=None, description="Target SDN controller host name. Defaults to runtime selection.")
+    host_name: str = Field(description="Target SDN controller host name.")
     southbound_port: int = Field(default=6633, description="Port to block.")
 
 
@@ -115,20 +110,16 @@ class SouthboundPortBlockBase:
         self.net_env = get_net_env_instance(scenario_name, **kwargs)
         self.kathara_api = KatharaAPIALL(lab_name=self.net_env.lab.name)
         self.injector = FaultInjectorBase(lab_name=self.net_env.lab.name)
-        self.faulty_devices = [random.choice(self.net_env.sdn_controllers)]
-        self.southbound_port: int = 6633
+        self.faulty_devices: list[str] = []
 
-    def inject_fault(self, params: SouthboundPortBlockParams | None = None):
-        if params is None:
-            params = SouthboundPortBlockParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+    def inject_fault(self, params: SouthboundPortBlockParams):
+        host = params.host_name
+        self.faulty_devices = [host]
         self.injector.inject_acl_rule(host_name=host, rule=f"tcp dport {params.southbound_port} drop")
 
-    def verify_fault(self, params: SouthboundPortBlockParams | None = None) -> dict:
+    def verify_fault(self, params: SouthboundPortBlockParams) -> dict:
         """Verify nftables has a rule blocking the southbound port."""
-        if params is None:
-            params = SouthboundPortBlockParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        host = params.host_name
         port = params.southbound_port
         nft_output = self.kathara_api.exec_cmd(host, "nft list ruleset 2>/dev/null").strip()
         verified = f"tcp dport {port}" in nft_output and "drop" in nft_output
@@ -175,7 +166,7 @@ class SouthboundPortBlockRCA(SouthboundPortBlockBase, RCATask):
 class SouthboundPortMismatchParams(BaseModel):
     """Parameters for injecting a southbound port mismatch fault."""
 
-    host_name: Optional[str] = Field(default=None, description="Target SDN controller host name. Defaults to runtime selection.")
+    host_name: str = Field(description="Target SDN controller host name.")
     mismatched_port: int = Field(default=6653, description="Port used after restart.")
     original_port: int = Field(default=6633, description="Expected original OpenFlow port.")
 
@@ -192,25 +183,20 @@ class SouthboundPortMismatchBase:
         self.net_env = get_net_env_instance(scenario_name, **kwargs)
         self.kathara_api = KatharaAPIALL(lab_name=self.net_env.lab.name)
         self.injector = FaultInjectorBase(lab_name=self.net_env.lab.name)
-        self.faulty_devices = [random.choice(self.net_env.sdn_controllers)]
-        self.original_port: int = 6633
-        self.mismatched_port: int = 6653
+        self.faulty_devices: list[str] = []
 
-    def inject_fault(self, params: SouthboundPortMismatchParams | None = None):
-        if params is None:
-            params = SouthboundPortMismatchParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+    def inject_fault(self, params: SouthboundPortMismatchParams):
+        host = params.host_name
+        self.faulty_devices = [host]
         self.kathara_api.exec_cmd(host, "pkill -f pox.py")
         self.kathara_api.exec_cmd(
             host,
             f"python3 /pox/pox.py openflow.of_01 --port={params.mismatched_port} forwarding.l2_learning &",
         )
 
-    def verify_fault(self, params: SouthboundPortMismatchParams | None = None) -> dict:
+    def verify_fault(self, params: SouthboundPortMismatchParams) -> dict:
         """Verify POX controller is running with the mismatched port."""
-        if params is None:
-            params = SouthboundPortMismatchParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        host = params.host_name
         mismatched_port = params.mismatched_port
         pgrep_output = self.kathara_api.exec_cmd(
             host, "pgrep -af pox 2>/dev/null | grep -v 'pgrep\\|bash\\|grep' | grep . || echo NONE"
@@ -261,7 +247,7 @@ class SouthboundPortMismatchRCA(SouthboundPortMismatchBase, RCATask):
 class FlowRuleShadowingParams(BaseModel):
     """Parameters for injecting a flow rule shadowing fault."""
 
-    host_name: Optional[str] = Field(default=None, description="Target OVS switch name. Defaults to runtime selection.")
+    host_name: str = Field(description="Target OVS switch name.")
 
 
 class FlowRuleShadowingBase:
@@ -276,19 +262,16 @@ class FlowRuleShadowingBase:
         self.net_env = get_net_env_instance(scenario_name, **kwargs)
         self.kathara_api = KatharaAPIALL(lab_name=self.net_env.lab.name)
         self.injector = FaultInjectorBase(lab_name=self.net_env.lab.name)
-        self.faulty_devices = [random.choice(self.net_env.ovs_switches)]
+        self.faulty_devices: list[str] = []
 
-    def inject_fault(self, params: FlowRuleShadowingParams | None = None):
-        if params is None:
-            params = FlowRuleShadowingParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+    def inject_fault(self, params: FlowRuleShadowingParams):
+        host = params.host_name
+        self.faulty_devices = [host]
         self.kathara_api.exec_cmd(host, f"ovs-ofctl add-flow {host} 'priority=100,actions=drop'")
 
-    def verify_fault(self, params: FlowRuleShadowingParams | None = None) -> dict:
+    def verify_fault(self, params: FlowRuleShadowingParams) -> dict:
         """Verify the OVS switch has a high-priority drop rule."""
-        if params is None:
-            params = FlowRuleShadowingParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        host = params.host_name
         flows = self.kathara_api.exec_cmd(host, f"ovs-ofctl dump-flows {host} 2>/dev/null").strip()
         verified = "priority=100" in flows and "drop" in flows
         return build_verify_result(
@@ -334,8 +317,8 @@ class FlowRuleShadowingRCA(FlowRuleShadowingBase, RCATask):
 class FlowRuleLoopParams(BaseModel):
     """Parameters for injecting a flow rule loop fault."""
 
-    host_name: Optional[str] = Field(default=None, description="Primary OVS switch name. Defaults to runtime selection.")
-    host_name_2: Optional[str] = Field(default=None, description="Secondary OVS switch name. Defaults to runtime selection.")
+    host_name: str = Field(description="Primary OVS switch name.")
+    host_name_2: str = Field(description="Secondary OVS switch name.")
 
 
 class FlowRuleLoopBase:
@@ -350,22 +333,19 @@ class FlowRuleLoopBase:
         self.net_env = get_net_env_instance(scenario_name, **kwargs)
         self.kathara_api = KatharaAPIALL(lab_name=self.net_env.lab.name)
         self.injector = FaultInjectorBase(lab_name=self.net_env.lab.name)
-        self.faulty_devices = self.net_env.ovs_switches[:2]
+        self.faulty_devices: list[str] = []
 
-    def inject_fault(self, params: FlowRuleLoopParams | None = None):
-        if params is None:
-            params = FlowRuleLoopParams()
-        host0 = params.host_name if params.host_name is not None else self.faulty_devices[0]
-        host1 = params.host_name_2 if params.host_name_2 is not None else self.faulty_devices[1]
+    def inject_fault(self, params: FlowRuleLoopParams):
+        host0 = params.host_name
+        host1 = params.host_name_2
+        self.faulty_devices = [host0, host1]
         self.kathara_api.exec_cmd(host0, f"ovs-ofctl add-flow {host0} 'in_port=eth0,actions=output:eth0'")
         self.kathara_api.exec_cmd(host1, f"ovs-ofctl add-flow {host1} 'in_port=eth1,actions=output:eth1'")
 
-    def verify_fault(self, params: FlowRuleLoopParams | None = None) -> dict:
+    def verify_fault(self, params: FlowRuleLoopParams) -> dict:
         """Verify both OVS switches have loop flow rules."""
-        if params is None:
-            params = FlowRuleLoopParams()
-        host0 = params.host_name if params.host_name is not None else self.faulty_devices[0]
-        host1 = params.host_name_2 if params.host_name_2 is not None else self.faulty_devices[1]
+        host0 = params.host_name
+        host1 = params.host_name_2
         flows0 = self.kathara_api.exec_cmd(host0, f"ovs-ofctl dump-flows {host0} 2>/dev/null").strip()
         flows1 = self.kathara_api.exec_cmd(host1, f"ovs-ofctl dump-flows {host1} 2>/dev/null").strip()
         has_loop0 = "in_port" in flows0 and "output" in flows0

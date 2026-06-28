@@ -1,5 +1,4 @@
 import logging
-import random
 import re
 from typing import Optional
 
@@ -150,7 +149,7 @@ def _detect_misconfigured_entry(kathara_api: KatharaAPIALL, host: str) -> tuple[
 class P4HeaderDefinitionErrorParams(BaseModel):
     """Parameters for injecting a P4 header definition error fault."""
 
-    host_name: Optional[str] = Field(default=None, description="Target BMv2 switch name. Defaults to runtime selection.")
+    host_name: str = Field(description="Target BMv2 switch name.")
     p4_name: Optional[str] = Field(default=None, description="P4 program name (without suffix). Defaults to runtime detection.")
 
 
@@ -166,14 +165,14 @@ class P4HeaderDefinitionErrorBase:
         self.net_env = get_net_env_instance(scenario_name, **kwargs)
         self.kathara_api = KatharaAPIALL(lab_name=self.net_env.lab.name)
         self.injector = FaultInjectorBase(lab_name=self.net_env.lab.name)
-        self.faulty_devices = [random.choice(self.net_env.bmv2_switches)]
-        self.p4_name = self.kathara_api.exec_cmd(self.faulty_devices[0], "echo *.p4 | sed 's/\\.p4//'")
+        self.faulty_devices: list[str] = []
 
-    def inject_fault(self, params: P4HeaderDefinitionErrorParams | None = None):
-        if params is None:
-            params = P4HeaderDefinitionErrorParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
-        p4_name = params.p4_name if params.p4_name is not None else self.p4_name
+    def inject_fault(self, params: P4HeaderDefinitionErrorParams):
+        host = params.host_name
+        self.faulty_devices = [host]
+        p4_name = params.p4_name if params.p4_name is not None else self.kathara_api.exec_cmd(
+            host, "echo *.p4 | sed 's/\\.p4//'"
+        )
         self.kathara_api.exec_cmd(
             host,
             f"cp {p4_name}.p4 {p4_name}.p4.bak && "
@@ -186,12 +185,12 @@ class P4HeaderDefinitionErrorBase:
         self.kathara_api.exec_cmd(host, "pkill -f simple_switch")
         self.kathara_api.exec_cmd(host, f"./hostlab/{host}.startup")
 
-    def verify_fault(self, params: P4HeaderDefinitionErrorParams | None = None) -> dict:
+    def verify_fault(self, params: P4HeaderDefinitionErrorParams) -> dict:
         """Verify the P4 JSON is missing (compilation failed) or switch is not running."""
-        if params is None:
-            params = P4HeaderDefinitionErrorParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
-        p4_name = params.p4_name if params.p4_name is not None else self.p4_name
+        host = params.host_name
+        p4_name = params.p4_name if params.p4_name is not None else self.kathara_api.exec_cmd(
+            host, "echo *.p4 | sed 's/\\.p4//'"
+        )
         json_check = self.kathara_api.exec_cmd(
             host, f"ls {p4_name}.json 2>/dev/null && echo exists || echo missing"
         ).strip()
@@ -244,7 +243,7 @@ class P4CompilationErrorHeaderRCA(P4HeaderDefinitionErrorBase, RCATask):
 class P4CompilationErrorParserStateParams(BaseModel):
     """Parameters for injecting a P4 parser state compilation error fault."""
 
-    host_name: Optional[str] = Field(default=None, description="Target BMv2 switch name. Defaults to runtime selection.")
+    host_name: str = Field(description="Target BMv2 switch name.")
     p4_name: Optional[str] = Field(default=None, description="P4 program name (without suffix). Defaults to runtime detection.")
 
 
@@ -260,14 +259,14 @@ class P4CompilationErrorParserStateBase:
         self.net_env = get_net_env_instance(scenario_name, **kwargs)
         self.kathara_api = KatharaAPIALL(lab_name=self.net_env.lab.name)
         self.injector = FaultInjectorBase(lab_name=self.net_env.lab.name)
-        self.faulty_devices = [random.choice(self.net_env.bmv2_switches)]
-        self.p4_name = self.kathara_api.exec_cmd(self.faulty_devices[0], "echo *.p4 | sed 's/\\.p4//'")
+        self.faulty_devices: list[str] = []
 
-    def inject_fault(self, params: P4CompilationErrorParserStateParams | None = None):
-        if params is None:
-            params = P4CompilationErrorParserStateParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
-        p4_name = params.p4_name if params.p4_name is not None else self.p4_name
+    def inject_fault(self, params: P4CompilationErrorParserStateParams):
+        host = params.host_name
+        self.faulty_devices = [host]
+        p4_name = params.p4_name if params.p4_name is not None else self.kathara_api.exec_cmd(
+            host, "echo *.p4 | sed 's/\\.p4//'"
+        )
         self.kathara_api.exec_cmd(
             host,
             f"cp {p4_name}.p4 {p4_name}.p4.bak && "
@@ -277,12 +276,12 @@ class P4CompilationErrorParserStateBase:
         self.kathara_api.exec_cmd(host, "pkill -f simple_switch")
         self.kathara_api.exec_cmd(host, f"./hostlab/{host}.startup")
 
-    def verify_fault(self, params: P4CompilationErrorParserStateParams | None = None) -> dict:
+    def verify_fault(self, params: P4CompilationErrorParserStateParams) -> dict:
         """Verify the P4 JSON is missing (compilation failed) or switch is not running."""
-        if params is None:
-            params = P4CompilationErrorParserStateParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
-        p4_name = params.p4_name if params.p4_name is not None else self.p4_name
+        host = params.host_name
+        p4_name = params.p4_name if params.p4_name is not None else self.kathara_api.exec_cmd(
+            host, "echo *.p4 | sed 's/\\.p4//'"
+        )
         json_check = self.kathara_api.exec_cmd(
             host, f"ls {p4_name}.json 2>/dev/null && echo exists || echo missing"
         ).strip()
@@ -335,7 +334,7 @@ class P4CompilationErrorParserStateRCA(P4CompilationErrorParserStateBase, RCATas
 class P4TableEntryMissingParams(BaseModel):
     """Parameters for injecting a P4 table entry missing fault."""
 
-    host_name: Optional[str] = Field(default=None, description="Target BMv2 switch name. Defaults to runtime selection.")
+    host_name: str = Field(description="Target BMv2 switch name.")
 
 
 class P4TableEntryMissingBase:
@@ -350,23 +349,20 @@ class P4TableEntryMissingBase:
         self.net_env = get_net_env_instance(scenario_name, **kwargs)
         self.kathara_api = KatharaAPIALL(lab_name=self.net_env.lab.name)
         self.injector = FaultInjectorBase(lab_name=self.net_env.lab.name)
-        self.faulty_devices = [random.choice(self.net_env.bmv2_switches)]
+        self.faulty_devices: list[str] = []
         self._cleared_table: str | None = None
 
-    def inject_fault(self, params: P4TableEntryMissingParams | None = None):
-        if params is None:
-            params = P4TableEntryMissingParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+    def inject_fault(self, params: P4TableEntryMissingParams):
+        host = params.host_name
+        self.faulty_devices = [host]
         table_name = _find_table_with_entries(self.kathara_api, host)
         _cli_run(self.kathara_api, host, f"table_clear {table_name}")
         self._cleared_table = table_name
         logger.info(f"Injected fault: Deleted table entries on {host} ({table_name})")
 
-    def verify_fault(self, params: P4TableEntryMissingParams | None = None) -> dict:
+    def verify_fault(self, params: P4TableEntryMissingParams) -> dict:
         """Verify the forwarding table has no match entries."""
-        if params is None:
-            params = P4TableEntryMissingParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        host = params.host_name
         table_name = self._cleared_table or _find_table_with_entries(self.kathara_api, host)
         table_dump = _cli_run(self.kathara_api, host, f"table_dump {table_name}").strip()
         verified = "0 entries" in table_dump or table_dump == "" or "Dumping entry" not in table_dump
@@ -413,7 +409,7 @@ class P4TableEntryMissingRCA(P4TableEntryMissingBase, RCATask):
 class P4TableEntryMisconfigParams(BaseModel):
     """Parameters for injecting a P4 table entry misconfiguration fault."""
 
-    host_name: Optional[str] = Field(default=None, description="Target BMv2 switch name. Defaults to the first switch.")
+    host_name: str = Field(description="Target BMv2 switch name.")
 
 
 class P4TableEntryMisconfigBase:
@@ -428,24 +424,21 @@ class P4TableEntryMisconfigBase:
         self.net_env = get_net_env_instance(scenario_name, **kwargs)
         self.kathara_api = KatharaAPIALL(lab_name=self.net_env.lab.name)
         self.injector = FaultInjectorBase(lab_name=self.net_env.lab.name)
-        self.faulty_devices = [self.net_env.bmv2_switches[0]]
+        self.faulty_devices: list[str] = []
         self._misconfig_details: dict | None = None
 
-    def inject_fault(self, params: P4TableEntryMisconfigParams | None = None):
-        if params is None:
-            params = P4TableEntryMisconfigParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+    def inject_fault(self, params: P4TableEntryMisconfigParams):
+        host = params.host_name
+        self.faulty_devices = [host]
         self._misconfig_details = _misconfigure_first_table_entry(self.kathara_api, host)
         logger.info(
             f"Injected fault: Misconfigured table entry on {host} "
             f"({self._misconfig_details['table_name']} handle {self._misconfig_details['entry_handle']})"
         )
 
-    def verify_fault(self, params: P4TableEntryMisconfigParams | None = None) -> dict:
+    def verify_fault(self, params: P4TableEntryMisconfigParams) -> dict:
         """Verify a table entry action was modified via simple_switch_CLI."""
-        if params is None:
-            params = P4TableEntryMisconfigParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        host = params.host_name
         if self._misconfig_details:
             table_name = self._misconfig_details["table_name"]
             handle = self._misconfig_details["entry_handle"]
@@ -500,7 +493,7 @@ class P4TableEntryMisconfigRCA(P4TableEntryMisconfigBase, RCATask):
 class P4MPLSLabelLimitExceededParams(BaseModel):
     """Parameters for injecting an MPLS label limit exceeded fault."""
 
-    host_name: Optional[str] = Field(default=None, description="Target BMv2 switch name. Defaults to runtime selection.")
+    host_name: str = Field(description="Target BMv2 switch name.")
 
 
 class P4MPLSLabelLimitExceededBase:
@@ -516,13 +509,12 @@ class P4MPLSLabelLimitExceededBase:
         self.net_env = get_net_env_instance(scenario_name, **kwargs)
         self.kathara_api = KatharaAPIALL(lab_name=self.net_env.lab.name)
         self.injector = FaultInjectorBase(lab_name=self.net_env.lab.name)
-        self.faulty_devices = [random.choice(self.net_env.bmv2_switches)]
+        self.faulty_devices: list[str] = []
         self.logger = system_logger
 
-    def inject_fault(self, params: P4MPLSLabelLimitExceededParams | None = None):
-        if params is None:
-            params = P4MPLSLabelLimitExceededParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+    def inject_fault(self, params: P4MPLSLabelLimitExceededParams):
+        host = params.host_name
+        self.faulty_devices = [host]
         self.kathara_api.exec_cmd(
             host,
             "cp mpls.p4 mpls.p4.bak && "
@@ -533,11 +525,9 @@ class P4MPLSLabelLimitExceededBase:
         self.kathara_api.exec_cmd(host, f"./hostlab/{host}.startup")
         self.logger.info(f"Injected MPLS label limit exceeded fault on device: {host}")
 
-    def verify_fault(self, params: P4MPLSLabelLimitExceededParams | None = None) -> dict:
+    def verify_fault(self, params: P4MPLSLabelLimitExceededParams) -> dict:
         """Verify CONST_MAX_LABELS was changed to 2 and the JSON may be missing."""
-        if params is None:
-            params = P4MPLSLabelLimitExceededParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        host = params.host_name
         const_check = self.kathara_api.exec_cmd(
             host,
             "grep 'CONST_MAX_LABELS 2' mpls.p4 2>/dev/null && echo found || echo absent",

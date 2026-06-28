@@ -1,6 +1,3 @@
-import random
-from typing import Optional
-
 from pydantic import BaseModel, Field
 
 from nika.generator.fault.injector_host import FaultInjectorHost
@@ -20,7 +17,7 @@ from nika.utils.logger import system_logger
 class ArpCachePoisoningParams(BaseModel):
     """Parameters for injecting an ARP cache poisoning fault."""
 
-    host_name: Optional[str] = Field(default=None, description="Target host name. Defaults to a randomly selected host.")
+    host_name: str = Field(description="Target host name.")
     fake_mac: str = Field(default="00:11:22:33:44:55", description="Forged MAC address.")
 
 
@@ -37,13 +34,11 @@ class ArpCachePoisoningBase:
         self.net_env = get_net_env_instance(scenario_name, **kwargs)
         self.kathara_api = KatharaAPIALL(lab_name=self.net_env.lab.name)
         self.injector = FaultInjectorHost(lab_name=self.net_env.lab.name)
-        self.faulty_devices = [random.choice(self.net_env.hosts)]
-        self.fake_mac = "00:11:22:33:44:55"
+        self.faulty_devices: list[str] = []
 
-    def inject_fault(self, params: ArpCachePoisoningParams | None = None):
-        if params is None:
-            params = ArpCachePoisoningParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+    def inject_fault(self, params: ArpCachePoisoningParams):
+        host = params.host_name
+        self.faulty_devices = [host]
         default_gateway = self.kathara_api.get_default_gateway(host)
         self.injector.inject_arp_misconfiguration(
             host_name=host,
@@ -51,11 +46,9 @@ class ArpCachePoisoningBase:
             fake_mac=params.fake_mac,
         )
 
-    def verify_fault(self, params: ArpCachePoisoningParams | None = None) -> dict:
+    def verify_fault(self, params: ArpCachePoisoningParams) -> dict:
         """Verify the ARP cache has the fake MAC for the default gateway."""
-        if params is None:
-            params = ArpCachePoisoningParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        host = params.host_name
         fake_mac = params.fake_mac
         gateway = self.kathara_api.get_default_gateway(host)
         neigh_output = self.kathara_api.exec_cmd(host, f"ip neigh show | grep '{fake_mac}'").strip()

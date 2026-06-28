@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import csv
 import hashlib
 import re
 import subprocess
@@ -25,6 +24,8 @@ from nika.net_env.net_env_pool import scenario_requires_topo_tier
 from nika.utils.kathara_cleanup import ensure_kathara_clean
 from nika.utils.logger import bind_session_dir, log_event
 from nika.workflows.agent.run import start_agent
+from nika.workflows.benchmark.inject_defaults import resolve_inject_params
+from nika.workflows.benchmark.load_config import load_benchmark_yaml
 from nika.workflows.env.start import start_net_env
 from nika.workflows.eval.session import eval_results
 from nika.workflows.failure.inject import inject_failure
@@ -35,12 +36,10 @@ _BENCHMARK_FAILED_PREFIX = "benchmark_failed "
 _BENCHMARK_PROGRESS_PREFIX = "benchmark_progress "
 _BENCHMARK_START_PREFIX = "benchmark_start "
 _BENCHMARK_SUMMARY_PREFIX = "benchmark_summary "
-_REQUIRED_CSV_COLUMNS = {"problem", "scenario", "topo_size"}
-_REMOVED_CSV_METADATA_COLUMNS = {"stream_id", "stream", "split", "sequence_index"}
 
 
-def default_benchmark_csv_path() -> str:
-    return str(BENCHMARK_DIR / "benchmark_test.csv")
+def default_benchmark_yaml_path() -> str:
+    return str(BENCHMARK_DIR / "benchmark_test.yaml")
 
 
 def _slugify_benchmark_name(raw: str) -> str:
@@ -61,6 +60,7 @@ def _stable_fault_seed(benchmark_name: str, row: dict) -> str:
         str(row.get("scenario", "")),
         str(row.get("problem", "")),
         str(row.get("topo_size") or ""),
+        repr(sorted((row.get("inject") or {}).items())),
         str(row.get("benchmark_index") or ""),
     ]
     return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()[:16]
@@ -128,6 +128,9 @@ def _benchmark_row_cli_args(
     topo = row.get("topo_size") or ""
     if topo and topo != "-":
         args += ["-t", topo]
+    inject = row.get("inject") or {}
+    for key, value in inject.items():
+        args += ["--set", f"{key}={value}"]
     if run_judge:
         args += [
             "--judge",
@@ -167,7 +170,7 @@ def _run_benchmark_row_subprocess(
     result_root: str | Path | None = None,
     fault_seed: str | None = None,
 ) -> str | None:
-    """Run one CSV row via a subprocess for isolated Tool Evolution execution."""
+    """Run one YAML case via a subprocess for isolated Tool Evolution execution."""
     cli_args = _benchmark_row_cli_args(
         row,
         agent_type=agent_type,
@@ -239,6 +242,7 @@ def run_single_benchmark(
     result_root: str | Path | None = None,
     fault_seed: str | None = None,
     benchmark_index: int | None = None,
+    inject_params: dict[str, str] | None = None,
 ) -> str:
     """
     Run a single benchmark case.
@@ -289,7 +293,12 @@ def run_single_benchmark(
     if benchmark_index is not None:
         session.update_session("benchmark_index", benchmark_index)
 
-    inject_failure(problem_names=[problem], session_id=session_id)
+    params = dict(inject_params or resolve_inject_params(problem, scenario, topo_size or ""))
+    inject_failure(
+        problem_names=[problem],
+        session_id=session_id,
+        param_overrides=params,
+    )
     session = Session().load_running_session(session_id=session_id)
     session_dir = Path(
         getattr(session, "session_dir", Path(result_root or RESULTS_DIR) / session_id)
@@ -382,7 +391,7 @@ def run_single_benchmark(
     return session_id
 
 
-def run_benchmark_from_csv(
+def run_benchmark_from_yaml(
     benchmark_file: str,
     agent_type: str,
     llm_backend: str,
@@ -400,12 +409,11 @@ def run_benchmark_from_csv(
     result_root: str | Path | None = None,
 ) -> None:
     """
-    Run benchmark cases defined in a CSV file.
+    Run benchmark cases defined in a YAML file.
 
-    The CSV file must contain the following columns:
-    - problem
-    - scenario
-    - topo_size (same values as ``nika env run -t``: s, m, l, or empty)
+    The YAML file must contain a top-level ``cases`` list. Each case includes
+    ``scenario``, ``problem``, optional ``topo_size``, and deterministic
+    ``inject`` parameters.
     """
     ensure_kathara_clean(context="benchmark run")
 
@@ -428,26 +436,13 @@ def run_benchmark_from_csv(
                 memory=memory_config,
             )
         )
-    with open(benchmark_file, newline="", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        fieldnames = set(reader.fieldnames or [])
-        missing = _REQUIRED_CSV_COLUMNS - fieldnames
-        if missing:
-            raise ValueError(
-                "benchmark CSV is missing required columns: "
-                + ", ".join(sorted(missing))
-            )
-        removed = _REMOVED_CSV_METADATA_COLUMNS & fieldnames
-        if removed:
-            raise ValueError(
-                "benchmark CSV metadata columns are no longer supported: "
-                + ", ".join(sorted(removed))
-                + ". Keep only problem, scenario, topo_size."
-            )
-        rows = list(reader)
+    if Path(benchmark_file).suffix.lower() == ".csv":
+        raise ValueError("benchmark CSV files are no longer supported; use YAML.")
+
+    rows = load_benchmark_yaml(benchmark_file)
 
     if not rows:
-        print(f"No benchmark rows found in {benchmark_file}")
+        print(f"No benchmark cases found in {benchmark_file}")
         return
     benchmark_name = Path(benchmark_file).stem
     benchmark_root = (
@@ -472,7 +467,7 @@ def run_benchmark_from_csv(
     batch_started_at = time.monotonic()
     print(
         f"{_BENCHMARK_PROGRESS_PREFIX}total={total} completed=0 failed=0 "
-        f"csv={benchmark_file} result_root={benchmark_root}",
+        f"yaml={benchmark_file} result_root={benchmark_root}",
         flush=True,
     )
 
@@ -525,6 +520,7 @@ def run_benchmark_from_csv(
                     harness_allow_failure=harness_allow_failure,
                     result_root=benchmark_root,
                     fault_seed=row.get("fault_seed"),
+                    inject_params=row.get("inject"),
                     benchmark_index=int(row["benchmark_index"]),
                 )
         except Exception as exc:

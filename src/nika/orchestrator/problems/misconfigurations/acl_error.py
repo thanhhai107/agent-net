@@ -1,7 +1,3 @@
-import logging
-import random
-from typing import Optional
-
 from pydantic import BaseModel, Field
 
 from nika.generator.fault.injector_base import FaultInjectorBase
@@ -20,7 +16,7 @@ from nika.service.kathara import KatharaAPIALL
 class BGPAclBlockParams(BaseModel):
     """Parameters for injecting a BGP ACL block fault."""
 
-    host_name: Optional[str] = Field(default=None, description="Target router host name. Defaults to a randomly selected router.")
+    host_name: str = Field(description="Target router host name.")
 
 
 class BGPAclBlockBase:
@@ -35,20 +31,18 @@ class BGPAclBlockBase:
         self.net_env = get_net_env_instance(scenario_name, **kwargs)
         self.kathara_api = KatharaAPIALL(lab_name=self.net_env.lab.name)
         self.injector = FaultInjectorBase(lab_name=self.net_env.lab.name)
-        self.faulty_devices = [random.choice(self.net_env.routers)]
+        self.faulty_devices: list[str] = []
 
-    def inject_fault(self, params: BGPAclBlockParams | None = None):
-        if params is None:
-            params = BGPAclBlockParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+    def inject_fault(self, params: BGPAclBlockParams):
+        host = params.host_name
+        self.faulty_devices = [host]
         self.injector.inject_acl_rule(host_name=host, rule="tcp dport 179 drop", table_name="filter")
         self.injector.inject_acl_rule(host_name=host, rule="tcp sport 179 drop", table_name="filter")
 
-    def verify_fault(self, params: BGPAclBlockParams | None = None) -> dict:
+    def verify_fault(self, params: BGPAclBlockParams) -> dict:
         """Verify nftables has a rule blocking TCP port 179 (BGP)."""
-        if params is None:
-            params = BGPAclBlockParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        host = params.host_name
+        self.faulty_devices = [host]
         nft_output = self.kathara_api.exec_cmd(host, "nft list ruleset 2>/dev/null").strip()
         verified = "tcp dport 179" in nft_output and "drop" in nft_output
         return build_verify_result(
@@ -94,7 +88,7 @@ class BGPAclBlockRCA(BGPAclBlockBase, RCATask):
 class OSPFAclBlockParams(BaseModel):
     """Parameters for injecting an OSPF ACL block fault."""
 
-    host_name: Optional[str] = Field(default=None, description="Target router host name. Defaults to a randomly selected router.")
+    host_name: str = Field(description="Target router host name.")
 
 
 class OSPFAclBlockBase:
@@ -109,20 +103,18 @@ class OSPFAclBlockBase:
         self.net_env = get_net_env_instance(scenario_name, **kwargs)
         self.kathara_api = KatharaAPIALL(lab_name=self.net_env.lab.name)
         self.injector = FaultInjectorBase(lab_name=self.net_env.lab.name)
-        self.faulty_devices = [random.choice(self.net_env.routers)]
+        self.faulty_devices: list[str] = []
 
-    def inject_fault(self, params: OSPFAclBlockParams | None = None):
-        if params is None:
-            params = OSPFAclBlockParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+    def inject_fault(self, params: OSPFAclBlockParams):
+        host = params.host_name
+        self.faulty_devices = [host]
         self.injector.inject_acl_rule(host_name=host, rule="ip protocol ospf drop", table_name="filter")
         self.injector.inject_acl_rule(host_name=host, rule="ip protocol ospf drop", table_name="filter")
 
-    def verify_fault(self, params: OSPFAclBlockParams | None = None) -> dict:
+    def verify_fault(self, params: OSPFAclBlockParams) -> dict:
         """Verify nftables has a rule blocking OSPF protocol."""
-        if params is None:
-            params = OSPFAclBlockParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        host = params.host_name
+        self.faulty_devices = [host]
         nft_output = self.kathara_api.exec_cmd(host, "nft list ruleset 2>/dev/null").strip()
         verified = "ospf" in nft_output and "drop" in nft_output
         return build_verify_result(
@@ -168,7 +160,7 @@ class OSPFAclBlockRCA(OSPFAclBlockBase, RCATask):
 class ARPAclBlockParams(BaseModel):
     """Parameters for injecting an ARP ACL block fault."""
 
-    host_name: Optional[str] = Field(default=None, description="Target host name. Defaults to a randomly selected host.")
+    host_name: str = Field(description="Target host name.")
 
 
 class ARPAclBlockBase:
@@ -183,20 +175,18 @@ class ARPAclBlockBase:
         self.net_env = get_net_env_instance(scenario_name, **kwargs)
         self.kathara_api = KatharaAPIALL(lab_name=self.net_env.lab.name)
         self.injector = FaultInjectorBase(lab_name=self.net_env.lab.name)
-        self.faulty_devices = [random.choice(self.net_env.hosts)]
+        self.faulty_devices: list[str] = []
 
-    def inject_fault(self, params: ARPAclBlockParams | None = None):
-        if params is None:
-            params = ARPAclBlockParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+    def inject_fault(self, params: ARPAclBlockParams):
+        host = params.host_name
+        self.faulty_devices = [host]
         self.injector.inject_acl_rule(host_name=host, rule="drop", table_name="filter", family="arp")
         self.kathara_api.exec_cmd(host, "ip neigh flush all")
 
-    def verify_fault(self, params: ARPAclBlockParams | None = None) -> dict:
+    def verify_fault(self, params: ARPAclBlockParams) -> dict:
         """Verify nftables has a rule blocking ARP traffic."""
-        if params is None:
-            params = ARPAclBlockParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        host = params.host_name
+        self.faulty_devices = [host]
         nft_output = self.kathara_api.exec_cmd(host, "nft list ruleset 2>/dev/null").strip()
         verified = "arp" in nft_output and "drop" in nft_output
         return build_verify_result(
@@ -242,7 +232,7 @@ class ARPAclBlockRCA(ARPAclBlockBase, RCATask):
 class IcmpAclBlockParams(BaseModel):
     """Parameters for injecting an ICMP ACL block fault."""
 
-    host_name: Optional[str] = Field(default=None, description="Target host name. Defaults to a randomly selected host.")
+    host_name: str = Field(description="Target host name.")
 
 
 class IcmpAclBlockBase:
@@ -257,19 +247,17 @@ class IcmpAclBlockBase:
         self.net_env = get_net_env_instance(scenario_name, **kwargs)
         self.kathara_api = KatharaAPIALL(lab_name=self.net_env.lab.name)
         self.injector = FaultInjectorBase(lab_name=self.net_env.lab.name)
-        self.faulty_devices = [random.choice(self.net_env.hosts)]
+        self.faulty_devices: list[str] = []
 
-    def inject_fault(self, params: IcmpAclBlockParams | None = None):
-        if params is None:
-            params = IcmpAclBlockParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+    def inject_fault(self, params: IcmpAclBlockParams):
+        host = params.host_name
+        self.faulty_devices = [host]
         self.injector.inject_acl_rule(host_name=host, family="ip", rule="ip protocol icmp drop", table_name="filter")
 
-    def verify_fault(self, params: IcmpAclBlockParams | None = None) -> dict:
+    def verify_fault(self, params: IcmpAclBlockParams) -> dict:
         """Verify nftables has a rule blocking ICMP traffic."""
-        if params is None:
-            params = IcmpAclBlockParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        host = params.host_name
+        self.faulty_devices = [host]
         nft_output = self.kathara_api.exec_cmd(host, "nft list ruleset 2>/dev/null").strip()
         verified = "icmp" in nft_output and "drop" in nft_output
         return build_verify_result(
@@ -315,7 +303,7 @@ class IcmpAclBlockRCA(IcmpAclBlockBase, RCATask):
 class HttpAclBlockParams(BaseModel):
     """Parameters for injecting an HTTP ACL block fault."""
 
-    host_name: Optional[str] = Field(default=None, description="Target host name. Defaults to a randomly selected host.")
+    host_name: str = Field(description="Target host name.")
 
 
 class HttpAclBlockBase:
@@ -330,19 +318,17 @@ class HttpAclBlockBase:
         self.net_env = get_net_env_instance(scenario_name, **kwargs)
         self.kathara_api = KatharaAPIALL(lab_name=self.net_env.lab.name)
         self.injector = FaultInjectorBase(lab_name=self.net_env.lab.name)
-        self.faulty_devices = [random.choice(self.net_env.hosts)]
+        self.faulty_devices: list[str] = []
 
-    def inject_fault(self, params: HttpAclBlockParams | None = None):
-        if params is None:
-            params = HttpAclBlockParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+    def inject_fault(self, params: HttpAclBlockParams):
+        host = params.host_name
+        self.faulty_devices = [host]
         self.injector.inject_acl_rule(host_name=host, family="inet", rule="tcp dport 80 drop", table_name="filter")
 
-    def verify_fault(self, params: HttpAclBlockParams | None = None) -> dict:
+    def verify_fault(self, params: HttpAclBlockParams) -> dict:
         """Verify nftables has a rule blocking HTTP (port 80) traffic."""
-        if params is None:
-            params = HttpAclBlockParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        host = params.host_name
+        self.faulty_devices = [host]
         nft_output = self.kathara_api.exec_cmd(host, "nft list ruleset 2>/dev/null").strip()
         verified = "tcp dport 80" in nft_output and "drop" in nft_output
         return build_verify_result(
@@ -388,7 +374,7 @@ class HttpAclBlockRCA(HttpAclBlockBase, RCATask):
 class DNSPortBlockedParams(BaseModel):
     """Parameters for injecting a DNS port blocked fault."""
 
-    host_name: Optional[str] = Field(default=None, description="Target DNS server host name. Defaults to runtime selection.")
+    host_name: str = Field(description="Target DNS server host name.")
 
 
 class DNSPortBlockedBase:
@@ -404,20 +390,18 @@ class DNSPortBlockedBase:
         self.net_env = get_net_env_instance(scenario_name, **kwargs)
         self.kathara_api = KatharaAPIALL(lab_name=self.net_env.lab.name)
         self.injector = FaultInjectorBase(lab_name=self.net_env.lab.name)
-        self.faulty_devices = [random.choice(self.net_env.servers["dns"])]
+        self.faulty_devices: list[str] = []
 
-    def inject_fault(self, params: DNSPortBlockedParams | None = None):
-        if params is None:
-            params = DNSPortBlockedParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+    def inject_fault(self, params: DNSPortBlockedParams):
+        host = params.host_name
+        self.faulty_devices = [host]
         self.injector.inject_acl_rule(host_name=host, rule="tcp dport 53 drop", table_name="filter")
         self.injector.inject_acl_rule(host_name=host, rule="udp dport 53 drop", table_name="filter")
 
-    def verify_fault(self, params: DNSPortBlockedParams | None = None) -> dict:
+    def verify_fault(self, params: DNSPortBlockedParams) -> dict:
         """Verify nftables has rules blocking DNS port 53."""
-        if params is None:
-            params = DNSPortBlockedParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        host = params.host_name
+        self.faulty_devices = [host]
         nft_output = self.kathara_api.exec_cmd(host, "nft list ruleset 2>/dev/null").strip()
         verified = "dport 53" in nft_output and "drop" in nft_output
         return build_verify_result(

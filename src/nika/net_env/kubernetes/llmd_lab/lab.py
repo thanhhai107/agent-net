@@ -23,7 +23,18 @@ class LLMDInferenceCluster(NetworkEnvBase):
     LAB_NAME = "llmd_lab"
     TOPO_LEVEL = "hard"
     TOPO_SIZE = None
-    TAGS = ["kubernetes", "k3s", "llm", "inference"]
+    TAGS = [
+        "kubernetes",
+        "k3s",
+        "llm",
+        "inference",
+        "link",
+        "pc",
+        "http",
+        "icmp",
+        "arp",
+        "mac",
+    ]
 
     def __init__(self, **kwargs):
         super().__init__()

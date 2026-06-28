@@ -21,8 +21,8 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 
 from agent.utils.mcp_servers import MCPServerConfig
 from agent.utils.phases import DIAGNOSIS, SUBMISSION
-from nika.codex_cli.main import app
-from nika.codex_cli.utils import env_id_from_lab
+from nika.cli.main import app
+from nika.cli.utils import env_id_from_lab
 from nika.utils.session_index import SessionIndex
 from nika.utils.session_store import SESSIONS_DIR, SessionStore
 from nika.workflows.session.containers import list_session_containers

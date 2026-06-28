@@ -1,7 +1,3 @@
-import logging
-import random
-from typing import Optional
-
 from pydantic import BaseModel, Field
 
 from nika.generator.fault.injector_host import FaultInjectorHost
@@ -21,8 +17,8 @@ from nika.utils.logger import system_logger
 class VPNMembershipMissingParams(BaseModel):
     """Parameters for injecting a VPN membership missing fault."""
 
-    host_name: Optional[str] = Field(default=None, description="Target host to remove from VPN. Defaults to runtime selection.")
-    host_name_2: Optional[str] = Field(default=None, description="VPN server host name. Defaults to runtime selection.")
+    host_name: str = Field(description="Target host to remove from VPN.")
+    host_name_2: str = Field(description="VPN server host name.")
 
 
 class VPNMembershipMissingBase:
@@ -38,15 +34,12 @@ class VPNMembershipMissingBase:
         self.net_env = get_net_env_instance(scenario_name, **kwargs)
         self.kathara_api = KatharaBaseAPI(lab_name=self.net_env.lab.name)
         self.injector = FaultInjectorHost(lab_name=self.net_env.lab.name)
-        self.vpn_server = self.net_env.servers["vpn"][0]
-        self.target_host = random.choice(["pc1", "web_server_1_1", "web_server_1_2"])
-        self.faulty_devices = [self.target_host, self.vpn_server]
+        self.faulty_devices: list[str] = []
 
-    def inject_fault(self, params: VPNMembershipMissingParams | None = None):
-        if params is None:
-            params = VPNMembershipMissingParams()
-        target_host = params.host_name if params.host_name is not None else self.target_host
-        vpn_server = params.host_name_2 if params.host_name_2 is not None else self.vpn_server
+    def inject_fault(self, params: VPNMembershipMissingParams):
+        target_host = params.host_name
+        vpn_server = params.host_name_2
+        self.faulty_devices = [target_host, vpn_server]
 
         self.kathara_api.exec_cmd(
             host_name=vpn_server,
@@ -62,12 +55,10 @@ class VPNMembershipMissingBase:
         )
         self.logger.info(f"Removed VPN membership of {target_host} on {vpn_server}.")
 
-    def verify_fault(self, params: VPNMembershipMissingParams | None = None) -> dict:
+    def verify_fault(self, params: VPNMembershipMissingParams) -> dict:
         """Verify the VPN config for target_host has commented-out lines."""
-        if params is None:
-            params = VPNMembershipMissingParams()
-        target_host = params.host_name if params.host_name is not None else self.target_host
-        vpn_server = params.host_name_2 if params.host_name_2 is not None else self.vpn_server
+        target_host = params.host_name
+        vpn_server = params.host_name_2
         wg_conf_snippet = self.kathara_api.exec_cmd(
             host_name=vpn_server,
             command=f"grep -A4 '# {target_host}' /etc/wireguard/wg0.conf 2>/dev/null || echo absent",

@@ -1,8 +1,4 @@
-import ipaddress
-import logging
-import random
 import re
-from typing import Optional
 
 from pydantic import BaseModel, Field
 
@@ -23,7 +19,7 @@ from nika.utils.logger import system_logger
 class OSPFAreaMisconfigParams(BaseModel):
     """Parameters for injecting an OSPF area misconfiguration fault."""
 
-    host_name: Optional[str] = Field(default=None, description="Target router host name. Defaults to a randomly selected router.")
+    host_name: str = Field(description="Target router host name.")
 
 
 class OSPFAreaMisconfigBase:
@@ -40,12 +36,11 @@ class OSPFAreaMisconfigBase:
         self.kathara_api = KatharaFRRAPI(lab_name=self.net_env.lab.name)
         self.injector = FaultInjectorBase(lab_name=self.net_env.lab.name)
         self.logger = system_logger
-        self.faulty_devices = [random.choice(self.net_env.routers)]
+        self.faulty_devices: list[str] = []
 
-    def inject_fault(self, params: OSPFAreaMisconfigParams | None = None):
-        if params is None:
-            params = OSPFAreaMisconfigParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+    def inject_fault(self, params: OSPFAreaMisconfigParams):
+        host = params.host_name
+        self.faulty_devices = [host]
         running_cfg = self.kathara_api.exec_cmd(host, "vtysh -c 'show running-config'")
         pattern = re.compile(r"^\s*network\s+\S+\s+area\s+(\S+)", re.MULTILINE)
         m = pattern.search(running_cfg)
@@ -59,11 +54,10 @@ class OSPFAreaMisconfigBase:
         )
         self.logger.info(f"Injected OSPF area misconfiguration on {host} from area {correct_area} to {wrong_area}.")
 
-    def verify_fault(self, params: OSPFAreaMisconfigParams | None = None) -> dict:
+    def verify_fault(self, params: OSPFAreaMisconfigParams) -> dict:
         """Verify the OSPF area in frr.conf and in the running daemon was changed."""
-        if params is None:
-            params = OSPFAreaMisconfigParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        host = params.host_name
+        self.faulty_devices = [host]
         file_areas_raw = self.kathara_api.exec_cmd(
             host,
             "grep -E '^[[:space:]]*network .* area ' /etc/frr/frr.conf 2>/dev/null | awk '{print $NF}' | sort -u",
@@ -130,7 +124,7 @@ class OSPFAreaMisconfigRCA(OSPFAreaMisconfigBase, RCATask):
 class OSPFNeighborMissingParams(BaseModel):
     """Parameters for injecting an OSPF neighbor missing fault."""
 
-    host_name: Optional[str] = Field(default=None, description="Target router host name. Defaults to a randomly selected router.")
+    host_name: str = Field(description="Target router host name.")
 
 
 class OSPFNeighborMissingBase:
@@ -147,12 +141,11 @@ class OSPFNeighborMissingBase:
         self.kathara_api = KatharaFRRAPI(lab_name=self.net_env.lab.name)
         self.injector = FaultInjectorBase(lab_name=self.net_env.lab.name)
         self.logger = system_logger
-        self.faulty_devices = [random.choice(self.net_env.routers)]
+        self.faulty_devices: list[str] = []
 
-    def inject_fault(self, params: OSPFNeighborMissingParams | None = None):
-        if params is None:
-            params = OSPFNeighborMissingParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+    def inject_fault(self, params: OSPFNeighborMissingParams):
+        host = params.host_name
+        self.faulty_devices = [host]
         cmd = (
             "sed -i.bak -E "
             "'s|^([[:space:]]*)network([[:space:]])|\\1# network\\2|' "
@@ -162,11 +155,10 @@ class OSPFNeighborMissingBase:
         self.kathara_api.exec_cmd(host, "service frr restart 2>/dev/null || true")
         self.logger.info(f"Injected OSPF neighbor missing on {host}.")
 
-    def verify_fault(self, params: OSPFNeighborMissingParams | None = None) -> dict:
+    def verify_fault(self, params: OSPFNeighborMissingParams) -> dict:
         """Verify network lines are commented in frr.conf and removed from the running daemon."""
-        if params is None:
-            params = OSPFNeighborMissingParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        host = params.host_name
+        self.faulty_devices = [host]
         commented_count_raw = self.kathara_api.exec_cmd(
             host,
             "grep -c '^[[:space:]]*# network' /etc/frr/frr.conf 2>/dev/null || echo 0",

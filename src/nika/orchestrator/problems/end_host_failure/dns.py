@@ -1,5 +1,4 @@
 import logging
-import random
 from typing import Optional
 
 from pydantic import BaseModel, Field
@@ -23,10 +22,10 @@ logger = system_logger
 class DNSRecordErrorParams(BaseModel):
     """Parameters for injecting a DNS record error fault."""
 
-    host_name: Optional[str] = Field(default=None, description="Target DNS server host name. Defaults to runtime selection.")
-    target_website: Optional[str] = Field(default=None, description="Record host label.")
-    target_domain: Optional[str] = Field(default=None, description="DNS zone/domain.")
-    wrong_ip: Optional[str] = Field(default=None, description="Incorrect IP to set.")
+    host_name: str = Field(description="Target DNS server host name.")
+    target_website: str = Field(description="Record host label.")
+    target_domain: str = Field(description="DNS zone/domain.")
+    wrong_ip: Optional[str] = Field(default=None, description="Incorrect IP to set. Derived at inject time if omitted.")
 
 
 class DNSRecordErrorBase:
@@ -43,25 +42,17 @@ class DNSRecordErrorBase:
         self.net_env = get_net_env_instance(scenario_name, **kwargs)
         self.kathara_api = KatharaBaseAPI(lab_name=self.net_env.lab.name)
         self.injector = FaultInjectorBase(lab_name=self.net_env.lab.name)
-        self.faulty_devices = [self.net_env.servers["dns"][0]]
-        url = random.choice(self.net_env.web_urls)
+        self.faulty_devices: list[str] = []
+        self._wrong_ip: str | None = None
 
-        self.target_website = url.split(".")[0]
-
-        if self.target_website.startswith("http://"):
-            self.target_website = self.target_website[len("http://"):]
-
-        self.target_domain = url.split(".")[1]
-        self.right_ip = self.kathara_api.get_host_ip(self.faulty_devices[0])
-        self.wrong_ip = self.kathara_api.get_host_ip(self.net_env.hosts[0])
-
-    def inject_fault(self, params: DNSRecordErrorParams | None = None):
-        if params is None:
-            params = DNSRecordErrorParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
-        target_website = params.target_website if params.target_website is not None else self.target_website
-        target_domain = params.target_domain if params.target_domain is not None else self.target_domain
-        wrong_ip = params.wrong_ip if params.wrong_ip is not None else self.wrong_ip
+    def inject_fault(self, params: DNSRecordErrorParams):
+        host = params.host_name
+        self.faulty_devices = [host]
+        target_website = params.target_website
+        target_domain = params.target_domain
+        wrong_ip = params.wrong_ip or self.kathara_api.get_host_ip(self.net_env.hosts[0])
+        self._wrong_ip = wrong_ip
+        right_ip = self.kathara_api.get_host_ip(host)
 
         self.kathara_api.exec_cmd(
             host,
@@ -76,17 +67,15 @@ class DNSRecordErrorBase:
         )
         logger.info(
             f"Injecting DNS record error on {host}: mapping {target_website}:{target_domain} "
-            f"to wrong IP {wrong_ip} instead of {self.right_ip}"
+            f"to wrong IP {wrong_ip} instead of {right_ip}"
         )
 
-    def verify_fault(self, params: DNSRecordErrorParams | None = None) -> dict:
+    def verify_fault(self, params: DNSRecordErrorParams) -> dict:
         """Verify the DNS zone file contains the wrong IP and the running daemon serves it."""
-        if params is None:
-            params = DNSRecordErrorParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
-        target_website = params.target_website if params.target_website is not None else self.target_website
-        target_domain = params.target_domain if params.target_domain is not None else self.target_domain
-        wrong_ip = params.wrong_ip if params.wrong_ip is not None else self.wrong_ip
+        host = params.host_name
+        target_website = params.target_website
+        target_domain = params.target_domain
+        wrong_ip = params.wrong_ip or self._wrong_ip
         grep_result = self.kathara_api.exec_cmd(
             host,
             f"grep '{target_website}.*{wrong_ip}' /etc/bind/db.{target_domain} 2>/dev/null && echo found || echo absent",

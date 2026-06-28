@@ -25,7 +25,18 @@ class K8sFatTreeBGP(NetworkEnvBase):
     LAB_NAME = "k8s_lab"
     TOPO_LEVEL = "hard"
     TOPO_SIZE = None
-    TAGS = ["bgp", "frr", "kubernetes", "k3s", "fat-tree"]
+    TAGS = [
+        "kubernetes",
+        "k3s",
+        "fat-tree",
+        "bgp",
+        "frr",
+        "link",
+        "pc",
+        "icmp",
+        "arp",
+        "mac",
+    ]
 
     def __init__(self, **kwargs):
         super().__init__()
@@ -73,21 +84,31 @@ class K8sFatTreeBGP(NetworkEnvBase):
         # Multipath sysctl for core and spine switches
         _sysctl_multipath = "net.ipv4.fib_multipath_hash_policy=1"
         _sysctl_machines = {
-            "core_1_1", "core_1_2",
-            "spine_1_1", "spine_1_2",
-            "spine_2_1", "spine_2_2",
-            "leaf_1_1", "leaf_1_2",
-            "leaf_2_1", "leaf_2_2",
+            "core_1_1",
+            "core_1_2",
+            "spine_1_1",
+            "spine_1_2",
+            "spine_2_1",
+            "spine_2_2",
+            "leaf_1_1",
+            "leaf_1_2",
+            "leaf_2_1",
+            "leaf_2_2",
             "dc_exit",
         }
 
         # IPv6 required for FRR unnumbered interfaces
         _ipv6_machines = {
-            "core_1_1", "core_1_2",
-            "spine_1_1", "spine_1_2",
-            "spine_2_1", "spine_2_2",
-            "leaf_1_1", "leaf_1_2",
-            "leaf_2_1", "leaf_2_2",
+            "core_1_1",
+            "core_1_2",
+            "spine_1_1",
+            "spine_1_2",
+            "spine_2_1",
+            "spine_2_2",
+            "leaf_1_1",
+            "leaf_1_2",
+            "leaf_2_1",
+            "leaf_2_2",
         }
 
         all_machines = {}
@@ -145,6 +166,4 @@ class K8sFatTreeBGP(NetworkEnvBase):
 
     def load_machines(self):
         super().load_machines()
-        self.kubernetes_nodes = sorted(
-            name for name, m in self.lab.machines.items() if "k3s" in m.get_image()
-        )
+        self.kubernetes_nodes = sorted(name for name, m in self.lab.machines.items() if "k3s" in m.get_image())

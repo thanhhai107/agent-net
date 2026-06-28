@@ -1,6 +1,3 @@
-import random
-from typing import Optional
-
 from pydantic import BaseModel, Field
 
 from nika.generator.fault.injector_host import FaultInjectorHost
@@ -20,7 +17,7 @@ from nika.service.kathara import KatharaAPIALL
 class DNSLookupLatencyParams(BaseModel):
     """Parameters for injecting a DNS lookup latency fault."""
 
-    host_name: Optional[str] = Field(default=None, description="Target DNS server host name. Defaults to runtime selection.")
+    host_name: str = Field(description="Target DNS server host name.")
     intf_name: str = Field(default="eth0", description="Interface name.")
     delay_ms: int = Field(default=1000, description="Delay in milliseconds.")
 
@@ -38,21 +35,16 @@ class DNSLookupLatencyBase:
         self.net_env = get_net_env_instance(scenario_name, **kwargs)
         self.kathara_api = KatharaAPIALL(lab_name=self.net_env.lab.name)
         self.injector = FaultInjectorTC(lab_name=self.net_env.lab.name)
-        self.faulty_devices = [random.choice(self.net_env.servers["dns"])]
-        self.intf_name = "eth0"
-        self.delay_ms = 1000
+        self.faulty_devices: list[str] = []
 
-    def inject_fault(self, params: DNSLookupLatencyParams | None = None):
-        if params is None:
-            params = DNSLookupLatencyParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+    def inject_fault(self, params: DNSLookupLatencyParams):
+        host = params.host_name
+        self.faulty_devices = [host]
         self.injector.inject_delay(host_name=host, intf_name=params.intf_name, delay_ms=params.delay_ms)
 
-    def verify_fault(self, params: DNSLookupLatencyParams | None = None) -> dict:
+    def verify_fault(self, params: DNSLookupLatencyParams) -> dict:
         """Verify tc qdisc on DNS server interface has a delay configured."""
-        if params is None:
-            params = DNSLookupLatencyParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        host = params.host_name
         intf = params.intf_name
         tc_output = self.kathara_api.exec_cmd(host, f"tc qdisc show dev {intf}").strip()
         verified = "delay" in tc_output
@@ -99,7 +91,7 @@ class DNSLookupLatencyRCA(DNSLookupLatencyBase, RCATask):
 class LoadBalancerOverloadParams(BaseModel):
     """Parameters for injecting a load balancer overload fault."""
 
-    host_name: Optional[str] = Field(default=None, description="Target load balancer host name. Defaults to runtime selection.")
+    host_name: str = Field(description="Target load balancer host name.")
     duration: int = Field(default=300, description="Stress duration in seconds.")
 
 
@@ -115,20 +107,16 @@ class LoadBalancerOverloadBase:
         self.net_env = get_net_env_instance(scenario_name, **kwargs)
         self.kathara_api = KatharaAPIALL(lab_name=self.net_env.lab.name)
         self.injector = FaultInjectorHost(lab_name=self.net_env.lab.name)
-        self.faulty_devices = [random.choice(self.net_env.servers["load_balancer"])]
-        self.duration = 300
+        self.faulty_devices: list[str] = []
 
-    def inject_fault(self, params: LoadBalancerOverloadParams | None = None):
-        if params is None:
-            params = LoadBalancerOverloadParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+    def inject_fault(self, params: LoadBalancerOverloadParams):
+        host = params.host_name
+        self.faulty_devices = [host]
         self.injector.inject_stress_all(host_name=host, duration=params.duration)
 
-    def verify_fault(self, params: LoadBalancerOverloadParams | None = None) -> dict:
+    def verify_fault(self, params: LoadBalancerOverloadParams) -> dict:
         """Verify stress-ng is running on the load balancer."""
-        if params is None:
-            params = LoadBalancerOverloadParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        host = params.host_name
         pgrep_output = self.kathara_api.exec_cmd(host, "pgrep -a stress-ng 2>/dev/null || echo NONE").strip()
         verified = "stress-ng" in pgrep_output and pgrep_output != "NONE"
         return build_verify_result(

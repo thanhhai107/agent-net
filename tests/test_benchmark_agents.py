@@ -6,7 +6,7 @@ the full benchmark pipeline on a real Kathara scenario with an injected failure:
     nika benchmark run <scenario> --problem <problem> -a <agent> ...
 
 Each agent type is exercised via the same benchmark entry point used in batch
-CSV runs (``src/nika/workflows/benchmark/run.py``), not the step-by-step CLI
+YAML runs (``src/nika/workflows/benchmark/run.py``), not the step-by-step CLI
 pipeline used in ``test_pipeline.py`` / ``test_integration_agents.py``.
 
 Assertions (common):

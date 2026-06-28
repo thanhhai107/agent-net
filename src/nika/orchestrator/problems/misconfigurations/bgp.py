@@ -1,12 +1,11 @@
 import ipaddress
-import logging
-import random
 import re
 from typing import Optional
 
 from pydantic import BaseModel, Field
 
 from nika.net_env.net_env_pool import get_net_env_instance
+from nika.orchestrator.problems.inject_resolve import resolve_victim_host
 from nika.orchestrator.problems.problem_base import ProblemMeta, RootCauseCategory, TaskDescription, TaskLevel, build_verify_result
 from nika.orchestrator.tasks.detection import DetectionTask
 from nika.orchestrator.tasks.localization import LocalizationTask
@@ -22,7 +21,7 @@ from nika.utils.logger import system_logger
 class BGPAsnMisconfigParams(BaseModel):
     """Parameters for injecting a BGP ASN misconfiguration fault."""
 
-    host_name: Optional[str] = Field(default=None, description="Target router host name. Defaults to a randomly selected router.")
+    host_name: str = Field(description="Target router host name.")
 
 
 class BGPAsnMisconfigBase:
@@ -39,12 +38,11 @@ class BGPAsnMisconfigBase:
         self.net_env = get_net_env_instance(scenario_name, **kwargs)
         self.kathara_api = KatharaAPIALL(lab_name=self.net_env.lab.name)
         self.logger = system_logger
-        self.faulty_devices = [random.choice(self.net_env.routers)]
+        self.faulty_devices: list[str] = []
 
-    def inject_fault(self, params: BGPAsnMisconfigParams | None = None):
-        if params is None:
-            params = BGPAsnMisconfigParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+    def inject_fault(self, params: BGPAsnMisconfigParams):
+        host = params.host_name
+        self.faulty_devices = [host]
         asn = self.kathara_api.exec_cmd(host, "vtysh -c 'show bgp summary' | grep 'BGP router identifier'")
         match = re.search(r"local AS number\s+(\d+)", asn)
         if match:
@@ -58,11 +56,10 @@ class BGPAsnMisconfigBase:
         )
         self.logger.info(f"Injected BGP ASN misconfiguration on {host} from ASN {as_number} to {wrong_asn}.")
 
-    def verify_fault(self, params: BGPAsnMisconfigParams | None = None) -> dict:
+    def verify_fault(self, params: BGPAsnMisconfigParams) -> dict:
         """Verify the ASN in frr.conf and in the running daemon was changed."""
-        if params is None:
-            params = BGPAsnMisconfigParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        host = params.host_name
+        self.faulty_devices = [host]
         file_asn_raw = self.kathara_api.exec_cmd(
             host,
             "grep -E '^router bgp' /etc/frr/frr.conf 2>/dev/null | awk '{print $3}'",
@@ -126,7 +123,7 @@ class BGPAsnMisconfigRCA(BGPAsnMisconfigBase, RCATask):
 class BGPMissingAdvertiseParams(BaseModel):
     """Parameters for injecting a BGP missing route advertisement fault."""
 
-    host_name: Optional[str] = Field(default=None, description="Target router host name. Defaults to a randomly selected router.")
+    host_name: str = Field(description="Target router host name.")
 
 
 class BGPMissingAdvertiseBase:
@@ -141,23 +138,21 @@ class BGPMissingAdvertiseBase:
         self.net_env = get_net_env_instance(scenario_name, **kwargs)
         self.kathara_api = KatharaAPIALL(lab_name=self.net_env.lab.name)
         self.logger = system_logger
-        self.faulty_devices = [random.choice(self.net_env.routers)]
+        self.faulty_devices: list[str] = []
 
-    def inject_fault(self, params: BGPMissingAdvertiseParams | None = None):
-        if params is None:
-            params = BGPMissingAdvertiseParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+    def inject_fault(self, params: BGPMissingAdvertiseParams):
+        host = params.host_name
+        self.faulty_devices = [host]
         self.kathara_api.exec_cmd(
             host,
             "sed -i.bak -E 's/^([[:space:]]*)network /\\1# network /' /etc/frr/frr.conf && service frr restart 2>/dev/null || true",
         )
         self.logger.info(f"Injected BGP missing route on {host}.")
 
-    def verify_fault(self, params: BGPMissingAdvertiseParams | None = None) -> dict:
+    def verify_fault(self, params: BGPMissingAdvertiseParams) -> dict:
         """Verify frr.conf has commented-out network lines and running daemon has no network advertisements."""
-        if params is None:
-            params = BGPMissingAdvertiseParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        host = params.host_name
+        self.faulty_devices = [host]
         count_raw = self.kathara_api.exec_cmd(
             host,
             "grep -c '^[[:space:]]*# network' /etc/frr/frr.conf 2>/dev/null || echo 0",
@@ -222,7 +217,7 @@ class BGPMissingAdvertiseRCA(BGPMissingAdvertiseBase, RCATask):
 class StaticBlackHoleParams(BaseModel):
     """Parameters for injecting a static blackhole route fault."""
 
-    host_name: Optional[str] = Field(default=None, description="Target router host name. Defaults to a randomly selected router with connected hosts.")
+    host_name: str = Field(description="Target router host name.")
 
 
 class StaticBlackHoleBase:
@@ -237,33 +232,26 @@ class StaticBlackHoleBase:
         self.net_env = get_net_env_instance(scenario_name, **kwargs)
         self.kathara_api = KatharaAPIALL(lab_name=self.net_env.lab.name)
         self.logger = system_logger
-        for router in random.sample(self.net_env.routers, len(self.net_env.routers)):
-            connected_devices = self.kathara_api.get_connected_devices(router)
-            connected_hosts = [dev for dev in connected_devices if "switch" not in dev and "router" not in dev]
-            if connected_hosts:
-                self.faulty_devices = [router]
-                self.victim_device = connected_hosts[0]
-                self.victim_ip = self.kathara_api.get_host_ip(self.victim_device, with_prefix=False)
-                break
+        self.faulty_devices: list[str] = []
 
-    def inject_fault(self, params: StaticBlackHoleParams | None = None):
-        if params is None:
-            params = StaticBlackHoleParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+    def inject_fault(self, params: StaticBlackHoleParams):
+        host = params.host_name
+        self.faulty_devices = [host]
+        self.victim_device = resolve_victim_host(self.kathara_api, host)
         host_network = ipaddress.ip_network(
             self.kathara_api.get_host_ip(self.victim_device, with_prefix=True), strict=False
         )
         self.kathara_api.exec_cmd(host, f"ip route replace blackhole {host_network}")
         self.logger.info(f"Injected addition of blackhole route {host_network} on {host}.")
 
-    def verify_fault(self, params: StaticBlackHoleParams | None = None) -> dict:
+    def verify_fault(self, params: StaticBlackHoleParams) -> dict:
         """Verify a blackhole route for the victim's network exists."""
-        if params is None:
-            params = StaticBlackHoleParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        host = params.host_name
+        self.faulty_devices = [host]
+        victim_device = resolve_victim_host(self.kathara_api, host)
         host_network = str(
             ipaddress.ip_network(
-                self.kathara_api.get_host_ip(self.victim_device, with_prefix=True), strict=False
+                self.kathara_api.get_host_ip(victim_device, with_prefix=True), strict=False
             )
         )
         route_output = self.kathara_api.exec_cmd(host, "ip route show").strip()
@@ -311,7 +299,7 @@ class StaticBlackHoleRCA(StaticBlackHoleBase, RCATask):
 class BGPBlackholeRouteLeakParams(BaseModel):
     """Parameters for injecting a BGP blackhole route leak fault."""
 
-    host_name: Optional[str] = Field(default=None, description="Target router host name. Defaults to a randomly selected router with connected hosts.")
+    host_name: str = Field(description="Target router host name.")
 
 
 class BGPBlackholeRouteLeakBase:
@@ -326,20 +314,14 @@ class BGPBlackholeRouteLeakBase:
         self.net_env = get_net_env_instance(scenario_name, **kwargs)
         self.kathara_api = KatharaAPIALL(lab_name=self.net_env.lab.name)
         self.logger = system_logger
-        for router in random.sample(self.net_env.routers, len(self.net_env.routers)):
-            connected_devices = self.kathara_api.get_connected_devices(router)
-            connected_hosts = [dev for dev in connected_devices if "switch" not in dev and "router" not in dev]
-            if connected_hosts:
-                self.faulty_devices = [router]
-                self.victim_device = connected_hosts[0]
-                self.victim_ip = self.kathara_api.get_host_ip(self.victim_device, with_prefix=False)
-                break
+        self.faulty_devices: list[str] = []
 
-    def inject_fault(self, params: BGPBlackholeRouteLeakParams | None = None):
-        if params is None:
-            params = BGPBlackholeRouteLeakParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
-        network_30 = ipaddress.ip_network(f"{self.victim_ip}/30", strict=False)
+    def inject_fault(self, params: BGPBlackholeRouteLeakParams):
+        host = params.host_name
+        self.faulty_devices = [host]
+        self.victim_device = resolve_victim_host(self.kathara_api, host)
+        victim_ip = self.kathara_api.get_host_ip(self.victim_device, with_prefix=False)
+        network_30 = ipaddress.ip_network(f"{victim_ip}/30", strict=False)
         asn_number = self.kathara_api.exec_cmd(host, "vtysh -c 'show bgp summary' | grep 'BGP router identifier'")
         match = re.search(r"local AS number\s+(\d+)", asn_number)
         if match:
@@ -357,12 +339,13 @@ class BGPBlackholeRouteLeakBase:
         self.kathara_api.exec_cmd(host, cmd)
         self.logger.info(f"Injected BGP advertise blackhole route on {host}: {network_30}.")
 
-    def verify_fault(self, params: BGPBlackholeRouteLeakParams | None = None) -> dict:
+    def verify_fault(self, params: BGPBlackholeRouteLeakParams) -> dict:
         """Verify vtysh running-config contains the Null0 route advertisement."""
-        if params is None:
-            params = BGPBlackholeRouteLeakParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
-        network_30 = str(ipaddress.ip_network(f"{self.victim_ip}/30", strict=False))
+        host = params.host_name
+        self.faulty_devices = [host]
+        victim_device = resolve_victim_host(self.kathara_api, host)
+        victim_ip = self.kathara_api.get_host_ip(victim_device, with_prefix=False)
+        network_30 = str(ipaddress.ip_network(f"{victim_ip}/30", strict=False))
         running_config = self.kathara_api.exec_cmd(
             host, "vtysh -c 'show running-config' 2>/dev/null"
         ).strip()
@@ -410,7 +393,7 @@ class BGPBlackholeRouteLeakRCA(BGPBlackholeRouteLeakBase, RCATask):
 class BGPHijackingParams(BaseModel):
     """Parameters for injecting a BGP hijacking fault."""
 
-    host_name: Optional[str] = Field(default=None, description="Target hijacking router host name. Defaults to a randomly selected router.")
+    host_name: str = Field(description="Target hijacking router host name.")
     target_network: Optional[str] = Field(default=None, description="Network prefix to advertise. Defaults to runtime selection.")
 
 
@@ -426,20 +409,21 @@ class BGPHijackingBase:
         self.net_env = get_net_env_instance(scenario_name, **kwargs)
         self.kathara_api = KatharaAPIALL(lab_name=self.net_env.lab.name)
         self.logger = system_logger
-        self.faulty_devices = [random.choice(self.net_env.routers)]
+        self.faulty_devices: list[str] = []
+
+    def _resolve_target_network(self) -> str:
         web_servers = self.net_env.servers.get("web", [])
         target_host = web_servers[-1] if web_servers else self.net_env.hosts[-1]
-        self.target_network = self.kathara_api.get_host_ip(target_host, with_prefix=True)
-        self.target_network = str(
-            ipaddress.ip_network(self.target_network, strict=False).subnets(new_prefix=25).__next__()
+        target_network = self.kathara_api.get_host_ip(target_host, with_prefix=True)
+        return str(
+            ipaddress.ip_network(target_network, strict=False).subnets(new_prefix=25).__next__()
         )
 
-    def inject_fault(self, params: BGPHijackingParams | None = None):
-        if params is None:
-            params = BGPHijackingParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
-        target_network = params.target_network if params.target_network is not None else self.target_network
-        asn_number = self.kathara_api.frr_get_bgp_asn_number(self.faulty_devices[0])
+    def inject_fault(self, params: BGPHijackingParams):
+        host = params.host_name
+        self.faulty_devices = [host]
+        target_network = params.target_network if params.target_network is not None else self._resolve_target_network()
+        asn_number = self.kathara_api.frr_get_bgp_asn_number(host)
         self.kathara_api.exec_cmd(
             host,
             f"vtysh -c 'configure terminal' -c 'interface lo' -c 'ip address {target_network}' ",
@@ -450,12 +434,11 @@ class BGPHijackingBase:
         )
         self.logger.info(f"Injected BGP hijacking on {host}: {target_network}.")
 
-    def verify_fault(self, params: BGPHijackingParams | None = None) -> dict:
+    def verify_fault(self, params: BGPHijackingParams) -> dict:
         """Verify the router's running-config contains the hijacked network advertisement."""
-        if params is None:
-            params = BGPHijackingParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
-        target_network = params.target_network if params.target_network is not None else self.target_network
+        host = params.host_name
+        self.faulty_devices = [host]
+        target_network = params.target_network if params.target_network is not None else self._resolve_target_network()
         running_config = self.kathara_api.exec_cmd(
             host, "vtysh -c 'show running-config' 2>/dev/null"
         ).strip()

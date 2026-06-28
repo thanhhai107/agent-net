@@ -11,7 +11,7 @@ from typing import ClassVar
 
 from typer.testing import CliRunner
 
-from nika.codex_cli.main import app
+from nika.cli.main import app
 from nika.service.mcp_server.mcp_session_context import SESSION_ID_ENV, get_lab_name
 from nika.utils.session_store import SessionStore
 from nika.workflows.eval.clean import remove_session_results
@@ -107,6 +107,37 @@ class CliIntegrationTestCase(unittest.TestCase):
     def _problem(self, cls_, session_id: str | None = None):
         scenario = getattr(self, "SCENARIO", None) or self._session_row(session_id)["scenario_name"]
         return cls_(scenario_name=scenario, **self._scenario_kwargs(session_id))
+
+    def _topo_size_from_env_args(self) -> str:
+        args = getattr(self, "ENV_RUN_ARGS", [])
+        if "-s" in args:
+            return args[args.index("-s") + 1]
+        return ""
+
+    def _inject_via_cli(self, problem: str, params: dict[str, str] | None = None) -> None:
+        from nika.workflows.benchmark.inject_defaults import resolve_inject_params
+
+        inject_params = dict(
+            params
+            or resolve_inject_params(
+                problem,
+                self.SCENARIO,
+                self._topo_size_from_env_args(),
+            )
+        )
+        args = ["failure", "inject", problem, "--session-id", self.session_id]
+        for key, value in inject_params.items():
+            args += ["--set", f"{key}={value}"]
+        self._invoke_ok(args)
+
+    def _assert_failure_injected(self, problem: str) -> None:
+        ps_output = self._invoke_ok(["failure", "ps", "--session-id", self.session_id])
+        self.assertIn(f"problem={problem}", ps_output)
+        self.assertIn("status=injected", ps_output)
+        failures = SessionStore().list_failure_injections(session_id=self.session_id)
+        matching = [row for row in failures if row.get("problem_name") == problem]
+        self.assertTrue(matching, f"No failure record for {problem}")
+        self.assertEqual(matching[-1].get("status"), "injected")
 
 
 class PerTestEnvTestCase(CliIntegrationTestCase):

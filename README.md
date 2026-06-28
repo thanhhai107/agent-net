@@ -298,7 +298,7 @@ create new executable tools or MCP servers.
   changing the document or fail to improve useful evidence.
 
 ```shell
-nika benchmark run --file benchmark/benchmark_test.csv \
+nika benchmark run --file benchmark/benchmark_test.yaml \
   -a react -b netmind -m openai/gpt-oss-120b \
   --tools bgp-study
 
@@ -327,14 +327,14 @@ policy, but it does not create new benchmark primitive tools; new promoted
 tools are handled by the optional Tool Evolution module.
 
 ```shell
-nika evolve run --file benchmark/benchmark_test.csv \
+nika evolve run --file benchmark/benchmark_test.yaml \
   --max-gen 3 \
   -b netmind -m openai/gpt-oss-120b -n 100
 ```
 
 Artifacts are stored under `runtime/harness_evolution/<run_id>/`;
 per-generation benchmark sessions are stored under
-`results/<benchmark>-<run_id>/gen_<n>/`. Every CSV row contributes to the next
+`results/<benchmark>-<run_id>/gen_<n>/`. Every YAML case contributes to the next
 target-agent update in order. SIA-H always requires structured Meta-Agent and
 Feedback-Agent source output; it does not silently carry forward a deterministic
 target agent when source generation fails. See [`docs/README.md`](docs/README.md).
@@ -357,6 +357,9 @@ For the full benchmark-safe design, see
   condition.
 - Semantic gradients are structured LLM critiques of the episode, with a
   deterministic critique used only when the critic is unavailable.
+- Hidden evaluator labels may be present in offline evidence for scoring, but
+  they are redacted from the LLM critic prompt and are not injected back into
+  retrieved skill context.
 - The PPO gate compares the candidate skill against the best existing/default
   policy using accuracy, step count, and tool-call cost.
 - Score-based maintenance retires low-value or duplicate skills.
@@ -465,7 +468,7 @@ Each scenario is defined in a Kathará `lab.py` file, which specifies the networ
 
 ## Network issues
 
-This framework provides a set of predefined issues that can be injected into the network environment. These issues are categorized into different types, each with specific root causes and key signals. By combining the issues with the network scenarios, randomlizing the failure locations, and composing multiple issues, this framework can generate multiple incidents based on a network issue (see # Incident column). The lightweight shared benchmark CSV is `benchmark/benchmark_test.csv`.
+This framework provides a set of predefined issues that can be injected into the network environment. These issues are categorized into different types, each with specific root causes and key signals. By combining the issues with the network scenarios, deterministic inject targets, and composed multi-issue incidents, this framework can generate multiple incidents based on a network issue (see # Incident column). The lightweight shared benchmark YAML is `benchmark/benchmark_test.yaml`.
 The following table summarizes the issues available in this framework:
 
 | Category                               | Root Cause                              | Key Signals                                                     | # Incident |

@@ -12,10 +12,11 @@ from agent.composition import (
 from agent.defaults import DEFAULT_MAX_STEPS
 from agent.llm.model_factory import DEFAULT_LLM_BACKEND, DEFAULT_MODEL
 from nika.net_env.net_env_pool import scenario_requires_topo_tier
+from nika.workflows.benchmark.inject_defaults import resolve_inject_params
 from nika.workflows.benchmark.run import (
     _new_benchmark_results_root,
-    default_benchmark_csv_path,
-    run_benchmark_from_csv,
+    default_benchmark_yaml_path,
+    run_benchmark_from_yaml,
     run_single_benchmark,
 )
 
@@ -24,18 +25,31 @@ benchmark_app = typer.Typer(
 )
 
 
+def _parse_set_options(raw_items: list[str] | None) -> dict[str, str]:
+    overrides: dict[str, str] = {}
+    for raw in raw_items or []:
+        if "=" not in raw:
+            raise typer.BadParameter(f"Invalid --set value {raw!r}. Use key=value.")
+        key, value = raw.split("=", 1)
+        key = key.strip()
+        if not key:
+            raise typer.BadParameter(f"Invalid --set value {raw!r}. Key cannot be empty.")
+        overrides[key] = value.strip()
+    return overrides
+
+
 @benchmark_app.command("run")
 def benchmark_run(
     scenario: str | None = typer.Argument(
         default=None,
         metavar="SCENARIO",
-        help="Scenario id for a single case (omit for CSV batch mode).",
+        help="Scenario id for a single case (omit for YAML batch mode).",
     ),
     file: Path | None = typer.Option(
         None,
         "-f",
         "--file",
-        help="Benchmark CSV path for batch mode. Defaults to benchmark/benchmark_test.csv.",
+        help="Benchmark YAML path for batch mode. Defaults to benchmark/benchmark_test.yaml.",
     ),
     problem: str | None = typer.Option(
         None,
@@ -47,6 +61,11 @@ def benchmark_run(
         "-t",
         "--tier",
         help="Topology tier s, m, or l (required only for scalable scenarios).",
+    ),
+    sets: list[str] | None = typer.Option(
+        None,
+        "--set",
+        help="Override inject parameters as key=value (single-case mode).",
     ),
     agent_type: str = typer.Option(
         "react", "-a", "--agent", help="Agent implementation."
@@ -135,7 +154,7 @@ def benchmark_run(
         None,
         "--benchmark-index",
         hidden=True,
-        help="Internal zero-based CSV row index for timeline reporting.",
+        help="Internal zero-based YAML case index for timeline reporting.",
     ),
     harness: Path | None = typer.Option(
         None,
@@ -150,7 +169,7 @@ def benchmark_run(
         help="Internal flag for evolution runs that should score crashed targets.",
     ),
 ) -> None:
-    """Run one benchmark row from CSV, or a single case when SCENARIO and --problem are set."""
+    """Run one benchmark case from YAML, or a single case when SCENARIO and --problem are set."""
     if not run_judge and (judge_backend is not None or judge_model is not None):
         raise typer.BadParameter(
             "Pass --judge to enable LLM judge; omit --judge-backend/--judge-model otherwise."
@@ -197,6 +216,8 @@ def benchmark_run(
             )
         topo = tier or ""
         benchmark_root = result_root or _new_benchmark_results_root(scenario)
+        inject_params = resolve_inject_params(problem, scenario, topo)
+        inject_params.update(_parse_set_options(sets))
         run_single_benchmark(
             problem=problem,
             scenario=scenario,
@@ -216,6 +237,7 @@ def benchmark_run(
             result_root=benchmark_root,
             fault_seed=fault_seed,
             benchmark_index=benchmark_index,
+            inject_params=inject_params,
         )
         return
 
@@ -223,8 +245,10 @@ def benchmark_run(
         raise typer.BadParameter(
             "--problem without SCENARIO is invalid; pass SCENARIO or use batch mode with --file."
         )
-    benchmark_path = str(file) if file is not None else default_benchmark_csv_path()
-    run_benchmark_from_csv(
+    if sets:
+        raise typer.BadParameter("--set applies to single-case mode only.")
+    benchmark_path = str(file) if file is not None else default_benchmark_yaml_path()
+    run_benchmark_from_yaml(
         benchmark_file=benchmark_path,
         agent_type=agent_type,
         llm_backend=llm_backend,

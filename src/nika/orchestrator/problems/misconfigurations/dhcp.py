@@ -1,6 +1,4 @@
 import ipaddress
-import random
-from typing import Optional
 
 from pydantic import BaseModel, Field
 
@@ -21,8 +19,8 @@ from nika.utils.logger import system_logger
 class DHCPMissingSubnetParams(BaseModel):
     """Parameters for injecting a DHCP missing subnet fault."""
 
-    host_name: Optional[str] = Field(default=None, description="DHCP server host name. Defaults to runtime selection.")
-    host_name_2: Optional[str] = Field(default=None, description="Affected client host name. Defaults to runtime selection.")
+    host_name: str = Field(description="DHCP server host name.")
+    host_name_2: str = Field(description="Affected client host name.")
 
 
 class DHCPMissingSubnetBase:
@@ -38,14 +36,12 @@ class DHCPMissingSubnetBase:
         self.net_env = get_net_env_instance(scenario_name, **kwargs)
         self.kathara_api = KatharaBaseAPI(lab_name=self.net_env.lab.name)
         self.injector = FaultInjectorService(lab_name=self.net_env.lab.name)
-        self.faulty_devices = [random.choice(self.net_env.servers["dhcp"])]
-        self.faulty_devices.append(random.choice(self.net_env.hosts))
+        self.faulty_devices: list[str] = []
 
-    def inject_fault(self, params: DHCPMissingSubnetParams | None = None):
-        if params is None:
-            params = DHCPMissingSubnetParams()
-        dhcp_server = params.host_name if params.host_name is not None else self.faulty_devices[0]
-        client_host = params.host_name_2 if params.host_name_2 is not None else self.faulty_devices[1]
+    def inject_fault(self, params: DHCPMissingSubnetParams):
+        dhcp_server = params.host_name
+        client_host = params.host_name_2
+        self.faulty_devices = [dhcp_server, client_host]
         system_logger.info(f"Injecting DHCP missing subnet fault: DHCP server {dhcp_server}, affected host {client_host}")
         subnet = str(
             ipaddress.ip_network(
@@ -55,12 +51,11 @@ class DHCPMissingSubnetBase:
         self.injector.inject_delete_subnet(dhcp_server=dhcp_server, subnet=subnet)
         self._injected_subnet = subnet
 
-    def verify_fault(self, params: DHCPMissingSubnetParams | None = None) -> dict:
+    def verify_fault(self, params: DHCPMissingSubnetParams) -> dict:
         """Verify the deleted subnet is absent from dhcpd.conf."""
-        if params is None:
-            params = DHCPMissingSubnetParams()
-        dhcp_server = params.host_name if params.host_name is not None else self.faulty_devices[0]
-        client_host = params.host_name_2 if params.host_name_2 is not None else self.faulty_devices[1]
+        dhcp_server = params.host_name
+        client_host = params.host_name_2
+        self.faulty_devices = [dhcp_server, client_host]
         subnet = getattr(self, "_injected_subnet", None)
         if subnet is None:
             subnet = str(

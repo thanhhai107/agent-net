@@ -1,6 +1,3 @@
-import random
-from typing import Optional
-
 from pydantic import BaseModel, Field
 
 from nika.generator.fault.injector_base import FaultInjectorBase
@@ -20,7 +17,7 @@ from nika.service.kathara import KatharaBaseAPI
 class HostCrashParams(BaseModel):
     """Parameters for injecting a host-crash fault."""
 
-    host_name: Optional[str] = Field(default=None, description="Target host name. Defaults to a randomly selected host.")
+    host_name: str = Field(description="Target host name.")
 
 
 class HostCrashBase:
@@ -35,19 +32,16 @@ class HostCrashBase:
         self.net_env = get_net_env_instance(scenario_name, **kwargs)
         self.kathara_api = KatharaBaseAPI(lab_name=self.net_env.lab.name)
         self.injector = FaultInjectorBase(lab_name=self.net_env.lab.name)
-        self.faulty_devices = [random.choice(self.net_env.hosts)]
+        self.faulty_devices: list[str] = []
 
-    def inject_fault(self, params: HostCrashParams | None = None):
-        if params is None:
-            params = HostCrashParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+    def inject_fault(self, params: HostCrashParams):
+        host = params.host_name
+        self.faulty_devices = [host]
         self.injector.inject_host_down(host_name=host)
 
-    def verify_fault(self, params: HostCrashParams | None = None) -> dict:
+    def verify_fault(self, params: HostCrashParams) -> dict:
         """Verify the host container is paused (simulated crash)."""
-        if params is None:
-            params = HostCrashParams()
-        host = params.host_name if params.host_name is not None else self.faulty_devices[0]
+        host = params.host_name
         container_status = "not_found"
         try:
             container = get_machine_container(lab_name=self.net_env.lab.name, host_name=host)

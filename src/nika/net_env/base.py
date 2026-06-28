@@ -66,6 +66,8 @@ class NetworkEnvBase:
                 self.ovs_switches.append(machine)
             elif "pox" in image:
                 self.sdn_controllers.append(machine)
+            elif "k3s" in image:
+                pass  # k8s nodes are tracked via kubernetes_nodes on kubernetes labs
             else:
                 print(f"Unknown machine type: {machine} with image {image}")
 

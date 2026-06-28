@@ -1,7 +1,3 @@
-import logging
-import random
-from typing import Optional
-
 from pydantic import BaseModel, Field
 
 from nika.generator.fault.injector_host import FaultInjectorHost
@@ -21,8 +17,8 @@ from nika.utils.logger import system_logger
 class MacAddressConflictParams(BaseModel):
     """Parameters for injecting a MAC address conflict fault."""
 
-    host_name: Optional[str] = Field(default=None, description="Target host/device receiving conflicting MAC. Defaults to runtime selection.")
-    host_name_2: Optional[str] = Field(default=None, description="Peer device whose MAC is copied. Defaults to runtime selection.")
+    host_name: str = Field(description="Target host/device receiving conflicting MAC.")
+    host_name_2: str = Field(description="Peer device whose MAC is copied.")
 
 
 class MacAddressConflictBase:
@@ -39,31 +35,23 @@ class MacAddressConflictBase:
         self.net_env = get_net_env_instance(scenario_name, **kwargs)
         self.kathara_api = KatharaAPIALL(lab_name=self.net_env.lab.name)
         self.injector = FaultInjectorHost(lab_name=self.net_env.lab.name)
-        topo = self.net_env.get_topology()
-        faulty_link = random.choice(topo)
-        device_1, device_2 = faulty_link
-        device_1, intf_1 = device_1.split(":")
-        device_2, intf_2 = device_2.split(":")
-        self.faulty_devices = [device_1, device_2]
-        self.falty_links = [intf_1, intf_2]
+        self.faulty_devices: list[str] = []
 
-    def inject_fault(self, params: MacAddressConflictParams | None = None):
-        if params is None:
-            params = MacAddressConflictParams()
-        device_0 = params.host_name if params.host_name is not None else self.faulty_devices[0]
-        device_1 = params.host_name_2 if params.host_name_2 is not None else self.faulty_devices[1]
-        target_mac = self.kathara_api.get_host_mac_address(device_1, self.falty_links[1])
+    def inject_fault(self, params: MacAddressConflictParams):
+        device_0 = params.host_name
+        device_1 = params.host_name_2
+        self.faulty_devices = [device_0, device_1]
+        target_mac = self.kathara_api.get_host_mac_address(device_1, "eth0")
         self.kathara_api.exec_cmd(host_name=device_0, command=f"ip link set dev eth0 address {target_mac}")
         self.logger.info(f"Injected MAC address conflict on {device_0} with MAC {target_mac} of {device_1}")
 
-    def verify_fault(self, params: MacAddressConflictParams | None = None) -> dict:
-        """Verify device_0's eth0 MAC matches device_1's link interface MAC (conflict)."""
-        if params is None:
-            params = MacAddressConflictParams()
-        device_0 = params.host_name if params.host_name is not None else self.faulty_devices[0]
-        device_1 = params.host_name_2 if params.host_name_2 is not None else self.faulty_devices[1]
+    def verify_fault(self, params: MacAddressConflictParams) -> dict:
+        """Verify device_0's eth0 MAC matches device_1's eth0 MAC (conflict)."""
+        device_0 = params.host_name
+        device_1 = params.host_name_2
+        self.faulty_devices = [device_0, device_1]
         mac_0 = self.kathara_api.get_host_mac_address(device_0, "eth0")
-        mac_1 = self.kathara_api.get_host_mac_address(device_1, self.falty_links[1])
+        mac_1 = self.kathara_api.get_host_mac_address(device_1, "eth0")
         verified = bool(mac_0) and mac_0.lower() == mac_1.lower()
         return build_verify_result(
             root_cause_name=self.root_cause_name,
