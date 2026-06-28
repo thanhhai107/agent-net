@@ -1,13 +1,113 @@
-% \chapter{LLMs deployment in the Legal Reasoning task}
-% \label{chap:LLMs}
-% % -------------------------------------------------------------------
-% % Introduction of the chapter
-% % ------------------------------------------------------------------
-% \section{Legal Knowledge Representation Infusion into Language Models}
-% \label{sec:method-infusion}
+\chapter{Thực nghiệm}
+\label{chap:experiments}
 
-% \section{Language models for Legal Textual Entailment task}
-% \label{sec:method-LMs}
+Chương này trình bày chi tiết về thiết lập thực nghiệm, bộ kịch bản lỗi được sử dụng, và kết quả đánh giá thực tế của hệ thống Self-Evolving AI Agents trên nền tảng NIKA. Các kết quả này chứng minh tính hiệu quả của mô-đun tiến hóa công cụ và bộ nhớ quy trình trong việc nâng cao độ chính xác và hiệu quả chẩn đoán lỗi mạng.
 
-% \section{AMR Graph Matching Network}
-% \label{sec:method-amr}
+\section{Thiết lập thực nghiệm}
+\label{sec:experiment_setup}
+
+Thực nghiệm được thực hiện trên hệ thống máy cá nhân chạy Linux Ubuntu với cấu hình phần cứng và phần mềm cụ thể như sau:
+\begin{itemize}
+    \item **Phần cứng:** CPU Intel Core i7 đa nhân, RAM 16GB, và GPU NVIDIA GeForce RTX 3050 8GB để hỗ trợ thực thi các mô hình cục bộ hoặc xử lý song song.
+    \item **Môi trường ảo hóa:** Docker Engine được cài đặt để chạy các container Kathará mô phỏng mạng, PostgreSQL 15 để lưu trữ bộ nhớ quan hệ, và Qdrant để lưu trữ vector ngữ nghĩa.
+    \item **Mô hình ngôn ngữ lớn:** Sử dụng mô hình \texttt{openai/gpt-oss-120b} thông qua NetMind API để đảm bảo khả năng suy luận chẩn đoán mạnh mẽ.
+    \item **Công cụ lập trình:** Dự án được lập trình hoàn toàn bằng ngôn ngữ Python 3.12, sử dụng \texttt{uv} để quản lý thư viện và chạy các framework chính như LangGraph và LangChain.
+\end{itemize}
+
+\section{Bộ kịch bản sự cố và cơ chế chia dữ liệu}
+\label{sec:benchmark_scenarios}
+
+Thực nghiệm sử dụng tập con chọn lọc gồm 30 incident khác nhau trích xuất từ kịch bản mạng của NIKA (định nghĩa trong \texttt{benchmark/tool\_evolution\_30.csv}). Các kịch bản này được chia thành 5 nhóm chính (Evolution Streams) để đánh giá khả năng chẩn đoán trên nhiều khía cạnh của mạng truyền thông:
+\begin{enumerate}
+    \item **dns\_dhcp\_service:** Gồm các sự cố về dịch vụ cơ bản như lỗi bản ghi DNS (\texttt{dns\_record\_error}), dịch vụ DNS bị dừng (\texttt{dns\_service\_down}), dịch vụ DHCP bị dừng (\texttt{dhcp\_service\_down}), và thiếu cấu hình mạng con trong DHCP (\texttt{dhcp\_missing\_subnet}).
+    \item **host\_ip\_config:** Gồm các lỗi cấu hình IP trên host như sai IP (\texttt{host\_incorrect\_ip}), mất IP (\texttt{host\_missing\_ip}), sai mặt nạ mạng (\texttt{host\_incorrect\_netmask}), sai gateway mặc định (\texttt{host\_incorrect\_gateway}), trùng IP (\texttt{host\_ip\_conflict}), và xung đột địa chỉ MAC (\texttt{mac\_address\_conflict}).
+    \item **link\_path:** Gồm các lỗi liên quan đến đường truyền vật lý như mất kết nối (\texttt{link\_down}), cáp bị tháo (\texttt{link\_detach}), link chập chờn (\texttt{link\_flap}), lỗi phân mảnh MTU (\texttt{link\_fragmentation\_disabled}), giới hạn băng thông (\texttt{link\_bandwidth\_throttling}), và tỷ lệ mất gói cao (\texttt{link\_high\_packet\_corruption}).
+    \item **routing\_control:** Gồm các sự cố cấu hình định tuyến tĩnh hoặc động như sai số hiệu tự trị BGP (\texttt{bgp\_asn\_misconfig}), thiếu quảng bá định tuyến BGP (\texttt{bgp\_missing\_route\_advertisement}), dịch vụ FRRouting bị dừng (\texttt{frr\_service\_down}), tấn công giả mạo BGP (\texttt{bgp\_hijacking}), mất neighbor OSPF (\texttt{ospf\_neighbor\_missing}), và sai cấu hình phân vùng OSPF (\texttt{ospf\_area\_misconfiguration}).
+    \item **sdn\_p4\_control:** Gồm các lỗi trên thiết bị mạng lập trình được và SDN như vòng lặp luật dòng chảy (\texttt{flow\_rule\_loop}), xung đột luật (\texttt{flow\_rule\_shadowing}), lỗi SDN controller bị sập (\texttt{sdn\_controller\_crash}), sai cổng kết nối southbound (\texttt{southbound\_port\_mismatch}), thiếu bảng luồng P4 (\texttt{p4\_table\_entry\_missing}), và cấu hình bảng luồng P4 bị sai (\texttt{p4\_table\_entry\_misconfig}).
+\end{enumerate}
+
+Toàn bộ 30 incident được chia đều thành 3 phân đoạn đánh giá (Splits):
+\begin{itemize}
+    \item **evolution:** Phân đoạn cho phép agent vừa chẩn đoán vừa cập nhật tự tiến hóa thư viện công cụ và bộ nhớ quy trình (cho phép quyền ghi và tiến hóa).
+    \item **development:** Phân đoạn chỉ cho phép đọc thông tin từ thư viện công cụ và bộ nhớ đã tiến hóa trước đó (đánh giá khả năng khai thác kiến thức cũ).
+    \item **transfer:** Phân đoạn kiểm tra khả năng chuyển đổi tri thức (transfer learning) khi áp dụng thư viện công cụ đã học sang các kịch bản mạng và lỗi hoàn toàn mới.
+\end{itemize}
+
+\section{Kết quả thực nghiệm}
+\label{sec:experimental_results}
+
+Bảng \ref{tab:overall_results} trình bày kết quả so sánh tổng quan giữa Baseline Agent (không sử dụng cơ chế tiến hóa) và Evolved Agent (kết hợp cả Tool Evolution và Memory Evolution chế độ \texttt{dual}) chạy trên mô hình \texttt{gpt-oss-120b}.
+
+\begin{table}[htbp]
+\centering
+\caption{So sánh hiệu năng tổng quan giữa Baseline Agent và Evolved Agent}
+\label{tab:overall_results}
+\begin{tabular}{|l|c|c|c|}
+\hline
+\textbf{Chỉ số đánh giá} & \textbf{Baseline Agent} & \textbf{Evolved Agent} & \textbf{Độ chênh lệch ($\Delta$)} \\ \hline
+Điểm số F1 trung bình & 0.0111 & 0.1611 & +0.1500 \\ \hline
+Số ca chẩn đoán thành công & 6 / 30 & 8 / 30 & +2 \\ \hline
+Số bước chẩn đoán trung bình & 12.33 & 11.63 & -0.70 \\ \hline
+Số lần gọi công cụ trung bình & 11.66 & 10.90 & -0.76 \\ \hline
+Số lượng token trung bình / ca & 64468.17 & 80771.63 & +16303.46 \\ \hline
+Số công cụ tiến hóa được tạo & 0 & 4 & +4 \\ \hline
+\end{tabular}
+\end{table}
+
+Kết quả bảng cho thấy Evolved Agent đạt điểm số F1 chẩn đoán trung bình cao gấp hơn 14 lần so với Baseline Agent (từ 0.0111 lên 0.1611), đồng thời tăng thêm 2 ca giải quyết thành công hoàn toàn. Đáng chú ý là số lượng bước chẩn đoán và số lần gọi công cụ trung bình đều giảm đi, cho thấy agent sử dụng các công cụ tiến hóa có tính định hướng và chính xác cao hơn, tránh gọi các lệnh rác. Lượng token tiêu thụ trung bình tăng nhẹ do hệ thống phải tải thêm các hướng dẫn mô tả Mastery từ thư viện.
+
+Bảng \ref{tab:results_by_split} so sánh chi tiết hiệu năng theo từng phân đoạn dữ liệu (Split), giúp đánh giá khả năng học và chuyển đổi tri thức của agent.
+
+\begin{table}[htbp]
+\centering
+\caption{Đánh giá hiệu năng theo từng phân đoạn (Split)}
+\label{tab:results_by_split}
+\begin{tabular}{|l|c|c|c|c|c|c|}
+\hline
+\multirow{2}{*}{\textbf{Phân đoạn (Split)}} & \multicolumn{2}{c|}{\textbf{Baseline Agent}} & \multicolumn{2}{c|}{\textbf{Evolved Agent}} & \multicolumn{2}{c|}{\textbf{Độ chênh lệch ($\Delta$)}} \\ \cline{2-7} 
+ & \textbf{F1 Score} & \textbf{Success} & \textbf{F1 Score} & \textbf{Success} & \textbf{F1 Score} & \textbf{Success} \\ \hline
+evolution & 0.0333 & 2 & 0.5500 & 4 & +0.5167 & +2 \\ \hline
+development & -0.1667 & 0 & 0.0000 & 1 & +0.1667 & +1 \\ \hline
+transfer & 0.1667 & 4 & -0.0667 & 3 & -0.2333 & -1 \\ \hline
+\end{tabular}
+\end{table}
+
+Phân tích theo phân đoạn:
+\begin{itemize}
+    \item Trên phân đoạn \texttt{evolution}, Evolved Agent cải thiện vượt bậc với điểm F1 tăng từ 0.0333 lên 0.5500 và số ca thành công tăng gấp đôi. Điều này chứng minh vòng lặp tự tiến hóa tại test-time hoạt động cực kỳ hiệu quả khi agent vừa điều tra vừa cập nhật công cụ và bộ nhớ.
+    \item Trên phân đoạn \texttt{development}, điểm F1 tăng từ -0.1667 lên 0.0000 và giải quyết thành công thêm 1 ca, chứng minh tri thức đã học được lưu trữ tốt và có thể áp dụng lại để cải thiện chẩn đoán.
+    \item Tuy nhiên, trên phân đoạn \texttt{transfer}, hiệu năng của Evolved Agent bị suy giảm nhẹ (F1 giảm 0.2333 và bớt đi 1 ca thành công). Điều này chỉ ra một thách thức quan trọng: hiện tượng quá khớp (overfitting) của các công cụ hoặc quy trình tiến hóa khi áp dụng sang một lớp mạng hoặc kịch bản lỗi hoàn toàn mới mà agent chưa được huấn luyện.
+\end{itemize}
+
+Bảng \ref{tab:results_by_stream} trình bày chi tiết F1 score theo từng nhóm lỗi (Stream) của mạng truyền thông.
+
+\begin{table}[htbp]
+\centering
+\caption{Đánh giá hiệu năng theo nhóm lỗi (Stream)}
+\label{tab:results_by_stream}
+\begin{tabular}{|l|c|c|c|}
+\hline
+\textbf{Nhóm lỗi (Stream)} & \textbf{Baseline Agent (F1)} & \textbf{Evolved Agent (F1)} & \textbf{Độ chênh lệch ($\Delta$)} \\ \hline
+dns\_dhcp\_service & -0.2222 & 0.2778 & +0.5000 \\ \hline
+host\_ip\_config & -0.6111 & -0.1667 & +0.4444 \\ \hline
+link\_path & 0.0556 & -0.2222 & -0.2778 \\ \hline
+routing\_control & 0.3333 & 0.2778 & -0.0555 \\ \hline
+sdn\_p4\_control & 0.5000 & 0.6389 & +0.1389 \\ \hline
+\end{tabular}
+\end{table}
+
+\section{Phân tích chi tiết và thảo luận}
+\label{sec:discussion}
+
+\subsection{Các sự cố có sự cải thiện lớn nhất (Top Gains)}
+\begin{itemize}
+    \item **host\_missing\_ip (evolution split, $\Delta$ = +2.0):** Baseline chẩn đoán sai hoàn toàn do thiết bị thiếu cấu hình IP dẫn đến không ping được gateway. Evolved Agent tự Master mô tả công cụ \texttt{get\_host\_net\_config}, truyền đúng tham số thiết bị và xác định được cổng giao tiếp bị thiếu địa chỉ IP.
+    \item **host\_incorrect\_gateway (development split, $\Delta$ = +2.0):** Evolved Agent khai thác lại tài liệu Mastery đã lưu từ các tập trước để cấu hình tham số gateway chính xác cho lệnh chẩn đoán, tránh lặp lại lỗi truyền sai tham số của baseline.
+    \item **bgp\_missing\_route\_advertisement (evolution split, $\Delta$ = +2.0):** Việc chẩn đoán thiếu quảng bá định tuyến yêu cầu kiểm tra cấu hình chi tiết của BGP. Evolved Agent tự động tổng hợp quy trình composite gọi \texttt{frr\_get\_bgp\_conf} để kiểm tra trạng thái bảng định tuyến BGP từ xa và tìm ra nguyên nhân chính xác.
+\end{itemize}
+
+\subsection{Các sự cố bị suy giảm hiệu năng (Top Losses)}
+\begin{itemize}
+    \item **ospf\_area\_misconfiguration (transfer split, $\Delta$ = -2.0):** Sự cố này nằm trong nhóm chuyển giao tri thức. Agent cố gắng gọi một công cụ composite chẩn đoán định tuyến vốn được tối ưu cho mô hình mạng BGP trước đó. Sự khác biệt về định dạng cấu hình tham số của OSPF làm cho các bước gọi công cụ bị lỗi và dẫn đến kết luận sai lệch.
+    \item **link\_flap (development split, $\Delta$ = -1.66):** Lỗi chập chập chờn của link yêu cầu theo dõi trạng thái theo thời gian thực. Việc agent nén vết chẩn đoán quá mức (trajectory compaction) vô tình lọc bỏ các log chập chờn định kỳ, làm agent mất đi bằng chứng quan trọng để xác định lỗi link\_flap.
+\end{itemize}

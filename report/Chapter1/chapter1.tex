@@ -1,5 +1,4 @@
 \chapter{Giới thiệu chung}
-\begin{CJK}{UTF8}{min}
 \label{chap:introduction}
 
 Chương này trình bày góc nhìn tổng quan về đề tài nghiên cứu, bao gồm ba nội dung chính. Đầu tiên, phần \ref{sec:motivation} đưa ra bối cảnh, động lực và lý do lựa chọn đề tài. Tiếp theo, phần \ref{sec:prob-statement} phát biểu cụ thể bài toán cần giải quyết trong dự án. Cuối cùng, phần \ref{sec:contributions} trình bày những đóng góp chính của dự án trong việc nghiên cứu và xây dựng hệ thống Self-Evolving AI Agents hỗ trợ xử lý sự cố mạng viễn thông.
@@ -31,19 +30,17 @@ Cụ thể, bài toán được xem xét trong dự án này bao gồm ba nhóm 
 \section{Đóng góp của dự án}
 \label{sec:contributions}
 
-Đóng góp chính của dự án nằm ở việc nghiên cứu và xây dựng một hướng tiếp cận sử dụng \textbf{Self-Evolving AI Agents} cho bài toán xử lý sự cố mạng viễn thông. Thay vì chỉ xây dựng một mô hình chẩn đoán tĩnh, dự án hướng tới một hệ thống agent có khả năng học hỏi từ quá trình vận hành, phản hồi và lịch sử xử lý để từng bước cải thiện năng lực suy luận. Cụ thể hơn, các đóng góp chính của dự án được mô tả như sau:
+Đóng góp chính của dự án nằm ở việc nghiên cứu và phát triển một hệ thống tự động chẩn đoán sự cố mạng truyền thông dựa trên hướng tiếp cận \textbf{Self-Evolving AI Agents} tích hợp trên nền tảng benchmark \textbf{NIKA}. Cụ thể hơn, các đóng góp chính của dự án bao gồm:
 
 \begin{itemize}
-\item Nghiên cứu tổng quan bài toán xử lý sự cố mạng viễn thông, bao gồm các nhiệm vụ quan trọng như phát hiện sự cố, phân tích nguyên nhân gốc rễ, đánh giá tác động và đề xuất hướng khắc phục. Qua đó, dự án làm rõ những đặc điểm khiến bài toán này trở nên khó, bao gồm dữ liệu nhiều chiều, quan hệ phụ thuộc phức tạp giữa các thành phần mạng và yêu cầu cao về tính chính xác, khả năng giải thích.
+\item **Xây dựng quy trình chẩn đoán sự cố trên nền tảng NIKA:** Nghiên cứu và ứng dụng môi trường giả lập mạng Kathará để triển khai các kịch bản sự cố phức tạp (như BGP ASN mismatch, link down, host crash, flow rule loop). Đồng thời thiết lập các AI Agent chẩn đoán hoạt động dựa trên các luồng suy luận phổ biến như ReAct, Plan \& Execute, và Reflexion.
 
-\item Khảo sát và hệ thống hóa các cơ chế tự cải thiện của AI Agent, bao gồm vòng lặp phản hồi, học tăng cường, tự phản tư, cập nhật bộ nhớ và học từ lịch sử tương tác. Những cơ chế này là nền tảng để xây dựng agent có khả năng thích nghi với các tình huống mới, thay vì chỉ hoạt động dựa trên tri thức hoặc chiến lược cố định ban đầu.
+\item **Đề xuất và hiện thực hóa Mô-đun Bộ Nhớ Quy Trình Tiến Hóa (Composable Procedural Memory):** Thiết kế bộ lưu trữ dữ liệu lai giữa PostgreSQL (quan hệ nguyên tử) và Qdrant (vector index). Ứng dụng các cơ chế truy xuất thuộc tính ngữ cảnh (MemInsight), nén vết chẩn đoán (LightMem) và liên kết đồ thị (A-Mem) để giúp agent tích lũy kinh nghiệm chẩn đoán hiệu quả. Đồng thời thiết kế cơ chế score-gated validation dựa trên điểm Evaluator của NIKA nhằm bảo vệ bộ nhớ khỏi hiện tượng học vẹt đáp án benchmark.
 
-\item Đề xuất kiến trúc hệ thống Self-Evolving AI Agent cho xử lý sự cố mạng viễn thông, trong đó agent có thể tiếp nhận dữ liệu vận hành, thực hiện suy luận chẩn đoán, sinh giải thích, ghi nhận phản hồi và cập nhật kinh nghiệm xử lý. Kiến trúc này hướng tới việc kết hợp khả năng suy luận của mô hình ngôn ngữ lớn với bộ nhớ, công cụ hỗ trợ và cơ chế đánh giá nhằm nâng cao chất lượng xử lý theo thời gian.
+\item **Đề xuất và hiện thực hóa Mô-đun Tiến Hóa Công Cụ (Tool Evolution):** Thiết kế cơ chế cho phép AI Agent tự hoàn thiện tài liệu hướng dẫn công cụ (Mastery) và sinh các công cụ chẩn đoán mới ở test-time (composite workflows và generated Python helpers). Xây dựng cơ chế xác thực an toàn mã nguồn sinh ra bằng cách phân tích AST và thực thi trong môi trường Docker sandbox cô lập.
 
-\item Xây dựng quy trình thực nghiệm và đánh giá hiệu quả của hệ thống trên các tác vụ xử lý sự cố mạng. Các tiêu chí đánh giá có thể bao gồm độ chính xác trong xác định nguyên nhân gốc rễ, chất lượng giải thích, khả năng cải thiện sau phản hồi, mức độ thích nghi với tình huống mới và hiệu quả hỗ trợ người dùng trong quá trình ra quyết định.
+\item **Đánh giá thực nghiệm chi tiết và sâu sắc:** Thực hiện kiểm thử agent tự tiến hóa trên 30 sự cố chọn lọc từ benchmark NIKA, so sánh toàn diện với baseline về các chỉ số: độ chính xác chẩn đoán (detection, localization, RCA), số bước chẩn đoán, số lượng công cụ và lượng token tiêu thụ.
 
-\item Chỉ ra các thách thức còn tồn tại khi áp dụng Self-Evolving AI Agents vào môi trường mạng viễn thông thực tế, chẳng hạn như chất lượng dữ liệu vận hành, độ tin cậy của phản hồi, rủi ro học sai từ kinh nghiệm quá khứ, khả năng kiểm soát quá trình tự cập nhật và yêu cầu đảm bảo an toàn trong các hệ thống quan trọng.
+\item **Phân tích thách thức trong thực tế:** Chỉ ra các thách thức còn tồn tại khi áp dụng Self-Evolving AI Agents vào môi trường mạng viễn thông thực tế, chẳng hạn như chất lượng dữ liệu vận hành, độ tin cậy của phản hồi, rủi ro học sai từ kinh nghiệm quá khứ, khả năng kiểm soát quá trình tự cập nhật và yêu cầu đảm bảo an toàn trong các hệ thống quan trọng.
 
 \end{itemize}
-
-\end{CJK}

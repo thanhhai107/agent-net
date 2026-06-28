@@ -31,13 +31,6 @@
 % setup page layout
 \usepackage[a4paper,left=30mm,top=20mm,bottom=25mm,right=20mm,]{geometry}
 
-% Acronyms Auto
-% Enable this block after adding acronym entries to FrontMatter/Acronyms.tex.
-% \usepackage[nopostdot,toc,acronym,nomain,nonumberlist]{glossaries}
-% \makeglossaries
-% \setacronymstyle{long-short}
-% \loadglsentries[acronym]{FrontMatter/Acronyms}
-% \setlength{\glsdescwidth}{0.7\linewidth}
 
 % % prevent text overflow
 % \usepackage{babel}
@@ -69,7 +62,7 @@
 % \setCJKsansfont{IPAGothic}
 % \setCJKmonofont{IPAGothic}
 
-\usepackage{CJKutf8}
+% \usepackage{CJKutf8}
 
 % natbib
 % if use natbib, please comment out the cite
@@ -123,9 +116,9 @@
 
 \hyphenation{Nan-yang}
 
-\title{Legal Knowledge Presentation Infusion into Language Models}
-\author{Tan-Minh Nguyen}
-\date{May 2024}
+\title{Xây dựng Self-Evolving AI Agents trong xử lý sự cố mạng viễn thông}
+\author{Nguyễn Thanh Hải}
+\date{Tháng 06 năm 2026}
 
 \begin{document}
 
@@ -137,7 +130,6 @@
 \pagenumbering{roman}
 \hypersetup{pageanchor=true}
 \setcounter{page}{3}
-% \include{FrontMatter/Abstract}
 \include{FrontMatter/Abstract_vn}
 \include{FrontMatter/Acknowledgements}
 \include{FrontMatter/Declaration}
@@ -172,11 +164,8 @@
 \include{Chapter3/chapter3}
 \include{Chapter4/chapter4}
 \include{Chapter5/chapter5}
-\include{Chapter6/chapter6}
 
 
-% % List of publications
-%\include{FrontMatter/Publications}
 
 %--------------------------------------------- 
 % References
@@ -189,10 +178,6 @@
 % \addcontentsline{toc}{chapter}{Tài liệu tham khảo}
 % \bibliography{references} % Path to your references.bib file
 
-%--------------------------------------------- 
-% Appendix
-%---------------------------------------------
 \appendix
-% \include{Appendix/appendix1}
 
 \end{document}

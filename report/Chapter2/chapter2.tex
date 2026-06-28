@@ -182,6 +182,31 @@ Tiến hóa dựa trên quần thể là phương thức trong đó hệ thống
 
 Trong bối cảnh xử lý sự cố mạng viễn thông, tiến hóa dựa trên quần thể có thể giúp tìm ra quy trình chẩn đoán phù hợp hơn cho từng loại sự cố. Ví dụ, với sự cố suy giảm thông lượng, một workflow ưu tiên phân tích KPI vô tuyến có thể hiệu quả hơn. Trong khi đó, với sự cố mất dịch vụ hàng loạt, workflow ưu tiên phân tích topology và alarm correlation có thể phù hợp hơn. Việc duy trì nhiều biến thể cho phép hệ thống linh hoạt hơn thay vì phụ thuộc vào một quy trình cố định.
 
+\subsection{Các công trình nghiên cứu tự tiến hóa nền tảng}
+\label{subsec:foundational-frameworks}
+
+Trong nghiên cứu này, các mô-đun cốt lõi được thiết kế dựa trên sự kế thừa và kết hợp các ưu điểm từ một số nghiên cứu tự tiến hóa nổi bật trong lĩnh vực AI Agent, được chia thành hai nhóm chính: tiến hóa bộ nhớ và tiến hóa công cụ.
+
+\subsubsection{Các nghiên cứu về Tiến hóa Bộ nhớ (Memory Evolution)}
+
+\begin{itemize}
+    \item **MemInsight:** Đề xuất cơ chế *Attribute-aware retrieval* (truy xuất nhận biết thuộc tính). MemInsight nhận định rằng việc truy xuất bộ nhớ chỉ dựa trên khoảng cách cosine của vector nhúng ngữ nghĩa (semantic similarity) dễ dẫn đến hiện tượng nhiễu thông tin, đặc biệt trong các miền chuyên sâu. Bằng cách gán thêm các thuộc tính ngữ cảnh cụ thể (contextual attributes) cho các mẩu bộ nhớ (như các thiết bị bị ảnh hưởng, loại giao thức, dạng triệu chứng), hệ thống có thể kết hợp lọc thuộc tính trước khi tính toán độ tương đồng, giúp chọn lọc chính xác các bài học phù hợp nhất với ngữ cảnh sự cố hiện tại.
+    
+    \item **LightMem:** Tập trung vào việc nén vết chẩn đoán và cập nhật ngoại tuyến (*offline consolidation / trajectory compaction*). Vết tương tác (trajectory) của AI Agent với môi trường thường rất dài, chứa nhiều bước gọi công cụ trung gian hoặc thông tin thừa. LightMem đề xuất phân đoạn vết chẩn đoán này theo các chủ đề chuyên biệt (diagnostic topics) và tóm tắt chúng thành các bài học ngắn gọn. Đồng thời, việc cập nhật bộ nhớ được tách biệt khỏi quá trình thực thi thời gian thực (được cập nhật ở pha "sleep-time" hoặc sau khi hoàn thành công việc), đảm bảo hiệu năng và giảm tải tài nguyên trong lúc agent hoạt động.
+    
+    \item **A-Mem:** Xây dựng đồ thị bộ nhớ nguyên tử (*atomic memory graph*). Thay vì lưu trữ các đoạn hội thoại nguyên bản, A-Mem đề xuất chuyển hóa kinh nghiệm thành các ghi chú nguyên tử ngắn gọn (atomic notes), độc lập và có tính tái sử dụng cao. Các ghi chú này được liên kết với nhau bằng các quan hệ lô-gích như *supports* (hỗ trợ), *refines* (làm mịn/chi tiết hóa), và *contradicts* (mâu thuẫn). Sự tiến hóa của bộ nhớ diễn ra thông qua việc điều chỉnh các trọng số tin cậy (confidence) của các nút và mối liên kết trên đồ thị, đồng thời loại bỏ hoặc thay thế các tri thức lỗi thời bằng các tri thức mới có độ tin cậy cao hơn.
+\end{itemize}
+
+\subsubsection{Các nghiên cứu về Tiến hóa Công cụ (Tool Evolution)}
+
+\begin{itemize}
+    \item **DRAFT:** Tập trung vào việc học cách sử dụng các công cụ có sẵn tốt hơn thông qua tinh chỉnh tài liệu mô tả công cụ (*documentation refinement / tool mastery*). DRAFT không thay đổi mã nguồn thực thi của công cụ nguyên thủy (primitive tools) mà sử dụng một vòng lặp: Explorer thực thi thử nghiệm công cụ, Analyzer phân tích kết quả phản hồi lỗi, và Rewriter viết lại tài liệu hướng dẫn (mô tả tham số, điều kiện tiền đề, giải nghĩa kết quả trả về). Điều này giúp LLM hiểu sâu hơn các ràng buộc và sử dụng công cụ hiệu quả hơn ở các lần sau.
+    
+    \item **TTE (Test-Time Tool Evolution):** Cho phép AI Agent tự sinh các công cụ thực thi mã nguồn Python mới ngay trong thời gian chạy (*test-time tool evolution*). Khi đối mặt với một capability gap (thiếu hụt năng lực chẩn đoán mà các công cụ hiện tại không hỗ trợ), agent có thể tự sinh mã nguồn Python để giải quyết bài toán tính toán cụ thể. Công cụ mới sinh ra phải được kiểm định cú pháp AST và chạy thử nghiệm an toàn trong môi trường ảo hóa Docker sandbox trước khi được thêm vào thư viện công cụ chính thức.
+    
+    \item **Alita / Alita-G:** Đề xuất cơ chế tự động tạo và trừu tượng hóa các công cụ Model Context Protocol (MCP) thành các hộp năng lực (capability boxes/MCP Box). Alita nhấn mạnh việc lọc bỏ các bước gọi công cụ lỗi hoặc lặp lại trong các vết tương tác thành công, tổng hợp các tham số biến thiên thành các tham số cấu hình chung để tạo ra các công cụ phức hợp (composite tools) có thể tái sử dụng, giúp đơn giản hóa việc gọi công cụ của agent.
+\end{itemize}
+
 \subsection{Vai trò trong xử lý sự cố mạng viễn thông}
 \label{subsec:self-evolving-role-telecom}
 
