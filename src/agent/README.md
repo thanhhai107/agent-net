@@ -14,7 +14,7 @@ src/agent/
 │   ├── reflexion_agent.py
 │   ├── workflow_models.py
 │   └── domain_agents/    # LangChain create_agent subgraphs
-├── tool_evolution/       # Persistent mastery + validated composite tools
+├── tool_evolution/       # Persistent mastery + validated composite/generated tools
 ├── mock/                 # [implemented] Deterministic mock without an LLM
 │   └── mock_agent.py
 ├── sdk/                  # [planned] Direct Claude / Codex SDK integration
@@ -158,19 +158,20 @@ nika agent run -a mock -n 5
 Reflexion. The module enriches tool descriptions, retrieval, synthesis, and
 post-incident curation without owning workflow orchestration or submission.
 
-- **DRAFT-like mastery** keeps MCP implementations immutable while versioned
-  Tool Cards rewrite their model-facing preconditions, parameter guidance,
+- **DRAFT-like documentation refinement** keeps MCP implementations immutable while versioned
+  mastery overlays rewrite their model-facing preconditions, parameter guidance,
   output interpretation, and failure semantics from real execution feedback.
-- **TTE-like synthesis** records a capability gap, creates an ephemeral
-  declarative workflow, and requires structural, runtime, and output-contract
-  verification before persistence.
-- **Alita-G-like distillation** removes failed and duplicate calls, generalizes
-  repeated concrete values into shared parameters, and stores successful
-  workflows as reusable candidates.
+- **TTE-like test-time evolution** records a capability gap and creates an
+  ephemeral candidate. NIKA can synthesize declarative composite workflows or
+  generated Python helpers, then validates them before persistence.
+- **Alita-like capability abstraction** removes failed and duplicate calls,
+  generalizes repeated concrete values into shared parameters, and stores
+  successful capabilities as reusable candidates rather than new MCP servers.
 - Composite tools use a stricter composable-primitive policy than the live
   diagnosis surface: they exclude file reads, traffic generators, unrestricted
   command arguments, and service/config changes.
-- Libraries live under `runtime/tool_evolution/{library_id}/`.
+- Libraries live under `runtime/tool_evolution/{library_id}/` and store both
+  composites and generated Python tools in `state.json`.
 - A source trajectory does not count as validation. Candidates require solved
   incidents in two distinct scenario/topology contexts before promotion;
   benchmark development/transfer splits are fully read-only.
@@ -180,7 +181,7 @@ post-incident curation without owning workflow orchestration or submission.
 ```bash
 nika agent run -a react -b netmind -m openai/gpt-oss-120b --tool-evolution \
   --tool-library experiment-a --evolution-mode dual
-nika benchmark run --csv benchmark/tool_evolution_stream.csv \
+nika benchmark run --csv benchmark/tool_evolution_eval.csv \
   -a react --tool-evolution --tool-library experiment-a
 ```
 

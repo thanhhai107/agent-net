@@ -124,7 +124,7 @@ Example: `nika exec pc1 ping -c 3 10.0.0.2 --timeout 30`
   | `--session-id` | all | target session |
   | `--tool-evolution` | LangGraph workflows | enable Tool Evolution |
   | `--tool-library` | Tool Evolution | persistent diagnostic tool library id |
-  | `--evolution-mode` | Tool Evolution | `mastery`, `distill`, `dual`, `dual-no-validation`, or `dual-no-dedup` |
+  | `--evolution-mode` | Tool Evolution | `mastery`, `distill`, or `dual` |
   | `--oracle-routing` | LLM agents | hidden-label MCP routing baseline |
 
   Examples:

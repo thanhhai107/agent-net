@@ -20,7 +20,7 @@ from agent.tool_evolution.models import (
 )
 from agent.tool_evolution.runtime import (
     COMPOSABLE_PRIMITIVE_TOOLS,
-    SAFE_PRIMITIVE_TOOLS,
+    MANAGER_TOOL_NAMES,
     _validate_argument_safety,
     _validate_step_argument_policy,
 )
@@ -140,16 +140,21 @@ def _tool_server(name: str) -> str:
     return "kathara_base_mcp_server"
 
 
-def _paired_primitive_calls(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _paired_primitive_calls(
+    events: list[dict[str, Any]],
+    *,
+    ignored_tool_names: set[str] | None = None,
+) -> list[dict[str, Any]]:
     calls: list[dict[str, Any]] = []
     pending: list[dict[str, Any]] = []
+    ignored = set(ignored_tool_names or set()) | set(MANAGER_TOOL_NAMES)
     for event in events:
         if event.get("agent") != "diagnosis_agent":
             continue
         event_type = event.get("event")
         if event_type == "tool_start":
             name = (event.get("tool") or {}).get("name")
-            if name in SAFE_PRIMITIVE_TOOLS:
+            if name and name not in ignored:
                 pending.append(
                     {
                         "tool": name,
@@ -216,6 +221,59 @@ def _composite_outcomes(
     return successes, errors, reuse_count
 
 
+def _generated_outcomes(
+    events: list[dict[str, Any]],
+) -> tuple[list[str], list[str], int]:
+    aliases = {
+        str(event.get("source_name")): str(event.get("name"))
+        for event in events
+        if event.get("event") == "tool_evolution_generated_verified"
+        and event.get("source_name")
+        and event.get("name")
+    }
+    pending: dict[str, list[str]] = {}
+    successes: list[str] = []
+    errors: list[str] = []
+    reuse_count = 0
+    for event in events:
+        event_type = event.get("event")
+        name = str(event.get("name", ""))
+        if not name:
+            continue
+        if event_type == "tool_evolution_generated_start":
+            pending.setdefault(name, []).append(str(event.get("status", "")))
+            continue
+        if event_type not in {
+            "tool_evolution_generated_end",
+            "tool_evolution_generated_error",
+        }:
+            continue
+        statuses = pending.get(name, [])
+        status = statuses.pop(0) if statuses else ""
+        persisted_name = aliases.get(name, name)
+        if event_type == "tool_evolution_generated_end":
+            successes.append(persisted_name)
+            if status != "ephemeral":
+                reuse_count += 1
+        else:
+            errors.append(persisted_name)
+    return successes, errors, reuse_count
+
+
+def _direct_evolved_tool_starts(
+    events: list[dict[str, Any]],
+    known_names: set[str],
+) -> list[str]:
+    starts: list[str] = []
+    for event in events:
+        if event.get("event") != "tool_start":
+            continue
+        name = str((event.get("tool") or {}).get("name") or "")
+        if name and name in known_names:
+            starts.append(name)
+    return starts
+
+
 def _curate_mastery(
     store: ToolEvolutionStore,
     calls: list[dict[str, Any]],
@@ -232,11 +290,7 @@ def _curate_mastery(
         successful = [call for call in tool_calls if call["succeeded"]]
         failed = [call for call in tool_calls if not call["succeeded"]]
         argument_fields = sorted(
-            {
-                str(field)
-                for call in tool_calls
-                for field in call["arguments"]
-            }
+            {str(field) for call in tool_calls for field in call["arguments"]}
         )
         unique_invocations = {
             json.dumps(call["arguments"], sort_keys=True, default=str)
@@ -255,12 +309,7 @@ def _curate_mastery(
             )
         output_interpretation = []
         if successful:
-            shapes = sorted(
-                {
-                    _output_shape(call.get("output"))
-                    for call in successful
-                }
-            )
+            shapes = sorted({_output_shape(call.get("output")) for call in successful})
             output_interpretation.append(
                 "Observed successful response shapes: "
                 + "; ".join(shapes)
@@ -317,7 +366,7 @@ def _minimal_successful_trace(
     *,
     limit: int = 6,
 ) -> list[dict[str, Any]]:
-    """Remove failed, non-composable, and exact duplicate calls in evidence order."""
+    """Remove failed, unsupported, unsafe-argument, and duplicate calls in order."""
     selected: list[dict[str, Any]] = []
     seen: set[str] = set()
     for call in calls:
@@ -325,7 +374,9 @@ def _minimal_successful_trace(
             continue
         tool_name = str(call.get("tool", ""))
         arguments = call.get("arguments", {})
-        if tool_name not in COMPOSABLE_PRIMITIVE_TOOLS or not isinstance(arguments, dict):
+        if tool_name not in COMPOSABLE_PRIMITIVE_TOOLS or not isinstance(
+            arguments, dict
+        ):
             continue
         try:
             _validate_argument_safety(arguments, allow_placeholders=False)
@@ -351,6 +402,51 @@ def _minimal_successful_trace(
         if len(selected) >= limit:
             break
     return selected
+
+
+def _argument_role_description(tool_name: str, arg_name: str, step_index: int) -> str:
+    role = arg_name.replace("_", " ")
+    if arg_name in {"host_a", "host_b"}:
+        role = "source endpoint" if arg_name == "host_a" else "destination endpoint"
+    elif arg_name == "host_name":
+        role = "target host or device"
+    elif arg_name == "router_name":
+        role = "target router"
+    return (
+        f"Generalized {role} value used by {tool_name}.{arg_name} "
+        f"in workflow step {step_index + 1}."
+    )
+
+
+def _step_label(tool_name: str, arguments: dict[str, Any], step_index: int) -> str:
+    if tool_name == "get_reachability":
+        return "Collect full host reachability evidence."
+    if tool_name == "ping_pair":
+        source = arguments.get("host_a", "source endpoint")
+        destination = arguments.get("host_b", "destination endpoint")
+        return f"Ping from {source} to {destination}."
+    if tool_name == "get_host_net_config":
+        target = arguments.get("host_name", "target host")
+        return f"Collect network configuration for {target}."
+    if tool_name.startswith("frr_show_") or tool_name.startswith("frr_get_"):
+        target = arguments.get("router_name", "target router")
+        return f"Collect {tool_name} evidence from {target}."
+    if tool_name.startswith("bmv2_"):
+        return f"Collect {tool_name} dataplane evidence."
+    if tool_name.startswith("influx_"):
+        return f"Collect {tool_name} telemetry evidence."
+    return f"Collect diagnostic evidence with {tool_name} at step {step_index + 1}."
+
+
+def _distilled_description(steps: list[CompositeStep]) -> str:
+    sequence = " -> ".join(step.tool for step in steps)
+    families = sorted({step.tool.split("_", 1)[0] for step in steps})
+    family_text = ", ".join(families)
+    return (
+        "Reusable read-only diagnostic workflow for gathering complementary "
+        f"{family_text} evidence. Sequence: {sequence}. Use when these evidence "
+        "types are needed together before drawing the final root-cause conclusion."
+    )[:1000]
 
 
 def _distill_trace(
@@ -390,7 +486,11 @@ def _distill_trace(
                     ToolParameter(
                         name=parameter_name,
                         type="str",
-                        description=f"Value passed to '{arg_name}' for diagnostic step {step_index + 1}.",
+                        description=_argument_role_description(
+                            str(call["tool"]),
+                            str(arg_name),
+                            step_index,
+                        ),
                     )
                 )
                 value_parameters[value_key] = parameter_name
@@ -401,7 +501,7 @@ def _distill_trace(
             CompositeStep(
                 tool=call["tool"],
                 arguments=arguments,
-                label=f"Collect evidence with {call['tool']}.",
+                label=_step_label(str(call["tool"]), arguments, step_index),
             )
         )
         _validate_argument_safety(arguments, allow_placeholders=True)
@@ -420,13 +520,13 @@ def _distill_trace(
     tool_names = "_".join(step.tool for step in steps[:2])
     composite = CompositeTool(
         name=f"workflow_{tool_names}_{short_hash}"[:64],
-        description=(
-            "Reusable read-only diagnostic workflow distilled from a successful "
-            "network investigation. It collects complementary evidence in sequence."
-        ),
+        description=_distilled_description(steps),
         parameters=parameters,
         steps=steps,
-        output_contract=[step.label for step in steps],
+        output_contract=[
+            f"Step {index + 1} {step.tool}: {step.label}"
+            for index, step in enumerate(steps)
+        ],
         tags=[scenario_name],
         source_trace_hash=short_hash,
         verification_reports=[
@@ -479,7 +579,14 @@ def finalize_tool_evolution_session(
         if existing_artifact.get("curation_version") == _CURATION_VERSION:
             return existing_artifact
     events = _load_events(session_dir / "messages.jsonl")
-    calls = _paired_primitive_calls(events)
+    state = store.load()
+    calls = _paired_primitive_calls(
+        events,
+        ignored_tool_names={
+            *state.composites.keys(),
+            *state.generated_tools.keys(),
+        },
+    )
     devices: set[str] = set()
     for edge in getattr(session, "topology", []) or []:
         if not isinstance(edge, (list, tuple)):
@@ -490,16 +597,11 @@ def finalize_tool_evolution_session(
             endpoint = str(item)
             devices.add(endpoint)
             devices.add(endpoint.split(":", 1)[0])
-    update_enabled = bool(
-        getattr(session, "tool_evolution_update_enabled", True)
-    )
+    update_enabled = bool(getattr(session, "tool_evolution_update_enabled", True))
     if update_enabled and mode.mastery_enabled:
         forbidden = {
             str(getattr(session, "session_id", "")),
-            *(
-                str(item)
-                for item in getattr(session, "problem_names", []) or []
-            ),
+            *(str(item) for item in getattr(session, "problem_names", []) or []),
         }
         _curate_mastery(
             store,
@@ -512,6 +614,9 @@ def finalize_tool_evolution_session(
     incident_success = _full_incident_success(metrics)
     fingerprint = _context_fingerprint(session)
     composite_successes, composite_errors, tool_reuse_count = _composite_outcomes(
+        events
+    )
+    generated_successes, generated_errors, generated_reuse_count = _generated_outcomes(
         events
     )
     called_primitives = [call["tool"] for call in calls]
@@ -572,6 +677,41 @@ def finalize_tool_evolution_session(
             )
             if updated and updated.status in {"candidate", "rejected"}:
                 regressed.append(updated.name)
+        for name in [item for item in generated_successes if item]:
+            generated = store.get_generated_tool(str(name))
+            semantic_valid = bool(
+                generated
+                and any(
+                    report.passed and report.stage == "semantic"
+                    for report in generated.verification_reports
+                )
+            )
+            updated = store.record_generated_evidence(
+                str(name),
+                ValidationEvidence(
+                    context_fingerprint=fingerprint,
+                    execution_success=True,
+                    incident_success=incident_success,
+                    source="runtime",
+                    semantic_valid=semantic_valid,
+                ),
+                validation_enabled=mode.validation_enabled,
+            )
+            if updated and updated.status == "promoted":
+                promoted.append(updated.name)
+        for name in [item for item in generated_errors if item]:
+            updated = store.record_generated_evidence(
+                str(name),
+                ValidationEvidence(
+                    context_fingerprint=fingerprint,
+                    execution_success=False,
+                    incident_success=False,
+                    source="runtime",
+                ),
+                validation_enabled=mode.validation_enabled,
+            )
+            if updated and updated.status in {"candidate", "rejected"}:
+                regressed.append(updated.name)
 
     distilled_name: str | None = None
     distilled_created = False
@@ -592,11 +732,25 @@ def finalize_tool_evolution_session(
         else {}
     )
     state = store.load()
+    retrieved_tool_names = {
+        str(item) for item in initial.get("retrieved_tools", []) if item
+    }
+    retrieved_tool_starts = _direct_evolved_tool_starts(events, retrieved_tool_names)
+    wrapper_called_tools = [
+        *composite_successes,
+        *composite_errors,
+        *generated_successes,
+        *generated_errors,
+    ]
+    retrieved_wrapper_calls = [
+        str(name) for name in wrapper_called_tools if str(name) in retrieved_tool_names
+    ]
     created_tools = set(initial.get("created_tools", []))
     created_tools.update(
         str(event.get("name"))
         for event in events
-        if event.get("event") == "tool_evolution_candidate_verified"
+        if event.get("event")
+        in {"tool_evolution_candidate_verified", "tool_evolution_generated_verified"}
         and event.get("created")
         and event.get("name")
     )
@@ -605,18 +759,23 @@ def finalize_tool_evolution_session(
     ephemeral_names = {
         str(event.get("name"))
         for event in events
-        if event.get("event") == "tool_evolution_ephemeral_created"
+        if event.get("event")
+        in {
+            "tool_evolution_ephemeral_created",
+            "tool_evolution_generated_ephemeral_created",
+        }
         and event.get("name")
     }
     verified_sources = {
         str(event.get("source_name"))
         for event in events
-        if event.get("event") == "tool_evolution_candidate_verified"
+        if event.get("event")
+        in {"tool_evolution_candidate_verified", "tool_evolution_generated_verified"}
         and event.get("source_name")
     }
-    unverified_ephemeral = set(
-        initial.get("unverified_ephemeral_tools", [])
-    ) | (ephemeral_names - verified_sources)
+    unverified_ephemeral = set(initial.get("unverified_ephemeral_tools", [])) | (
+        ephemeral_names - verified_sources
+    )
     mastery_updated_tools = {call["tool"] for call in calls}
     mastery_updated_tools.update(
         str(event.get("tool_name"))
@@ -633,10 +792,9 @@ def finalize_tool_evolution_session(
         "update_enabled": update_enabled,
         "primitive_calls": len(calls),
         "composite_calls": len(composite_successes) + len(composite_errors),
+        "generated_tool_calls": len(generated_successes) + len(generated_errors),
         "mastery_updates": (
-            len(mastery_updated_tools)
-            if update_enabled and mode.mastery_enabled
-            else 0
+            len(mastery_updated_tools) if update_enabled and mode.mastery_enabled else 0
         ),
         "argument_validity": (
             sum(bool(call.get("succeeded")) for call in calls) / len(calls)
@@ -649,6 +807,13 @@ def finalize_tool_evolution_session(
         "distilled_tool": distilled_name,
         "composite_successes": len(composite_successes),
         "composite_errors": len(composite_errors),
+        "generated_successes": len(generated_successes),
+        "generated_errors": len(generated_errors),
+        "retrieved_tool_available_count": len(retrieved_tool_names),
+        "retrieved_tool_started_count": len(retrieved_tool_starts),
+        "retrieved_tool_started_unique_count": len(set(retrieved_tool_starts)),
+        "retrieved_tool_called_count": len(retrieved_wrapper_calls),
+        "retrieved_tool_called_unique_count": len(set(retrieved_wrapper_calls)),
         "promoted_tools": sorted(set(promoted)),
         "regressed_tools": sorted(set(regressed)),
         "library_candidates": sum(
@@ -656,6 +821,13 @@ def finalize_tool_evolution_session(
         ),
         "library_promoted": sum(
             item.status == "promoted" for item in state.composites.values()
+        ),
+        "library_generated_tools": len(state.generated_tools),
+        "library_generated_candidates": sum(
+            item.status == "candidate" for item in state.generated_tools.values()
+        ),
+        "library_generated_promoted": sum(
+            item.status == "promoted" for item in state.generated_tools.values()
         ),
         "library_mastered_primitives": len(state.mastery),
         "tool_card_revisions": sum(
@@ -669,9 +841,17 @@ def finalize_tool_evolution_session(
             )
             for item in state.composites.values()
         ),
+        "verified_generated_tools": sum(
+            any(
+                report.passed and report.stage == "semantic"
+                for report in item.verification_reports
+            )
+            for item in state.generated_tools.values()
+        ),
         "unverified_ephemeral_tools": len(unverified_ephemeral),
         "cross_model_reused_tools": len(initial.get("cross_model_mastery", [])),
-        "tool_reuse_count": tool_reuse_count,
+        "tool_reuse_count": tool_reuse_count + generated_reuse_count,
+        "generated_tool_reuse_count": generated_reuse_count,
     }
     artifact_path.write_text(
         json.dumps(artifact, indent=2),

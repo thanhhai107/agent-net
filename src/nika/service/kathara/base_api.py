@@ -151,19 +151,31 @@ class KatharaBaseAPI:
         :param with_prefix: if True, return "ip/prefix" (e.g. 192.168.1.10/24)
                             if False, return only "ip" (e.g. 192.168.1.10)
         """
+        import time
 
         cmd = "ip -j addr"
-        result = self.exec_cmd(host_name, cmd)
+        last_error = None
+        output = ""
 
-        if isinstance(result, list):
-            output = "\n".join(result)
+        for attempt in range(3):
+            result = self.exec_cmd(host_name, cmd, timeout=30)
+
+            if isinstance(result, list):
+                output = "\n".join(result)
+            else:
+                output = result
+
+            try:
+                ifaces = json.loads(output)
+                break
+            except json.JSONDecodeError as e:
+                last_error = e
+                time.sleep(2)
         else:
-            output = result
-
-        try:
-            ifaces = json.loads(output)
-        except json.JSONDecodeError as e:
-            raise RuntimeError(f"Failed to parse `ip -j addr` output: {e}") from e
+            raise RuntimeError(
+                f"Failed to parse `ip -j addr` output for host '{host_name}' after 3 attempts. "
+                f"Error: {last_error}. Command output was: {output!r}"
+            ) from last_error
 
         def format_ip(ip: str, prefix: Optional[int]) -> str:
             if with_prefix and prefix is not None:
@@ -234,7 +246,7 @@ class KatharaBaseAPI:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, self.exec_cmd, host_name, command)
 
-    def _run_cmd(self, host_name: str, command: str, max_chars: int = 4000) -> str:
+    def _run_cmd(self, host_name: str, command: str, max_chars: int = 262144) -> str:
         """
         Run a command on a machine and return its output as a string,
         decoding bytes and filtering out None/empty/zeros.

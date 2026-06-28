@@ -100,7 +100,7 @@ def agent_run(
     evolution_mode: str = typer.Option(
         ToolEvolutionMode.DUAL.value,
         "--evolution-mode",
-        help="Tool Evolution mode: mastery, distill, dual, dual-no-validation, dual-no-dedup.",
+        help="Tool Evolution mode: mastery, distill, dual.",
     ),
     memory_mode: str = typer.Option(
         "off",

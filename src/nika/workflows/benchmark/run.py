@@ -33,17 +33,17 @@ def _benchmark_row_cli_args(
     model: str,
     max_steps: int,
     max_attempts: int,
-    memory_mode: str,
-    memory_bank: str,
-    memory_top_k: int,
-    memory_token_budget: int,
-    run_judge: bool,
-    judge_llm_backend: str | None,
-    judge_model: str | None,
-    oracle_routing: bool,
-    tool_evolution_enabled: bool,
-    tool_library_id: str,
-    tool_evolution_mode: str,
+    memory_mode: str = "off",
+    memory_bank: str = "default",
+    memory_top_k: int = 5,
+    memory_token_budget: int = 1500,
+    run_judge: bool = False,
+    judge_llm_backend: str | None = None,
+    judge_model: str | None = None,
+    oracle_routing: bool = False,
+    tool_evolution_enabled: bool = False,
+    tool_library_id: str = "default",
+    tool_evolution_mode: str = "dual",
 ) -> list[str]:
     args = [
         row["scenario"],
@@ -78,6 +78,12 @@ def _benchmark_row_cli_args(
             "--evolution-mode",
             tool_evolution_mode,
         ]
+        if row.get("stream_id") or row.get("stream"):
+            args += ["--evolution-stream", row.get("stream_id") or row["stream"]]
+        if row.get("split"):
+            args += ["--evolution-split", row["split"]]
+        if row.get("sequence_index"):
+            args += ["--evolution-sequence-index", str(row["sequence_index"])]
     topo = row.get("topo_size") or ""
     if topo and topo != "-":
         args += ["-t", topo]
@@ -314,6 +320,29 @@ def run_benchmark_from_csv(
 
     if parallel == 1:
         for index, row in enumerate(rows):
+            row = dict(row)
+            row.setdefault("sequence_index", str(index))
+            if tool_evolution_enabled:
+                _run_benchmark_row_subprocess(
+                    row,
+                    agent_type=agent_type,
+                    llm_backend=llm_backend,
+                    model=model,
+                    max_steps=max_steps,
+                    max_attempts=max_attempts,
+                    memory_mode=memory_mode,
+                    memory_bank=memory_bank,
+                    memory_top_k=memory_top_k,
+                    memory_token_budget=memory_token_budget,
+                    run_judge=run_judge,
+                    judge_llm_backend=judge_llm_backend,
+                    judge_model=judge_model,
+                    oracle_routing=oracle_routing,
+                    tool_evolution_enabled=tool_evolution_enabled,
+                    tool_library_id=resolved_library_id,
+                    tool_evolution_mode=tool_evolution_mode,
+                )
+                continue
             run_single_benchmark(
                 problem=row["problem"],
                 scenario=row["scenario"],
@@ -340,9 +369,7 @@ def run_benchmark_from_csv(
                 tool_evolution_mode=tool_evolution_mode,
                 evolution_stream=row.get("stream_id") or row.get("stream") or None,
                 evolution_split=row.get("split") or None,
-                evolution_sequence_index=int(
-                    row.get("sequence_index") or index
-                ),
+                evolution_sequence_index=int(row.get("sequence_index") or index),
             )
         return
 

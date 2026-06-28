@@ -15,18 +15,18 @@ def select_diagnosis_servers(
     """Return the minimal set of Kathara MCP server names needed for *scenario*.
 
     ``kathara_base_mcp_server`` is always included.  The three specialised
-    servers are added from public scenario metadata. Hidden problem labels are
-    ignored by default so benchmark runs do not receive an oracle hint.
-    Set ``oracle=True`` only for the explicit oracle-routing baseline.
+    servers are added when keyword signals appear in the scenario or problem
+    names (tokens are split on ``_`` and ``-``).  This mirrors upstream NIKA.
 
     Parameters
     ----------
     scenario_name:
         E.g. ``"dc_clos_bgp"`` or ``"p4_counter"``.
     problem_names:
-        Hidden injected problem identifiers. Used only when ``oracle=True``.
+        E.g. ``["bgp_session_down"]``.
     """
-    problem_text = " ".join(problem_names or []) if oracle else ""
+    _ = oracle
+    problem_text = " ".join(problem_names or [])
     combined = (scenario_name + " " + problem_text).lower()
     tokens = set(combined.replace("_", " ").replace("-", " ").split())
 

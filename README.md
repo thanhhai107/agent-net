@@ -279,28 +279,31 @@ that memory as strategy guidance. The loop stops on evaluator success or after
 The module can augment `react`, `plan-execute`, or `reflexion` and combines
 DRAFT-, TTE-, and Alita-G-inspired mechanisms:
 
-- **DRAFT-like Tool Cards** version agent-facing usage semantics for immutable
+- **DRAFT-like documentation refinement** versions agent-facing usage semantics for immutable
   MCP primitives. Post-incident curation groups diverse invocations, contrasts
   successful and failed executions, rewrites preconditions, argument guidance,
   output interpretation, and failure semantics, and records convergence when
   repeated evidence produces no semantic change.
-- **TTE-like test-time synthesis** requires the agent to identify a sanitized
-  capability gap before constructing an ephemeral workflow. The workflow must
-  pass schema, parameterization, composable-primitive allowlist, runtime, and output
-  contract checks before it can enter the persistent library as a candidate.
-- **Alita-G-like distillation** removes failed and duplicate calls from
+- **TTE-like test-time evolution** requires the agent to identify a sanitized
+  capability gap before constructing an ephemeral tool. It can synthesize either
+  a declarative composite workflow or a runnable Python helper. Generated Python
+  must pass AST checks, declared-parameter validation, sandbox execution, and
+  semantic output checks before it can enter the persistent library.
+- **Alita-like capability abstraction** removes failed and duplicate calls from
   successful traces, shares parameters for repeated concrete values, and
-  creates reusable declarative composite tools. The source trajectory is not
-  counted as validation evidence.
+  creates reusable capability entries. Unlike Alita-style auto MCP creation,
+  NIKA does not persist new MCP servers. The MCP adapter exposes persisted
+  composites and promoted generated Python helpers from the same library.
 
-Nika deliberately synthesizes declarative MCP workflows rather than arbitrary
-Python. This preserves actual tool execution while keeping every step within
-the composable diagnostic allowlist. Live diagnosis can still use broader
-diagnostic tools, but persisted composites exclude open-ended file reads,
-traffic generators, unrestricted command arguments, and service/config changes.
+NIKA has two persisted evolved-tool forms: composite MCP workflows for live
+diagnostic evidence collection, and generated Python helpers for pure
+computation over declared inputs. Composite workflows use the same diagnosis
+primitive surface exposed by upstream NIKA, including open-ended operational
+tools, while still requiring parameterized reusable arguments and structural
+validation before persistence.
 
 ```shell
-nika benchmark run --csv benchmark/tool_evolution_stream.csv \
+nika benchmark run --csv benchmark/tool_evolution_eval.csv \
   -a react -b netmind -m openai/gpt-oss-120b --tool-evolution \
   --tool-library bgp-study --evolution-mode dual
 
@@ -320,15 +323,14 @@ The library tracks retrieval count, verification reports, utility, and
 regression. Capacity defaults to 250 tools and can be changed with
 `NIKA_TOOL_LIBRARY_CAPACITY`; overflow is pruned by status and observed utility.
 
-Available ablations are `mastery`, `distill`, `dual`,
-`dual-no-validation`, and `dual-no-dedup`. Add `--oracle-routing` only for the
+Available modes are `mastery`, `distill`, and `dual`. Add `--oracle-routing` only for the
 explicit oracle baseline; normal runs select diagnosis servers from public
 scenario metadata without consulting the injected problem label.
 
 Tool-Evolving sessions additionally write `tool_evolution.json` and expose
 selection recall, argument validity, recovery, reuse, promotion, Tool Card
-revisions, capability gaps, verified composites, library health, cross-model
-reuse, and sequential efficiency metrics.
+revisions, capability gaps, verified composites, verified generated Python
+tools, library health, cross-model reuse, and sequential efficiency metrics.
 
 ### Composable procedural memory
 
@@ -530,8 +532,8 @@ This framework provides MCP servers under `src/nika/service/mcp_server`. These i
   - `list_avail_problems` to list injectable root-cause ids.
   - `submit` to write the agent's final detection/localization/RCA answer.
 - **Evolved diagnostic toolbox MCP server** (`tool_evolution_mcp_server.py`):
-  - `list_evolved_tools` to inspect promoted composites; probationary candidates are opt-in for inspection.
-  - `execute_evolved_tool` to run promoted composites over the composable diagnostic primitive allowlist.
+  - `list_evolved_tools` to inspect promoted composites and generated Python helpers; probationary candidates are opt-in for inspection.
+  - `execute_evolved_tool` to run promoted composites over the composable diagnostic primitive allowlist or generated Python helpers in the configured sandbox runner.
   - Selects the library through `NIKA_TOOL_LIBRARY_ID` and the live lab through `NIKA_SESSION_ID`.
 
 💡 More tools are coming soon...

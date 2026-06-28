@@ -14,9 +14,6 @@ SUBMIT_PROMPT_TEMPLATE = dedent("""\
     You are an expert network engineer.
     Your task is to submit the final solution for this network problem based on the diagnosis reported provided.
     Carefully review the diagnosis results and ensure that your submission is accurate and complete.
-    First call list_avail_problems(). Select root_cause_name only from that result,
-    preserving the exact canonical snake_case identifier. Never translate, title-case,
-    paraphrase, or invent a root-cause name.
     You must strictly follow the submission format and call the submit() tool to submit your solution.
 """).strip()
 

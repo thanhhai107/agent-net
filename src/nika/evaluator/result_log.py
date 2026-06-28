@@ -21,7 +21,11 @@ SUBMISSION_FILENAME = "submission.json"
 LLM_JUDGE_FILENAME = "llm_judge.json"
 MESSAGES_FILENAME = "messages.jsonl"
 
-SUMMARY_REQUIRED_ARTIFACTS = (RUN_FILENAME, GROUND_TRUTH_FILENAME, EVAL_METRICS_FILENAME)
+SUMMARY_REQUIRED_ARTIFACTS = (
+    RUN_FILENAME,
+    GROUND_TRUTH_FILENAME,
+    EVAL_METRICS_FILENAME,
+)
 
 
 @dataclass
@@ -40,6 +44,7 @@ class EvalResult:
     tool_errors: int = None
     primitive_calls: int = None
     composite_calls: int = None
+    generated_tool_calls: int = None
     evolved_tools_created: int = None
     mastery_updates: int = None
     tool_evolution_enabled: bool | None = None
@@ -56,12 +61,22 @@ class EvalResult:
     tool_regression_count: int = None
     library_candidates: int = None
     library_promoted: int = None
+    library_generated_tools: int = None
+    library_generated_candidates: int = None
+    library_generated_promoted: int = None
     library_mastered_primitives: int = None
     tool_card_revisions: int = None
     capability_gaps: int = None
     verified_composites: int = None
+    verified_generated_tools: int = None
     unverified_ephemeral_tools: int = None
     cross_model_reused_tools: int = None
+    generated_tool_reuse_count: int = None
+    retrieved_tool_available_count: int = None
+    retrieved_tool_started_count: int = None
+    retrieved_tool_started_unique_count: int = None
+    retrieved_tool_called_count: int = None
+    retrieved_tool_called_unique_count: int = None
     incident_success: bool = None
     efficiency_evolution_rate: float = None
     evolutionary_gain: float = None
@@ -99,7 +114,9 @@ def default_summary_csv_path() -> str:
 
 
 def missing_summary_artifacts(session_dir: Path) -> list[str]:
-    return [name for name in SUMMARY_REQUIRED_ARTIFACTS if not (session_dir / name).exists()]
+    return [
+        name for name in SUMMARY_REQUIRED_ARTIFACTS if not (session_dir / name).exists()
+    ]
 
 
 def is_finished_session(run_meta: dict) -> bool:
@@ -149,14 +166,20 @@ def build_eval_result_from_session_dir(session_dir: Path) -> EvalResult:
 
     run_meta = json.loads((session_dir / RUN_FILENAME).read_text(encoding="utf-8"))
     if not is_finished_session(run_meta):
-        raise ValueError(f"Session {run_meta.get('session_id', session_dir.name)} is not finished.")
+        raise ValueError(
+            f"Session {run_meta.get('session_id', session_dir.name)} is not finished."
+        )
 
-    metrics_blob = json.loads((session_dir / EVAL_METRICS_FILENAME).read_text(encoding="utf-8"))
+    metrics_blob = json.loads(
+        (session_dir / EVAL_METRICS_FILENAME).read_text(encoding="utf-8")
+    )
 
     judge_response: JudgeResponse | None = None
     judge_path = session_dir / LLM_JUDGE_FILENAME
     if judge_path.exists():
-        judge_response = JudgeResponse.model_validate_json(judge_path.read_text(encoding="utf-8"))
+        judge_response = JudgeResponse.model_validate_json(
+            judge_path.read_text(encoding="utf-8")
+        )
 
     trace_metrics = {
         "in_tokens": metrics_blob.get("in_tokens"),
@@ -200,6 +223,7 @@ def build_eval_result_from_session_dir(session_dir: Path) -> EvalResult:
         tool_errors=trace_metrics.get("tool_errors"),
         primitive_calls=trace_metrics.get("primitive_calls"),
         composite_calls=trace_metrics.get("composite_calls"),
+        generated_tool_calls=trace_metrics.get("generated_tool_calls"),
         evolved_tools_created=trace_metrics.get("evolved_tools_created"),
         mastery_updates=trace_metrics.get("mastery_updates"),
         tool_evolution_enabled=bool(run_meta.get("tool_evolution_enabled", False)),
@@ -218,16 +242,28 @@ def build_eval_result_from_session_dir(session_dir: Path) -> EvalResult:
         tool_regression_count=metrics_blob.get("tool_regression_count"),
         library_candidates=metrics_blob.get("library_candidates"),
         library_promoted=metrics_blob.get("library_promoted"),
-        library_mastered_primitives=metrics_blob.get(
-            "library_mastered_primitives"
-        ),
+        library_generated_tools=metrics_blob.get("library_generated_tools"),
+        library_generated_candidates=metrics_blob.get("library_generated_candidates"),
+        library_generated_promoted=metrics_blob.get("library_generated_promoted"),
+        library_mastered_primitives=metrics_blob.get("library_mastered_primitives"),
         tool_card_revisions=metrics_blob.get("tool_card_revisions"),
         capability_gaps=metrics_blob.get("capability_gaps"),
         verified_composites=metrics_blob.get("verified_composites"),
-        unverified_ephemeral_tools=metrics_blob.get(
-            "unverified_ephemeral_tools"
-        ),
+        verified_generated_tools=metrics_blob.get("verified_generated_tools"),
+        unverified_ephemeral_tools=metrics_blob.get("unverified_ephemeral_tools"),
         cross_model_reused_tools=metrics_blob.get("cross_model_reused_tools"),
+        generated_tool_reuse_count=metrics_blob.get("generated_tool_reuse_count"),
+        retrieved_tool_available_count=metrics_blob.get(
+            "retrieved_tool_available_count"
+        ),
+        retrieved_tool_started_count=metrics_blob.get("retrieved_tool_started_count"),
+        retrieved_tool_started_unique_count=metrics_blob.get(
+            "retrieved_tool_started_unique_count"
+        ),
+        retrieved_tool_called_count=metrics_blob.get("retrieved_tool_called_count"),
+        retrieved_tool_called_unique_count=metrics_blob.get(
+            "retrieved_tool_called_unique_count"
+        ),
         incident_success=all(
             metrics_blob.get(key) == 1.0
             for key in (
@@ -236,7 +272,9 @@ def build_eval_result_from_session_dir(session_dir: Path) -> EvalResult:
                 "rca_accuracy",
             )
         ),
-        time_taken=_session_duration_seconds(run_meta.get("start_time"), run_meta.get("end_time")),
+        time_taken=_session_duration_seconds(
+            run_meta.get("start_time"), run_meta.get("end_time")
+        ),
         llm_judge_relevance_score=relevance_score,
         llm_judge_correctness_score=correctness_score,
         llm_judge_efficiency_score=efficiency_score,
@@ -255,7 +293,9 @@ def build_eval_result_from_session_dir(session_dir: Path) -> EvalResult:
     )
 
 
-def write_eval_summary_csv(eval_results: list[EvalResult], output_path: str | Path) -> Path:
+def write_eval_summary_csv(
+    eval_results: list[EvalResult], output_path: str | Path
+) -> Path:
     out = Path(output_path)
     out.parent.mkdir(parents=True, exist_ok=True)
     fieldnames = list(asdict(EvalResult()).keys())

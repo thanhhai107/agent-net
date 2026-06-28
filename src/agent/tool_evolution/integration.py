@@ -22,7 +22,9 @@ def write_tool_evolution_session(
         "retrieved_tools": runtime.retrieved_names,
         "created_tools": runtime.created_names,
         "capability_gaps": runtime.capability_gap_ids,
-        "unverified_ephemeral_tools": sorted(runtime._ephemeral_tools),
+        "unverified_ephemeral_tools": sorted(
+            {*runtime._ephemeral_tools, *runtime._ephemeral_generated_tools}
+        ),
         "mastery_overlays": runtime.mastery_used,
         "cross_model_mastery": runtime.cross_model_mastery,
         "update_enabled": runtime.update_enabled,

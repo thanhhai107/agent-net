@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import re
@@ -10,10 +11,15 @@ from typing import Any
 from langchain_core.tools import BaseTool, StructuredTool
 from pydantic import BaseModel, Field, create_model
 
+from agent.tool_evolution.generated_tools import (
+    run_generated_tool,
+    validate_generated_tool_code,
+)
 from agent.tool_evolution.models import (
     CapabilityGap,
     CompositeStep,
     CompositeTool,
+    GeneratedTool,
     ToolEvolutionMode,
     ToolParameter,
     ToolVerificationReport,
@@ -23,18 +29,22 @@ from agent.utils.loggers import MessageLogger
 from nika.orchestrator.problems.prob_pool import list_avail_problem_names
 
 
-SAFE_PRIMITIVE_TOOLS = frozenset(
+COMPOSABLE_PRIMITIVE_TOOLS = frozenset(
     {
+        "cat_file",
+        "curl_web_test",
+        "ethtool",
+        "exec_shell",
+        "exec_shell_dual",
+        "frr_exec",
         "get_reachability",
         "ping_pair",
         "get_host_net_config",
         "get_tc_statistics",
+        "iperf_test",
         "netstat",
         "ip_addr_statistics",
-        "ethtool",
-        "curl_web_test",
-        "iperf_test",
-        "cat_file",
+        "systemctl_ops",
         "frr_get_bgp_conf",
         "frr_show_bgp_summary",
         "frr_show_running_config",
@@ -55,24 +65,17 @@ SAFE_PRIMITIVE_TOOLS = frozenset(
     }
 )
 
-NON_COMPOSABLE_PRIMITIVE_TOOLS = frozenset(
-    {
-        # These tools are useful during live diagnosis, but are too stateful,
-        # traffic-heavy, or open-ended to persist inside reusable composite tools.
-        "cat_file",
-        "curl_web_test",
-        "iperf_test",
-        "ethtool",
-    }
-)
-
-COMPOSABLE_PRIMITIVE_TOOLS = SAFE_PRIMITIVE_TOOLS - NON_COMPOSABLE_PRIMITIVE_TOOLS
+# The upstream NIKA diagnosis surface exposes all of these primitives directly.
+# Keep tool-evolution on the same surface instead of blocking stateful or
+# open-ended tools at the composability layer.
+NON_COMPOSABLE_PRIMITIVE_TOOLS = frozenset()
 
 MANAGER_TOOL_NAMES = frozenset(
     {
         "search_diagnostic_tools",
         "identify_capability_gap",
         "propose_composite_tool",
+        "propose_python_tool",
         "revise_composite_tool",
         "execute_candidate_tool",
         "record_tool_lesson",
@@ -81,7 +84,7 @@ MANAGER_TOOL_NAMES = frozenset(
 
 _PLACEHOLDER = re.compile(r"\$\{([a-z][a-z0-9_]*)\}")
 _IPV4 = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
-_SHELL_CONTROL = re.compile(r"[;&|`$><\n\r\"']")
+_SHELL_CONTROL = re.compile(r"[;&|`$><\n\r]")
 _NETSTAT_ALLOWED_ARGS = frozenset({"", "-tuln", "-rn", "-s", "-i", "-ant", "-anu"})
 
 
@@ -103,6 +106,31 @@ class ProposeCompositeInput(BaseModel):
             "JSON list of read-only steps: "
             "{tool, arguments, label}. Use ${parameter_name} placeholders."
         )
+    )
+
+
+class ProposePythonToolInput(BaseModel):
+    name: str
+    description: str
+    gap_id: str = Field(
+        description="Capability gap id returned by identify_capability_gap.",
+    )
+    parameters_json: str = Field(
+        description="JSON list of {name,type,description,required,default}."
+    )
+    code: str = Field(
+        description=(
+            "Complete Python source defining a function whose name and parameters "
+            "match this generated tool."
+        )
+    )
+    output_description: str = Field(
+        default="",
+        description="Short description of the generated function output.",
+    )
+    test_example_json: str = Field(
+        default="{}",
+        description="Optional JSON object with sample arguments for validation.",
     )
 
 
@@ -153,23 +181,45 @@ def _validate_composite_arguments(
     composite: CompositeTool,
     arguments: dict[str, Any],
 ) -> dict[str, Any]:
+    return _validate_parameter_arguments(
+        composite.parameters,
+        arguments,
+        label="composite",
+    )
+
+
+def _validate_generated_arguments(
+    tool: GeneratedTool,
+    arguments: dict[str, Any],
+) -> dict[str, Any]:
+    return _validate_parameter_arguments(
+        tool.parameters,
+        arguments,
+        label="generated tool",
+    )
+
+
+def _validate_parameter_arguments(
+    parameters: list[ToolParameter],
+    arguments: dict[str, Any],
+    *,
+    label: str,
+) -> dict[str, Any]:
     if not isinstance(arguments, dict):
-        raise ValueError("composite arguments must be an object")
-    declared = {parameter.name for parameter in composite.parameters}
+        raise ValueError(f"{label} arguments must be an object")
+    declared = {parameter.name for parameter in parameters}
     unknown = set(arguments) - declared
     if unknown:
-        raise ValueError(
-            f"unknown composite argument(s): {', '.join(sorted(unknown))}"
-        )
+        raise ValueError(f"unknown {label} argument(s): {', '.join(sorted(unknown))}")
 
     normalized: dict[str, Any] = {}
-    for parameter in composite.parameters:
+    for parameter in parameters:
         if parameter.name in arguments:
             value = arguments[parameter.name]
         elif parameter.default is not None or not parameter.required:
             value = parameter.default
         else:
-            raise ValueError(f"missing required composite argument: {parameter.name}")
+            raise ValueError(f"missing required {label} argument: {parameter.name}")
         if value is None and not parameter.required:
             normalized[parameter.name] = None
             continue
@@ -177,8 +227,10 @@ def _validate_composite_arguments(
         valid = isinstance(value, expected)
         if parameter.type in {"int", "float"} and isinstance(value, bool):
             valid = False
-        if parameter.type == "float" and isinstance(value, int) and not isinstance(
-            value, bool
+        if (
+            parameter.type == "float"
+            and isinstance(value, int)
+            and not isinstance(value, bool)
         ):
             value = float(value)
             valid = True
@@ -218,7 +270,9 @@ def _validate_argument_safety(value: Any, *, allow_placeholders: bool) -> None:
     if len(inspected) > 512:
         raise ValueError("string arguments must be at most 512 characters")
     if _SHELL_CONTROL.search(inspected):
-        raise ValueError("shell control characters are not allowed in composite arguments")
+        raise ValueError(
+            "shell control characters are not allowed in composite arguments"
+        )
 
 
 def _is_placeholder(value: Any) -> bool:
@@ -358,6 +412,61 @@ def _tool_output_is_error(output: Any) -> bool:
     return _tool_output_is_error(content) if content is not None else False
 
 
+def _compact_text(value: Any, *, limit: int = 96) -> str:
+    if isinstance(value, str):
+        text = value
+    else:
+        text = json.dumps(value, ensure_ascii=False, default=str)
+    text = " ".join(text.split())
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3].rstrip() + "..."
+
+
+def _parameter_summary(parameters: list[ToolParameter], *, limit: int = 8) -> str:
+    if not parameters:
+        return "none"
+    parts: list[str] = []
+    for parameter in parameters[:limit]:
+        requirement = (
+            "required"
+            if parameter.required and parameter.default is None
+            else f"default={parameter.default!r}"
+        )
+        parts.append(
+            f"{parameter.name} ({parameter.type}, {requirement}): "
+            f"{_compact_text(parameter.description, limit=72)}"
+        )
+    if len(parameters) > limit:
+        parts.append("...")
+    return "; ".join(parts)
+
+
+def _step_sequence_summary(steps: list[CompositeStep], *, limit: int = 6) -> str:
+    pieces: list[str] = []
+    for step in steps[:limit]:
+        if step.arguments:
+            args = ", ".join(
+                f"{key}={_compact_text(value, limit=32)}"
+                for key, value in step.arguments.items()
+            )
+            pieces.append(f"{step.tool}({args})")
+        else:
+            pieces.append(f"{step.tool}()")
+    if len(steps) > limit:
+        pieces.append("...")
+    return " -> ".join(pieces)
+
+
+def _output_contract_summary(output_contract: list[str], *, limit: int = 6) -> str:
+    if not output_contract:
+        return "one observation per declared step"
+    values = [_compact_text(item, limit=80) for item in output_contract[:limit]]
+    if len(output_contract) > limit:
+        values.append("...")
+    return "; ".join(values)
+
+
 class ToolEvolutionRuntime:
     def __init__(
         self,
@@ -381,15 +490,14 @@ class ToolEvolutionRuntime:
             session_dir=session.session_dir,
             extra_fields={"phase": "tool_evolution"},
         )
-        self.primitive_tools = {
-            tool.name: tool for tool in primitive_tools
-        }
+        self.primitive_tools = {tool.name: tool for tool in primitive_tools}
         self.retrieved_names: list[str] = []
         self.created_names: list[str] = []
         self.capability_gap_ids: list[str] = []
         self.mastery_used: list[str] = []
         self.cross_model_mastery: list[str] = []
         self._ephemeral_tools: dict[str, CompositeTool] = {}
+        self._ephemeral_generated_tools: dict[str, GeneratedTool] = {}
         self._known_devices = self._collect_devices()
         self._apply_mastery_overlays()
         self.retrieved = self.store.search_composites(
@@ -402,7 +510,20 @@ class ToolEvolutionRuntime:
             include_candidates=True,
             record_usage=self.update_enabled,
         )
-        self.retrieved_names = [tool.name for tool in self.retrieved]
+        self.retrieved_generated = self.store.search_generated_tools(
+            task_description,
+            tags=[
+                str(getattr(session, "scenario_name", "")),
+                str(getattr(session, "scenario_topo_size", "")),
+            ],
+            top_k=5,
+            include_candidates=True,
+            record_usage=self.update_enabled,
+        )
+        self.retrieved_names = [
+            *[tool.name for tool in self.retrieved],
+            *[tool.name for tool in self.retrieved_generated],
+        ]
         if self.retrieved_names:
             self.logger.log(
                 "tool_evolution_retrieved",
@@ -430,52 +551,159 @@ class ToolEvolutionRuntime:
             overlay = mastery.agent_overlay()
             if not overlay:
                 continue
-            tool.description = f"{tool.description}\n\nLearned from prior executions:\n{overlay}"
+            tool.description = (
+                f"{tool.description}\n\nLearned from prior executions:\n{overlay}"
+            )
             self.mastery_used.append(tool_name)
             if mastery.source_models and self.model not in mastery.source_models:
                 self.cross_model_mastery.append(tool_name)
 
     def prompt_suffix(self) -> str:
-        return """\
+        retrieved_guidance = self._retrieved_tool_guidance()
+        return f"""\
 
 Tool-evolution policy:
-- Search the diagnostic tool library before repeating a multi-step investigation.
-- Existing composite tools may be probationary; verify their observations.
-- When a reusable read-only workflow is missing, first identify the capability gap.
-- Synthesize an ephemeral parameterized composite for that gap, then execute it.
-- A synthesized tool is persisted only after structural, runtime, and semantic checks pass.
-- Revise a composite into a new version when execution reveals a general flaw.
-- Composite steps may use only composable diagnostic primitives; do not compose
-  file reads, arbitrary command arguments, traffic generators, or service/config changes.
-- Never encode incident labels, concrete device names, IP addresses, or session identifiers.
-- Record concise lessons when a primitive tool's documentation is incomplete or misleading.
-"""
+    - If a retrieved composite/generated tool below matches the evidence you need
+      and you can supply its arguments, call it before manually repeating the same
+      primitive sequence.
+    - Search the diagnostic tool library before repeating any other multi-step
+      investigation.
+    - Candidate tools are reusable evidence collectors; verify observations before
+      using them as the final conclusion.
+    - When a reusable workflow or executable helper is missing, first identify the
+      capability gap.
+    - Synthesize either a parameterized composite or Python generated tool for that
+      gap, then execute it.
+    - A synthesized tool is persisted only after structural, runtime/sandbox, and
+      semantic checks pass.
+    - Revise a composite into a new version when execution reveals a general flaw.
+    - Composite steps may use the same diagnosis primitives exposed by upstream
+      NIKA; keep arguments parameterized and reusable across incidents.
+    - Generated Python tools must be pure computational helpers with declared
+      parameters.
+    - Never encode incident labels, concrete device names, IP addresses, or session
+      identifiers.
+    - Record concise lessons when a primitive tool's documentation is incomplete or
+      misleading.
+{retrieved_guidance}"""
+
+    def _retrieved_tool_guidance(self) -> str:
+        if not self.retrieved and not self.retrieved_generated:
+            return ""
+
+        lines = ["", "Retrieved reusable tools for this task:"]
+        for composite in self.retrieved:
+            lines.extend(
+                [
+                    f"- {composite.name} [{composite.status}]: "
+                    f"{_compact_text(composite.description, limit=180)}",
+                    f"  Steps: {_step_sequence_summary(composite.steps)}",
+                    f"  Args: {_parameter_summary(composite.parameters)}",
+                    f"  Outputs: {_output_contract_summary(composite.output_contract)}",
+                ]
+            )
+        for tool in self.retrieved_generated:
+            lines.extend(
+                [
+                    f"- {tool.name} [{tool.status} generated_python]: "
+                    f"{_compact_text(tool.description, limit=180)}",
+                    f"  Args: {_parameter_summary(tool.parameters)}",
+                    f"  Output: {_compact_text(tool.output_description or 'computed diagnostic value')}",
+                ]
+            )
+        return "\n".join(lines) + "\n"
+
+    @staticmethod
+    def _composite_payload(composite: CompositeTool) -> dict[str, Any]:
+        return {
+            "kind": "composite",
+            "name": composite.name,
+            "description": composite.description,
+            "status": composite.status,
+            "parameters": [
+                parameter.model_dump() for parameter in composite.parameters
+            ],
+            "step_sequence": _step_sequence_summary(composite.steps),
+            "steps": [
+                {
+                    "tool": step.tool,
+                    "arguments": step.arguments,
+                    "label": step.label,
+                }
+                for step in composite.steps
+            ],
+            "output_contract": composite.output_contract,
+            "execution_hint": (
+                "Call this tool directly when available, or use execute_candidate_tool "
+                "with this name and arguments_json."
+            ),
+        }
+
+    @staticmethod
+    def _generated_payload(tool: GeneratedTool) -> dict[str, Any]:
+        return {
+            "kind": "generated_python",
+            "name": tool.name,
+            "description": tool.description,
+            "status": tool.status,
+            "parameters": [parameter.model_dump() for parameter in tool.parameters],
+            "output_description": tool.output_description,
+            "execution_hint": (
+                "Call this tool directly when available, or use execute_candidate_tool "
+                "with this name and arguments_json."
+            ),
+        }
+
+    @staticmethod
+    def _composite_tool_description(composite: CompositeTool) -> str:
+        return "\n".join(
+            [
+                composite.description,
+                f"Runs: {_step_sequence_summary(composite.steps)}",
+                f"Arguments: {_parameter_summary(composite.parameters)}",
+                f"Returns: {_output_contract_summary(composite.output_contract)}",
+            ]
+        )
+
+    @staticmethod
+    def _generated_tool_description(tool: GeneratedTool) -> str:
+        return "\n".join(
+            [
+                tool.description,
+                f"Arguments: {_parameter_summary(tool.parameters)}",
+                f"Returns: {_compact_text(tool.output_description or 'computed diagnostic value')}",
+            ]
+        )
 
     def build_tools(self) -> list[BaseTool]:
         tools = list(self.primitive_tools.values())
         tools.extend(self._build_composite_tool(item) for item in self.retrieved)
+        tools.extend(
+            self._build_generated_tool(item) for item in self.retrieved_generated
+        )
         tools.extend(self._build_manager_tools())
         return tools
 
     def _build_manager_tools(self) -> list[StructuredTool]:
         async def search_diagnostic_tools(query: str) -> str:
-            matches = self.store.search_composites(
+            composite_matches = self.store.search_composites(
                 query,
                 tags=[str(getattr(self.session, "scenario_name", ""))],
                 top_k=8,
                 include_candidates=True,
                 record_usage=self.update_enabled,
             )
-            payload = [
-                {
-                    "name": item.name,
-                    "description": item.description,
-                    "status": item.status,
-                    "parameters": [parameter.model_dump() for parameter in item.parameters],
-                    "output_contract": item.output_contract,
-                }
-                for item in matches
+            generated_matches = self.store.search_generated_tools(
+                query,
+                tags=[str(getattr(self.session, "scenario_name", ""))],
+                top_k=8,
+                include_candidates=True,
+                record_usage=self.update_enabled,
+            )
+            payload: list[dict[str, Any]] = [
+                self._composite_payload(item) for item in composite_matches
             ]
+            payload.extend(self._generated_payload(item) for item in generated_matches)
             self.logger.log(
                 "tool_evolution_search",
                 {"query": query, "result_names": [item["name"] for item in payload]},
@@ -535,7 +763,7 @@ Tool-evolution policy:
             )
             return (
                 f"Recorded capability gap '{gap.gap_id}'. "
-                "Synthesize an ephemeral composite for this gap."
+                "Synthesize an ephemeral composite or Python tool for this gap."
             )
 
         async def propose_composite_tool(
@@ -612,11 +840,144 @@ Tool-evolution policy:
                 "Execute it with execute_candidate_tool to verify and persist it."
             )
 
+        async def propose_python_tool(
+            name: str,
+            description: str,
+            gap_id: str,
+            parameters_json: str,
+            code: str,
+            output_description: str = "",
+            test_example_json: str = "{}",
+        ) -> str:
+            if not self.mode.distillation_enabled:
+                return "Tool generation is disabled in mastery-only mode."
+            if not self.update_enabled:
+                return "Tool library updates are frozen for this benchmark split."
+            try:
+                if not gap_id:
+                    raise ValueError(
+                        "gap_id is required; identify the capability gap first"
+                    )
+                gap = self.store.load().capability_gaps.get(gap_id)
+                if gap is None:
+                    raise ValueError(f"unknown capability gap: {gap_id}")
+                parameters = [
+                    ToolParameter.model_validate(item)
+                    for item in json.loads(parameters_json)
+                ]
+                test_example = json.loads(test_example_json or "{}")
+                if not isinstance(test_example, dict):
+                    raise ValueError("test_example_json must decode to an object")
+                generated = GeneratedTool(
+                    name=name,
+                    description=description,
+                    parameters=parameters,
+                    code=code,
+                    output_description=output_description
+                    or ", ".join(gap.expected_observations),
+                    tags=[str(getattr(self.session, "scenario_name", ""))],
+                    status="ephemeral",
+                    test_example=test_example,
+                )
+                self.validate_generated_tool(generated)
+                generated.verification_reports.append(
+                    ToolVerificationReport(
+                        stage="structural",
+                        passed=True,
+                        checks=validate_generated_tool_code(generated),
+                        context_fingerprint=self._context_fingerprint(),
+                    )
+                )
+                self.store.resolve_capability_gap(
+                    gap_id,
+                    proposed_tool=generated.name,
+                )
+                self._ephemeral_generated_tools[generated.name] = generated
+            except Exception as exc:
+                self.logger.log(
+                    "tool_evolution_candidate_rejected",
+                    {"name": name, "kind": "generated_python", "error": str(exc)},
+                )
+                return f"Rejected generated Python tool: {exc}"
+            self.logger.log(
+                "tool_evolution_generated_ephemeral_created",
+                {
+                    "name": generated.name,
+                    "signature": generated.ensure_signature().signature,
+                    "gap_id": gap_id,
+                },
+            )
+            return (
+                f"Synthesized ephemeral Python tool '{generated.name}'. "
+                "Execute it with execute_candidate_tool to sandbox-verify and persist it."
+            )
+
         async def execute_candidate_tool(name: str, arguments_json: str) -> str:
             try:
                 arguments = json.loads(arguments_json)
                 if not isinstance(arguments, dict):
                     raise ValueError("arguments_json must decode to an object")
+                ephemeral_generated = self._ephemeral_generated_tools.get(name)
+                generated = ephemeral_generated or self.store.get_generated_tool(name)
+                if generated is not None:
+                    result = await self.execute_generated_tool(generated, arguments)
+                    checks = self._verify_generated_result(generated, result)
+                    report = ToolVerificationReport(
+                        stage="semantic",
+                        passed=True,
+                        checks=checks,
+                        context_fingerprint=self._context_fingerprint(),
+                    )
+                    if ephemeral_generated is not None:
+                        ephemeral_generated.verification_reports.extend(
+                            [
+                                ToolVerificationReport(
+                                    stage="sandbox",
+                                    passed=True,
+                                    checks=list(result.get("checks") or []),
+                                    context_fingerprint=self._context_fingerprint(),
+                                ),
+                                report,
+                            ]
+                        )
+                        registered, created = self.store.register_generated_tool(
+                            ephemeral_generated,
+                            deduplicate=self.mode.dedup_enabled,
+                        )
+                        if not created:
+                            self.store.record_generated_verification(
+                                registered.name,
+                                report,
+                            )
+                        self._ephemeral_generated_tools.pop(name, None)
+                        if created:
+                            self.created_names.append(registered.name)
+                        for gap_id in self.capability_gap_ids:
+                            gap = self.store.load().capability_gaps.get(gap_id)
+                            if gap and gap.proposed_tool == name:
+                                self.store.resolve_capability_gap(
+                                    gap_id,
+                                    proposed_tool=registered.name,
+                                    resolved=True,
+                                )
+                        self.logger.log(
+                            "tool_evolution_generated_verified",
+                            {
+                                "name": registered.name,
+                                "source_name": name,
+                                "created": created,
+                                "checks": checks,
+                            },
+                        )
+                        result["persisted_as"] = registered.name
+                    else:
+                        if self.update_enabled:
+                            self.store.record_generated_verification(
+                                generated.name,
+                                report,
+                            )
+                    return json.dumps(result, ensure_ascii=False, default=str)
+
                 ephemeral = self._ephemeral_tools.get(name)
                 composite = ephemeral or self.store.get_composite(name)
                 if composite is None:
@@ -683,7 +1044,17 @@ Tool-evolution policy:
                             context_fingerprint=self._context_fingerprint(),
                         )
                     )
-                return f"Composite execution failed: {exc}"
+                generated = self._ephemeral_generated_tools.get(name)
+                if generated is not None:
+                    generated.verification_reports.append(
+                        ToolVerificationReport(
+                            stage="sandbox",
+                            passed=False,
+                            error=str(exc),
+                            context_fingerprint=self._context_fingerprint(),
+                        )
+                    )
+                return f"Candidate execution failed: {exc}"
 
         async def revise_composite_tool(
             existing_name: str,
@@ -703,7 +1074,7 @@ Tool-evolution policy:
                 version = existing.version + 1
                 suffix = f"_v{version}"
                 revised = CompositeTool(
-                    name=f"{existing.name[:64 - len(suffix)]}{suffix}",
+                    name=f"{existing.name[: 64 - len(suffix)]}{suffix}",
                     description=description,
                     parameters=[
                         ToolParameter.model_validate(item)
@@ -832,9 +1203,21 @@ Tool-evolution policy:
                         args_schema=ProposeCompositeInput,
                     ),
                     StructuredTool.from_function(
+                        coroutine=propose_python_tool,
+                        name="propose_python_tool",
+                        description=(
+                            "Create an executable Python helper for a missing "
+                            "computational capability. The code must define the "
+                            "named function and pass sandbox validation."
+                        ),
+                        args_schema=ProposePythonToolInput,
+                    ),
+                    StructuredTool.from_function(
                         coroutine=execute_candidate_tool,
                         name="execute_candidate_tool",
-                        description="Execute a newly proposed or probationary composite tool.",
+                        description=(
+                            "Execute a newly proposed or probationary composite/generated tool."
+                        ),
                         args_schema=ExecuteCandidateInput,
                     ),
                     StructuredTool.from_function(
@@ -896,12 +1279,63 @@ Tool-evolution policy:
         status_note = (
             "Promoted and validated."
             if composite.status == "promoted"
-            else "Probationary: verify its observations before concluding."
+            else (
+                "Candidate reusable workflow: use it for matching evidence "
+                "collection, then cross-check observations before the final conclusion."
+            )
         )
         return StructuredTool.from_function(
             coroutine=execute,
             name=composite.name,
-            description=f"{composite.description}\n{status_note}",
+            description=f"{self._composite_tool_description(composite)}\n{status_note}",
+            args_schema=args_model,
+        )
+
+    def _build_generated_tool(self, tool: GeneratedTool) -> StructuredTool:
+        fields: Any = {}
+        for parameter in tool.parameters:
+            py_type = _parameter_python_type(parameter.type)
+            default = (
+                ...
+                if parameter.required and parameter.default is None
+                else parameter.default
+            )
+            fields[parameter.name] = (
+                py_type,
+                Field(default=default, description=parameter.description),
+            )
+        args_model = create_model(
+            f"{tool.name.title().replace('_', '')}Input",
+            **fields,
+        )
+
+        async def execute(**kwargs: Any) -> str:
+            result = await self.execute_generated_tool(tool, kwargs)
+            checks = self._verify_generated_result(tool, result)
+            if self.update_enabled:
+                self.store.record_generated_verification(
+                    tool.name,
+                    ToolVerificationReport(
+                        stage="semantic",
+                        passed=True,
+                        checks=checks,
+                        context_fingerprint=self._context_fingerprint(),
+                    ),
+                )
+            return json.dumps(result, ensure_ascii=False, default=str)
+
+        status_note = (
+            "Promoted and validated generated Python tool."
+            if tool.status == "promoted"
+            else (
+                "Candidate generated Python tool: use it for matching computations, "
+                "then cross-check before the final conclusion."
+            )
+        )
+        return StructuredTool.from_function(
+            coroutine=execute,
+            name=tool.name,
+            description=f"{self._generated_tool_description(tool)}\n{status_note}",
             args_schema=args_model,
         )
 
@@ -957,6 +1391,27 @@ Tool-evolution policy:
                 }
             )
             _validate_composite_arguments(partial, defaults)
+
+    def validate_generated_tool(self, tool: GeneratedTool) -> None:
+        serialized = tool.model_dump_json().lower()
+        self._validate_persistent_text(serialized)
+        validate_generated_tool_code(tool)
+        defaults = {
+            parameter.name: parameter.default
+            for parameter in tool.parameters
+            if parameter.default is not None or not parameter.required
+        }
+        if defaults:
+            partial = tool.model_copy(
+                update={
+                    "parameters": [
+                        parameter.model_copy(update={"required": False})
+                        for parameter in tool.parameters
+                        if parameter.name in defaults
+                    ]
+                }
+            )
+            _validate_generated_arguments(partial, defaults)
 
     @staticmethod
     def _validate_primitive_step_schema(
@@ -1073,9 +1528,7 @@ Tool-evolution policy:
                 raise ValueError(
                     f"observation {index} does not match its declared step"
                 )
-            if not ToolEvolutionRuntime._informative_output(
-                observation.get("output")
-            ):
+            if not ToolEvolutionRuntime._informative_output(observation.get("output")):
                 raise ValueError(
                     f"observation {index} returned no informative primitive output"
                 )
@@ -1086,11 +1539,29 @@ Tool-evolution policy:
         ]
         if composite.output_contract:
             if not all(item.strip() for item in composite.output_contract):
-                raise ValueError("composite output contract contains an empty observation")
+                raise ValueError(
+                    "composite output contract contains an empty observation"
+                )
             checks.append(
-                "declared observation contract: "
-                + ", ".join(composite.output_contract)
+                "declared observation contract: " + ", ".join(composite.output_contract)
             )
+        return checks
+
+    @staticmethod
+    def _verify_generated_result(
+        tool: GeneratedTool,
+        result: dict[str, Any],
+    ) -> list[str]:
+        if result.get("status") != "success" or not result.get("success"):
+            raise ValueError("generated tool did not return success status")
+        if not ToolEvolutionRuntime._informative_output(result.get("result")):
+            raise ValueError("generated tool returned no informative output")
+        checks = [
+            "success status",
+            "informative generated output",
+        ]
+        if tool.output_description:
+            checks.append(f"declared output: {tool.output_description}")
         return checks
 
     @staticmethod
@@ -1172,3 +1643,40 @@ Tool-evolution policy:
             {"name": composite.name, "steps": len(outputs)},
         )
         return {"tool": composite.name, "status": "success", "observations": outputs}
+
+    async def execute_generated_tool(
+        self,
+        tool: GeneratedTool,
+        arguments: dict[str, Any],
+    ) -> dict[str, Any]:
+        self.validate_generated_tool(tool)
+        arguments = _validate_generated_arguments(tool, arguments)
+        self.logger.log(
+            "tool_evolution_generated_start",
+            {"name": tool.name, "status": tool.status},
+        )
+        try:
+            output = await asyncio.to_thread(run_generated_tool, tool, arguments)
+        except Exception as exc:
+            self.logger.log(
+                "tool_evolution_generated_error",
+                {"name": tool.name, "error": str(exc)},
+            )
+            raise
+        if not output.get("success"):
+            self.logger.log(
+                "tool_evolution_generated_error",
+                {"name": tool.name, "error": output.get("stderr", "")},
+            )
+            raise RuntimeError(output.get("stderr") or "generated tool failed")
+        self.logger.log(
+            "tool_evolution_generated_end",
+            {"name": tool.name},
+        )
+        return {
+            "tool": tool.name,
+            "status": "success",
+            "success": True,
+            "result": output.get("result"),
+            "checks": output.get("checks", []),
+        }

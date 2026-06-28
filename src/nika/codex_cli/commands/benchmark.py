@@ -131,7 +131,22 @@ def benchmark_run(
     evolution_mode: str = typer.Option(
         ToolEvolutionMode.DUAL.value,
         "--evolution-mode",
-        help="Tool Evolution mode: mastery, distill, dual, dual-no-validation, dual-no-dedup.",
+        help="Tool Evolution mode: mastery, distill, dual.",
+    ),
+    evolution_stream: str | None = typer.Option(
+        None,
+        "--evolution-stream",
+        help="Tool Evolution stream id for CSV row subprocess execution.",
+    ),
+    evolution_split: str | None = typer.Option(
+        None,
+        "--evolution-split",
+        help="Tool Evolution split for CSV row subprocess execution.",
+    ),
+    evolution_sequence_index: int | None = typer.Option(
+        None,
+        "--evolution-sequence-index",
+        help="Tool Evolution sequence index for CSV row subprocess execution.",
     ),
 ) -> None:
     """Run one benchmark row from CSV, or a single case when SCENARIO and --problem are set."""
@@ -204,12 +219,24 @@ def benchmark_run(
             tool_evolution_enabled=tool_evolution,
             tool_library_id=tool_library or "default",
             tool_evolution_mode=evolution_mode,
+            evolution_stream=evolution_stream,
+            evolution_split=evolution_split,
+            evolution_sequence_index=evolution_sequence_index,
         )
         return
 
     if problem is not None:
         raise typer.BadParameter(
             "--problem without SCENARIO is invalid; pass SCENARIO or use batch mode with --csv."
+        )
+    if (
+        evolution_stream is not None
+        or evolution_split is not None
+        or evolution_sequence_index is not None
+    ):
+        raise typer.BadParameter(
+            "--evolution-stream/--evolution-split/--evolution-sequence-index "
+            "apply only to single-case subprocess mode."
         )
 
     benchmark_path = str(csv) if csv is not None else default_benchmark_csv_path()

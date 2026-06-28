@@ -16,6 +16,7 @@ import fcntl
 from agent.tool_evolution.models import (
     CapabilityGap,
     CompositeTool,
+    GeneratedTool,
     ToolLibraryState,
     ToolCardRevision,
     ToolMastery,
@@ -83,8 +84,8 @@ class ToolEvolutionStore:
         state = ToolLibraryState.model_validate_json(
             self.state_path.read_text(encoding="utf-8")
         )
-        if state.schema_version < 2:
-            state.schema_version = 2
+        if state.schema_version < 3:
+            state.schema_version = 3
         return state
 
     def _write_unlocked(self, state: ToolLibraryState) -> None:
@@ -268,6 +269,35 @@ class ToolEvolutionStore:
             self._write_unlocked(state)
             return composite, True
 
+    def register_generated_tool(
+        self,
+        tool: GeneratedTool,
+        *,
+        deduplicate: bool = True,
+    ) -> tuple[GeneratedTool, bool]:
+        tool = tool.model_copy(deep=True).ensure_signature()
+        with self._lock():
+            state = self._read_unlocked()
+            if deduplicate:
+                for existing in state.generated_tools.values():
+                    if (
+                        existing.status != "rejected"
+                        and existing.signature == tool.signature
+                    ):
+                        return existing, False
+
+            base_name = tool.name
+            suffix = 2
+            while tool.name in state.generated_tools or tool.name in state.composites:
+                tool.name = f"{base_name[:58]}_{suffix}"
+                suffix += 1
+            tool.status = "promoted" if tool.status == "promoted" else "candidate"
+            tool.updated_at = utc_now()
+            state.generated_tools[tool.name] = tool
+            self._prune_generated_to_capacity(state)
+            self._write_unlocked(state)
+            return tool, True
+
     def _prune_to_capacity(self, state: ToolLibraryState) -> None:
         overflow = len(state.composites) - self.capacity
         if overflow <= 0:
@@ -284,8 +314,27 @@ class ToolEvolutionStore:
         for composite in ranked[:overflow]:
             state.composites.pop(composite.name, None)
 
+    def _prune_generated_to_capacity(self, state: ToolLibraryState) -> None:
+        overflow = len(state.generated_tools) - self.capacity
+        if overflow <= 0:
+            return
+        ranked = sorted(
+            state.generated_tools.values(),
+            key=lambda item: (
+                item.status != "rejected",
+                item.status == "promoted",
+                item.utility_score(),
+                item.updated_at,
+            ),
+        )
+        for tool in ranked[:overflow]:
+            state.generated_tools.pop(tool.name, None)
+
     def get_composite(self, name: str) -> CompositeTool | None:
         return self.load().composites.get(name)
+
+    def get_generated_tool(self, name: str) -> GeneratedTool | None:
+        return self.load().generated_tools.get(name)
 
     def record_composite_evidence(
         self,
@@ -362,7 +411,10 @@ class ToolEvolutionStore:
                 composite.status = "rejected"
             elif not latest_succeeded:
                 composite.status = "candidate"
-            elif not validation_enabled or len(successful_contexts) >= min_distinct_contexts:
+            elif (
+                not validation_enabled
+                or len(successful_contexts) >= min_distinct_contexts
+            ):
                 composite.status = "promoted"
             elif composite.status != "rejected":
                 composite.status = "candidate"
@@ -388,6 +440,128 @@ class ToolEvolutionStore:
             self._write_unlocked(state)
             return composite
 
+    def record_generated_evidence(
+        self,
+        name: str,
+        evidence: ValidationEvidence,
+        *,
+        validation_enabled: bool = True,
+        min_distinct_contexts: int = 2,
+    ) -> GeneratedTool | None:
+        with self._lock():
+            state = self._read_unlocked()
+            tool = state.generated_tools.get(name)
+            if tool is None:
+                return None
+            duplicate = any(
+                item.context_fingerprint == evidence.context_fingerprint
+                and item.source == evidence.source
+                and item.incident_success == evidence.incident_success
+                and item.execution_success == evidence.execution_success
+                and item.structural_valid == evidence.structural_valid
+                and item.semantic_valid == evidence.semantic_valid
+                for item in tool.evidence
+            )
+            if not duplicate:
+                tool.evidence.append(evidence)
+                tool.execution_count += 1
+                if evidence.execution_success:
+                    tool.success_count += 1
+
+            successful_contexts = {
+                item.context_fingerprint
+                for item in tool.evidence
+                if item.execution_success
+                and item.incident_success
+                and item.structural_valid
+                and item.semantic_valid
+                and item.source in {"runtime", "replay"}
+            }
+            consecutive_failures = 0
+            for item in reversed(tool.evidence):
+                if item.execution_success:
+                    break
+                consecutive_failures += 1
+            latest_succeeded = bool(
+                tool.evidence and tool.evidence[-1].execution_success
+            )
+            if tool.status == "rejected":
+                pass
+            elif consecutive_failures >= 2:
+                tool.status = "rejected"
+            elif not latest_succeeded:
+                tool.status = "candidate"
+            elif (
+                not validation_enabled
+                or len(successful_contexts) >= min_distinct_contexts
+            ):
+                tool.status = "promoted"
+            elif tool.status != "rejected":
+                tool.status = "candidate"
+            tool.updated_at = utc_now()
+            state.generated_tools[name] = tool
+            self._write_unlocked(state)
+            return tool
+
+    def record_generated_verification(
+        self,
+        name: str,
+        report: ToolVerificationReport,
+    ) -> GeneratedTool | None:
+        with self._lock():
+            state = self._read_unlocked()
+            tool = state.generated_tools.get(name)
+            if tool is None:
+                return None
+            tool.verification_reports.append(report)
+            tool.verification_reports = tool.verification_reports[-30:]
+            tool.updated_at = utc_now()
+            state.generated_tools[name] = tool
+            self._write_unlocked(state)
+            return tool
+
+    @staticmethod
+    def _composite_search_text(composite: CompositeTool) -> str:
+        step_parts: list[str] = []
+        for step in composite.steps:
+            step_parts.extend(
+                [
+                    step.tool,
+                    step.label,
+                    json.dumps(step.arguments, sort_keys=True, default=str),
+                ]
+            )
+        parameter_parts = [
+            f"{parameter.name} {parameter.description} {parameter.type}"
+            for parameter in composite.parameters
+        ]
+        return " ".join(
+            [
+                composite.name,
+                composite.description,
+                *composite.tags,
+                *composite.output_contract,
+                *parameter_parts,
+                *step_parts,
+            ]
+        ).lower()
+
+    @staticmethod
+    def _generated_search_text(tool: GeneratedTool) -> str:
+        parameter_parts = [
+            f"{parameter.name} {parameter.description} {parameter.type}"
+            for parameter in tool.parameters
+        ]
+        return " ".join(
+            [
+                tool.name,
+                tool.description,
+                tool.output_description,
+                *tool.tags,
+                *parameter_parts,
+            ]
+        ).lower()
+
     def search_composites(
         self,
         query: str,
@@ -408,9 +582,7 @@ class ToolEvolutionStore:
                     continue
                 if composite.status == "candidate" and not include_candidates:
                     continue
-                text = " ".join(
-                    [composite.name, composite.description, *composite.tags]
-                ).lower()
+                text = self._composite_search_text(composite)
                 tokens = set(re.findall(r"[a-z0-9_]+", text))
                 overlap = len(query_tokens & tokens)
                 candidate_ngrams = self._character_ngrams(text)
@@ -434,6 +606,56 @@ class ToolEvolutionStore:
             now = utc_now()
             for composite in selected:
                 stored = state.composites[composite.name]
+                stored.retrieval_count += 1
+                stored.last_used_at = now
+            if selected and record_usage:
+                self._write_unlocked(state)
+            return selected
+
+    def search_generated_tools(
+        self,
+        query: str,
+        *,
+        tags: list[str] | None = None,
+        top_k: int = 5,
+        include_candidates: bool = True,
+        record_usage: bool = True,
+    ) -> list[GeneratedTool]:
+        with self._lock():
+            state = self._read_unlocked()
+            query_tokens = set(re.findall(r"[a-z0-9_]+", query.lower()))
+            query_tokens.update(str(tag).lower() for tag in tags or [])
+            query_ngrams = self._character_ngrams(" ".join(sorted(query_tokens)))
+            scored: list[tuple[float, GeneratedTool]] = []
+            for tool in state.generated_tools.values():
+                if tool.status == "rejected":
+                    continue
+                if tool.status == "candidate" and not include_candidates:
+                    continue
+                text = self._generated_search_text(tool)
+                tokens = set(re.findall(r"[a-z0-9_]+", text))
+                overlap = len(query_tokens & tokens)
+                candidate_ngrams = self._character_ngrams(text)
+                union = query_ngrams | candidate_ngrams
+                fuzzy = (
+                    len(query_ngrams & candidate_ngrams) / len(union)
+                    if union and query_ngrams
+                    else 0.0
+                )
+                score = float(overlap) + fuzzy * 2.0
+                if tool.status == "promoted":
+                    score += 2.0
+                score += min(tool.utility_score(), 10.0) * 0.1
+                if score > 0 or not query_tokens:
+                    scored.append((score, tool))
+            scored.sort(
+                key=lambda item: (item[0], item[1].utility_score()),
+                reverse=True,
+            )
+            selected = [item[1] for item in scored[:top_k]]
+            now = utc_now()
+            for tool in selected:
+                stored = state.generated_tools[tool.name]
                 stored.retrieval_count += 1
                 stored.last_used_at = now
             if selected and record_usage:

@@ -1,7 +1,8 @@
-"""FastMCP adapter for persistent, read-only evolved diagnostic workflows."""
+"""FastMCP adapter for persistent evolved diagnostic workflows and helpers."""
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
 import os
@@ -9,12 +10,14 @@ from typing import Any, Callable
 
 from mcp.server.fastmcp import FastMCP
 
+from agent.tool_evolution.generated_tools import run_generated_tool
 from agent.tool_evolution.runtime import (
     COMPOSABLE_PRIMITIVE_TOOLS,
     _resolve_template,
     _tool_output_is_error,
     _validate_argument_safety,
     _validate_composite_arguments,
+    _validate_generated_arguments,
     _validate_step_argument_policy,
 )
 from agent.tool_evolution.store import ToolEvolutionStore
@@ -51,6 +54,7 @@ def list_evolved_tools(include_candidates: bool = False) -> list[dict[str, Any]]
     state = _store().load()
     return [
         {
+            "kind": "composite",
             "name": item.name,
             "description": item.description,
             "status": item.status,
@@ -62,6 +66,20 @@ def list_evolved_tools(include_candidates: bool = False) -> list[dict[str, Any]]
         for item in state.composites.values()
         if item.status == "promoted"
         or (include_candidates and item.status == "candidate")
+    ] + [
+        {
+            "kind": "generated_python",
+            "name": item.name,
+            "description": item.description,
+            "status": item.status,
+            "version": item.version,
+            "parameters": [parameter.model_dump() for parameter in item.parameters],
+            "output_description": item.output_description,
+            "utility": item.utility_score(),
+        }
+        for item in state.generated_tools.values()
+        if item.status == "promoted"
+        or (include_candidates and item.status == "candidate")
     ]
 
 
@@ -71,11 +89,31 @@ async def execute_evolved_tool(
     name: str,
     arguments_json: str,
 ) -> str:
-    """Execute one evolved read-only workflow from the configured library."""
-    composite = _store().get_composite(name)
+    """Execute one evolved tool from the configured library."""
+    store = _store()
+    composite = store.get_composite(name)
+    generated = store.get_generated_tool(name)
+    arguments = json.loads(arguments_json)
+    if generated is not None:
+        if generated.status != "promoted":
+            raise ValueError(f"Unknown or unpromoted evolved tool: {name}")
+        arguments = _validate_generated_arguments(generated, arguments)
+        output = await asyncio.to_thread(run_generated_tool, generated, arguments)
+        if not output.get("success"):
+            raise RuntimeError(output.get("stderr") or "generated tool failed")
+        return json.dumps(
+            {
+                "tool": generated.name,
+                "kind": "generated_python",
+                "status": "success",
+                "result": output.get("result"),
+            },
+            ensure_ascii=False,
+            default=str,
+        )
+
     if composite is None or composite.status != "promoted":
         raise ValueError(f"Unknown or unpromoted evolved tool: {name}")
-    arguments = json.loads(arguments_json)
     arguments = _validate_composite_arguments(composite, arguments)
 
     outputs: list[dict[str, Any]] = []

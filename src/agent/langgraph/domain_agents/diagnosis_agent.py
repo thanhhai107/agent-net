@@ -5,7 +5,7 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 
 from agent.llm.model_factory import DEFAULT_LLM_BACKEND, DEFAULT_MODEL, load_model
 from agent.tool_evolution.models import ToolEvolutionMode
-from agent.tool_evolution.runtime import SAFE_PRIMITIVE_TOOLS, ToolEvolutionRuntime
+from agent.tool_evolution.runtime import ToolEvolutionRuntime
 from agent.utils.mcp_servers import MCPServerConfig, select_diagnosis_servers
 from nika.utils.session import Session
 
@@ -17,8 +17,6 @@ OVERALL_DIAGNOSIS_PROMPT = """\
     
     Basic requirements:
     - Use the provided tools to gather necessary information.
-    - Diagnosis is read-only. Never change network state, configuration, links,
-      routes, services, traffic control, files, or processes.
     - Do not provide mitigation unless explicitly required.
 """
 
@@ -68,9 +66,6 @@ class DiagnosisAgent:
         for tool in self.tools:
             tool.handle_tool_error = True
             tool.handle_validation_error = True
-        self.tools = [
-            tool for tool in self.tools if tool.name in SAFE_PRIMITIVE_TOOLS
-        ]
         if self.tool_evolution_enabled:
             session = Session().load_running_session(session_id=self.session_id)
             assert self.tool_evolution_mode is not None

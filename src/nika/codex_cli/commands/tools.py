@@ -11,7 +11,9 @@ from agent.tool_evolution.store import ToolEvolutionStore
 from nika.config import TOOL_EVOLUTION_DIR
 
 
-tools_app = typer.Typer(help="Inspect persistent mastered and composite diagnostic tools.")
+tools_app = typer.Typer(
+    help="Inspect persistent mastered, composite, and generated diagnostic tools."
+)
 
 
 @tools_app.command("libraries")
@@ -24,11 +26,19 @@ def list_libraries() -> None:
             state = ToolEvolutionStore(path.name).load()
             promoted = sum(item.status == "promoted" for item in state.composites.values())
             candidates = sum(item.status == "candidate" for item in state.composites.values())
+            generated_promoted = sum(
+                item.status == "promoted" for item in state.generated_tools.values()
+            )
+            generated_candidates = sum(
+                item.status == "candidate" for item in state.generated_tools.values()
+            )
             revisions = sum(len(item.revisions) for item in state.mastery.values())
             typer.echo(
                 f"{path.name}\tmastery={len(state.mastery)}\t"
                 f"revisions={revisions}\tgaps={len(state.capability_gaps)}\t"
-                f"candidates={candidates}\tpromoted={promoted}"
+                f"candidates={candidates}\tpromoted={promoted}\t"
+                f"generated_candidates={generated_candidates}\t"
+                f"generated_promoted={generated_promoted}"
             )
 
 

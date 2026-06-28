@@ -15,16 +15,20 @@ from agent.langgraph.domain_agents.diagnosis_agent import DiagnosisAgent
 from agent.tool_evolution.curator import (
     _composite_outcomes,
     _distill_trace,
+    _generated_outcomes,
     _minimal_successful_trace,
     _paired_primitive_calls,
     _sanitize_value,
     finalize_tool_evolution_session,
 )
+from agent.tool_evolution.generated_tools import validate_generated_tool_code
 from agent.tool_evolution.models import (
     CompositeStep,
     CompositeTool,
+    GeneratedTool,
     ToolEvolutionMode,
     ToolParameter,
+    ToolVerificationReport,
     ToolUsageExample,
     ValidationEvidence,
 )
@@ -67,6 +71,33 @@ def _composite(name: str = "workflow_host_config") -> CompositeTool:
     )
 
 
+def _generated(name: str = "calculate_loss_ratio") -> GeneratedTool:
+    return GeneratedTool(
+        name=name,
+        description="Compute a reusable diagnostic ratio from two numeric counters.",
+        parameters=[
+            ToolParameter(
+                name="drops",
+                type="int",
+                description="Observed dropped packet count.",
+            ),
+            ToolParameter(
+                name="total",
+                type="int",
+                description="Observed total packet count.",
+            ),
+        ],
+        code=(
+            "def calculate_loss_ratio(drops, total):\n"
+            "    if total == 0:\n"
+            "        return 0.0\n"
+            "    return drops / total\n"
+        ),
+        output_description="Packet loss ratio.",
+        test_example={"drops": 1, "total": 10},
+    )
+
+
 class ToolEvolutionModuleBoundaryTest(unittest.IsolatedAsyncioTestCase):
     @staticmethod
     def _tool(name: str) -> StructuredTool:
@@ -79,7 +110,7 @@ class ToolEvolutionModuleBoundaryTest(unittest.IsolatedAsyncioTestCase):
             description=f"Test tool {name}.",
         )
 
-    async def test_read_only_primitive_surface_is_identical_when_disabled(self) -> None:
+    async def test_primitive_surface_is_not_filtered_when_disabled(self) -> None:
         safe = self._tool("get_reachability")
         unsafe = self._tool("exec_shell")
         agent = DiagnosisAgent.__new__(DiagnosisAgent)
@@ -90,9 +121,12 @@ class ToolEvolutionModuleBoundaryTest(unittest.IsolatedAsyncioTestCase):
 
         await agent.load_tools()
 
-        self.assertEqual([tool.name for tool in agent.tools], ["get_reachability"])
+        self.assertEqual(
+            [tool.name for tool in agent.tools],
+            ["get_reachability", "exec_shell"],
+        )
 
-    async def test_enabled_module_wraps_the_same_read_only_primitives(self) -> None:
+    async def test_enabled_module_receives_the_same_upstream_primitives(self) -> None:
         safe = self._tool("get_reachability")
         unsafe = self._tool("exec_shell")
         manager = self._tool("search_diagnostic_tools")
@@ -106,7 +140,7 @@ class ToolEvolutionModuleBoundaryTest(unittest.IsolatedAsyncioTestCase):
         agent.tool_evolution_mode = ToolEvolutionMode.DUAL
         agent.model = "model"
         runtime = MagicMock()
-        runtime.build_tools.return_value = [safe, manager]
+        runtime.build_tools.return_value = [safe, unsafe, manager]
 
         with (
             patch(
@@ -123,10 +157,13 @@ class ToolEvolutionModuleBoundaryTest(unittest.IsolatedAsyncioTestCase):
             await agent.load_tools()
 
         primitives = runtime_cls.call_args.kwargs["primitive_tools"]
-        self.assertEqual([tool.name for tool in primitives], ["get_reachability"])
+        self.assertEqual(
+            [tool.name for tool in primitives],
+            ["get_reachability", "exec_shell"],
+        )
         self.assertEqual(
             [tool.name for tool in agent.tools],
-            ["get_reachability", "search_diagnostic_tools"],
+            ["get_reachability", "exec_shell", "search_diagnostic_tools"],
         )
 
 
@@ -156,6 +193,59 @@ class ToolEvolutionStoreTest(unittest.TestCase):
         self.assertTrue(created_first)
         self.assertFalse(created_second)
         self.assertEqual(first.name, second.name)
+
+    def test_registers_and_deduplicates_generated_python_tools(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = ToolEvolutionStore("experiment", root=tmp)
+            first, created_first = store.register_generated_tool(_generated())
+            second, created_second = store.register_generated_tool(
+                _generated("calculate_loss_ratio")
+            )
+            matches = store.search_generated_tools(
+                "loss ratio",
+                top_k=3,
+                include_candidates=True,
+            )
+
+        self.assertTrue(created_first)
+        self.assertFalse(created_second)
+        self.assertEqual(first.name, second.name)
+        self.assertEqual(matches[0].name, first.name)
+
+    def test_rejects_generated_python_with_bad_signature(self) -> None:
+        tool = _generated().model_copy(
+            update={"code": ("def calculate_loss_ratio(drops):\n    return drops\n")}
+        )
+
+        with self.assertRaisesRegex(ValueError, "function signature"):
+            validate_generated_tool_code(tool)
+
+    def test_rejects_generated_python_with_unsafe_import(self) -> None:
+        tool = _generated().model_copy(
+            update={
+                "code": (
+                    "import os\n"
+                    "def calculate_loss_ratio(drops, total):\n"
+                    "    return os.getcwd()\n"
+                )
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "import is not allowed"):
+            validate_generated_tool_code(tool)
+
+    def test_rejects_generated_python_with_forbidden_call(self) -> None:
+        tool = _generated().model_copy(
+            update={
+                "code": (
+                    "def calculate_loss_ratio(drops, total):\n"
+                    "    return eval('drops / total')\n"
+                )
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "call is not allowed"):
+            validate_generated_tool_code(tool)
 
     def test_promotes_only_after_distinct_successful_contexts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -325,6 +415,36 @@ class ToolEvolutionStoreTest(unittest.TestCase):
         self.assertEqual(frozen.retrieval_count, 0)
         self.assertIsNone(frozen.last_used_at)
 
+    def test_composite_search_uses_step_and_output_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = ToolEvolutionStore("experiment", root=tmp)
+            store.register_composite(_composite("workflow_generic_host"))
+            bgp, _ = store.register_composite(
+                CompositeTool(
+                    name="workflow_route_summary",
+                    description="Collect reusable routing control-plane evidence.",
+                    parameters=[
+                        ToolParameter(
+                            name="router",
+                            description="Target router.",
+                        )
+                    ],
+                    steps=[
+                        CompositeStep(
+                            tool="frr_show_bgp_summary",
+                            arguments={"router_name": "${router}"},
+                            label="Collect BGP neighbor summary evidence.",
+                        )
+                    ],
+                    output_contract=["BGP summary and neighbor state evidence."],
+                    tags=["dc_clos_bgp"],
+                )
+            )
+
+            matches = store.search_composites("bgp summary", top_k=3)
+
+        self.assertEqual(matches[0].name, bgp.name)
+
     def test_capacity_prunes_low_utility_candidates(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = ToolEvolutionStore("experiment", root=tmp, capacity=10)
@@ -367,10 +487,10 @@ class CompositeValidationTest(unittest.TestCase):
             "exec_shell": object(),
         }
 
-    def test_rejects_mutating_or_arbitrary_shell_primitives(self) -> None:
-        unsafe = CompositeTool(
-            name="workflow_unsafe",
-            description="Execute an arbitrary command against a target device.",
+    def test_accepts_upstream_shell_primitives_when_parameterized(self) -> None:
+        composite = CompositeTool(
+            name="workflow_shell",
+            description="Execute a reusable command against a target device.",
             parameters=[
                 ToolParameter(name="host", description="Target device."),
                 ToolParameter(name="command", description="Command to execute."),
@@ -385,30 +505,17 @@ class CompositeValidationTest(unittest.TestCase):
                 )
             ],
         )
-        with self.assertRaisesRegex(ValueError, "unsafe"):
-            self.runtime.validate_composite(unsafe)
 
-    def test_rejects_non_composable_observation_primitives(self) -> None:
-        for tool_name in NON_COMPOSABLE_PRIMITIVE_TOOLS:
-            composite = CompositeTool(
-                name=f"workflow_{tool_name}",
-                description="Try to persist a non-composable diagnostic action.",
-                parameters=[
-                    ToolParameter(name="host", description="Target device."),
-                ],
-                steps=[
-                    CompositeStep(
-                        tool=tool_name,
-                        arguments={"host_name": "${host}"},
-                    )
-                ],
-            )
-            with self.assertRaisesRegex(ValueError, "unsafe|unsupported"):
-                self.runtime.validate_composite(composite)
+        self.runtime.validate_composite(composite)
 
-    def test_composable_set_is_stricter_than_live_safe_surface(self) -> None:
-        self.assertFalse(NON_COMPOSABLE_PRIMITIVE_TOOLS & COMPOSABLE_PRIMITIVE_TOOLS)
-        self.assertIn("cat_file", NON_COMPOSABLE_PRIMITIVE_TOOLS)
+    def test_upstream_diagnosis_surface_is_composable(self) -> None:
+        self.assertFalse(NON_COMPOSABLE_PRIMITIVE_TOOLS)
+        self.assertIn("cat_file", COMPOSABLE_PRIMITIVE_TOOLS)
+        self.assertIn("exec_shell", COMPOSABLE_PRIMITIVE_TOOLS)
+        self.assertIn("exec_shell_dual", COMPOSABLE_PRIMITIVE_TOOLS)
+        self.assertIn("frr_exec", COMPOSABLE_PRIMITIVE_TOOLS)
+        self.assertIn("systemctl_ops", COMPOSABLE_PRIMITIVE_TOOLS)
+        self.assertIn("iperf_test", COMPOSABLE_PRIMITIVE_TOOLS)
 
     def test_rejects_hard_coded_incident_values(self) -> None:
         leaked = CompositeTool(
@@ -605,8 +712,7 @@ class CompositeValidationTest(unittest.TestCase):
 
     def test_detects_mcp_error_string_and_nested_content(self) -> None:
         error = (
-            "Error executing tool ping_pair: 2 validation errors for "
-            "ping_pairArguments"
+            "Error executing tool ping_pair: 2 validation errors for ping_pairArguments"
         )
 
         self.assertTrue(_tool_output_is_error(error))
@@ -646,21 +752,39 @@ class TraceDistillationTest(unittest.TestCase):
         self.assertNotIn("pc2", serialized)
         self.assertIn("${host_name}", serialized)
         self.assertEqual(state.composites[name].evidence, [])
-        self.assertIn("${host_name}", state.composites[name].steps[1].arguments["host_a"])
+        self.assertIn(
+            "${host_name}", state.composites[name].steps[1].arguments["host_a"]
+        )
+        self.assertIn("Sequence:", state.composites[name].description)
+        self.assertIn(
+            "Step 1 get_host_net_config", state.composites[name].output_contract[0]
+        )
+        self.assertIn("target host", state.composites[name].parameters[0].description)
 
-    def test_minimal_trace_removes_failed_noncomposable_and_duplicates(self) -> None:
+    def test_minimal_trace_removes_failed_invalid_and_duplicates(self) -> None:
         calls = [
-            {"tool": "cat_file", "arguments": {"host_name": "x", "file_path": "/etc/passwd"}, "succeeded": True},
+            {
+                "tool": "cat_file",
+                "arguments": {"host_name": "x", "file_path": "/etc/passwd"},
+                "succeeded": True,
+            },
             {"tool": "ping_pair", "arguments": {"a": "x"}, "succeeded": True},
             {"tool": "ping_pair", "arguments": {"a": "x"}, "succeeded": True},
-            {"tool": "ping_pair", "arguments": {"host_a": "x", "host_b": "y", "count": 999}, "succeeded": True},
+            {
+                "tool": "ping_pair",
+                "arguments": {"host_a": "x", "host_b": "y", "count": 999},
+                "succeeded": True,
+            },
             {"tool": "netstat", "arguments": {"host": "x"}, "succeeded": False},
             {"tool": "netstat", "arguments": {"host": "y"}, "succeeded": True},
         ]
 
         selected = _minimal_successful_trace(calls)
 
-        self.assertEqual([item["tool"] for item in selected], ["ping_pair", "netstat"])
+        self.assertEqual(
+            [item["tool"] for item in selected],
+            ["cat_file", "ping_pair", "netstat"],
+        )
 
     def test_parallel_calls_are_correlated_by_run_id(self) -> None:
         events = [
@@ -720,6 +844,30 @@ class TraceDistillationTest(unittest.TestCase):
         successes, errors, reuse_count = _composite_outcomes(events)
 
         self.assertEqual(successes, ["workflow_existing"])
+        self.assertEqual(errors, [])
+        self.assertEqual(reuse_count, 0)
+
+    def test_generated_execution_is_counted_once_and_aliased_after_dedup(self) -> None:
+        events = [
+            {
+                "event": "tool_evolution_generated_start",
+                "name": "calculate_loss_ratio_ephemeral",
+                "status": "ephemeral",
+            },
+            {
+                "event": "tool_evolution_generated_end",
+                "name": "calculate_loss_ratio_ephemeral",
+            },
+            {
+                "event": "tool_evolution_generated_verified",
+                "source_name": "calculate_loss_ratio_ephemeral",
+                "name": "calculate_loss_ratio",
+            },
+        ]
+
+        successes, errors, reuse_count = _generated_outcomes(events)
+
+        self.assertEqual(successes, ["calculate_loss_ratio"])
         self.assertEqual(errors, [])
         self.assertEqual(reuse_count, 0)
 
@@ -787,9 +935,56 @@ class TestTimeSynthesisTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("record_tool_lesson", mastery_tools)
         self.assertNotIn("propose_composite_tool", mastery_tools)
         self.assertIn("propose_composite_tool", distill_tools)
+        self.assertIn("propose_python_tool", distill_tools)
         self.assertNotIn("record_tool_lesson", distill_tools)
         self.assertIn("record_tool_lesson", dual_tools)
         self.assertIn("propose_composite_tool", dual_tools)
+        self.assertIn("propose_python_tool", dual_tools)
+
+    def test_prompt_and_tool_description_surface_retrieved_workflow_details(
+        self,
+    ) -> None:
+        async def fake_get_host_net_config(host_name: str) -> dict:
+            return {"host_name": host_name, "state": "up"}
+
+        primitive = StructuredTool.from_function(
+            coroutine=fake_get_host_net_config,
+            name="get_host_net_config",
+            description="Read host network configuration.",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            store = ToolEvolutionStore("experiment", root=tmp)
+            composite, _ = store.register_composite(_composite())
+            session = SimpleNamespace(
+                session_id="session-123",
+                session_dir=tmp,
+                scenario_name="simple_bgp",
+                scenario_topo_size=None,
+                topology=[],
+                tool_evolution_update_enabled=True,
+            )
+            with patch(
+                "agent.tool_evolution.runtime.ToolEvolutionStore",
+                return_value=store,
+            ):
+                runtime = ToolEvolutionRuntime(
+                    session=session,
+                    primitive_tools=[primitive],
+                    library_id="experiment",
+                    mode=ToolEvolutionMode.DUAL,
+                    model="model-a",
+                    task_description="Collect host configuration evidence.",
+                )
+            tool_map = {tool.name: tool for tool in runtime.build_tools()}
+
+        suffix = runtime.prompt_suffix()
+        description = tool_map[composite.name].description
+        self.assertIn("Retrieved reusable tools", suffix)
+        self.assertIn(composite.name, suffix)
+        self.assertIn("Steps:", suffix)
+        self.assertIn("Args:", suffix)
+        self.assertIn("Runs:", description)
+        self.assertIn("Arguments:", description)
 
     async def test_ephemeral_tool_is_persisted_only_after_verification(self) -> None:
         async def fake_get_host_net_config(host_name: str) -> dict:
@@ -945,8 +1140,240 @@ class TestTimeSynthesisTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("no informative primitive output", output)
         self.assertIsNone(store.get_composite("workflow_empty_output"))
 
+    async def test_generated_python_tool_is_persisted_after_sandbox_verification(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = ToolEvolutionStore("experiment", root=tmp)
+            session = SimpleNamespace(
+                session_id="session-123",
+                session_dir=tmp,
+                scenario_name="simple_bgp",
+                scenario_topo_size=None,
+                topology=[],
+                tool_evolution_update_enabled=True,
+            )
+            with (
+                patch(
+                    "agent.tool_evolution.runtime.ToolEvolutionStore",
+                    return_value=store,
+                ),
+                patch.dict("os.environ", {"NIKA_GENERATED_TOOL_RUNNER": "local"}),
+            ):
+                runtime = ToolEvolutionRuntime(
+                    session=session,
+                    primitive_tools=[],
+                    library_id="experiment",
+                    mode=ToolEvolutionMode.DUAL,
+                    model="model-a",
+                    task_description="Compute loss ratio evidence.",
+                )
+                tools = {tool.name: tool for tool in runtime._build_manager_tools()}
+                gap_result = await tools["identify_capability_gap"].ainvoke(
+                    {
+                        "description": "Compute reusable packet loss ratio evidence.",
+                        "required_inputs_json": '["drop count", "total count"]',
+                        "expected_observations_json": '["packet loss ratio"]',
+                    }
+                )
+                gap_id = gap_result.split("'")[1]
+                proposed = await tools["propose_python_tool"].ainvoke(
+                    {
+                        "name": "calculate_loss_ratio",
+                        "description": "Compute reusable packet loss ratio evidence.",
+                        "gap_id": gap_id,
+                        "parameters_json": json.dumps(
+                            [
+                                {
+                                    "name": "drops",
+                                    "type": "int",
+                                    "description": "Observed dropped packet count.",
+                                },
+                                {
+                                    "name": "total",
+                                    "type": "int",
+                                    "description": "Observed total packet count.",
+                                },
+                            ]
+                        ),
+                        "code": (
+                            "def calculate_loss_ratio(drops, total):\n"
+                            "    if total == 0:\n"
+                            "        return 0.0\n"
+                            "    return drops / total\n"
+                        ),
+                        "output_description": "Packet loss ratio.",
+                        "test_example_json": '{"drops": 1, "total": 10}',
+                    }
+                )
+
+                self.assertIn("ephemeral Python tool", proposed)
+                self.assertEqual(store.load().generated_tools, {})
+                output = await tools["execute_candidate_tool"].ainvoke(
+                    {
+                        "name": "calculate_loss_ratio",
+                        "arguments_json": '{"drops": 2, "total": 10}',
+                    }
+                )
+
+            persisted = store.get_generated_tool("calculate_loss_ratio")
+            gap = store.load().capability_gaps[gap_id]
+
+        payload = json.loads(output)
+        self.assertEqual(payload["result"], 0.2)
+        self.assertEqual(payload["persisted_as"], "calculate_loss_ratio")
+        self.assertIsNotNone(persisted)
+        self.assertEqual(persisted.status, "candidate")
+        self.assertEqual(gap.status, "resolved")
+
 
 class CurationIdempotencyTest(unittest.TestCase):
+    def test_generated_tool_metrics_are_written_after_finalization(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            session_dir = Path(tmp) / "session-generated"
+            session_dir.mkdir()
+            events = [
+                {
+                    "agent": "diagnosis_agent",
+                    "event": "tool_evolution_generated_start",
+                    "name": "calculate_loss_ratio",
+                    "status": "ephemeral",
+                },
+                {
+                    "agent": "diagnosis_agent",
+                    "event": "tool_evolution_generated_end",
+                    "name": "calculate_loss_ratio",
+                },
+                {
+                    "agent": "diagnosis_agent",
+                    "event": "tool_evolution_generated_verified",
+                    "source_name": "calculate_loss_ratio",
+                    "name": "calculate_loss_ratio",
+                    "created": True,
+                },
+            ]
+            (session_dir / "messages.jsonl").write_text(
+                "\n".join(json.dumps(item) for item in events) + "\n",
+                encoding="utf-8",
+            )
+            session = SimpleNamespace(
+                session_id="session-generated",
+                session_dir=str(session_dir),
+                agent_type="react",
+                tool_evolution_enabled=True,
+                tool_library_id="experiment",
+                tool_evolution_mode="dual",
+                tool_evolution_update_enabled=True,
+                scenario_name="simple_bgp",
+                scenario_topo_size=None,
+                topology=[],
+                problem_names=[],
+                model="model-a",
+            )
+            loader = SimpleNamespace(load_closed_session=lambda session_id: session)
+            store = ToolEvolutionStore("experiment", root=tmp)
+            generated = _generated()
+            generated.verification_reports.append(
+                ToolVerificationReport(
+                    stage="semantic",
+                    passed=True,
+                    checks=["verified in runtime"],
+                    context_fingerprint="simple_bgp:fixed",
+                )
+            )
+            store.register_generated_tool(generated)
+            metrics = {
+                "detection_score": 1.0,
+                "localization_accuracy": 1.0,
+                "rca_accuracy": 1.0,
+            }
+            with (
+                patch(
+                    "agent.tool_evolution.curator.Session",
+                    return_value=loader,
+                ),
+                patch(
+                    "agent.tool_evolution.curator.ToolEvolutionStore",
+                    return_value=store,
+                ),
+            ):
+                artifact = finalize_tool_evolution_session(
+                    session_id="session-generated",
+                    metrics=metrics,
+                )
+
+        self.assertEqual(artifact["generated_tool_calls"], 1)
+        self.assertEqual(artifact["created_tools"], ["calculate_loss_ratio"])
+        self.assertEqual(artifact["library_generated_tools"], 1)
+        self.assertEqual(artifact["verified_generated_tools"], 1)
+
+    def test_retrieved_tool_start_metric_catches_interrupted_direct_call(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            session_dir = Path(tmp) / "session-retrieved-start"
+            session_dir.mkdir()
+            (session_dir / "messages.jsonl").write_text(
+                json.dumps(
+                    {
+                        "agent": "diagnosis_agent",
+                        "event": "tool_start",
+                        "tool": {"name": "workflow_host_config"},
+                        "input": '{"host": "pc1"}',
+                        "run_id": "run-1",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (session_dir / "tool_evolution_session.json").write_text(
+                json.dumps(
+                    {
+                        "retrieved_tools": ["workflow_host_config"],
+                        "created_tools": [],
+                        "update_enabled": False,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            session = SimpleNamespace(
+                session_id="session-retrieved-start",
+                session_dir=str(session_dir),
+                agent_type="react",
+                tool_evolution_enabled=True,
+                tool_library_id="experiment",
+                tool_evolution_mode="dual",
+                tool_evolution_update_enabled=False,
+                scenario_name="simple_bgp",
+                scenario_topo_size=None,
+                topology=[],
+                problem_names=[],
+                model="model-a",
+            )
+            loader = SimpleNamespace(load_closed_session=lambda session_id: session)
+            store = ToolEvolutionStore("experiment", root=tmp)
+            metrics = {
+                "detection_score": 0.0,
+                "localization_accuracy": 0.0,
+                "rca_accuracy": 0.0,
+            }
+            with (
+                patch(
+                    "agent.tool_evolution.curator.Session",
+                    return_value=loader,
+                ),
+                patch(
+                    "agent.tool_evolution.curator.ToolEvolutionStore",
+                    return_value=store,
+                ),
+            ):
+                artifact = finalize_tool_evolution_session(
+                    session_id="session-retrieved-start",
+                    metrics=metrics,
+                )
+
+        self.assertEqual(artifact["retrieved_tool_available_count"], 1)
+        self.assertEqual(artifact["retrieved_tool_started_count"], 1)
+        self.assertEqual(artifact["retrieved_tool_called_count"], 0)
+
     def test_repeated_finalization_does_not_reapply_mastery(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             session_dir = Path(tmp) / "session-1"
@@ -984,9 +1411,7 @@ class CurationIdempotencyTest(unittest.TestCase):
                 problem_names=[],
                 model="model-a",
             )
-            loader = SimpleNamespace(
-                load_closed_session=lambda session_id: session
-            )
+            loader = SimpleNamespace(load_closed_session=lambda session_id: session)
             store = ToolEvolutionStore("experiment", root=tmp)
             metrics = {
                 "detection_score": 1.0,
@@ -1018,7 +1443,7 @@ class CurationIdempotencyTest(unittest.TestCase):
 
 
 class NonOracleRoutingTest(unittest.TestCase):
-    def test_problem_labels_are_ignored_without_oracle_flag(self) -> None:
+    def test_problem_labels_are_used_like_upstream_nika(self) -> None:
         normal = select_diagnosis_servers(
             "generic_scenario",
             ["bgp_asn_misconfig"],
@@ -1029,8 +1454,9 @@ class NonOracleRoutingTest(unittest.TestCase):
             oracle=True,
         )
 
-        self.assertNotIn("kathara_frr_mcp_server", normal)
+        self.assertIn("kathara_frr_mcp_server", normal)
         self.assertIn("kathara_frr_mcp_server", oracle)
+        self.assertEqual(normal, oracle)
 
     def test_p4_int_selects_bmv2_and_telemetry_from_scenario(self) -> None:
         servers = select_diagnosis_servers("p4_int", [])
@@ -1223,6 +1649,36 @@ class ToolEvolutionMcpAdapterTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(listed[0]["name"], tool.name)
         self.assertEqual(json.loads(output)["observations"][0]["output"]["state"], "up")
+
+    async def test_lists_and_executes_promoted_generated_python_tool(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = ToolEvolutionStore("experiment", root=tmp)
+            generated, _ = store.register_generated_tool(
+                _generated().model_copy(update={"status": "promoted"})
+            )
+            with (
+                patch.object(
+                    tool_evolution_mcp_server,
+                    "ToolEvolutionStore",
+                    return_value=store,
+                ),
+                patch.dict(
+                    "os.environ",
+                    {
+                        "NIKA_TOOL_LIBRARY_ID": "experiment",
+                        "NIKA_GENERATED_TOOL_RUNNER": "local",
+                    },
+                ),
+            ):
+                listed = tool_evolution_mcp_server.list_evolved_tools()
+                output = await tool_evolution_mcp_server.execute_evolved_tool(
+                    generated.name,
+                    json.dumps({"drops": 3, "total": 12}),
+                )
+
+        generated_rows = [item for item in listed if item["kind"] == "generated_python"]
+        self.assertEqual(generated_rows[0]["name"], generated.name)
+        self.assertEqual(json.loads(output)["result"], 0.25)
 
     async def test_refuses_unpromoted_composite_execution(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

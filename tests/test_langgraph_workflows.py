@@ -7,6 +7,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
+from langchain_core.messages import AIMessage
+from langchain_core.outputs import ChatGeneration, ChatResult
 from langgraph.errors import GraphRecursionError
 from pydantic import ValidationError
 
@@ -27,6 +29,9 @@ from agent.llm.model_factory import (
     NETMIND_MAX_RETRIES,
     NETMIND_SUPPORTED_MODELS,
     NETMIND_TIMEOUT_SECONDS,
+    GLM47ChatOpenAI,
+    _extract_glm_tool_calls,
+    _normalize_glm_tool_calls,
     load_model,
 )
 from agent.registry import create_agent
@@ -303,6 +308,101 @@ class ModelFactoryTest(unittest.TestCase):
             chat_openai.call_args.kwargs["max_retries"],
             NETMIND_MAX_RETRIES,
         )
+
+    @patch.dict(
+        "os.environ",
+        {"NETMIND_API_KEY": "test-key"},
+        clear=True,
+    )
+    def test_netmind_glm_47_uses_tool_call_adapter(self) -> None:
+        model = load_model("netmind", "zai-org/GLM-4.7")
+
+        self.assertIsInstance(model, GLM47ChatOpenAI)
+
+    def test_glm_tool_call_xml_is_normalized(self) -> None:
+        extracted = _extract_glm_tool_calls(
+            (
+                '<tool_call>{"name":"ping_pair","arguments":'
+                '{"host_a":"pc1","host_b":"pc2"}}</tool_call>'
+            )
+        )
+
+        self.assertIsNotNone(extracted)
+        calls, cleaned = extracted
+        self.assertEqual(cleaned, "")
+        self.assertEqual(calls[0]["name"], "ping_pair")
+        self.assertEqual(calls[0]["args"], {"host_a": "pc1", "host_b": "pc2"})
+        self.assertTrue(calls[0]["id"].startswith("call_glm_"))
+
+    def test_glm_tool_call_xml_name_without_json_is_normalized(self) -> None:
+        extracted = _extract_glm_tool_calls(
+            "Check reachability.<tool_call>get_reachability</tool_call>"
+        )
+
+        self.assertIsNotNone(extracted)
+        calls, cleaned = extracted
+        self.assertEqual(cleaned, "Check reachability.")
+        self.assertEqual(calls[0]["name"], "get_reachability")
+        self.assertEqual(calls[0]["args"], {})
+
+    def test_glm_tool_call_xml_arg_key_value_is_normalized(self) -> None:
+        extracted = _extract_glm_tool_calls(
+            (
+                "<tool_call>frr_show_bgp_summary"
+                "<arg_key>router_name</arg_key>"
+                "<arg_value>router_core_1</arg_value>"
+                "</tool_call>"
+            )
+        )
+
+        self.assertIsNotNone(extracted)
+        calls, cleaned = extracted
+        self.assertEqual(cleaned, "")
+        self.assertEqual(calls[0]["name"], "frr_show_bgp_summary")
+        self.assertEqual(calls[0]["args"], {"router_name": "router_core_1"})
+
+    def test_glm_tool_call_accepts_openai_function_payload(self) -> None:
+        extracted = _extract_glm_tool_calls(
+            (
+                '<tool_call>{"id":"call_1","function":'
+                '{"name":"get_host_net_config","arguments":'
+                '"{\\"host_name\\":\\"pc1\\"}"}}</tool_call>'
+            )
+        )
+
+        self.assertIsNotNone(extracted)
+        calls, _ = extracted
+        self.assertEqual(
+            calls[0],
+            {
+                "name": "get_host_net_config",
+                "args": {"host_name": "pc1"},
+                "id": "call_1",
+                "type": "tool_call",
+            },
+        )
+
+    def test_glm_chat_result_normalization_sets_langchain_tool_calls(self) -> None:
+        result = ChatResult(
+            generations=[
+                ChatGeneration(
+                    message=AIMessage(
+                        content=(
+                            "Need evidence.\n"
+                            '<tool_call>{"name":"get_reachability",'
+                            '"arguments":{}}</tool_call>'
+                        )
+                    )
+                )
+            ]
+        )
+
+        normalized = _normalize_glm_tool_calls(result)
+
+        message = normalized.generations[0].message
+        self.assertEqual(message.content, "Need evidence.")
+        self.assertEqual(message.tool_calls[0]["name"], "get_reachability")
+        self.assertEqual(message.tool_calls[0]["args"], {})
 
     @patch.dict(
         "os.environ",
