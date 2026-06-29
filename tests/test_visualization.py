@@ -58,6 +58,32 @@ def test_discover_and_load_finished_session(tmp_path: Path) -> None:
     assert timeline_rows(bundle)[0]["event"] == "env_start"
 
 
+def test_discover_and_load_nested_benchmark_session(tmp_path: Path) -> None:
+    results = tmp_path / "results"
+    sessions = tmp_path / "sessions"
+    session_dir = results / "test-20260629-010203-000001" / "session-1"
+    _write_json(
+        session_dir / "run.json",
+        {
+            "session_id": "session-1",
+            "session_dir": str(session_dir),
+            "status": "finished",
+            "scenario_name": "simple_bgp",
+        },
+    )
+    _write_json(session_dir / "ground_truth.json", {"faulty_devices": ["router1"]})
+
+    discovered = discover_sessions(results_dir=results, sessions_dir=sessions)
+    assert [item["session_id"] for item in discovered] == ["session-1"]
+    assert discovered[0]["session_dir"] == str(session_dir)
+
+    bundle = load_session_bundle(
+        "session-1", results_dir=results, sessions_dir=sessions
+    )
+    assert bundle.session_dir == session_dir
+    assert faulty_devices(bundle.ground_truth) == {"router1"}
+
+
 def test_runtime_session_overrides_result_metadata(tmp_path: Path) -> None:
     results = tmp_path / "results"
     sessions = tmp_path / "sessions"

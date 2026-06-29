@@ -21,12 +21,29 @@ def _iter_session_dirs() -> list[Path]:
     if not root.exists():
         return []
     return [
-        entry
-        for entry in sorted(root.iterdir())
-        if entry.is_dir()
-        and entry.name != "0_summary"
-        and (entry / RUN_FILENAME).exists()
+        run_path.parent
+        for run_path in sorted(root.rglob(RUN_FILENAME))
+        if "0_summary" not in run_path.relative_to(root).parts
     ]
+
+
+def find_session_dir(session_id: str, *, results_dir: str | Path | None = None) -> Path:
+    root = Path(results_dir or RESULTS_DIR)
+    direct = root / session_id
+    if (direct / RUN_FILENAME).exists():
+        return direct
+    if not root.exists():
+        raise FileNotFoundError(f"Session '{session_id}' not found under results/.")
+    for run_path in sorted(root.rglob(RUN_FILENAME)):
+        if "0_summary" in run_path.relative_to(root).parts:
+            continue
+        try:
+            run_meta = json.loads(run_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if str(run_meta.get("session_id") or run_path.parent.name) == session_id:
+            return run_path.parent
+    raise FileNotFoundError(f"Session '{session_id}' not found under results/.")
 
 
 class Session:
@@ -40,6 +57,7 @@ class Session:
         scenario_name: str,
         lab_name: str,
         scenario_topo_size: str | None,
+        results_root: str | Path | None = None,
         scenario_params: dict | None = None,
         topology: list[tuple[str, str]] | None = None,
     ) -> None:
@@ -49,7 +67,7 @@ class Session:
         self.scenario_topo_size = scenario_topo_size
         self.scenario_params = scenario_params or {}
         self.topology = topology or []
-        self.session_dir = os.path.join(str(RESULTS_DIR), session_id)
+        self.session_dir = os.path.join(str(results_root or RESULTS_DIR), session_id)
         os.makedirs(self.session_dir, exist_ok=True)
         self.store.create_session(
             {
@@ -110,13 +128,8 @@ class Session:
                 f"Session '{session_id}' is still running. Close it with `nika session close` before running eval."
             )
 
-        session_dir = Path(RESULTS_DIR) / session_id
+        session_dir = find_session_dir(session_id)
         run_path = session_dir / RUN_FILENAME
-        if not run_path.exists():
-            raise FileNotFoundError(
-                f"Closed session '{session_id}' not found under results/. "
-                "Close the session with `nika session close` first."
-            )
 
         run_meta = json.loads(run_path.read_text(encoding="utf-8"))
         if not _is_finished_session(run_meta):
@@ -128,7 +141,7 @@ class Session:
     def _apply_closed_session_meta(self, run_meta: dict, *, session_dir: Path | None = None):
         for key, value in run_meta.items():
             setattr(self, key, value)
-        resolved_dir = session_dir or Path(RESULTS_DIR) / (run_meta.get("session_id") or "")
+        resolved_dir = session_dir or find_session_dir(run_meta.get("session_id") or "")
         self.session_dir = str(resolved_dir)
         return self
 

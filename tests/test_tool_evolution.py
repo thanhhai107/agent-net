@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from langchain_core.tools import StructuredTool
 
+from agent.composition import ToolEvolutionConfig
 from agent.langgraph.domain_agents.diagnosis_agent import DiagnosisAgent
 from agent.tool_evolution.curator import (
     _composite_outcomes,
@@ -1517,8 +1518,7 @@ class EvolutionSummaryTest(unittest.TestCase):
                             "root_cause_name": "link_down",
                             "root_cause_category": "link_failure",
                             "tool_library_id": "experiment",
-                            "evolution_stream": "link",
-                            "evolution_sequence_index": index,
+                            "benchmark_index": index,
                         }
                     ),
                     encoding="utf-8",
@@ -1557,7 +1557,7 @@ class EvolutionSummaryTest(unittest.TestCase):
 
 
 class ToolEvolutionBenchmarkArgsTest(unittest.TestCase):
-    def test_stream_cli_args_preserve_library_and_skip_dash_tier(self) -> None:
+    def test_tool_evolution_cli_args_preserve_library_and_skip_dash_tier(self) -> None:
         args = _benchmark_row_cli_args(
             {
                 "problem": "link_down",
@@ -1573,15 +1573,23 @@ class ToolEvolutionBenchmarkArgsTest(unittest.TestCase):
             judge_llm_backend=None,
             judge_model=None,
             oracle_routing=False,
-            tool_evolution_enabled=True,
-            tool_library_id="experiment",
-            tool_evolution_mode="dual",
+            tool_evolution=ToolEvolutionConfig(
+                enabled=True,
+                library_id="experiment",
+                mode="dual",
+            ),
+            fault_seed="seed-a",
         )
 
-        self.assertIn("--tool-library", args)
-        self.assertIn("--tool-evolution", args)
+        self.assertIn("--tools", args)
+        self.assertIn("--tool-mode", args)
+        self.assertIn("--fault-seed", args)
+        self.assertIn("seed-a", args)
         self.assertIn("experiment", args)
         self.assertNotIn("-t", args)
+        self.assertNotIn("--stream", args)
+        self.assertNotIn("--split", args)
+        self.assertNotIn("--sequence-index", args)
 
     def test_failed_benchmark_closes_environment(self) -> None:
         session = SimpleNamespace(update_session=MagicMock())

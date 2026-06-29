@@ -12,6 +12,13 @@ from langchain_core.outputs import ChatGeneration, ChatResult
 from langgraph.errors import GraphRecursionError
 from pydantic import ValidationError
 
+from agent.composition import (
+    AgentRunConfig,
+    MemoryConfig,
+    PolicyOverlayConfig,
+    ToolEvolutionConfig,
+    workflow_agent_kwargs,
+)
 from agent.langgraph.plan_execute_agent import PlanExecuteAgent
 from agent.langgraph.reflexion_agent import ReflexionAgent
 from agent.langgraph.workflow_models import (
@@ -40,6 +47,31 @@ from nika.codex_cli.commands.agent import (
     SUPPORTED_AGENT_TYPES,
     SUPPORTED_LLM_BACKENDS,
 )
+
+
+def _agent_run_config(
+    agent_type: str,
+    *,
+    session_id: str = "session",
+    llm_backend: str = "openai",
+    model: str = "model",
+    max_steps: int = 7,
+    max_attempts: int = 3,
+    tool_evolution: ToolEvolutionConfig | None = None,
+    memory: MemoryConfig | None = None,
+    policy_overlay: PolicyOverlayConfig | None = None,
+) -> AgentRunConfig:
+    return AgentRunConfig(
+        agent_type=agent_type,
+        session_id=session_id,
+        llm_backend=llm_backend,
+        model=model,
+        max_steps=max_steps,
+        max_attempts=max_attempts,
+        tool_evolution=tool_evolution or ToolEvolutionConfig(),
+        memory=memory or MemoryConfig(),
+        policy_overlay=policy_overlay or PolicyOverlayConfig(),
+    )
 
 
 class WorkflowModelTest(unittest.TestCase):
@@ -87,37 +119,36 @@ class WorkflowRegistrationTest(unittest.TestCase):
             patch("agent.registry.BasicReActAgent") as react_agent,
             patch("agent.registry.PlanExecuteAgent") as plan_agent,
             patch("agent.registry.ReflexionAgent") as reflexion_agent,
-            patch("agent.registry.ProceduralMemoryModule") as memory_module,
-            patch("agent.registry.MemoryAugmentedAgent") as memory_adapter,
+            patch("agent.composition.ProceduralMemoryModule") as memory_module,
+            patch("agent.composition.MemoryAugmentedAgent") as memory_adapter,
         ):
             create_agent(
-                "plan-execute",
-                session_id="session",
-                llm_backend="openai",
-                model="model",
-                max_steps=7,
+                _agent_run_config("plan-execute")
             )
             create_agent(
-                "reflexion",
-                session_id="session",
-                llm_backend="deepseek",
-                model="model",
-                max_steps=9,
-                max_attempts=4,
+                _agent_run_config(
+                    "reflexion",
+                    llm_backend="deepseek",
+                    max_steps=9,
+                    max_attempts=4,
+                )
             )
             create_agent(
-                "react",
-                session_id="session",
-                llm_backend="openai",
-                model="model",
-                max_steps=11,
-                tool_evolution_enabled=True,
-                tool_library_id="experiment-a",
-                tool_evolution_mode="mastery",
-                memory_mode="read",
-                memory_bank="experiment",
-                memory_top_k=4,
-                memory_token_budget=900,
+                _agent_run_config(
+                    "react",
+                    max_steps=11,
+                    tool_evolution=ToolEvolutionConfig(
+                        enabled=True,
+                        library_id="experiment-a",
+                        mode="mastery",
+                    ),
+                    memory=MemoryConfig(
+                        mode="read",
+                        bank="experiment",
+                        top_k=4,
+                        token_budget=900,
+                    ),
+                )
             )
 
         plan_agent.assert_called_once_with(
@@ -181,20 +212,16 @@ class WorkflowRegistrationTest(unittest.TestCase):
     def test_tool_evolution_rejects_non_langgraph_workflows(self) -> None:
         with self.assertRaisesRegex(ValueError, "supports react"):
             create_agent(
-                "mock",
-                session_id="session",
-                llm_backend="openai",
-                model="model",
-                tool_evolution_enabled=True,
+                _agent_run_config(
+                    "mock",
+                    tool_evolution=ToolEvolutionConfig(enabled=True),
+                )
             )
 
     def test_tool_evolve_is_not_an_agent_type(self) -> None:
         with self.assertRaisesRegex(ValueError, "Unsupported agent type"):
             create_agent(
-                "tool-evolve",
-                session_id="session",
-                llm_backend="openai",
-                model="model",
+                _agent_run_config("tool-evolve")
             )
 
     def test_memory_composes_with_each_supported_workflow(self) -> None:
@@ -211,18 +238,15 @@ class WorkflowRegistrationTest(unittest.TestCase):
             with self.subTest(agent_type=agent_type):
                 with (
                     patch(target) as workflow,
-                    patch("agent.registry.ProceduralMemoryModule") as memory_module,
-                    patch("agent.registry.MemoryAugmentedAgent") as adapter,
+                    patch("agent.composition.ProceduralMemoryModule") as memory_module,
+                    patch("agent.composition.MemoryAugmentedAgent") as adapter,
                 ):
                     result = create_agent(
-                        agent_type,
-                        session_id="session",
-                        llm_backend="openai",
-                        model="model",
-                        max_steps=7,
-                        memory_mode="evolve",
-                        memory_bank="experiment",
-                        **extra,
+                        _agent_run_config(
+                            agent_type,
+                            memory=MemoryConfig(mode="evolve", bank="experiment"),
+                            **extra,
+                        )
                     )
 
                 self.assertIs(result, adapter.return_value)
@@ -238,12 +262,35 @@ class WorkflowRegistrationTest(unittest.TestCase):
     def test_memory_rejects_unsupported_workflow(self) -> None:
         with self.assertRaisesRegex(ValueError, "supported only"):
             create_agent(
-                "mock",
-                session_id="session",
-                llm_backend="mock",
-                model="model",
-                memory_mode="read",
+                _agent_run_config(
+                    "mock",
+                    llm_backend="mock",
+                    memory=MemoryConfig(mode="read"),
+                )
             )
+
+    def test_composition_config_builds_extension_kwargs(self) -> None:
+        config = AgentRunConfig(
+            agent_type="react",
+            session_id="session",
+            llm_backend="openai",
+            model="model",
+            max_steps=9,
+            tool_evolution=ToolEvolutionConfig(
+                enabled=True,
+                library_id="tools-a",
+                mode="mastery",
+            ),
+            memory=MemoryConfig(mode="read", bank="memory-a"),
+            policy_overlay=PolicyOverlayConfig(path="/tmp/policy.md"),
+        )
+
+        kwargs = workflow_agent_kwargs(config)
+
+        self.assertEqual(kwargs["tool_library_id"], "tools-a")
+        self.assertEqual(kwargs["tool_evolution_mode"], "mastery")
+        self.assertEqual(kwargs["policy_overlay_path"], "/tmp/policy.md")
+        self.assertFalse(kwargs["use_problem_tool_hints"])
 
 
 class ModelFactoryTest(unittest.TestCase):

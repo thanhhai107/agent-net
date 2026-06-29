@@ -718,7 +718,7 @@ Tool-evolution policy:
             if not self.mode.distillation_enabled:
                 return "Tool synthesis is disabled in mastery-only mode."
             if not self.update_enabled:
-                return "Tool library updates are frozen for this benchmark split."
+                return "Tool library updates are disabled for this run."
             try:
                 self._validate_persistent_text(description)
                 required_inputs = self._parse_gap_items(
@@ -776,7 +776,7 @@ Tool-evolution policy:
             if not self.mode.distillation_enabled:
                 return "Tool distillation is disabled in mastery-only mode."
             if not self.update_enabled:
-                return "Tool library updates are frozen for this benchmark split."
+                return "Tool library updates are disabled for this run."
             try:
                 if not gap_id:
                     raise ValueError(
@@ -852,7 +852,7 @@ Tool-evolution policy:
             if not self.mode.distillation_enabled:
                 return "Tool generation is disabled in mastery-only mode."
             if not self.update_enabled:
-                return "Tool library updates are frozen for this benchmark split."
+                return "Tool library updates are disabled for this run."
             try:
                 if not gap_id:
                     raise ValueError(
@@ -1065,7 +1065,7 @@ Tool-evolution policy:
             if not self.mode.distillation_enabled:
                 return "Tool distillation is disabled in mastery-only mode."
             if not self.update_enabled:
-                return "Tool library updates are frozen for this benchmark split."
+                return "Tool library updates are disabled for this run."
             existing = self._ephemeral_tools.get(existing_name)
             existing = existing or self.store.get_composite(existing_name)
             if existing is None:
@@ -1130,7 +1130,7 @@ Tool-evolution policy:
             if not self.mode.mastery_enabled:
                 return "Tool mastery is disabled in distillation-only mode."
             if not self.update_enabled:
-                return "Tool library updates are frozen for this benchmark split."
+                return "Tool library updates are disabled for this run."
             if tool_name not in self.primitive_tools:
                 return f"Unknown primitive tool: {tool_name}"
             if not any(

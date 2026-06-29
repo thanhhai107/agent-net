@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from nika.config import RESULTS_DIR, SESSIONS_DIR
+from nika.utils.session import find_session_dir
 from nika.utils.session_store import SessionStore
 
 
@@ -21,9 +22,10 @@ def remove_session_results(
     *,
     results_dir: str | Path | None = None,
 ) -> bool:
-    """Remove ``results/{session_id}/`` if it exists."""
-    session_results = Path(results_dir or RESULTS_DIR) / session_id
-    if not session_results.exists():
+    """Remove a session result directory by id, including nested benchmark runs."""
+    try:
+        session_results = find_session_dir(session_id, results_dir=results_dir)
+    except FileNotFoundError:
         return False
     shutil.rmtree(session_results)
     return True

@@ -14,6 +14,7 @@ from typing import Any
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from agent.llm.model_factory import load_model
+from agent.memory.attributes import infer_memory_attributes
 from agent.memory.models import (
     EvaluationEvidence,
     MemoryCandidate,
@@ -25,6 +26,7 @@ from agent.memory.models import (
     RetrievedMemory,
     StoredMemory,
 )
+from agent.memory.safety import assert_no_oracle_leakage
 from agent.memory.store import create_memory_store
 from agent.memory.vector_index import QdrantMemoryIndex
 from nika.config import MEMORY_DIR
@@ -60,7 +62,7 @@ Return relation=null when no meaningful link exists.
 """
 
 _DEVICE_TOKEN = re.compile(
-    r"\b(?:pc|host|router|switch|server|client|leaf|spine|node|r|s|h)[_-]?\d+\b",
+    r"\b(?:pc|host|router|switch|server|client|leaf|spine|node|r|s|h)(?:[_-]?\d+)+\b",
     re.IGNORECASE,
 )
 _IPV4 = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}(?:/\d{1,2})?\b")
@@ -92,6 +94,129 @@ def _jaccard(left: str, right: str) -> float:
 
 def _terms(text: str) -> set[str]:
     return set(re.findall(r"[a-z0-9_-]{3,}", text.lower()))
+
+
+def _semantic_query_text(
+    query: MemoryQuery,
+    attribute_terms: str,
+    *,
+    max_chars: int = 500,
+) -> str:
+    text = _redact_episode_entities(query.text).replace("\n", " ")
+    text = re.sub(r"\s+", " ", text).strip()
+    if len(text) > max_chars:
+        text = text[:max_chars].rsplit(" ", 1)[0].strip()
+    return f"{text}\n{attribute_terms}".strip()
+
+
+_TOPIC_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (
+        "routing_inspection",
+        (
+            "bgp",
+            "ospf",
+            "route",
+            "routes",
+            "routing",
+            "neighbor",
+            "adjacency",
+            "frr",
+            "vtysh",
+            "next-hop",
+        ),
+    ),
+    (
+        "service_inspection",
+        (
+            "dns",
+            "dhcp",
+            "http",
+            "nginx",
+            "apache",
+            "systemctl",
+            "service",
+            "resolver",
+            "lease",
+            "curl",
+        ),
+    ),
+    (
+        "connectivity_probe",
+        (
+            "ping",
+            "traceroute",
+            "reachability",
+            "packet loss",
+            "latency",
+            "timeout",
+            "icmp",
+        ),
+    ),
+    (
+        "configuration_inspection",
+        (
+            "config",
+            "configuration",
+            "interface",
+            "ip addr",
+            "link state",
+            "iptables",
+            "acl",
+            "policy",
+        ),
+    ),
+    (
+        "tool_error_recovery",
+        ("error", "exception", "failed", "permission denied", "not found"),
+    ),
+)
+
+
+def _compact_event_text(entry: dict[str, Any]) -> str:
+    return " ".join(
+        str(entry.get(key, ""))
+        for key in ("event", "phase", "tool", "input", "result", "text")
+        if entry.get(key)
+    )
+
+
+def _topic_for_entry(entry: dict[str, Any]) -> str:
+    if entry.get("event") == "tool_error":
+        return "tool_error_recovery"
+    text = _compact_event_text(entry).lower()
+    for topic, patterns in _TOPIC_RULES:
+        if any(pattern in text for pattern in patterns):
+            return topic
+    return "reasoning_summary" if entry.get("text") else "general_diagnosis"
+
+
+def _summarize_trace_topics(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    summaries: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    for entry in entries:
+        topic = _topic_for_entry(entry)
+        entry["topic"] = topic
+        if topic not in summaries:
+            summaries[topic] = {
+                "topic": topic,
+                "event_count": 0,
+                "tools": [],
+                "evidence": [],
+            }
+            order.append(topic)
+        summary = summaries[topic]
+        summary["event_count"] += 1
+        tool = entry.get("tool")
+        if tool and tool not in summary["tools"]:
+            summary["tools"].append(tool)
+        evidence_text = (
+            str(entry.get("result") or entry.get("text") or entry.get("input") or "")
+            .replace("\n", " ")
+            .strip()
+        )
+        if evidence_text and len(summary["evidence"]) < 4:
+            summary["evidence"].append(evidence_text[:500])
+    return [summaries[topic] for topic in order]
 
 
 class ProceduralMemoryModule:
@@ -131,11 +256,16 @@ class ProceduralMemoryModule:
 
     @staticmethod
     def compact_trace(trace_path: str | Path, max_chars: int = 32000) -> str:
-        """Keep diagnosis evidence while excluding submission and oracle artifacts."""
+        """Keep diagnosis evidence while excluding submission and oracle artifacts.
+
+        This is a deterministic LightMem-inspired compaction pass: it filters the
+        trace, redacts concrete identifiers, groups events by diagnostic topic,
+        and emits both compact events and topic-level evidence summaries.
+        """
         entries: list[dict[str, Any]] = []
         path = Path(trace_path)
         if not path.exists():
-            return "[]"
+            return json.dumps({"events": [], "topics": []})
         for raw_line in path.read_text(encoding="utf-8").splitlines():
             if not raw_line.strip():
                 continue
@@ -167,11 +297,21 @@ class ProceduralMemoryModule:
                 continue
             entries.append(compact)
 
-        while entries and len(json.dumps(entries, default=str)) > max_chars:
+        payload: dict[str, Any] = {
+            "events": entries,
+            "topics": _summarize_trace_topics(entries),
+        }
+        while entries and len(json.dumps(payload, default=str)) > max_chars:
             entries.pop(0)
-        return _redact_episode_entities(
-            json.dumps(entries, ensure_ascii=False, default=str)
+            payload = {
+                "events": entries,
+                "topics": _summarize_trace_topics(entries),
+            }
+        redacted = _redact_episode_entities(
+            json.dumps(payload, ensure_ascii=False, default=str)
         )
+        assert_no_oracle_leakage(redacted)
+        return redacted
 
     async def extract(
         self,
@@ -188,6 +328,7 @@ class ProceduralMemoryModule:
             "topology_class": topology_class,
             "diagnosis_trajectory": trace,
         }
+        assert_no_oracle_leakage(payload)
         raw = await extractor.ainvoke(
             [
                 SystemMessage(content=EXTRACTION_PROMPT),
@@ -208,17 +349,18 @@ class ProceduralMemoryModule:
                 _redact_episode_entities(item) for item in candidate.evidence_required
             ]
             data["avoid"] = [_redact_episode_entities(item) for item in candidate.avoid]
-            attrs = candidate.attributes.model_dump()
-            attrs["scenarios"] = sorted(
-                set(attrs["scenarios"] + ([scenario] if scenario else []))
+            sanitized = MemoryCandidate.model_validate(data)
+            note_attrs = infer_memory_attributes(
+                sanitized.content,
+                *sanitized.applicability,
+                *sanitized.evidence_required,
+                *sanitized.avoid,
+                scenario=scenario,
+                topology_class=topology_class,
+                task_stage="diagnosis",
+                tools=sanitized.attributes.tools,
             )
-            attrs["topology_classes"] = sorted(
-                set(
-                    attrs["topology_classes"]
-                    + ([topology_class] if topology_class else [])
-                )
-            )
-            data["attributes"] = attrs
+            data["attributes"] = note_attrs.model_dump()
             result.append(MemoryCandidate.model_validate(data))
         return result
 
@@ -342,10 +484,16 @@ class ProceduralMemoryModule:
         query: MemoryQuery,
         session_id: str,
     ) -> list[RetrievedMemory]:
+        assert_no_oracle_leakage(query.model_dump())
         self.store.record_episode_start(self.bank_id, session_id)
+        query_attributes = query.attributes()
+        query_attrs = query_attributes.flat_values()
+        attribute_terms = " ".join(sorted(query_attrs))
+        retrieval_text = f"{query.text}\n{attribute_terms}".strip()
+        semantic_text = _semantic_query_text(query, attribute_terms)
         lexical = self.store.search_fts(
             bank_id=self.bank_id,
-            query=query.text,
+            query=retrieval_text,
             limit=query.candidate_limit,
         )
         lexical_scores = {memory.memory_id: score for memory, score in lexical}
@@ -355,8 +503,11 @@ class ProceduralMemoryModule:
         try:
             semantic = self.vector_index.search(
                 bank_id=self.bank_id,
-                query=query.text,
+                query=semantic_text,
                 limit=query.candidate_limit,
+                protocols=query_attributes.protocols,
+                services=query_attributes.services,
+                task_stages=query_attributes.task_stages,
             )
             semantic_scores = dict(semantic)
             for memory in self.store.get_many([item[0] for item in semantic]):
@@ -365,9 +516,16 @@ class ProceduralMemoryModule:
         except Exception as exc:
             logger.warning("Qdrant memory retrieval skipped: %s", exc)
 
-        query_attrs = query.attributes().flat_values()
-        link_counts = self.store.link_counts(self.bank_id, list(candidates))
-        max_links = max(link_counts.values(), default=1) or 1
+        relation_counts = self.store.relation_counts(self.bank_id, list(candidates))
+        positive_link_counts = {
+            memory_id: (
+                counts.get(MemoryLinkType.SUPPORTS.value, 0)
+                + counts.get(MemoryLinkType.REFINES.value, 0)
+                + counts.get(MemoryLinkType.SAME_PATTERN.value, 0)
+            )
+            for memory_id, counts in relation_counts.items()
+        }
+        max_positive_links = max(positive_link_counts.values(), default=1) or 1
 
         ranked: list[RetrievedMemory] = []
         for memory in candidates.values():
@@ -386,18 +544,27 @@ class ProceduralMemoryModule:
                 )
                 / 8,
             )
+            relation_summary = relation_counts.get(memory.memory_id, {})
+            positive_links = positive_link_counts.get(memory.memory_id, 0)
+            contradiction_count = relation_summary.get(
+                MemoryLinkType.CONTRADICTS.value,
+                0,
+            )
             graph_score = (
-                0.65 * min(1.0, link_counts.get(memory.memory_id, 0) / max_links)
-                + 0.35 * structural_score
+                0.55 * min(1.0, positive_links / max_positive_links)
+                + 0.25 * structural_score
+                + 0.20 * min(1.0, memory.validation_count / 3)
             )
             lexical_score = lexical_scores.get(memory.memory_id, 0.0)
             semantic_score = semantic_scores.get(memory.memory_id, 0.0)
             relevance = max(lexical_score, semantic_score)
+            contradiction_penalty = min(0.25, 0.08 * contradiction_count)
             score = (
                 0.40 * relevance
                 + 0.30 * attribute_score
                 + 0.20 * memory.confidence
                 + 0.10 * graph_score
+                - contradiction_penalty
             )
             ranked.append(
                 RetrievedMemory(

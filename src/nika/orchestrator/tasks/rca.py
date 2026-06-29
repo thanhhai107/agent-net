@@ -88,8 +88,8 @@ class RCATask(TaskBase):
             gt = RCASubmission.model_validate(gt)
 
         # 4. Get normalized component sets
-        correct_rc_names = set([c for c in gt.root_cause_name])
-        sub_rc_names = set([c for c in sub_rc_names])
+        correct_rc_names = {str(c).strip() for c in gt.root_cause_name}
+        sub_rc_names = {str(c).strip() for c in sub_rc_names}
 
         # 5. Calculate precision, recall, F1 score
         tp = len(correct_rc_names & sub_rc_names)
@@ -98,7 +98,7 @@ class RCATask(TaskBase):
 
         precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
         recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-        accuracy = tp / len(correct_rc_names) if len(correct_rc_names) > 0 else 0.0
+        accuracy = 1.0 if sub_rc_names == correct_rc_names else 0.0
 
         if precision + recall == 0:
             f1 = 0.0

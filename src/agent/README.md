@@ -28,6 +28,8 @@ src/agent/
 │   └── model_factory.py
 ├── memory/               # Composable cross-session procedural memory
 │   ├── adapter.py        # Wraps an existing workflow
+│   ├── attributes.py     # Deterministic public attribute mining
+│   ├── safety.py         # Oracle-leakage guards
 │   ├── service.py        # Extract, validate, consolidate, retrieve
 │   ├── store.py          # PostgreSQL canonical store
 │   └── vector_index.py   # Optional Qdrant embedding index
@@ -123,6 +125,11 @@ nika agent run -a reflexion -b netmind -m openai/gpt-oss-120b -n 20 -r 3
 `plan-execute`, or `reflexion`. It adds cross-session atomic procedural memory
 without changing the selected workflow's graph.
 
+The module boundary lives in
+[`docs/learning_modules.md`](../../docs/learning_modules.md). The detailed
+memory design and benchmark-safety contract live in
+[`docs/memory/README.md`](../../docs/memory/README.md).
+
 - Canonical records, versions, links, provenance, and validation state live in
   PostgreSQL; Qdrant stores only rebuildable embedding vectors and filter
   metadata.
@@ -132,12 +139,10 @@ without changing the selected workflow's graph.
   consolidation phase.
 - Memory extraction and consolidation run after numeric evaluation. Ground
   truth is never included in the extractor prompt.
-- Use a unique `--memory-bank` per experimental condition and seed.
+- Use a unique memory bank per experimental condition and seed.
 
 ```bash
-nika agent run -a reflexion --memory-mode evolve \
-  --memory-bank experiment-01 --memory-top-k 5 \
-  --memory-token-budget 1500
+nika memory run --bank experiment-01 --limit 4 -a reflexion
 ```
 
 ## 4. Mock Path (`-a mock`)
@@ -152,7 +157,7 @@ nika agent run -a reflexion --memory-mode evolve \
 nika agent run -a mock -n 5
 ```
 
-## 5. Tool Evolution module (`--tool-evolution`)
+## 5. Tool Evolution module (`--tools`)
 
 **Integration point**: `DiagnosisAgent`, shared by ReAct, Plan-Execute, and
 Reflexion. The module enriches tool descriptions, retrieval, synthesis, and
@@ -173,16 +178,15 @@ post-incident curation without owning workflow orchestration or submission.
 - Libraries live under `runtime/tool_evolution/{library_id}/` and store both
   composites and generated Python tools in `state.json`.
 - A source trajectory does not count as validation. Candidates require solved
-  incidents in two distinct scenario/topology contexts before promotion;
-  benchmark development/transfer splits are fully read-only.
+  incidents in two distinct scenario/topology contexts before promotion.
 - Library capacity defaults to 250 and overflow is pruned by status and
   observed utility.
 
 ```bash
-nika agent run -a react -b netmind -m openai/gpt-oss-120b --tool-evolution \
-  --tool-library experiment-a --evolution-mode dual
-nika benchmark run --csv benchmark/tool_evolution_eval.csv \
-  -a react --tool-evolution --tool-library experiment-a
+nika agent run -a react -b netmind -m openai/gpt-oss-120b \
+  --tools experiment-a --tool-mode dual
+nika benchmark run --file benchmark/benchmark_test.csv \
+  -a react --tools experiment-a
 ```
 
 ## 6. SDK Path (`-a sdk`, planned)
@@ -195,7 +199,7 @@ Design notes:
 - Expose MCP tools to the model via SDK MCP configuration or an adapter.
 - Keep the diagnosis → submission flow and the same logging format.
 
-Register the `"sdk"` branch in `registry.create_agent()` once implemented.
+Register the `"sdk"` branch in `registry.create_agent(config)` once implemented.
 
 ## 7. LangGraph + CLI Path (`-a cli`)
 
@@ -233,7 +237,8 @@ See the root [README.md](../../README.md#troubleshooting-agents) for a longer wa
 ## Adding a New Agent
 
 1. Implement a class in the appropriate subpackage with `async def run(task_description) -> dict`.
-2. Add a branch in `registry.create_agent()`.
+2. Add a branch in `registry.create_agent(config)` and keep extension handling in
+   `agent.composition.AgentRunConfig`.
 3. Ensure `MessageLogger` (or `AgentCallbackLogger` for LangChain paths) writes to `{session_dir}/messages.jsonl`.
 
 ## CLI Usage
@@ -243,11 +248,11 @@ nika agent list                              # List agent types and LLM backends
 nika agent run -a react -b openai -m ...   # ReAct baseline
 nika agent run -a plan-execute -b openai -m ...
 nika agent run -a reflexion -b openai -m ...
-nika agent run -a react -b openai -m ... --tool-evolution \
-  --tool-library experiment-a
+nika agent run -a react -b openai -m ... --tools experiment-a
 nika agent run -a cli -m gpt-5.4-mini      # Codex CLI path
 nika agent run -a mock                       # Mock path (no LLM required)
 # nika agent run -a sdk                      # Not yet implemented
 ```
 
-Registration and dispatch live in `nika/workflows/agent/run.py` → `agent.registry.create_agent()`.
+Registration and dispatch live in `nika/workflows/agent/run.py` →
+`agent.composition.AgentRunConfig` → `agent.registry.create_agent(config)`.

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import tempfile
 import unittest
@@ -10,14 +11,19 @@ from unittest.mock import AsyncMock, MagicMock, call, patch
 
 from qdrant_client import QdrantClient
 
+from agent.composition import MemoryConfig
 from agent.memory.adapter import MemoryAugmentedAgent
+from agent.memory.attributes import infer_memory_attributes
 from agent.memory.models import (
     EvaluationEvidence,
     MemoryAttributes,
     MemoryCandidate,
+    MemoryExtraction,
+    MemoryLinkType,
     MemoryQuery,
     MemoryStatus,
 )
+from agent.memory.safety import MemoryOracleLeakageError, assert_no_oracle_leakage
 from agent.memory.service import ProceduralMemoryModule
 from agent.memory.store import SQLiteMemoryStore, create_memory_store
 from agent.memory.vector_index import QdrantMemoryIndex
@@ -38,6 +44,17 @@ class DisabledVectorIndex:
         return None
 
 
+class RecordingVectorIndex(DisabledVectorIndex):
+    enabled = True
+
+    def __init__(self) -> None:
+        self.queries: list[str] = []
+
+    def search(self, **kwargs) -> list:
+        self.queries.append(kwargs["query"])
+        return []
+
+
 class FixedEmbeddingProvider:
     def embed(self, texts: list[str]) -> list[list[float]]:
         return [
@@ -48,6 +65,22 @@ class FixedEmbeddingProvider:
             ]
             for text in texts
         ]
+
+
+class FakeExtractor:
+    def __init__(self, extraction: MemoryExtraction) -> None:
+        self.extraction = extraction
+
+    async def ainvoke(self, messages) -> MemoryExtraction:
+        return self.extraction
+
+
+class FakeLLM:
+    def __init__(self, extraction: MemoryExtraction) -> None:
+        self.extraction = extraction
+
+    def with_structured_output(self, schema):
+        return FakeExtractor(self.extraction)
 
 
 class FakeWorkflow:
@@ -181,6 +214,40 @@ class SQLiteMemoryStoreTest(unittest.TestCase):
         self.assertEqual(promoted.memory_id, staged.memory_id)
         self.assertEqual(promoted.status, MemoryStatus.VALIDATED)
 
+    def test_relation_counts_preserve_link_types(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = SQLiteMemoryStore(Path(tmp) / "memory.sqlite3")
+            left, _ = store.add_or_corroborate(
+                bank_id="experiment",
+                candidate=atomic_note("Check BGP neighbor state before RCA."),
+                status=MemoryStatus.VALIDATED,
+                confidence=0.8,
+                source_session_id="episode-1",
+                successful_episode=True,
+            )
+            right, _ = store.add_or_corroborate(
+                bank_id="experiment",
+                candidate=atomic_note("Compare BGP advertised routes before RCA."),
+                status=MemoryStatus.VALIDATED,
+                confidence=0.8,
+                source_session_id="episode-2",
+                successful_episode=True,
+            )
+
+            store.add_link(
+                bank_id="experiment",
+                source_id=left.memory_id,
+                target_id=right.memory_id,
+                relation=MemoryLinkType.SUPPORTS,
+            )
+            counts = store.relation_counts(
+                "experiment",
+                [left.memory_id, right.memory_id],
+            )
+
+        self.assertEqual(counts[left.memory_id][MemoryLinkType.SUPPORTS.value], 1)
+        self.assertEqual(counts[right.memory_id][MemoryLinkType.SUPPORTS.value], 1)
+
 
 class MemoryPolicyTest(unittest.TestCase):
     def setUp(self) -> None:
@@ -271,6 +338,31 @@ class MemoryPolicyTest(unittest.TestCase):
             all(item.memory.status == MemoryStatus.VALIDATED for item in results)
         )
 
+    def test_vector_retrieval_uses_compact_semantic_query(self) -> None:
+        index = RecordingVectorIndex()
+        module = ProceduralMemoryModule(
+            bank_id="test",
+            store_path=Path(self.tmp.name) / "recording.sqlite3",
+            vector_index=index,
+        )
+        module.retrieve(
+            query=MemoryQuery(
+                text=" ".join(["BGP 10.0.0.1 pc_0_0 eth0"] * 400),
+                scenario="dc_clos_bgp",
+                protocols=["bgp"],
+                services=["frr"],
+                top_k=2,
+            ),
+            session_id="next-episode",
+        )
+
+        self.assertEqual(len(index.queries), 1)
+        self.assertLessEqual(len(index.queries[0]), 600)
+        self.assertIn("bgp", index.queries[0].lower())
+        self.assertIn("frr", index.queries[0].lower())
+        self.assertNotIn("10.0.0.1", index.queries[0])
+        self.assertNotIn("pc_0_0", index.queries[0])
+
     def test_compact_trace_excludes_submission_and_redacts_entities(self) -> None:
         trace_path = Path(self.tmp.name) / "messages.jsonl"
         rows = [
@@ -297,6 +389,82 @@ class MemoryPolicyTest(unittest.TestCase):
         self.assertNotIn("pc1", compact)
         self.assertNotIn("10.0.0.1", compact)
         self.assertIn("<device>", compact)
+        payload = json.loads(compact)
+        self.assertEqual(payload["events"][0]["topic"], "connectivity_probe")
+        self.assertTrue(payload["topics"])
+
+    def test_extract_scopes_attributes_to_atomic_note_text(self) -> None:
+        broad_note = MemoryCandidate(
+            content="Check DNS resolver configuration with dig before changing routing.",
+            applicability=["Name resolution fails while ICMP still works."],
+            evidence_required=["Inspect resolv.conf and run a DNS lookup."],
+            attributes=MemoryAttributes(
+                protocols=["bgp", "rip"],
+                services=["bgp", "http"],
+                tools=["dig_lookup"],
+            ),
+        )
+        self.module._llm = FakeLLM(MemoryExtraction(memories=[broad_note]))
+
+        extracted = asyncio.run(
+            self.module.extract(
+                task_description="The task mentions BGP, HTTP, and RIP elsewhere.",
+                trace="A long trace mentions BGP neighbors, HTTP checks, and RIP routes.",
+                scenario="ospf_enterprise_dhcp",
+                topology_class="s",
+            )
+        )
+
+        attrs = extracted[0].attributes
+        self.assertIn("dns", attrs.protocols)
+        self.assertIn("dns", attrs.services)
+        self.assertIn("icmp", attrs.protocols)
+        self.assertIn("dig_lookup", attrs.tools)
+        self.assertNotIn("bgp", attrs.protocols)
+        self.assertNotIn("rip", attrs.protocols)
+        self.assertNotIn("http", attrs.services)
+
+    def test_compact_trace_groups_routing_topic_evidence(self) -> None:
+        trace_path = Path(self.tmp.name) / "messages.jsonl"
+        rows = [
+            {
+                "agent": "diagnosis_agent",
+                "event": "tool_start",
+                "tool": {"name": "frr_show_ip_route"},
+                "input": '{"node": "r1"}',
+            },
+            {
+                "agent": "diagnosis_agent",
+                "event": "tool_end",
+                "output": "BGP neighbor is idle and route is missing.",
+            },
+        ]
+        trace_path.write_text(
+            "\n".join(json.dumps(row) for row in rows),
+            encoding="utf-8",
+        )
+
+        payload = json.loads(self.module.compact_trace(trace_path))
+        topics = {item["topic"]: item for item in payload["topics"]}
+
+        self.assertIn("routing_inspection", topics)
+        self.assertIn("frr_show_ip_route", topics["routing_inspection"]["tools"])
+
+    def test_oracle_guard_rejects_hidden_payload_keys(self) -> None:
+        with self.assertRaises(MemoryOracleLeakageError):
+            assert_no_oracle_leakage({"problem_names": ["hidden_fault_id"]})
+
+    def test_attribute_miner_extracts_services_and_symptoms(self) -> None:
+        attrs = infer_memory_attributes(
+            "DNS resolver timeout after HTTP check failed.",
+            scenario="ospf_enterprise_dns",
+            topology_class="s",
+            tools=["curl_url", "dig_lookup"],
+        )
+
+        self.assertIn("dns", attrs.services)
+        self.assertIn("timeout", attrs.symptoms)
+        self.assertIn("ospf", attrs.protocols)
 
     def test_snapshot_is_jsonl_audit_artifact(self) -> None:
         self.module.store.add_or_corroborate(
@@ -345,6 +513,25 @@ class MemoryAdapterTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(query.top_k, 3)
         self.assertEqual(query.token_budget, 700)
         self.assertIn("frr_show_ip_route", query.tools)
+
+    async def test_wrapper_mines_service_attributes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workflow = FakeWorkflow(tmp)
+            memory = MagicMock()
+            memory.bank_id = "experiment"
+            memory.retrieve.return_value = []
+            memory.format_context.return_value = ""
+            adapter = MemoryAugmentedAgent(
+                workflow,
+                memory,
+                memory_mode="read",
+            )
+
+            await adapter.run("Diagnose DNS resolver timeout.")
+
+        query = memory.retrieve.call_args.kwargs["query"]
+        self.assertIn("dns", query.services)
+        self.assertIn("timeout", query.symptoms)
 
 
 class QdrantMemoryIndexTest(unittest.TestCase):
@@ -407,6 +594,53 @@ class QdrantMemoryIndexTest(unittest.TestCase):
                 ),
                 [],
             )
+
+    @patch.dict(
+        "os.environ",
+        {
+            "QDRANT_URL": "http://unused",
+            "QDRANT_COLLECTION": "memory-test",
+            "EMBEDDING_DIMENSION": "3",
+        },
+        clear=False,
+    )
+    def test_qdrant_search_filters_by_attributes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = SQLiteMemoryStore(Path(tmp) / "memory.sqlite3")
+            bgp_memory, _ = store.add_or_corroborate(
+                bank_id="experiment",
+                candidate=atomic_note("Check BGP routing evidence first."),
+                status=MemoryStatus.VALIDATED,
+                confidence=0.9,
+                source_session_id="episode-1",
+                successful_episode=True,
+            )
+            ospf_memory, _ = store.add_or_corroborate(
+                bank_id="experiment",
+                candidate=MemoryCandidate(
+                    content="Check OSPF adjacency evidence before RCA.",
+                    applicability=["OSPF reachability is unstable."],
+                    evidence_required=["Inspect OSPF neighbors."],
+                    attributes=MemoryAttributes(protocols=["ospf"]),
+                ),
+                status=MemoryStatus.VALIDATED,
+                confidence=0.9,
+                source_session_id="episode-2",
+                successful_episode=True,
+            )
+            index = QdrantMemoryIndex(provider=FixedEmbeddingProvider())
+            index._client = QdrantClient(":memory:")
+            index.upsert(bgp_memory)
+            index.upsert(ospf_memory)
+
+            results = index.search(
+                bank_id="experiment",
+                query="routing diagnosis",
+                limit=5,
+                protocols=["ospf"],
+            )
+
+        self.assertEqual(results, [(ospf_memory.memory_id, results[0][1])])
 
 
 class OnlineEvolutionWorkflowTest(unittest.IsolatedAsyncioTestCase):
@@ -472,5 +706,5 @@ class ContinualBenchmarkPolicyTest(unittest.TestCase):
                 model="model",
                 max_steps=1,
                 parallel=2,
-                memory_mode="evolve",
+                memory=MemoryConfig(mode="evolve"),
             )

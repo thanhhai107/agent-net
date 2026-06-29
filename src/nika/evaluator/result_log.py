@@ -50,9 +50,7 @@ class EvalResult:
     tool_evolution_enabled: bool | None = None
     tool_library_id: str = None
     tool_evolution_mode: str = None
-    evolution_stream: str = None
-    evolution_split: str = None
-    evolution_sequence_index: int = None
+    benchmark_index: int = None
     tool_selection_recall: float = None
     argument_validity: float = None
     error_recovery_count: int = None
@@ -130,11 +128,10 @@ def iter_session_dirs(results_dir: str | Path | None = None) -> list[Path]:
     if not root.exists():
         return []
     session_dirs: list[Path] = []
-    for entry in sorted(root.iterdir()):
-        if not entry.is_dir() or entry.name == "0_summary":
+    for run_path in sorted(root.rglob(RUN_FILENAME)):
+        if "0_summary" in run_path.relative_to(root).parts:
             continue
-        if (entry / RUN_FILENAME).exists():
-            session_dirs.append(entry)
+        session_dirs.append(run_path.parent)
     return session_dirs
 
 
@@ -231,9 +228,7 @@ def build_eval_result_from_session_dir(session_dir: Path) -> EvalResult:
         or run_meta.get("tool_library_id"),
         tool_evolution_mode=metrics_blob.get("tool_evolution_mode")
         or run_meta.get("tool_evolution_mode"),
-        evolution_stream=run_meta.get("evolution_stream"),
-        evolution_split=run_meta.get("evolution_split"),
-        evolution_sequence_index=run_meta.get("evolution_sequence_index"),
+        benchmark_index=run_meta.get("benchmark_index"),
         tool_selection_recall=metrics_blob.get("tool_selection_recall"),
         argument_validity=metrics_blob.get("argument_validity"),
         error_recovery_count=metrics_blob.get("error_recovery_count"),

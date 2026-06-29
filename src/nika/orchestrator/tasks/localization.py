@@ -97,8 +97,10 @@ class LocalizationTask(TaskBase):
         gt_components_raw = gt.faulty_devices if gt else []
 
         # 4. Get normalized component sets
-        correct_components = set([c for c in gt_components_raw])
-        submitted_components_norm = set([c for c in submitted_components])
+        correct_components = {str(c).strip().lower() for c in gt_components_raw}
+        submitted_components_norm = {
+            str(c).strip().lower() for c in submitted_components
+        }
 
         # 5. Calculate precision, recall, F1 score
         tp = len(correct_components & submitted_components_norm)
@@ -107,7 +109,7 @@ class LocalizationTask(TaskBase):
 
         precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
         recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
-        accuracy = tp / len(correct_components) if len(correct_components) > 0 else 0.0
+        accuracy = 1.0 if submitted_components_norm == correct_components else 0.0
 
         if precision + recall == 0:
             f1 = 0.0

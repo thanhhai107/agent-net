@@ -1,6 +1,7 @@
 """Start a Kathara lab for one scenario and persist a new session."""
 
 from datetime import datetime
+from pathlib import Path
 from typing import Literal
 from uuid import uuid4
 
@@ -24,6 +25,7 @@ def start_net_env(
     *,
     redeploy: bool = True,
     instance_tag: str | None = None,
+    results_root: str | Path | None = None,
 ) -> str:
     """Deploy the lab for ``scenario`` and create a new runtime session."""
     tier = _normalize_topo_tier(topo_size)
@@ -54,6 +56,7 @@ def start_net_env(
         scenario_name=scenario,
         lab_name=net_env.lab.name,
         scenario_topo_size=tier,
+        results_root=results_root,
         scenario_params=scenario_params,
         topology=net_env.get_topology(),
     )

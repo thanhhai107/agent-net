@@ -11,6 +11,7 @@ from langgraph.graph import END, START, StateGraph
 from pydantic import Field, ValidationError
 from typing_extensions import TypedDict
 
+from agent.defaults import DEFAULT_MAX_STEPS
 from agent.langgraph.domain_agents.diagnosis_agent import DiagnosisAgent
 from agent.langgraph.domain_agents.submission_agent import SubmissionAgent
 from agent.llm.model_factory import DEFAULT_LLM_BACKEND, DEFAULT_MODEL
@@ -46,12 +47,13 @@ class BasicReActAgent:
         session_id: str,
         llm_backend: str = DEFAULT_LLM_BACKEND,
         model: str = DEFAULT_MODEL,
-        max_steps: int = 20,
+        max_steps: int = DEFAULT_MAX_STEPS,
         oracle_routing: bool = False,
         tool_evolution_enabled: bool = False,
         tool_library_id: str = "default",
         tool_evolution_mode: str = "dual",
         use_problem_tool_hints: bool = True,
+        policy_overlay_path: str | None = None,
     ):
         self.session_id = session_id
         self.max_steps = max_steps
@@ -87,6 +89,7 @@ class BasicReActAgent:
             tool_evolution_enabled=tool_evolution_enabled,
             tool_library_id=tool_library_id,
             tool_evolution_mode=tool_evolution_mode,
+            policy_overlay_path=policy_overlay_path,
         )
         asyncio.run(diagnosis_agent.load_tools())
         self.llm = diagnosis_agent.llm

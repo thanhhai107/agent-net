@@ -1,8 +1,17 @@
 """Commands for running diagnosis agents."""
 
+from pathlib import Path
+
 import typer
 
 from agent.cli.codex_worker import REASONING_EFFORT_LEVELS
+from agent.composition import (
+    AgentRunConfig,
+    MemoryConfig,
+    PolicyOverlayConfig,
+    ToolEvolutionConfig,
+)
+from agent.defaults import DEFAULT_MAX_STEPS
 from agent.llm.model_factory import (
     DEFAULT_LLM_BACKEND,
     DEFAULT_MODEL,
@@ -17,7 +26,6 @@ SUPPORTED_AGENT_TYPES = (
     "mock",
     "cli",
 )
-MEMORY_COMPATIBLE_AGENT_TYPES = ("react", "plan-execute", "reflexion")
 SUPPORTED_LLM_BACKENDS = ("openai", "ollama", "deepseek", "netmind")
 
 agent_app = typer.Typer(help="Troubleshooting agents.")
@@ -58,7 +66,7 @@ def agent_run(
         DEFAULT_MODEL, "-m", "--model", help="Model id for the chosen backend."
     ),
     max_steps: int = typer.Option(
-        20,
+        DEFAULT_MAX_STEPS,
         "-n",
         "--max-steps",
         help=(
@@ -87,43 +95,44 @@ def agent_run(
         "--oracle-routing",
         help="Use hidden problem labels to select MCP servers (oracle baseline only).",
     ),
-    tool_evolution: bool = typer.Option(
-        False,
-        "--tool-evolution/--no-tool-evolution",
-        help="Enable Tool Evolution as a module for a LangGraph workflow.",
+    tools: str | None = typer.Option(
+        None,
+        "--tools",
+        help="Enable Tool Evolution with this library id.",
     ),
-    tool_library: str = typer.Option(
-        "default",
-        "--tool-library",
-        help="Persistent diagnostic tool library id used by Tool Evolution.",
-    ),
-    evolution_mode: str = typer.Option(
+    tool_mode: str = typer.Option(
         ToolEvolutionMode.DUAL.value,
-        "--evolution-mode",
+        "--tool-mode",
         help="Tool Evolution mode: mastery, distill, dual.",
     ),
-    memory_mode: str = typer.Option(
-        "off",
-        "--memory-mode",
-        help="Composable memory module: off, read, or evolve.",
+    memory: str | None = typer.Option(
+        None,
+        "--memory",
+        help="Enable evolving memory with this bank id.",
     ),
-    memory_bank: str = typer.Option(
-        "default",
-        "--memory-bank",
-        help="Persistent memory-bank id when memory is enabled.",
+    memory_read: str | None = typer.Option(
+        None,
+        "--memory-read",
+        help="Read this memory bank without updating it.",
     ),
-    memory_top_k: int = typer.Option(
+    memory_k: int = typer.Option(
         5,
-        "--memory-top-k",
+        "--memory-k",
         min=1,
         max=20,
         help="Maximum memories injected into one diagnosis.",
     ),
-    memory_token_budget: int = typer.Option(
+    memory_tokens: int = typer.Option(
         1500,
-        "--memory-token-budget",
+        "--memory-tokens",
         min=100,
         help="Maximum estimated tokens used by retrieved memory.",
+    ),
+    policy_overlay: Path | None = typer.Option(
+        None,
+        "--policy-overlay",
+        hidden=True,
+        help="Internal agent-evolution policy overlay injected into LangGraph diagnosis prompts.",
     ),
 ) -> None:
     """Run the agent on the current session task."""
@@ -134,35 +143,43 @@ def agent_run(
             f"reasoning_effort must be one of {', '.join(REASONING_EFFORT_LEVELS)}"
         )
     try:
-        ToolEvolutionMode(evolution_mode)
+        ToolEvolutionMode(tool_mode)
     except ValueError as exc:
         raise typer.BadParameter(
-            "evolution_mode must be one of "
+            "tool_mode must be one of "
             + ", ".join(item.value for item in ToolEvolutionMode)
         ) from exc
-    if memory_mode not in {"off", "read", "evolve"}:
-        raise typer.BadParameter("--memory-mode must be off, read, or evolve")
-    if memory_mode != "off" and agent_type.lower() not in MEMORY_COMPATIBLE_AGENT_TYPES:
-        supported = ", ".join(MEMORY_COMPATIBLE_AGENT_TYPES)
-        raise typer.BadParameter(f"memory is supported only for: {supported}")
+    if memory is not None and memory_read is not None:
+        raise typer.BadParameter("Use either --memory or --memory-read, not both.")
+    memory_mode = "evolve" if memory is not None else "read" if memory_read else "off"
+    memory_bank = memory or memory_read or "default"
 
     try:
         start_agent(
-            agent_type,
-            llm_backend,
-            model,
-            max_steps,
-            max_attempts=max_attempts,
+            AgentRunConfig(
+                agent_type=agent_type,
+                llm_backend=llm_backend,
+                model=model,
+                max_steps=max_steps,
+                max_attempts=max_attempts,
+                reasoning_effort=reasoning_effort,
+                oracle_routing=oracle_routing,
+                tool_evolution=ToolEvolutionConfig(
+                    enabled=tools is not None,
+                    library_id=tools or "default",
+                    mode=tool_mode,
+                ),
+                memory=MemoryConfig(
+                    mode=memory_mode,
+                    bank=memory_bank,
+                    top_k=memory_k,
+                    token_budget=memory_tokens,
+                ),
+                policy_overlay=PolicyOverlayConfig(
+                    path=str(policy_overlay) if policy_overlay else None
+                ),
+            ),
             session_id=session_id,
-            reasoning_effort=reasoning_effort,
-            oracle_routing=oracle_routing,
-            tool_evolution_enabled=tool_evolution,
-            tool_library_id=tool_library,
-            tool_evolution_mode=evolution_mode,
-            memory_mode=memory_mode,
-            memory_bank=memory_bank,
-            memory_top_k=memory_top_k,
-            memory_token_budget=memory_token_budget,
         )
     except (FileNotFoundError, ValueError) as exc:
         raise typer.BadParameter(str(exc)) from exc

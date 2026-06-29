@@ -15,6 +15,7 @@ from langgraph.errors import GraphRecursionError
 from langgraph.graph import END, START, StateGraph
 from typing_extensions import TypedDict
 
+from agent.defaults import DEFAULT_MAX_STEPS
 from agent.langgraph.domain_agents.diagnosis_agent import DiagnosisAgent
 from agent.langgraph.domain_agents.submission_agent import SubmissionAgent
 from agent.langgraph.workflow_models import ReflexionEvaluation, ReflexionMemory
@@ -95,13 +96,14 @@ class ReflexionAgent:
         session_id: str,
         llm_backend: str = DEFAULT_LLM_BACKEND,
         model: str = DEFAULT_MODEL,
-        max_steps: int = 20,
+        max_steps: int = DEFAULT_MAX_STEPS,
         max_attempts: int = 3,
         oracle_routing: bool = False,
         tool_evolution_enabled: bool = False,
         tool_library_id: str = "default",
         tool_evolution_mode: str = "dual",
         use_problem_tool_hints: bool = True,
+        policy_overlay_path: str | None = None,
     ) -> None:
         if max_steps < 1:
             raise ValueError("max_steps must be >= 1")
@@ -131,6 +133,7 @@ class ReflexionAgent:
             tool_evolution_enabled=tool_evolution_enabled,
             tool_library_id=tool_library_id,
             tool_evolution_mode=tool_evolution_mode,
+            policy_overlay_path=policy_overlay_path,
         )
         asyncio.run(diagnosis.load_tools())
         self.tool_evolution_runtime = diagnosis.tool_evolution_runtime

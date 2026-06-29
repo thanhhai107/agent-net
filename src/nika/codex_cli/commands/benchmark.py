@@ -4,10 +4,17 @@ from pathlib import Path
 
 import typer
 
+from agent.composition import (
+    MemoryConfig,
+    PolicyOverlayConfig,
+    ToolEvolutionConfig,
+)
+from agent.defaults import DEFAULT_MAX_STEPS
 from agent.llm.model_factory import DEFAULT_LLM_BACKEND, DEFAULT_MODEL
 from agent.tool_evolution.models import ToolEvolutionMode
 from nika.net_env.net_env_pool import scenario_requires_topo_tier
 from nika.workflows.benchmark.run import (
+    _new_benchmark_results_root,
     default_benchmark_csv_path,
     run_benchmark_from_csv,
     run_single_benchmark,
@@ -25,10 +32,11 @@ def benchmark_run(
         metavar="SCENARIO",
         help="Scenario id for a single case (omit for CSV batch mode).",
     ),
-    csv: Path | None = typer.Option(
+    file: Path | None = typer.Option(
         None,
-        "--csv",
-        help="Benchmark CSV path (batch mode). Defaults to benchmark/benchmark_selected.csv under the repo root.",
+        "-f",
+        "--file",
+        help="Benchmark CSV path for batch mode. Defaults to benchmark/benchmark_test.csv.",
     ),
     problem: str | None = typer.Option(
         None,
@@ -54,7 +62,7 @@ def benchmark_run(
         DEFAULT_MODEL, "-m", "--model", help="Model id for the agent."
     ),
     max_steps: int = typer.Option(
-        20,
+        DEFAULT_MAX_STEPS,
         "-n",
         "--max-steps",
         help=(
@@ -75,26 +83,26 @@ def benchmark_run(
         "--parallel",
         help="Number of benchmark cases to run concurrently in CSV batch mode (default: 1).",
     ),
-    memory_mode: str = typer.Option(
-        "off",
-        "--memory-mode",
-        help="Composable memory module: off, read, or evolve.",
+    memory: str | None = typer.Option(
+        None,
+        "--memory",
+        help="Enable evolving memory with this bank id.",
     ),
-    memory_bank: str = typer.Option(
-        "default",
-        "--memory-bank",
-        help="Persistent memory-bank id when memory is enabled.",
+    memory_read: str | None = typer.Option(
+        None,
+        "--memory-read",
+        help="Read this memory bank without updating it.",
     ),
-    memory_top_k: int = typer.Option(
+    memory_k: int = typer.Option(
         5,
-        "--memory-top-k",
+        "--memory-k",
         min=1,
         max=20,
         help="Maximum memories injected into one diagnosis.",
     ),
-    memory_token_budget: int = typer.Option(
+    memory_tokens: int = typer.Option(
         1500,
-        "--memory-token-budget",
+        "--memory-tokens",
         min=100,
         help="Maximum estimated tokens used by retrieved memory.",
     ),
@@ -118,35 +126,39 @@ def benchmark_run(
         "--oracle-routing",
         help="Use hidden problem labels for MCP server selection (oracle baseline).",
     ),
-    tool_evolution: bool = typer.Option(
-        False,
-        "--tool-evolution/--no-tool-evolution",
-        help="Enable Tool Evolution as a module for the selected workflow.",
-    ),
-    tool_library: str | None = typer.Option(
+    tools: str | None = typer.Option(
         None,
-        "--tool-library",
-        help="Persistent Tool Evolution library id; generated in batch mode when omitted.",
+        "--tools",
+        help="Enable Tool Evolution with this library id.",
     ),
-    evolution_mode: str = typer.Option(
+    tool_mode: str = typer.Option(
         ToolEvolutionMode.DUAL.value,
-        "--evolution-mode",
+        "--tool-mode",
         help="Tool Evolution mode: mastery, distill, dual.",
     ),
-    evolution_stream: str | None = typer.Option(
+    result_root: Path | None = typer.Option(
         None,
-        "--evolution-stream",
-        help="Tool Evolution stream id for CSV row subprocess execution.",
+        "--result-root",
+        hidden=True,
+        help="Internal benchmark result root for row subprocess execution.",
     ),
-    evolution_split: str | None = typer.Option(
+    fault_seed: str | None = typer.Option(
         None,
-        "--evolution-split",
-        help="Tool Evolution split for CSV row subprocess execution.",
+        "--fault-seed",
+        hidden=True,
+        help="Internal deterministic fault seed for row subprocess execution.",
     ),
-    evolution_sequence_index: int | None = typer.Option(
+    benchmark_index: int | None = typer.Option(
         None,
-        "--evolution-sequence-index",
-        help="Tool Evolution sequence index for CSV row subprocess execution.",
+        "--benchmark-index",
+        hidden=True,
+        help="Internal zero-based CSV row index for timeline reporting.",
+    ),
+    policy_overlay: Path | None = typer.Option(
+        None,
+        "--policy-overlay",
+        hidden=True,
+        help="Internal agent-evolution policy overlay injected into LangGraph diagnosis prompts.",
     ),
 ) -> None:
     """Run one benchmark row from CSV, or a single case when SCENARIO and --problem are set."""
@@ -157,28 +169,39 @@ def benchmark_run(
     judge_backend = judge_backend or DEFAULT_LLM_BACKEND
     judge_model = judge_model or DEFAULT_MODEL
     try:
-        ToolEvolutionMode(evolution_mode)
+        ToolEvolutionMode(tool_mode)
     except ValueError as exc:
         raise typer.BadParameter(
-            "evolution_mode must be one of "
+            "tool_mode must be one of "
             + ", ".join(item.value for item in ToolEvolutionMode)
         ) from exc
-    if memory_mode not in {"off", "read", "evolve"}:
-        raise typer.BadParameter("--memory-mode must be off, read, or evolve")
-    if memory_mode != "off" and agent_type.lower() not in {
-        "react",
-        "plan-execute",
-        "reflexion",
-    }:
-        raise typer.BadParameter(
-            "memory is supported only for: react, plan-execute, reflexion"
-        )
-    if memory_mode == "evolve" and parallel != 1:
+    if memory is not None and memory_read is not None:
+        raise typer.BadParameter("Use either --memory or --memory-read, not both.")
+    memory_mode = "evolve" if memory is not None else "read" if memory_read else "off"
+    memory_bank = memory or memory_read or "default"
+    tool_evolution_enabled = tools is not None
+    tool_library_id = tools or "default"
+    memory_config = MemoryConfig(
+        mode=memory_mode,
+        bank=memory_bank,
+        top_k=memory_k,
+        token_budget=memory_tokens,
+    )
+    tool_config = ToolEvolutionConfig(
+        enabled=tool_evolution_enabled,
+        library_id=tool_library_id,
+        mode=tool_mode,
+    )
+    policy_config = PolicyOverlayConfig(
+        path=str(policy_overlay) if policy_overlay else None
+    )
+
+    if memory_config.mode == "evolve" and parallel != 1:
         raise typer.BadParameter("online memory evolution requires --parallel 1")
 
-    if scenario is not None and csv is not None:
+    if scenario is not None and file is not None:
         raise typer.BadParameter(
-            "Use either SCENARIO (single-case mode) or --csv (batch mode), not both."
+            "Use either SCENARIO (single-case mode) or --file (batch mode), not both."
         )
 
     single_mode = scenario is not None
@@ -199,6 +222,7 @@ def benchmark_run(
                 f"Scenario '{scenario}' does not use tiers; omit -t/--tier."
             )
         topo = tier or ""
+        benchmark_root = result_root or _new_benchmark_results_root(scenario)
         run_single_benchmark(
             problem=problem,
             scenario=scenario,
@@ -208,38 +232,24 @@ def benchmark_run(
             model=model,
             max_steps=max_steps,
             max_attempts=max_attempts,
-            memory_mode=memory_mode,
-            memory_bank=memory_bank,
-            memory_top_k=memory_top_k,
-            memory_token_budget=memory_token_budget,
+            memory=memory_config,
             run_judge=run_judge,
             judge_llm_backend=judge_backend,
             judge_model=judge_model,
             oracle_routing=oracle_routing,
-            tool_evolution_enabled=tool_evolution,
-            tool_library_id=tool_library or "default",
-            tool_evolution_mode=evolution_mode,
-            evolution_stream=evolution_stream,
-            evolution_split=evolution_split,
-            evolution_sequence_index=evolution_sequence_index,
+            tool_evolution=tool_config,
+            policy_overlay=policy_config,
+            result_root=benchmark_root,
+            fault_seed=fault_seed,
+            benchmark_index=benchmark_index,
         )
         return
 
     if problem is not None:
         raise typer.BadParameter(
-            "--problem without SCENARIO is invalid; pass SCENARIO or use batch mode with --csv."
+            "--problem without SCENARIO is invalid; pass SCENARIO or use batch mode with --file."
         )
-    if (
-        evolution_stream is not None
-        or evolution_split is not None
-        or evolution_sequence_index is not None
-    ):
-        raise typer.BadParameter(
-            "--evolution-stream/--evolution-split/--evolution-sequence-index "
-            "apply only to single-case subprocess mode."
-        )
-
-    benchmark_path = str(csv) if csv is not None else default_benchmark_csv_path()
+    benchmark_path = str(file) if file is not None else default_benchmark_csv_path()
     run_benchmark_from_csv(
         benchmark_file=benchmark_path,
         agent_type=agent_type,
@@ -248,15 +258,12 @@ def benchmark_run(
         max_steps=max_steps,
         max_attempts=max_attempts,
         parallel=parallel,
-        memory_mode=memory_mode,
-        memory_bank=memory_bank,
-        memory_top_k=memory_top_k,
-        memory_token_budget=memory_token_budget,
+        memory=memory_config,
         run_judge=run_judge,
         judge_llm_backend=judge_backend,
         judge_model=judge_model,
         oracle_routing=oracle_routing,
-        tool_evolution_enabled=tool_evolution,
-        tool_library_id=tool_library,
-        tool_evolution_mode=evolution_mode,
+        tool_evolution=tool_config,
+        policy_overlay=policy_config,
+        result_root=result_root,
     )

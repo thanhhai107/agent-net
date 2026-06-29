@@ -206,7 +206,9 @@ class QdrantMemoryIndex:
                         "scenario": memory.attributes.scenarios,
                         "topology_class": memory.attributes.topology_classes,
                         "protocols": memory.attributes.protocols,
+                        "services": memory.attributes.services,
                         "task_stages": memory.attributes.task_stages,
+                        "symptoms": memory.attributes.symptoms,
                         "tools": memory.attributes.tools,
                         "confidence": memory.confidence,
                     },
@@ -220,23 +222,33 @@ class QdrantMemoryIndex:
         bank_id: str,
         query: str,
         limit: int,
+        protocols: list[str] | None = None,
+        services: list[str] | None = None,
+        task_stages: list[str] | None = None,
     ) -> list[tuple[str, float]]:
         if not self.enabled:
             return []
         vectors = self.provider.embed([query])
         if not vectors or not self._ensure_collection(len(vectors[0])):
             return []
-        from qdrant_client.models import FieldCondition, Filter, MatchValue
+        from qdrant_client.models import FieldCondition, Filter, MatchAny, MatchValue
 
-        query_filter = Filter(
-            must=[
-                FieldCondition(key="bank_id", match=MatchValue(value=bank_id)),
-                FieldCondition(
-                    key="status",
-                    match=MatchValue(value="validated"),
-                ),
-            ]
-        )
+        must = [
+            FieldCondition(key="bank_id", match=MatchValue(value=bank_id)),
+            FieldCondition(
+                key="status",
+                match=MatchValue(value="validated"),
+            ),
+        ]
+        for key, values in (
+            ("protocols", protocols),
+            ("services", services),
+            ("task_stages", task_stages),
+        ):
+            normalized = sorted({str(value).strip().lower() for value in values or []})
+            if normalized:
+                must.append(FieldCondition(key=key, match=MatchAny(any=normalized)))
+        query_filter = Filter(must=must)
         client = self._client_or_none()
         if hasattr(client, "query_points"):
             response = client.query_points(

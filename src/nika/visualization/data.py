@@ -76,10 +76,13 @@ def discover_sessions(
     discovered: dict[str, dict[str, Any]] = {}
 
     if results_dir.exists():
-        for run_path in results_dir.glob("*/run.json"):
+        for run_path in results_dir.rglob("run.json"):
+            if "0_summary" in run_path.relative_to(results_dir).parts:
+                continue
             run = _read_json(run_path)
             session_id = str(run.get("session_id") or run_path.parent.name)
             run["session_id"] = session_id
+            run["session_dir"] = str(run_path.parent)
             run["_source"] = "results"
             discovered[session_id] = run
 
@@ -115,7 +118,7 @@ def load_session_bundle(
         raise FileNotFoundError(f"Session '{session_id}' not found.")
 
     meta = sessions[session_id]
-    session_dir = results_dir / session_id
+    session_dir = Path(meta.get("session_dir") or results_dir / session_id)
     run_meta = _read_json(session_dir / "run.json")
     meta = {**run_meta, **meta}
     failure_injections = meta.get("failure_injections", [])

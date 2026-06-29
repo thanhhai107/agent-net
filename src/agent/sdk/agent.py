@@ -5,6 +5,8 @@ Select with ``nika agent run -a sdk`` once implemented.
 
 from typing import Any
 
+from agent.defaults import DEFAULT_MAX_STEPS
+
 
 class SdkAgent:
     """Two-phase troubleshooting agent backed by Claude or Codex SDK."""
@@ -14,7 +16,7 @@ class SdkAgent:
         session_id: str,
         llm_backend: str = "claude",
         model: str = "claude-sonnet-4-20250514",
-        max_steps: int = 20,
+        max_steps: int = DEFAULT_MAX_STEPS,
     ) -> None:
         self.session_id = session_id
         self.llm_backend = llm_backend

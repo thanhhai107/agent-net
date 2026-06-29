@@ -3,28 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-import re
 from typing import Any
 
+from agent.memory.attributes import infer_memory_attributes
 from agent.memory.models import MemoryQuery
 from agent.memory.service import ProceduralMemoryModule
 from agent.protocols import TroubleshootingAgent
 from agent.utils.loggers import MessageLogger
-
-_PROTOCOL_NAMES = (
-    "bgp",
-    "ospf",
-    "rip",
-    "dhcp",
-    "dns",
-    "arp",
-    "icmp",
-    "http",
-    "mpls",
-    "p4",
-    "bmv2",
-    "vpn",
-)
 
 
 class MemoryAugmentedAgent:
@@ -54,19 +39,24 @@ class MemoryAugmentedAgent:
         self.session = session
         self.session_dir = str(session.session_dir)
 
-    def _protocols(self, task_description: str) -> list[str]:
-        haystack = f"{self.session.scenario_name} {task_description}".lower()
-        tokens = set(re.findall(r"[a-z0-9]+", haystack))
-        return [name for name in _PROTOCOL_NAMES if name in tokens]
-
     async def run(self, task_description: str) -> dict[str, Any]:
+        tools = list(getattr(self.agent, "diagnosis_tool_names", []))
+        query_attributes = infer_memory_attributes(
+            task_description,
+            scenario=str(self.session.scenario_name),
+            topology_class=str(self.session.scenario_topo_size or ""),
+            task_stage="diagnosis",
+            tools=tools,
+        )
         query = MemoryQuery(
             text=task_description,
             scenario=str(self.session.scenario_name),
             topology_class=str(self.session.scenario_topo_size or ""),
-            protocols=self._protocols(task_description),
+            protocols=query_attributes.protocols,
+            services=query_attributes.services,
+            symptoms=query_attributes.symptoms,
             task_stage="diagnosis",
-            tools=list(getattr(self.agent, "diagnosis_tool_names", [])),
+            tools=tools,
             top_k=self.memory_top_k,
             token_budget=self.memory_token_budget,
         )

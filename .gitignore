@@ -1,7 +1,8 @@
 cache_dir/
 **/log/**
 *.pyc
-**/__pycache_/**
+__pycache__/
+**/__pycache__/
 *.p4i
 **/pcap/**
 tmp/
@@ -12,8 +13,6 @@ tmp/
 *.egg-info/
 /results/
 /runtime/
-/.vscode/
-/docs/
 notebooks/
 uv.lock
 .agents/

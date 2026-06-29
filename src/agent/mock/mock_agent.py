@@ -14,6 +14,7 @@ from typing import Any
 
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
+from agent.defaults import DEFAULT_MAX_STEPS
 from agent.utils.mcp_servers import MCPServerConfig
 from nika.utils.session import Session
 
@@ -57,7 +58,7 @@ class MockAgent:
         session_id: str,
         llm_backend: str = "mock",
         model: str = "mock-v1",
-        max_steps: int = 20,
+        max_steps: int = DEFAULT_MAX_STEPS,
     ) -> None:
         self.session_id = session_id
         self.llm_backend = llm_backend

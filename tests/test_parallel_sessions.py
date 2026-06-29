@@ -93,7 +93,7 @@ class ParallelBenchmarkIntegrationTest(CliIntegrationTestCase):
                     "nika",
                     "benchmark",
                     "run",
-                    "--csv",
+                    "--file",
                     csv_path,
                     "--parallel",
                     str(len(SCENARIO_CASES)),

@@ -27,6 +27,7 @@ This repository is a unified platform that can offer:
 - Session-based workflow with multi-session support (`nika session`, `--session-id`)
 - Parameterized fault injection (`nika failure describe`, `--set key=value`)
 - MCP-based tool support and persistent Tool-Evolving experiments
+- SIA-style outer-loop Agent Evolution experiments (`nika evolve run`)
 - Pre-built network scenarios and fault injection mechanisms
 - Reproducible evaluation framework with batch summary (`nika eval summary`)
 - Support for various network topologies and configurations
@@ -168,8 +169,8 @@ Each `nika env run` creates a **session** (printed as `session_id=…`). Session
    nika agent list
    nika agent run -a react -b netmind -m openai/gpt-oss-120b -n 20   # LangGraph + LangChain ReAct
    nika agent run -a cli -m gpt-5.4-mini                    # Codex CLI subprocess worker
-   nika agent run -a react -b netmind -m openai/gpt-oss-120b --tool-evolution \
-     --tool-library bgp-study --evolution-mode dual
+   nika agent run -a react -b netmind -m openai/gpt-oss-120b \
+     --tools bgp-study --tool-mode dual
    nika agent run -a cli -m gpt-5.4-mini -e medium        # optional Codex reasoning effort
    nika agent run -a mock -n 5                             # no LLM; useful for pipeline testing
    ```
@@ -214,6 +215,9 @@ nika traffic list
 nika traffic run od --all-to-host pc1 --mbps 20 --interval 300 --background
 ```
 
+Benchmark runs write per-case session artifacts under
+`results/<benchmark-name>-<timestamp>/<session_id>/`.
+
 ## Run Unit Tests
 
 ```shell
@@ -255,10 +259,10 @@ nika agent run -a react -b netmind -m openai/gpt-oss-120b -n 20
 nika agent run -a react -b deepseek -m deepseek-chat -n 20
 nika agent run -a plan-execute -b netmind -m openai/gpt-oss-120b -n 20
 nika agent run -a reflexion -b netmind -m openai/gpt-oss-120b -n 20 -r 3
-nika agent run -a react -b netmind -m openai/gpt-oss-120b --tool-evolution \
-  --tool-library experiment-a --evolution-mode dual
 nika agent run -a react -b netmind -m openai/gpt-oss-120b \
-  --memory-bank bgp-study --memory-mode evolve
+  --tools experiment-a --tool-mode dual
+nika agent run -a react -b netmind -m openai/gpt-oss-120b \
+  --memory bgp-study
 ```
 
 - **`-b` / `--backend`**: `openai`, `ollama`, `deepseek`, or `netmind`
@@ -274,7 +278,7 @@ failed attempts generate compact episodic memory, and the next attempt receives
 that memory as strategy guidance. The loop stops on evaluator success or after
 `--max-attempts`.
 
-### Tool Evolution module (`--tool-evolution`)
+### Tool Evolution module (`--tools`)
 
 The module can augment `react`, `plan-execute`, or `reflexion` and combines
 DRAFT-, TTE-, and Alita-G-inspired mechanisms:
@@ -303,9 +307,9 @@ tools, while still requiring parameterized reusable arguments and structural
 validation before persistence.
 
 ```shell
-nika benchmark run --csv benchmark/tool_evolution_eval.csv \
-  -a react -b netmind -m openai/gpt-oss-120b --tool-evolution \
-  --tool-library bgp-study --evolution-mode dual
+nika benchmark run --file benchmark/benchmark_test.csv \
+  -a react -b netmind -m openai/gpt-oss-120b \
+  --tools bgp-study --tool-mode dual
 
 nika tools libraries
 nika tools show bgp-study
@@ -316,8 +320,7 @@ Generated tools start as ephemeral artifacts and become probationary candidates
 only after structural, runtime, and semantic verification. With validation
 enabled, a candidate is promoted only after successful use in at least two
 distinct scenario/topology contexts whose incidents are also solved correctly.
-Development and transfer rows retrieve tools but freeze library updates,
-preventing held-out leakage.
+Online benchmark rows update the selected library in CSV order.
 
 The library tracks retrieval count, verification reports, utility, and
 regression. Capacity defaults to 250 tools and can be changed with
@@ -332,6 +335,29 @@ selection recall, argument validity, recovery, reuse, promotion, Tool Card
 revisions, capability gaps, verified composites, verified generated Python
 tools, library health, cross-model reuse, and sequential efficiency metrics.
 
+### Agent Evolution outer loop (`nika evolve run`)
+
+Agent Evolution runs full benchmark generations, writes a scored
+`context.md`, then creates `improvement.md` and `policy_overlay.md` for the next
+generation. The overlay is injected into the evaluated agent's diagnosis prompt;
+ground truth, fault injection, submission tools, and primitive MCP tools remain
+unchanged.
+
+```shell
+nika evolve run --file benchmark/benchmark_test.csv \
+  --max-gen 3 \
+  -a react -b netmind -m openai/gpt-oss-120b -n 50
+```
+
+Artifacts are stored under `runtime/agent_evolution/<run_id>/`; per-generation
+benchmark sessions are stored under `results/agent-evolution-<run_id>/`.
+Every CSV row contributes to the next policy in order. See
+[`docs/learning_modules.md`](docs/learning_modules.md).
+Use `--feedback-mode deterministic` for a no-extra-LLM smoke path, or
+`--feedback-mode llm` to require the structured feedback agent.
+
+See [`docs/README.md`](docs/README.md) for the current documentation map.
+
 ### Composable procedural memory
 
 Memory is an optional module composed with `react`, `plan-execute`, or
@@ -339,6 +365,9 @@ Memory is an optional module composed with `react`, `plan-execute`, or
 procedural lessons before calling the selected workflow. After `nika eval
 metrics` produces detection, localization, and RCA scores, the shared
 post-evaluation hook can evolve the same memory bank.
+
+For the full benchmark-safe design, implementation notes, paper lineage, and
+roadmap, see [`docs/memory/README.md`](docs/memory/README.md).
 
 - PostgreSQL is the canonical atomic-note store. The default configuration uses
   the self-hosted Docker service at
@@ -360,11 +389,9 @@ Online evolution must be sequential:
 docker compose up -d postgres qdrant
 nika memory health --bank experiment-01
 
-nika benchmark run --csv benchmark/benchmark_selected.csv \
-  -a react --memory-mode evolve --memory-bank experiment-01 -j 1
+nika memory run --bank experiment-01 --limit 4
 
-nika benchmark run --csv benchmark/benchmark_selected.csv \
-  -a plan-execute --memory-mode read --memory-bank experiment-01
+nika memory run --bank experiment-01 --read --limit 4 -a plan-execute
 
 nika memory inspect --bank experiment-01
 nika memory snapshot --bank experiment-01
@@ -372,8 +399,9 @@ nika memory clear --bank experiment-01 -y
 ```
 
 Retrieval defaults to 20 candidates and injects at most 5 memories within an
-estimated 1,500-token budget. Override with `--memory-top-k` and
-`--memory-token-budget`.
+estimated 1,500-token budget. For `nika memory run`, override with `--k` and
+`--tokens`; for `nika agent run` and `nika benchmark run`, use `--memory-k`
+and `--memory-tokens`.
 
 ### Codex CLI agent (`-a cli`)
 
@@ -459,7 +487,7 @@ Each scenario is defined in a Kathará `lab.py` file, which specifies the networ
 
 ## Network issues
 
-This framework provides a set of predefined issues that can be injected into the network environment. These issues are categorized into different types, each with specific root causes and key signals. By combining the issues with the network scenarios, randomlizing the failure locations, and composing multiple issues, this framework can generate multiple incidents based on a network issue (see # Incident column). The current registry/full CSV contains 55 problem IDs; the compact `benchmark_selected.csv` intentionally selects 54 of them.
+This framework provides a set of predefined issues that can be injected into the network environment. These issues are categorized into different types, each with specific root causes and key signals. By combining the issues with the network scenarios, randomlizing the failure locations, and composing multiple issues, this framework can generate multiple incidents based on a network issue (see # Incident column). The lightweight shared benchmark CSV is `benchmark/benchmark_test.csv`.
 The following table summarizes the issues available in this framework:
 
 | Category                               | Root Cause                              | Key Signals                                                     | # Incident |

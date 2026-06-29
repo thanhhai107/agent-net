@@ -495,6 +495,38 @@ class SQLiteMemoryStore:
             ).fetchall()
         return {str(row["memory_id"]): int(row["count"]) for row in rows}
 
+    def relation_counts(
+        self,
+        bank_id: str,
+        memory_ids: list[str],
+    ) -> dict[str, dict[str, int]]:
+        if not memory_ids:
+            return {}
+        placeholders = ",".join("?" for _ in memory_ids)
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT memory_id, relation, COUNT(*) AS count
+                FROM (
+                    SELECT source_id AS memory_id, relation
+                    FROM memory_links
+                    WHERE bank_id=? AND source_id IN ({placeholders})
+                    UNION ALL
+                    SELECT target_id AS memory_id, relation
+                    FROM memory_links
+                    WHERE bank_id=? AND target_id IN ({placeholders})
+                )
+                GROUP BY memory_id, relation
+                """,
+                [bank_id, *memory_ids, bank_id, *memory_ids],
+            ).fetchall()
+        summary: dict[str, dict[str, int]] = {}
+        for row in rows:
+            summary.setdefault(str(row["memory_id"]), {})[str(row["relation"])] = int(
+                row["count"]
+            )
+        return summary
+
     def export_bank(self, bank_id: str) -> tuple[list[dict], list[dict]]:
         with self._connect() as conn:
             memories = [
@@ -1043,6 +1075,37 @@ class PostgreSQLMemoryStore:
                 (bank_id, memory_ids, bank_id, memory_ids),
             ).fetchall()
         return {str(row["memory_id"]): int(row["count"]) for row in rows}
+
+    def relation_counts(
+        self,
+        bank_id: str,
+        memory_ids: list[str],
+    ) -> dict[str, dict[str, int]]:
+        if not memory_ids:
+            return {}
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT memory_id, relation, COUNT(*) AS count
+                FROM (
+                    SELECT source_id AS memory_id, relation
+                    FROM memory_links
+                    WHERE bank_id=%s AND source_id = ANY(%s)
+                    UNION ALL
+                    SELECT target_id AS memory_id, relation
+                    FROM memory_links
+                    WHERE bank_id=%s AND target_id = ANY(%s)
+                ) linked
+                GROUP BY memory_id, relation
+                """,
+                (bank_id, memory_ids, bank_id, memory_ids),
+            ).fetchall()
+        summary: dict[str, dict[str, int]] = {}
+        for row in rows:
+            summary.setdefault(str(row["memory_id"]), {})[str(row["relation"])] = int(
+                row["count"]
+            )
+        return summary
 
     def export_bank(self, bank_id: str) -> tuple[list[dict], list[dict]]:
         with self._connect() as conn:

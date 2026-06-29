@@ -114,6 +114,8 @@ class MemoryQuery(BaseModel):
     scenario: str = ""
     topology_class: str = ""
     protocols: list[str] = Field(default_factory=list)
+    services: list[str] = Field(default_factory=list)
+    symptoms: list[str] = Field(default_factory=list)
     task_stage: str = "diagnosis"
     tools: list[str] = Field(default_factory=list)
     top_k: int = Field(default=5, ge=1, le=20)
@@ -125,7 +127,9 @@ class MemoryQuery(BaseModel):
             scenarios=[self.scenario] if self.scenario else [],
             topology_classes=[self.topology_class] if self.topology_class else [],
             protocols=self.protocols,
+            services=self.services,
             task_stages=[self.task_stage] if self.task_stage else [],
+            symptoms=self.symptoms,
             tools=self.tools,
         ).normalized()
 

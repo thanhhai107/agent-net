@@ -3,13 +3,23 @@
 from __future__ import annotations
 
 import csv
+import hashlib
+import re
 import subprocess
 import sys
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
 from pathlib import Path
 
-from agent.registry import MEMORY_COMPATIBLE_AGENT_TYPES
+from agent.composition import (
+    AgentRunConfig,
+    MemoryConfig,
+    PolicyOverlayConfig,
+    ToolEvolutionConfig,
+    validate_agent_extensions,
+)
 from nika.config import BENCHMARK_DIR, RESULTS_DIR
 from nika.net_env.net_env_pool import scenario_requires_topo_tier
 from nika.workflows.agent.run import start_agent
@@ -19,10 +29,39 @@ from nika.workflows.failure.inject import inject_failure
 from nika.workflows.session.close import close_session
 
 _BENCHMARK_DONE_PREFIX = "benchmark_done "
+_BENCHMARK_FAILED_PREFIX = "benchmark_failed "
+_BENCHMARK_PROGRESS_PREFIX = "benchmark_progress "
+_BENCHMARK_START_PREFIX = "benchmark_start "
+_BENCHMARK_SUMMARY_PREFIX = "benchmark_summary "
+_REQUIRED_CSV_COLUMNS = {"problem", "scenario", "topo_size"}
+_REMOVED_CSV_METADATA_COLUMNS = {"stream_id", "stream", "split", "sequence_index"}
 
 
 def default_benchmark_csv_path() -> str:
-    return str(BENCHMARK_DIR / "benchmark_selected.csv")
+    return str(BENCHMARK_DIR / "benchmark_test.csv")
+
+
+def _slugify_benchmark_name(raw: str) -> str:
+    slug = re.sub(r"[^A-Za-z0-9_.-]+", "-", raw).strip(".-")
+    return slug or "benchmark"
+
+
+def _new_benchmark_results_root(benchmark_name: str) -> Path:
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    root = Path(RESULTS_DIR) / f"{_slugify_benchmark_name(benchmark_name)}-{timestamp}"
+    root.mkdir(parents=True, exist_ok=False)
+    return root
+
+
+def _stable_fault_seed(benchmark_name: str, row: dict) -> str:
+    parts = [
+        benchmark_name,
+        str(row.get("scenario", "")),
+        str(row.get("problem", "")),
+        str(row.get("topo_size") or ""),
+        str(row.get("benchmark_index") or ""),
+    ]
+    return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()[:16]
 
 
 def _benchmark_row_cli_args(
@@ -33,18 +72,19 @@ def _benchmark_row_cli_args(
     model: str,
     max_steps: int,
     max_attempts: int,
-    memory_mode: str = "off",
-    memory_bank: str = "default",
-    memory_top_k: int = 5,
-    memory_token_budget: int = 1500,
+    memory: MemoryConfig | None = None,
     run_judge: bool = False,
     judge_llm_backend: str | None = None,
     judge_model: str | None = None,
     oracle_routing: bool = False,
-    tool_evolution_enabled: bool = False,
-    tool_library_id: str = "default",
-    tool_evolution_mode: str = "dual",
+    tool_evolution: ToolEvolutionConfig | None = None,
+    policy_overlay: PolicyOverlayConfig | None = None,
+    result_root: str | Path | None = None,
+    fault_seed: str | None = None,
 ) -> list[str]:
+    memory = memory or MemoryConfig()
+    tool_evolution = tool_evolution or ToolEvolutionConfig()
+    policy_overlay = policy_overlay or PolicyOverlayConfig()
     args = [
         row["scenario"],
         "--problem",
@@ -59,31 +99,34 @@ def _benchmark_row_cli_args(
         str(max_steps),
         "-r",
         str(max_attempts),
-        "--memory-mode",
-        memory_mode,
-        "--memory-bank",
-        memory_bank,
-        "--memory-top-k",
-        str(memory_top_k),
-        "--memory-token-budget",
-        str(memory_token_budget),
     ]
+    if memory.mode == "evolve":
+        args += [
+            "--memory",
+            memory.bank,
+            "--memory-k",
+            str(memory.top_k),
+            "--memory-tokens",
+            str(memory.token_budget),
+        ]
+    elif memory.mode == "read":
+        args += [
+            "--memory-read",
+            memory.bank,
+            "--memory-k",
+            str(memory.top_k),
+            "--memory-tokens",
+            str(memory.token_budget),
+        ]
     if oracle_routing:
         args.append("--oracle-routing")
-    if tool_evolution_enabled:
+    if tool_evolution.enabled:
         args += [
-            "--tool-evolution",
-            "--tool-library",
-            tool_library_id,
-            "--evolution-mode",
-            tool_evolution_mode,
+            "--tools",
+            tool_evolution.library_id,
+            "--tool-mode",
+            tool_evolution.mode,
         ]
-        if row.get("stream_id") or row.get("stream"):
-            args += ["--evolution-stream", row.get("stream_id") or row["stream"]]
-        if row.get("split"):
-            args += ["--evolution-split", row["split"]]
-        if row.get("sequence_index"):
-            args += ["--evolution-sequence-index", str(row["sequence_index"])]
     topo = row.get("topo_size") or ""
     if topo and topo != "-":
         args += ["-t", topo]
@@ -95,6 +138,14 @@ def _benchmark_row_cli_args(
             "--judge-model",
             judge_model,
         ]
+    if policy_overlay.enabled:
+        args += ["--policy-overlay", str(policy_overlay.path)]
+    if result_root is not None:
+        args += ["--result-root", str(result_root)]
+    if fault_seed is not None:
+        args += ["--fault-seed", fault_seed]
+    if row.get("benchmark_index") is not None:
+        args += ["--benchmark-index", str(row["benchmark_index"])]
     return args
 
 
@@ -106,18 +157,16 @@ def _run_benchmark_row_subprocess(
     model: str,
     max_steps: int,
     max_attempts: int,
-    memory_mode: str,
-    memory_bank: str,
-    memory_top_k: int,
-    memory_token_budget: int,
+    memory: MemoryConfig,
     run_judge: bool,
     judge_llm_backend: str | None,
     judge_model: str | None,
     oracle_routing: bool,
-    tool_evolution_enabled: bool,
-    tool_library_id: str,
-    tool_evolution_mode: str,
-) -> None:
+    tool_evolution: ToolEvolutionConfig,
+    policy_overlay: PolicyOverlayConfig,
+    result_root: str | Path | None = None,
+    fault_seed: str | None = None,
+) -> str | None:
     """Run one CSV row via a subprocess for thread-safe parallel batch execution."""
     cli_args = _benchmark_row_cli_args(
         row,
@@ -126,17 +175,15 @@ def _run_benchmark_row_subprocess(
         model=model,
         max_steps=max_steps,
         max_attempts=max_attempts,
-        memory_mode=memory_mode,
-        memory_bank=memory_bank,
-        memory_top_k=memory_top_k,
-        memory_token_budget=memory_token_budget,
+        memory=memory,
         run_judge=run_judge,
         judge_llm_backend=judge_llm_backend,
         judge_model=judge_model,
         oracle_routing=oracle_routing,
-        tool_evolution_enabled=tool_evolution_enabled,
-        tool_library_id=tool_library_id,
-        tool_evolution_mode=tool_evolution_mode,
+        tool_evolution=tool_evolution,
+        policy_overlay=policy_overlay,
+        result_root=result_root,
+        fault_seed=fault_seed,
     )
     proc = subprocess.run(
         [sys.executable, "-m", "nika.codex_cli.main", "benchmark", "run", *cli_args],
@@ -153,8 +200,23 @@ def _run_benchmark_row_subprocess(
             f"[{scenario}/{problem}] `nika benchmark run {' '.join(cli_args)}` "
             f"exited {proc.returncode}:\n{output}"
         )
-    if output:
-        print(output, end="" if output.endswith("\n") else "\n")
+    done_lines = [
+        line for line in output.splitlines() if line.startswith(_BENCHMARK_DONE_PREFIX)
+    ]
+    if done_lines:
+        print(done_lines[-1], flush=True)
+        for part in done_lines[-1].split():
+            if part.startswith("session_id="):
+                return part.split("=", 1)[1]
+    return None
+
+
+def _progress_row_label(row: dict) -> str:
+    topo = row.get("topo_size") or "-"
+    return (
+        f"scenario={row.get('scenario', '?')} problem={row.get('problem', '?')} "
+        f"topo={topo}"
+    )
 
 
 def run_single_benchmark(
@@ -167,20 +229,16 @@ def run_single_benchmark(
     max_steps: int,
     max_attempts: int = 3,
     *,
-    memory_mode: str = "off",
-    memory_bank: str = "default",
-    memory_top_k: int = 5,
-    memory_token_budget: int = 1500,
+    memory: MemoryConfig | None = None,
     run_judge: bool = False,
     judge_llm_backend: str | None = None,
     judge_model: str | None = None,
     oracle_routing: bool = False,
-    tool_evolution_enabled: bool = False,
-    tool_library_id: str = "default",
-    tool_evolution_mode: str = "dual",
-    evolution_stream: str | None = None,
-    evolution_split: str | None = None,
-    evolution_sequence_index: int | None = None,
+    tool_evolution: ToolEvolutionConfig | None = None,
+    policy_overlay: PolicyOverlayConfig | None = None,
+    result_root: str | Path | None = None,
+    fault_seed: str | None = None,
+    benchmark_index: int | None = None,
 ) -> str:
     """
     Run a single benchmark case.
@@ -191,6 +249,22 @@ def run_single_benchmark(
     print(
         f"Running benchmark for Problem: {problem}, Scenario: {scenario}, Topo Size: {topo_size}"
     )
+    memory = memory or MemoryConfig()
+    tool_evolution = tool_evolution or ToolEvolutionConfig()
+    policy_overlay = policy_overlay or PolicyOverlayConfig()
+    validate_agent_extensions(
+        AgentRunConfig(
+            agent_type=agent_type,
+            llm_backend=llm_backend,
+            model=model,
+            max_steps=max_steps,
+            max_attempts=max_attempts,
+            oracle_routing=oracle_routing,
+            tool_evolution=tool_evolution,
+            memory=memory,
+            policy_overlay=policy_overlay,
+        )
+    )
 
     tier = topo_size if topo_size else None
     if scenario_requires_topo_tier(scenario) and not tier:
@@ -200,41 +274,35 @@ def run_single_benchmark(
     if not scenario_requires_topo_tier(scenario):
         tier = None
 
-    session_id = start_net_env(scenario, tier, redeploy=True)
-    session_dir = Path(RESULTS_DIR) / session_id
+    session_id = start_net_env(scenario, tier, redeploy=True, results_root=result_root)
     from nika.utils.session import Session
 
     session = Session().load_running_session(session_id=session_id)
-    if evolution_stream is not None:
-        session.update_session("evolution_stream", evolution_stream)
-    if evolution_split is not None:
-        session.update_session("evolution_split", evolution_split)
-        session.update_session(
-            "tool_evolution_update_enabled",
-            evolution_split == "evolution",
-        )
-    if evolution_sequence_index is not None:
-        session.update_session("evolution_sequence_index", evolution_sequence_index)
+    session_dir = Path(
+        getattr(session, "session_dir", Path(result_root or RESULTS_DIR) / session_id)
+    )
+    if fault_seed is not None:
+        session.update_session("fault_seed", fault_seed)
+    if benchmark_index is not None:
+        session.update_session("benchmark_index", benchmark_index)
 
     inject_failure(problem_names=[problem], session_id=session_id)
 
     try:
         start_agent(
-            agent_type=agent_type,
-            llm_backend=llm_backend,
-            model=model,
-            max_steps=max_steps,
-            max_attempts=max_attempts,
+            AgentRunConfig(
+                agent_type=agent_type,
+                llm_backend=llm_backend,
+                model=model,
+                max_steps=max_steps,
+                max_attempts=max_attempts,
+                stream_output=False,
+                oracle_routing=oracle_routing,
+                tool_evolution=tool_evolution,
+                memory=memory,
+                policy_overlay=policy_overlay,
+            ),
             session_id=session_id,
-            stream_output=False,
-            oracle_routing=oracle_routing,
-            tool_evolution_enabled=tool_evolution_enabled,
-            tool_library_id=tool_library_id,
-            tool_evolution_mode=tool_evolution_mode,
-            memory_mode=memory_mode,
-            memory_bank=memory_bank,
-            memory_top_k=memory_top_k,
-            memory_token_budget=memory_token_budget,
         )
         eval_results(
             session_id=session_id,
@@ -265,17 +333,14 @@ def run_benchmark_from_csv(
     max_attempts: int = 3,
     *,
     parallel: int = 1,
-    memory_mode: str = "off",
-    memory_bank: str = "default",
-    memory_top_k: int = 5,
-    memory_token_budget: int = 1500,
+    memory: MemoryConfig | None = None,
     run_judge: bool = False,
     judge_llm_backend: str | None = None,
     judge_model: str | None = None,
     oracle_routing: bool = False,
-    tool_evolution_enabled: bool = False,
-    tool_library_id: str | None = None,
-    tool_evolution_mode: str = "dual",
+    tool_evolution: ToolEvolutionConfig | None = None,
+    policy_overlay: PolicyOverlayConfig | None = None,
+    result_root: str | Path | None = None,
 ) -> None:
     """
     Run benchmark cases defined in a CSV file.
@@ -287,115 +352,204 @@ def run_benchmark_from_csv(
     """
     if parallel < 1:
         raise ValueError("parallel must be >= 1")
-    if tool_evolution_enabled and parallel != 1:
-        raise ValueError(
-            "Tool Evolution benchmark streams must run sequentially so library "
-            "updates are observed in sequence."
+    memory_config = memory or MemoryConfig()
+    tool_config = tool_evolution or ToolEvolutionConfig()
+    policy_config = policy_overlay or PolicyOverlayConfig()
+    validate_agent_extensions(
+        AgentRunConfig(
+            agent_type=agent_type,
+            llm_backend=llm_backend,
+            model=model,
+            max_steps=max_steps,
+            max_attempts=max_attempts,
+            oracle_routing=oracle_routing,
+            tool_evolution=tool_config,
+            memory=memory_config,
+            policy_overlay=policy_config,
         )
-    if memory_mode != "off" and agent_type.lower() not in MEMORY_COMPATIBLE_AGENT_TYPES:
-        supported = ", ".join(sorted(MEMORY_COMPATIBLE_AGENT_TYPES))
-        raise ValueError(f"memory is supported only for these workflows: {supported}")
-    if memory_mode == "evolve" and parallel != 1:
+    )
+    if tool_config.enabled and parallel != 1:
+        raise ValueError(
+            "online Tool Evolution requires --parallel 1 so library updates "
+            "are observed in CSV order."
+        )
+    if memory_config.mode == "evolve" and parallel != 1:
         raise ValueError(
             "online memory evolution requires --parallel 1 so episode "
             "memory ordering is deterministic"
         )
 
     with open(benchmark_file, newline="", encoding="utf-8") as f:
-        rows = list(csv.DictReader(f))
+        reader = csv.DictReader(f)
+        fieldnames = set(reader.fieldnames or [])
+        missing = _REQUIRED_CSV_COLUMNS - fieldnames
+        if missing:
+            raise ValueError(
+                "benchmark CSV is missing required columns: "
+                + ", ".join(sorted(missing))
+            )
+        removed = _REMOVED_CSV_METADATA_COLUMNS & fieldnames
+        if removed:
+            raise ValueError(
+                "benchmark CSV metadata columns are no longer supported: "
+                + ", ".join(sorted(removed))
+                + ". Keep only problem, scenario, topo_size."
+            )
+        rows = list(reader)
 
     if not rows:
         print(f"No benchmark rows found in {benchmark_file}")
         return
-    resolved_library_id = tool_library_id or (
-        f"{Path(benchmark_file).stem}-{uuid.uuid4().hex[:8]}"
-        if tool_evolution_enabled
-        else "default"
-    )
-    if tool_evolution_enabled:
+    benchmark_name = Path(benchmark_file).stem
+    benchmark_root = Path(result_root) if result_root is not None else _new_benchmark_results_root(benchmark_name)
+    benchmark_root.mkdir(parents=True, exist_ok=True)
+    if tool_config.enabled and tool_config.library_id == "default":
+        tool_config = ToolEvolutionConfig(
+            enabled=True,
+            library_id=f"{Path(benchmark_file).stem}-{uuid.uuid4().hex[:8]}",
+            mode=tool_config.mode,
+        )
+    if tool_config.enabled:
         print(
-            f"tool_evolution_library id={resolved_library_id} "
-            f"mode={tool_evolution_mode}"
+            f"tool_evolution_library id={tool_config.library_id} "
+            f"mode={tool_config.mode}"
         )
 
+    total = len(rows)
+    prepared_rows: list[dict] = []
+    for index, raw_row in enumerate(rows):
+        row = dict(raw_row)
+        row["benchmark_index"] = str(index)
+        if not row.get("fault_seed"):
+            row["fault_seed"] = _stable_fault_seed(benchmark_name, row)
+        prepared_rows.append(row)
+    completed = 0
+    failed = 0
+    batch_started_at = time.monotonic()
+    print(
+        f"{_BENCHMARK_PROGRESS_PREFIX}total={total} completed=0 failed=0 "
+        f"csv={benchmark_file} result_root={benchmark_root}",
+        flush=True,
+    )
+
     if parallel == 1:
-        for index, row in enumerate(rows):
-            row = dict(row)
-            row.setdefault("sequence_index", str(index))
-            if tool_evolution_enabled:
-                _run_benchmark_row_subprocess(
-                    row,
-                    agent_type=agent_type,
-                    llm_backend=llm_backend,
-                    model=model,
-                    max_steps=max_steps,
-                    max_attempts=max_attempts,
-                    memory_mode=memory_mode,
-                    memory_bank=memory_bank,
-                    memory_top_k=memory_top_k,
-                    memory_token_budget=memory_token_budget,
-                    run_judge=run_judge,
-                    judge_llm_backend=judge_llm_backend,
-                    judge_model=judge_model,
-                    oracle_routing=oracle_routing,
-                    tool_evolution_enabled=tool_evolution_enabled,
-                    tool_library_id=resolved_library_id,
-                    tool_evolution_mode=tool_evolution_mode,
-                )
-                continue
-            run_single_benchmark(
-                problem=row["problem"],
-                scenario=row["scenario"],
-                topo_size=(
-                    ""
-                    if (row.get("topo_size") or "") == "-"
-                    else (row.get("topo_size") or "")
-                ),
-                agent_type=agent_type,
-                llm_backend=llm_backend,
-                model=model,
-                max_steps=max_steps,
-                max_attempts=max_attempts,
-                memory_mode=memory_mode,
-                memory_bank=memory_bank,
-                memory_top_k=memory_top_k,
-                memory_token_budget=memory_token_budget,
-                run_judge=run_judge,
-                judge_llm_backend=judge_llm_backend,
-                judge_model=judge_model,
-                oracle_routing=oracle_routing,
-                tool_evolution_enabled=tool_evolution_enabled,
-                tool_library_id=resolved_library_id,
-                tool_evolution_mode=tool_evolution_mode,
-                evolution_stream=row.get("stream_id") or row.get("stream") or None,
-                evolution_split=row.get("split") or None,
-                evolution_sequence_index=int(row.get("sequence_index") or index),
+        for index, row in enumerate(prepared_rows):
+            case_started_at = time.monotonic()
+            print(
+                f"{_BENCHMARK_START_PREFIX}index={index + 1}/{total} "
+                f"{_progress_row_label(row)}",
+                flush=True,
             )
+            try:
+                if tool_config.enabled:
+                    session_id = _run_benchmark_row_subprocess(
+                        row,
+                        agent_type=agent_type,
+                        llm_backend=llm_backend,
+                        model=model,
+                        max_steps=max_steps,
+                        max_attempts=max_attempts,
+                        memory=memory_config,
+                        run_judge=run_judge,
+                        judge_llm_backend=judge_llm_backend,
+                        judge_model=judge_model,
+                        oracle_routing=oracle_routing,
+                        tool_evolution=tool_config,
+                        policy_overlay=policy_config,
+                        result_root=benchmark_root,
+                        fault_seed=row.get("fault_seed"),
+                    )
+                else:
+                    session_id = run_single_benchmark(
+                        problem=row["problem"],
+                        scenario=row["scenario"],
+                        topo_size=(
+                            ""
+                            if (row.get("topo_size") or "") == "-"
+                            else (row.get("topo_size") or "")
+                        ),
+                        agent_type=agent_type,
+                        llm_backend=llm_backend,
+                        model=model,
+                        max_steps=max_steps,
+                        max_attempts=max_attempts,
+                        memory=memory_config,
+                        run_judge=run_judge,
+                        judge_llm_backend=judge_llm_backend,
+                        judge_model=judge_model,
+                        oracle_routing=oracle_routing,
+                        tool_evolution=tool_config,
+                        policy_overlay=policy_config,
+                        result_root=benchmark_root,
+                        fault_seed=row.get("fault_seed"),
+                        benchmark_index=int(row["benchmark_index"]),
+                    )
+            except Exception as exc:
+                failed += 1
+                elapsed = time.monotonic() - case_started_at
+                error = str(exc).replace("\n", " ")[:500]
+                print(
+                    f"{_BENCHMARK_FAILED_PREFIX}index={index + 1}/{total} "
+                    f"completed={completed} failed={failed} elapsed_sec={elapsed:.1f} "
+                    f"error_type={type(exc).__name__} error={error!r} "
+                    f"{_progress_row_label(row)}",
+                    flush=True,
+                )
+                raise
+            completed += 1
+            elapsed = time.monotonic() - case_started_at
+            print(
+                f"{_BENCHMARK_PROGRESS_PREFIX}index={index + 1}/{total} "
+                f"completed={completed} failed={failed} elapsed_sec={elapsed:.1f} "
+                f"session_id={session_id or '-'} {_progress_row_label(row)}",
+                flush=True,
+            )
+        total_elapsed = time.monotonic() - batch_started_at
+        print(
+            f"{_BENCHMARK_SUMMARY_PREFIX}total={total} completed={completed} "
+            f"failed={failed} elapsed_sec={total_elapsed:.1f}",
+            flush=True,
+        )
         return
 
     with ThreadPoolExecutor(max_workers=parallel) as pool:
         futures = [
             pool.submit(
                 _run_benchmark_row_subprocess,
-                row,
+                {
+                    **row,
+                    "fault_seed": row.get("fault_seed")
+                    or _stable_fault_seed(benchmark_name, row),
+                },
                 agent_type=agent_type,
                 llm_backend=llm_backend,
                 model=model,
                 max_steps=max_steps,
                 max_attempts=max_attempts,
-                memory_mode=memory_mode,
-                memory_bank=memory_bank,
-                memory_top_k=memory_top_k,
-                memory_token_budget=memory_token_budget,
+                memory=memory_config,
                 run_judge=run_judge,
                 judge_llm_backend=judge_llm_backend,
                 judge_model=judge_model,
                 oracle_routing=oracle_routing,
-                tool_evolution_enabled=tool_evolution_enabled,
-                tool_library_id=resolved_library_id,
-                tool_evolution_mode=tool_evolution_mode,
+                tool_evolution=tool_config,
+                policy_overlay=policy_config,
+                result_root=benchmark_root,
+                fault_seed=row.get("fault_seed"),
             )
-            for row in rows
+            for row in prepared_rows
         ]
         for future in as_completed(futures):
             future.result()
+            completed += 1
+            elapsed = time.monotonic() - batch_started_at
+            print(
+                f"{_BENCHMARK_PROGRESS_PREFIX}completed={completed}/{total} "
+                f"failed={failed} elapsed_sec={elapsed:.1f}",
+                flush=True,
+            )
+    total_elapsed = time.monotonic() - batch_started_at
+    print(
+        f"{_BENCHMARK_SUMMARY_PREFIX}total={total} completed={completed} "
+        f"failed={failed} elapsed_sec={total_elapsed:.1f}",
+        flush=True,
+    )

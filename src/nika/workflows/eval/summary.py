@@ -95,21 +95,23 @@ def run_eval_summary(
         selected.append(session_dir)
 
     eval_results = [build_eval_result_from_session_dir(session_dir) for session_dir in selected]
-    streams: dict[tuple[str | None, str | None], list] = defaultdict(list)
+    timelines: dict[tuple[str | None, str | None, str | None], list] = defaultdict(list)
     for result in eval_results:
-        streams[(result.tool_library_id, result.evolution_stream)].append(result)
-    for stream_results in streams.values():
-        stream_results.sort(
+        timelines[(result.tool_library_id, result.agent_type, result.model)].append(
+            result
+        )
+    for timeline_results in timelines.values():
+        timeline_results.sort(
             key=lambda item: (
-                item.evolution_sequence_index
-                if item.evolution_sequence_index is not None
+                item.benchmark_index
+                if item.benchmark_index is not None
                 else 10**9,
                 item.session_id or "",
             )
         )
-        if not stream_results:
+        if not timeline_results:
             continue
-        baseline = stream_results[0]
+        baseline = timeline_results[0]
         baseline_score = sum(
             value or 0.0
             for value in (
@@ -119,7 +121,7 @@ def run_eval_summary(
             )
         ) / 3
         previous_tokens: int | None = None
-        for result in stream_results:
+        for result in timeline_results:
             current_tokens = (result.in_tokens or 0) + (result.out_tokens or 0)
             if previous_tokens and current_tokens:
                 result.efficiency_evolution_rate = round(
