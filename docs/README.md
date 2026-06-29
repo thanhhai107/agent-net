@@ -11,6 +11,18 @@ understanding the current system boundary.
 | `memory/README.md` | Detailed procedural-memory design notes and implementation rationale |
 | `report/` | Thesis/report source moved from the old top-level `report/` directory |
 
+## Experiment Studio
+
+Launch the Streamlit runner UI:
+
+```bash
+uv run nika studio
+```
+
+The studio writes run specs and logs under `runtime/streamlit_runs/`. It runs
+the same CLI workflows as the terminal commands, so benchmark artifacts still
+land under `results/` and can be inspected with `nika visualize`.
+
 ## Benchmark Contract
 
 Benchmark CSV files should use the minimal online-timeline schema:

@@ -140,3 +140,9 @@ nika evolve run --file benchmark/benchmark_test.csv \
   -a react -b netmind -m openai/gpt-oss-120b -n 100 \
   --max-gen 3
 ```
+
+The same modules can be toggled together and launched from the Streamlit UI:
+
+```bash
+uv run nika studio
+```

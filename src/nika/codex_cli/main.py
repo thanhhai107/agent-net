@@ -11,6 +11,7 @@ from nika.codex_cli.commands.exec import exec_command
 from nika.codex_cli.commands.failure import failure_app
 from nika.codex_cli.commands.memory import memory_app
 from nika.codex_cli.commands.session import session_app
+from nika.codex_cli.commands.studio import studio_command
 from nika.codex_cli.commands.traffic import traffic_app
 from nika.codex_cli.commands.tools import tools_app
 from nika.codex_cli.commands.visualize import visualize_command
@@ -28,6 +29,7 @@ app.add_typer(benchmark_app, name="benchmark")
 app.add_typer(traffic_app, name="traffic")
 app.add_typer(tools_app, name="tools")
 app.command("visualize")(visualize_command)
+app.command("studio")(studio_command)
 
 
 def main() -> None:

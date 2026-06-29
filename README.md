@@ -205,6 +205,19 @@ nika visualize --host 0.0.0.0 --port 8501 --no-browser
 The dashboard reads persisted files under `runtime/sessions/` and `results/`,
 so it works for both running and completed sessions.
 
+### Run experiments from Streamlit
+
+Launch the experiment runner UI to enable learning modules and watch live
+progress without hand-writing long commands:
+
+```shell
+nika studio
+nika studio --host 0.0.0.0 --port 8502 --no-browser
+```
+
+The studio writes run specs and logs under `runtime/streamlit_runs/`; benchmark
+artifacts still land under `results/`.
+
 ### Optional: benchmark or traffic from the CLI
 
 ```shell

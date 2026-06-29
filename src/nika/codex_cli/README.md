@@ -227,6 +227,17 @@ structured feedback LLM and falls back to the
 deterministic planner; use `deterministic` for smoke tests or `llm` to require
 feedback-agent output.
 
+### Streamlit experiment studio
+
+```shell
+nika studio
+nika studio --host 0.0.0.0 --port 8502 --no-browser
+```
+
+The studio toggles Tool Evolution, memory evolution, and Agent Evolution as
+modules in one run, then shows live log and progress events from the same CLI
+workflows.
+
 ### Single-case mode
 
 Pass **`SCENARIO`** as the first positional argument (like `nika env run NAME`), plus **`--problem`**:

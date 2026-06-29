@@ -76,6 +76,23 @@ def evolve_run(
         "--tool-mode",
         help="Tool Evolution mode: mastery, distill, dual.",
     ),
+    memory: str | None = typer.Option(
+        None,
+        "--memory",
+        help="Also enable online memory evolution with this memory bank id.",
+    ),
+    memory_k: int = typer.Option(
+        5,
+        "--memory-k",
+        min=1,
+        help="Number of procedural memories to retrieve per case.",
+    ),
+    memory_tokens: int = typer.Option(
+        1500,
+        "--memory-tokens",
+        min=100,
+        help="Maximum memory context tokens injected into each case.",
+    ),
     initial_policy: Path | None = typer.Option(
         None,
         "--initial-policy",
@@ -145,6 +162,8 @@ def evolve_run(
         raise typer.BadParameter(
             "feedback_mode must be one of " + ", ".join(sorted(FEEDBACK_MODES))
         )
+    if memory is not None and parallel != 1:
+        raise typer.BadParameter("online memory evolution requires --parallel 1")
 
     kwargs = {}
     if runtime_root is not None:
@@ -169,6 +188,10 @@ def evolve_run(
         tool_evolution_enabled=tools is not None,
         tool_library_id=tools,
         tool_evolution_mode=tool_mode,
+        memory_mode="evolve" if memory is not None else "off",
+        memory_bank=memory or "default",
+        memory_top_k=memory_k,
+        memory_token_budget=memory_tokens,
         initial_policy_overlay=initial_policy,
         feedback_mode=feedback_mode,
         feedback_llm_backend=feedback_backend or llm_backend,

@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
-from agent.composition import PolicyOverlayConfig, ToolEvolutionConfig
+from agent.composition import MemoryConfig, PolicyOverlayConfig, ToolEvolutionConfig
 from agent.defaults import DEFAULT_MAX_STEPS
 from agent.llm.model_factory import DEFAULT_LLM_BACKEND, DEFAULT_MODEL, load_model
 from nika.config import RESULTS_DIR, RUNTIME_DIR
@@ -576,6 +576,10 @@ def run_agent_evolution(
     tool_evolution_enabled: bool = False,
     tool_library_id: str | None = None,
     tool_evolution_mode: str = "dual",
+    memory_mode: str = "off",
+    memory_bank: str = "default",
+    memory_top_k: int = 5,
+    memory_token_budget: int = 1500,
     initial_policy_overlay: str | Path | None = None,
     feedback_mode: str = "auto",
     feedback_llm_backend: str = DEFAULT_LLM_BACKEND,
@@ -617,6 +621,10 @@ def run_agent_evolution(
             "tool_evolution_enabled": tool_evolution_enabled,
             "tool_library_id": resolved_tool_library if tool_evolution_enabled else None,
             "tool_evolution_mode": tool_evolution_mode if tool_evolution_enabled else None,
+            "memory_mode": memory_mode,
+            "memory_bank": memory_bank if memory_mode != "off" else None,
+            "memory_top_k": memory_top_k if memory_mode != "off" else None,
+            "memory_token_budget": memory_token_budget if memory_mode != "off" else None,
             "started_at": datetime.now().isoformat(timespec="seconds"),
         },
     )
@@ -650,6 +658,12 @@ def run_agent_evolution(
                 enabled=tool_evolution_enabled,
                 library_id=resolved_tool_library,
                 mode=tool_evolution_mode,
+            ),
+            memory=MemoryConfig(
+                mode=memory_mode,
+                bank=memory_bank,
+                top_k=memory_top_k,
+                token_budget=memory_token_budget,
             ),
             policy_overlay=PolicyOverlayConfig(
                 path=str(policy_overlay_path) if policy_overlay_path else None
