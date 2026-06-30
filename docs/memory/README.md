@@ -845,7 +845,7 @@ Equivalent advanced benchmark command:
 
 ```shell
 nika benchmark run --file benchmark/benchmark_test.csv \
-  -a react --memory experiment-01 -j 1
+  -a react --memory experiment-01
 ```
 
 Inspect and export:
@@ -902,7 +902,7 @@ Interpretation:
 
 ## Online Evolution Protocol
 
-`memory_mode=evolve` must run sequentially:
+`memory_mode=evolve` runs sequentially:
 
 ```text
 episode 1 retrieve from memory_so_far
@@ -916,20 +916,8 @@ episode 2 evaluate
 episode 2 update memory
 ```
 
-Do not run multiple evolving episodes against the same mutable bank in parallel:
-
-- a future episode could update memory before an earlier one retrieves;
-- update order becomes nondeterministic;
-- results become hard to reproduce;
-- the bank becomes uncontrolled shared mutable state.
-
-Current code enforces:
-
-```text
---memory <bank-id> -> --parallel 1
-```
-
-`--memory-read <bank-id>` may run in parallel if the bank is treated as frozen.
+Benchmark CSV execution is sequential by design, so a future episode cannot
+update memory before an earlier episode retrieves from the bank.
 
 Use a unique bank per experiment condition, model, seed, and benchmark suite.
 
@@ -978,11 +966,11 @@ Required safety tests:
 - extractor never receives `ground_truth`;
 - retrieval input has no post-episode data;
 - long-term memory content redacts concrete identifiers;
-- evolving benchmark rejects parallel execution;
+- benchmark CSV execution remains sequential;
 - memory context tells agent to verify with tools.
 
 Current tests already cover parts of this, including no `problem_names` or
-`ground_truth` in extractor kwargs and rejection of parallel online evolution.
+`ground_truth` in extractor kwargs and sequential benchmark execution.
 
 ## Current Fit Assessment
 

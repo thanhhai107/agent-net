@@ -185,7 +185,6 @@ nika benchmark run
 nika benchmark run --file benchmark/benchmark_test.csv
 nika benchmark run --file benchmark/benchmark_test.csv \
   -a react --tools experiment-a --tool-mode dual
-nika benchmark run -j 4
 ```
 
 **Default CSV path**: `benchmark/benchmark_test.csv` under the repository root.
@@ -195,11 +194,8 @@ Each benchmark command creates a result root named
 that parent as `<session_id>/run.json`, `<session_id>/messages.jsonl`, and the
 usual eval files.
 
-CSV rows are treated as one online timeline. Tool Evolution and evolving memory
-update after each row, so online-learning runs must stay sequential
-(`--parallel 1`).
-
-**`-j` / `--parallel`**: run up to N CSV rows concurrently (default `1`). Applies to batch mode only.
+CSV rows are treated as one online timeline and always run sequentially. Tool
+Evolution and evolving memory update after each row in that fixed order.
 
 **CSV columns** (header row):
 

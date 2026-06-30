@@ -11,7 +11,6 @@ from unittest.mock import AsyncMock, MagicMock, call, patch
 
 from qdrant_client import QdrantClient
 
-from agent.composition import MemoryConfig
 from agent.memory.adapter import MemoryAugmentedAgent
 from agent.memory.attributes import infer_memory_attributes
 from agent.memory.models import (
@@ -28,7 +27,6 @@ from agent.memory.service import ProceduralMemoryModule
 from agent.memory.store import SQLiteMemoryStore, create_memory_store
 from agent.memory.vector_index import QdrantMemoryIndex
 from agent.memory.workflow import evolve_session_memory
-from nika.workflows.benchmark.run import run_benchmark_from_csv
 
 
 class DisabledVectorIndex:
@@ -694,17 +692,3 @@ class OnlineEvolutionWorkflowTest(unittest.IsolatedAsyncioTestCase):
             },
         )
         self.assertNotIn("hidden_fault_id", str(extract_kwargs))
-
-
-class ContinualBenchmarkPolicyTest(unittest.TestCase):
-    def test_online_evolution_rejects_parallel_execution(self) -> None:
-        with self.assertRaisesRegex(ValueError, "requires --parallel 1"):
-            run_benchmark_from_csv(
-                benchmark_file="does-not-matter.csv",
-                agent_type="react",
-                llm_backend="openai",
-                model="model",
-                max_steps=1,
-                parallel=2,
-                memory=MemoryConfig(mode="evolve"),
-            )

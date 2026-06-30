@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from nika.config import RUNTIME_DIR, _REPO_ROOT
+from nika.utils.kathara_cleanup import ensure_kathara_clean
 from nika.workflows.benchmark.run import default_benchmark_csv_path
 
 RUNS_DIR = RUNTIME_DIR / "streamlit_runs"
@@ -23,7 +24,7 @@ META_FILENAME = "meta.json"
 MODULE_LABELS = {
     "tool_evolution": "Tool Evolution",
     "memory_evolution": "Memory Evolution",
-    "agent_evolution": "Agent Evolution",
+    "agent_evolution": "Harness Evolving",
 }
 
 
@@ -82,16 +83,13 @@ def _judge_args(config: dict[str, Any]) -> list[str]:
     ]
 
 
-def _benchmark_command(config: dict[str, Any], *, parallel: int | None = None) -> list[str]:
-    requested_parallel = _int(config.get("parallel"), 1)
+def _benchmark_command(config: dict[str, Any]) -> list[str]:
     command = _python_module_command(
         "benchmark",
         "run",
         "--file",
         _str(config.get("benchmark_file"), default_benchmark_csv_path()),
         *_common_agent_args(config),
-        "-j",
-        str(parallel if parallel is not None else requested_parallel),
         *_judge_args(config),
     )
     if config.get("oracle_routing"):
@@ -128,8 +126,6 @@ def build_experiment_command(config: dict[str, Any]) -> list[str]:
             "--max-gen",
             str(_int(config.get("max_generations"), 3)),
             *_common_agent_args(config),
-            "-j",
-            "1" if (tool_enabled or memory_enabled) else str(_int(config.get("parallel"), 1)),
             "--feedback-mode",
             _str(config.get("feedback_mode"), "auto"),
             "--feedback-backend",
@@ -141,9 +137,7 @@ def build_experiment_command(config: dict[str, Any]) -> list[str]:
         if config.get("oracle_routing"):
             command.append("--oracle-routing")
     else:
-        command = _benchmark_command(
-            config, parallel=1 if (tool_enabled or memory_enabled) else None
-        )
+        command = _benchmark_command(config)
 
     if tool_enabled:
         command.extend(
@@ -315,6 +309,8 @@ def run_status(run_dir: Path) -> dict[str, Any]:
     meta = _read_json(run_dir / META_FILENAME)
     if meta.get("status") == "queued":
         return {**meta, "status": "queued", "exit_code": None}
+    if meta.get("status") == "stopped":
+        return {**meta, "status": "stopped", "exit_code": None}
     log_text = read_run_log(run_dir)
     done = [line for line in log_text.splitlines() if line.startswith("ui_run_done ")]
     if done:
@@ -328,6 +324,8 @@ def run_status(run_dir: Path) -> dict[str, Any]:
 
 
 def check_and_start_next_queued() -> None:
+    if any(run_status(run).get("status") == "running" for run in list_runs()):
+        return
     # list_runs() returns newest first. We reverse it to find the oldest queued run.
     runs = list(reversed(list_runs()))
     for r in runs:
@@ -356,22 +354,58 @@ def check_and_start_next_queued() -> None:
                 print(f"Failed to auto-start queued run {r.name}: {e}")
 
 
+def _write_run_meta(run_dir: Path, meta: dict[str, Any]) -> None:
+    (run_dir / META_FILENAME).write_text(json.dumps(meta, indent=2), encoding="utf-8")
+
+
+def _append_run_log(run_dir: Path, message: str) -> None:
+    with (run_dir / LOG_FILENAME).open("a", encoding="utf-8") as handle:
+        handle.write(message.rstrip() + "\n")
+
+
 def stop_run(run_dir: Path) -> None:
     meta = _read_json(run_dir / META_FILENAME)
     pid = _int(meta.get("pid"), 0)
     if not pid:
         return
+    meta["status"] = "stopped"
+    meta["stopped_at"] = datetime.now(timezone.utc).isoformat()
+    _write_run_meta(run_dir, meta)
+    _append_run_log(
+        run_dir,
+        "ui_run_stopped "
+        + json.dumps({"reason": "user_stop"}, ensure_ascii=False),
+    )
     try:
         os.killpg(pid, signal.SIGTERM)
     except ProcessLookupError:
         pass
+    for _ in range(20):
+        if not _pid_running(pid):
+            break
+        try:
+            os.killpg(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            break
+        import time
+
+        time.sleep(0.2)
+    if _pid_running(pid):
+        try:
+            os.killpg(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
     
-    # Clean up lingering Kathara container environments
+    # Clean up lingering Kathara container environments.
     try:
-        import subprocess
-        subprocess.run(["kathara", "wipe", "-f"], capture_output=True)
-    except Exception:
-        pass
+        ensure_kathara_clean(context="studio stop")
+    except Exception as exc:
+        _append_run_log(
+            run_dir,
+            "ui_cleanup_failed " + json.dumps({"error": str(exc)}, ensure_ascii=False),
+        )
+
+    check_and_start_next_queued()
 
 
 def _parse_json_suffix(line: str, prefix: str) -> dict[str, Any]:
@@ -386,12 +420,15 @@ def parse_progress_events(log_text: str) -> list[dict[str, str]]:
     prefixes = (
         "ui_step_start ",
         "ui_step_done ",
+        "ui_run_stopped ",
         "ui_run_done ",
         "benchmark_start ",
         "benchmark_progress ",
         "benchmark_done ",
         "benchmark_failed ",
         "benchmark_summary ",
+        "kathara_cleanup_start ",
+        "kathara_cleanup_done ",
         "evolve_generation_start ",
         "evolve_generation_done ",
         "evolve_summary ",
@@ -417,12 +454,9 @@ def parse_progress_events(log_text: str) -> list[dict[str, str]]:
 
 
 def run_spec_file(spec_path: str | Path) -> int:
-    # Auto-clean any leftover Kathara container environments before starting a new experiment run
-    try:
-        import subprocess
-        subprocess.run(["kathara", "wipe", "-f"], capture_output=True)
-    except Exception:
-        pass
+    print("kathara_cleanup_start context=studio_run", flush=True)
+    ensure_kathara_clean(context="studio run")
+    print("kathara_cleanup_done context=studio_run", flush=True)
 
     spec = _read_json(Path(spec_path))
     commands = spec.get("commands") or []

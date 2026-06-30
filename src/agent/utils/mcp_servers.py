@@ -1,3 +1,5 @@
+import sys
+
 from nika.config import MCP_SERVER_DIR
 
 # Keyword sets that trigger inclusion of each optional Kathara MCP server.
@@ -57,7 +59,7 @@ class MCPServerConfig:
         if if_submit:
             config = {
                 "task_mcp_server": {
-                    "command": "python3",
+                    "command": sys.executable,
                     "args": [f"{self.mcp_server_dir}/task_mcp_server.py"],
                     "transport": "stdio",
                 },
@@ -65,22 +67,22 @@ class MCPServerConfig:
         else:
             config = {
                 "kathara_base_mcp_server": {
-                    "command": "python3",
+                    "command": sys.executable,
                     "args": [f"{self.mcp_server_dir}/kathara_base_mcp_server.py"],
                     "transport": "stdio",
                 },
                 "kathara_frr_mcp_server": {
-                    "command": "python3",
+                    "command": sys.executable,
                     "args": [f"{self.mcp_server_dir}/kathara_frr_mcp_server.py"],
                     "transport": "stdio",
                 },
                 "kathara_bmv2_mcp_server": {
-                    "command": "python3",
+                    "command": sys.executable,
                     "args": [f"{self.mcp_server_dir}/kathara_bmv2_mcp_server.py"],
                     "transport": "stdio",
                 },
                 "kathara_telemetry_mcp_server": {
-                    "command": "python3",
+                    "command": sys.executable,
                     "args": [f"{self.mcp_server_dir}/kathara_telemetry_mcp_server.py"],
                     "transport": "stdio",
                 },
@@ -106,7 +108,7 @@ class MCPServerConfig:
             raise ValueError("library_id is required for the diagnostic toolbox.")
         return {
             "nika_diagnostic_toolbox": {
-                "command": "python3",
+                "command": sys.executable,
                 "args": [
                     f"{self.mcp_server_dir}/tool_evolution_mcp_server.py"
                 ],

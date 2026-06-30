@@ -35,7 +35,7 @@ The runner writes an internal `benchmark_index` into `run.json` based on row
 order. It no longer reads `stream_id`, `split`, or `sequence_index` from CSV.
 Every row can influence later rows through enabled learning modules.
 
-Stateful online learning should run with `--parallel 1`:
+Benchmark CSV runs are intentionally sequential:
 
 - evolving memory updates the memory bank after each evaluated episode;
 - Tool Evolution updates the selected tool library after each evaluated episode;
@@ -55,8 +55,7 @@ nika benchmark run --file benchmark/benchmark_test.csv \
   -b netmind \
   -m openai/gpt-oss-120b \
   -n 100 \
-  --memory memory-gptoss120 \
-  -j 1
+  --memory memory-gptoss120
 ```
 
 Use `--memory-read <bank>` for read-only retrieval. See `memory/README.md` for
@@ -75,8 +74,7 @@ nika benchmark run --file benchmark/benchmark_test.csv \
   -m openai/gpt-oss-120b \
   -n 100 \
   --tools tools-gptoss120 \
-  --tool-mode dual \
-  -j 1
+  --tool-mode dual
 ```
 
 Modes:
@@ -128,12 +126,12 @@ nika benchmark run --file benchmark/benchmark_test.csv \
 # memory only
 nika benchmark run --file benchmark/benchmark_test.csv \
   -a react -b netmind -m openai/gpt-oss-120b -n 100 \
-  --memory memory-gptoss120 -j 1
+  --memory memory-gptoss120
 
 # tool evolution only
 nika benchmark run --file benchmark/benchmark_test.csv \
   -a react -b netmind -m openai/gpt-oss-120b -n 100 \
-  --tools tools-gptoss120 --tool-mode dual -j 1
+  --tools tools-gptoss120 --tool-mode dual
 
 # agent evolution only
 nika evolve run --file benchmark/benchmark_test.csv \

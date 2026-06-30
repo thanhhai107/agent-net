@@ -9,7 +9,6 @@ import subprocess
 import sys
 import time
 import uuid
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 
@@ -22,6 +21,7 @@ from agent.composition import (
 )
 from nika.config import BENCHMARK_DIR, RESULTS_DIR
 from nika.net_env.net_env_pool import scenario_requires_topo_tier
+from nika.utils.kathara_cleanup import ensure_kathara_clean
 from nika.workflows.agent.run import start_agent
 from nika.workflows.env.start import start_net_env
 from nika.workflows.eval.session import eval_results
@@ -167,7 +167,7 @@ def _run_benchmark_row_subprocess(
     result_root: str | Path | None = None,
     fault_seed: str | None = None,
 ) -> str | None:
-    """Run one CSV row via a subprocess for thread-safe parallel batch execution."""
+    """Run one CSV row via a subprocess for isolated Tool Evolution execution."""
     cli_args = _benchmark_row_cli_args(
         row,
         agent_type=agent_type,
@@ -332,7 +332,6 @@ def run_benchmark_from_csv(
     max_steps: int,
     max_attempts: int = 3,
     *,
-    parallel: int = 1,
     memory: MemoryConfig | None = None,
     run_judge: bool = False,
     judge_llm_backend: str | None = None,
@@ -350,15 +349,7 @@ def run_benchmark_from_csv(
     - scenario
     - topo_size (same values as ``nika env run -t``: s, m, l, or empty)
     """
-    if parallel < 1:
-        raise ValueError("parallel must be >= 1")
-    
-    # Auto-clean any leftover Kathara container environments before starting a new benchmark run
-    try:
-        import subprocess
-        subprocess.run(["kathara", "wipe", "-f"], capture_output=True)
-    except Exception:
-        pass
+    ensure_kathara_clean(context="benchmark run")
 
     memory_config = memory or MemoryConfig()
     tool_config = tool_evolution or ToolEvolutionConfig()
@@ -376,17 +367,6 @@ def run_benchmark_from_csv(
             policy_overlay=policy_config,
         )
     )
-    if tool_config.enabled and parallel != 1:
-        raise ValueError(
-            "online Tool Evolution requires --parallel 1 so library updates "
-            "are observed in CSV order."
-        )
-    if memory_config.mode == "evolve" and parallel != 1:
-        raise ValueError(
-            "online memory evolution requires --parallel 1 so episode "
-            "memory ordering is deterministic"
-        )
-
     with open(benchmark_file, newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         fieldnames = set(reader.fieldnames or [])
@@ -440,121 +420,77 @@ def run_benchmark_from_csv(
         flush=True,
     )
 
-    if parallel == 1:
-        for index, row in enumerate(prepared_rows):
-            case_started_at = time.monotonic()
+    for index, row in enumerate(prepared_rows):
+        case_started_at = time.monotonic()
+        print(
+            f"{_BENCHMARK_START_PREFIX}index={index + 1}/{total} "
+            f"{_progress_row_label(row)}",
+            flush=True,
+        )
+        try:
+            if tool_config.enabled:
+                session_id = _run_benchmark_row_subprocess(
+                    row,
+                    agent_type=agent_type,
+                    llm_backend=llm_backend,
+                    model=model,
+                    max_steps=max_steps,
+                    max_attempts=max_attempts,
+                    memory=memory_config,
+                    run_judge=run_judge,
+                    judge_llm_backend=judge_llm_backend,
+                    judge_model=judge_model,
+                    oracle_routing=oracle_routing,
+                    tool_evolution=tool_config,
+                    policy_overlay=policy_config,
+                    result_root=benchmark_root,
+                    fault_seed=row.get("fault_seed"),
+                )
+            else:
+                session_id = run_single_benchmark(
+                    problem=row["problem"],
+                    scenario=row["scenario"],
+                    topo_size=(
+                        ""
+                        if (row.get("topo_size") or "") == "-"
+                        else (row.get("topo_size") or "")
+                    ),
+                    agent_type=agent_type,
+                    llm_backend=llm_backend,
+                    model=model,
+                    max_steps=max_steps,
+                    max_attempts=max_attempts,
+                    memory=memory_config,
+                    run_judge=run_judge,
+                    judge_llm_backend=judge_llm_backend,
+                    judge_model=judge_model,
+                    oracle_routing=oracle_routing,
+                    tool_evolution=tool_config,
+                    policy_overlay=policy_config,
+                    result_root=benchmark_root,
+                    fault_seed=row.get("fault_seed"),
+                    benchmark_index=int(row["benchmark_index"]),
+                )
+        except Exception as exc:
+            failed += 1
+            elapsed = time.monotonic() - case_started_at
+            error = str(exc).replace("\n", " ")[:500]
             print(
-                f"{_BENCHMARK_START_PREFIX}index={index + 1}/{total} "
+                f"{_BENCHMARK_FAILED_PREFIX}index={index + 1}/{total} "
+                f"completed={completed} failed={failed} elapsed_sec={elapsed:.1f} "
+                f"error_type={type(exc).__name__} error={error!r} "
                 f"{_progress_row_label(row)}",
                 flush=True,
             )
-            try:
-                if tool_config.enabled:
-                    session_id = _run_benchmark_row_subprocess(
-                        row,
-                        agent_type=agent_type,
-                        llm_backend=llm_backend,
-                        model=model,
-                        max_steps=max_steps,
-                        max_attempts=max_attempts,
-                        memory=memory_config,
-                        run_judge=run_judge,
-                        judge_llm_backend=judge_llm_backend,
-                        judge_model=judge_model,
-                        oracle_routing=oracle_routing,
-                        tool_evolution=tool_config,
-                        policy_overlay=policy_config,
-                        result_root=benchmark_root,
-                        fault_seed=row.get("fault_seed"),
-                    )
-                else:
-                    session_id = run_single_benchmark(
-                        problem=row["problem"],
-                        scenario=row["scenario"],
-                        topo_size=(
-                            ""
-                            if (row.get("topo_size") or "") == "-"
-                            else (row.get("topo_size") or "")
-                        ),
-                        agent_type=agent_type,
-                        llm_backend=llm_backend,
-                        model=model,
-                        max_steps=max_steps,
-                        max_attempts=max_attempts,
-                        memory=memory_config,
-                        run_judge=run_judge,
-                        judge_llm_backend=judge_llm_backend,
-                        judge_model=judge_model,
-                        oracle_routing=oracle_routing,
-                        tool_evolution=tool_config,
-                        policy_overlay=policy_config,
-                        result_root=benchmark_root,
-                        fault_seed=row.get("fault_seed"),
-                        benchmark_index=int(row["benchmark_index"]),
-                    )
-            except Exception as exc:
-                failed += 1
-                elapsed = time.monotonic() - case_started_at
-                error = str(exc).replace("\n", " ")[:500]
-                print(
-                    f"{_BENCHMARK_FAILED_PREFIX}index={index + 1}/{total} "
-                    f"completed={completed} failed={failed} elapsed_sec={elapsed:.1f} "
-                    f"error_type={type(exc).__name__} error={error!r} "
-                    f"{_progress_row_label(row)}",
-                    flush=True,
-                )
-                raise
-            completed += 1
-            elapsed = time.monotonic() - case_started_at
-            print(
-                f"{_BENCHMARK_PROGRESS_PREFIX}index={index + 1}/{total} "
-                f"completed={completed} failed={failed} elapsed_sec={elapsed:.1f} "
-                f"session_id={session_id or '-'} {_progress_row_label(row)}",
-                flush=True,
-            )
-        total_elapsed = time.monotonic() - batch_started_at
+            raise
+        completed += 1
+        elapsed = time.monotonic() - case_started_at
         print(
-            f"{_BENCHMARK_SUMMARY_PREFIX}total={total} completed={completed} "
-            f"failed={failed} elapsed_sec={total_elapsed:.1f}",
+            f"{_BENCHMARK_PROGRESS_PREFIX}index={index + 1}/{total} "
+            f"completed={completed} failed={failed} elapsed_sec={elapsed:.1f} "
+            f"session_id={session_id or '-'} {_progress_row_label(row)}",
             flush=True,
         )
-        return
-
-    with ThreadPoolExecutor(max_workers=parallel) as pool:
-        futures = [
-            pool.submit(
-                _run_benchmark_row_subprocess,
-                {
-                    **row,
-                    "fault_seed": row.get("fault_seed")
-                    or _stable_fault_seed(benchmark_name, row),
-                },
-                agent_type=agent_type,
-                llm_backend=llm_backend,
-                model=model,
-                max_steps=max_steps,
-                max_attempts=max_attempts,
-                memory=memory_config,
-                run_judge=run_judge,
-                judge_llm_backend=judge_llm_backend,
-                judge_model=judge_model,
-                oracle_routing=oracle_routing,
-                tool_evolution=tool_config,
-                policy_overlay=policy_config,
-                result_root=benchmark_root,
-                fault_seed=row.get("fault_seed"),
-            )
-            for row in prepared_rows
-        ]
-        for future in as_completed(futures):
-            future.result()
-            completed += 1
-            elapsed = time.monotonic() - batch_started_at
-            print(
-                f"{_BENCHMARK_PROGRESS_PREFIX}completed={completed}/{total} "
-                f"failed={failed} elapsed_sec={elapsed:.1f}",
-                flush=True,
-            )
     total_elapsed = time.monotonic() - batch_started_at
     print(
         f"{_BENCHMARK_SUMMARY_PREFIX}total={total} completed={completed} "

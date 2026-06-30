@@ -16,6 +16,7 @@ from agent.composition import MemoryConfig, PolicyOverlayConfig, ToolEvolutionCo
 from agent.defaults import DEFAULT_MAX_STEPS
 from agent.llm.model_factory import DEFAULT_LLM_BACKEND, DEFAULT_MODEL, load_model
 from nika.config import RESULTS_DIR, RUNTIME_DIR
+from nika.utils.kathara_cleanup import ensure_kathara_clean
 from nika.workflows.benchmark.run import default_benchmark_csv_path, run_benchmark_from_csv
 
 AGENT_EVOLUTION_DIR = RUNTIME_DIR / "agent_evolution"
@@ -568,7 +569,6 @@ def run_agent_evolution(
     model: str = "openai/gpt-oss-120b",
     max_steps: int = DEFAULT_MAX_STEPS,
     max_attempts: int = 3,
-    parallel: int = 1,
     run_judge: bool = False,
     judge_llm_backend: str | None = None,
     judge_model: str | None = None,
@@ -590,12 +590,7 @@ def run_agent_evolution(
     if max_generations < 1:
         raise ValueError("max_generations must be >= 1")
     
-    # Auto-clean any leftover Kathara container environments before starting a new agent evolution run
-    try:
-        import subprocess
-        subprocess.run(["kathara", "wipe", "-f"], capture_output=True)
-    except Exception:
-        pass
+    ensure_kathara_clean(context="agent evolution run")
 
     if feedback_mode not in FEEDBACK_MODES:
         raise ValueError(
@@ -660,7 +655,6 @@ def run_agent_evolution(
             model=model,
             max_steps=max_steps,
             max_attempts=max_attempts,
-            parallel=parallel,
             run_judge=run_judge,
             judge_llm_backend=judge_llm_backend,
             judge_model=judge_model,

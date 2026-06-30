@@ -18,7 +18,6 @@ def _config(**overrides: object) -> dict[str, object]:
         "model": "openai/gpt-oss-120b",
         "max_steps": 100,
         "max_attempts": 3,
-        "parallel": 4,
         "tool_library_id": "tools-test",
         "tool_mode": "dual",
         "memory_bank": "memory-test",
@@ -33,14 +32,15 @@ def _config(**overrides: object) -> dict[str, object]:
     return config
 
 
-def test_baseline_command_uses_requested_parallel() -> None:
+def test_baseline_command_uses_default_sequential_execution() -> None:
     command = build_experiment_command(_config())
 
     assert command[:3] == [sys.executable, "-m", "nika.codex_cli.main"]
     assert command[3:6] == ["benchmark", "run", "--file"]
     assert "benchmark/benchmark_test.csv" in command
     assert command[command.index("-n") + 1] == "100"
-    assert command[command.index("-j") + 1] == "4"
+    assert "-j" not in command
+    assert "--parallel" not in command
 
 
 def test_tool_and_memory_modules_share_one_sequential_command() -> None:
@@ -49,7 +49,8 @@ def test_tool_and_memory_modules_share_one_sequential_command() -> None:
     )
 
     assert command[3:6] == ["benchmark", "run", "--file"]
-    assert command[command.index("-j") + 1] == "1"
+    assert "-j" not in command
+    assert "--parallel" not in command
     assert command[command.index("--tools") + 1] == "tools-test"
     assert command[command.index("--memory") + 1] == "memory-test"
 
@@ -62,7 +63,8 @@ def test_agent_evolution_modules_share_one_evolve_command() -> None:
     assert command[3:6] == ["evolve", "run", "--file"]
     assert command[command.index("--max-gen") + 1] == "3"
     assert command[command.index("--feedback-mode") + 1] == "deterministic"
-    assert command[command.index("-j") + 1] == "1"
+    assert "-j" not in command
+    assert "--parallel" not in command
     assert command[command.index("--tools") + 1] == "tools-test"
     assert command[command.index("--memory") + 1] == "memory-test"
 
@@ -87,6 +89,8 @@ def test_parse_progress_events_reads_benchmark_and_ui_events() -> None:
             [
                 'ui_step_start {"index": 1, "name": "Baseline"}',
                 "benchmark_progress index=1/30 completed=1 failed=0 session_id=s1",
+                "kathara_cleanup_done context=studio_run",
+                'ui_run_stopped {"reason": "user_stop"}',
                 'ui_run_done {"exit_code": 0}',
             ]
         )
@@ -95,7 +99,11 @@ def test_parse_progress_events_reads_benchmark_and_ui_events() -> None:
     assert [row["event"] for row in rows] == [
         "ui_step_start",
         "benchmark_progress",
+        "kathara_cleanup_done",
+        "ui_run_stopped",
         "ui_run_done",
     ]
     assert rows[1]["completed"] == "1"
-    assert rows[2]["exit_code"] == "0"
+    assert rows[2]["context"] == "studio_run"
+    assert rows[3]["reason"] == "user_stop"
+    assert rows[4]["exit_code"] == "0"

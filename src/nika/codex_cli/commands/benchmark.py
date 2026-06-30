@@ -77,12 +77,6 @@ def benchmark_run(
         min=1,
         help="Maximum attempts for the reflexion agent; ignored by other agents.",
     ),
-    parallel: int = typer.Option(
-        1,
-        "-j",
-        "--parallel",
-        help="Number of benchmark cases to run concurrently in CSV batch mode (default: 1).",
-    ),
     memory: str | None = typer.Option(
         None,
         "--memory",
@@ -196,9 +190,6 @@ def benchmark_run(
         path=str(policy_overlay) if policy_overlay else None
     )
 
-    if memory_config.mode == "evolve" and parallel != 1:
-        raise typer.BadParameter("online memory evolution requires --parallel 1")
-
     if scenario is not None and file is not None:
         raise typer.BadParameter(
             "Use either SCENARIO (single-case mode) or --file (batch mode), not both."
@@ -207,10 +198,6 @@ def benchmark_run(
     single_mode = scenario is not None
 
     if single_mode:
-        if parallel != 1:
-            raise typer.BadParameter(
-                "--parallel applies to CSV batch mode only; omit it for a single case."
-            )
         if not problem:
             raise typer.BadParameter("--problem is required when SCENARIO is given.")
         if scenario_requires_topo_tier(scenario) and not tier:
@@ -257,7 +244,6 @@ def benchmark_run(
         model=model,
         max_steps=max_steps,
         max_attempts=max_attempts,
-        parallel=parallel,
         memory=memory_config,
         run_judge=run_judge,
         judge_llm_backend=judge_backend,

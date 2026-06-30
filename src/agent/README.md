@@ -150,7 +150,7 @@ nika memory run --bank experiment-01 --limit 4 -a reflexion
 **Entry point**: `agent.mock.mock_agent.MockAgent`
 
 - Skips LangGraph and LangChain; calls MCP tools from a fixed script.
-- Matches the `BasicReActAgent.run()` interface for CI and parallel benchmark tests.
+- Matches the `BasicReActAgent.run()` interface for CI and benchmark smoke tests.
 - Writes the same `messages.jsonl` event schema as the LangGraph path.
 
 ```bash

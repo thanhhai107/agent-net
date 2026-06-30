@@ -96,8 +96,14 @@ def discover_sessions(
             merged["_source"] = "runtime"
             discovered[session_id] = merged
 
+    valid_sessions = []
+    for item in discovered.values():
+        s_dir = item.get("session_dir") or str(results_dir / item["session_id"])
+        if Path(s_dir).exists():
+            valid_sessions.append(item)
+
     return sorted(
-        discovered.values(),
+        valid_sessions,
         key=lambda item: str(item.get("created_at") or item.get("session_id") or ""),
         reverse=True,
     )

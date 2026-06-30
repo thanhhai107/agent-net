@@ -138,7 +138,6 @@ def memory_run(
         model=model,
         max_steps=max_steps,
         max_attempts=max_attempts,
-        parallel=1,
         memory=MemoryConfig(
             mode=mode,
             bank=bank,

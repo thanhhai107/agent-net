@@ -12,10 +12,8 @@ import streamlit as st
 
 from nika.config import BENCHMARK_DIR, RESULTS_DIR
 from nika.visualization.experiment_runner import (
-    MODULE_LABELS,
     build_command_plan,
     create_run,
-    experiment_label,
     list_runs,
     parse_progress_events,
     read_run_log,
@@ -27,8 +25,8 @@ from nika.workflows.benchmark.run import default_benchmark_csv_path
 
 
 st.set_page_config(
-    page_title="NIKA Experiment Studio",
-    page_icon="N",
+    page_title="NIKA · Experiment Studio",
+    page_icon="◈",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
@@ -36,65 +34,167 @@ st.set_page_config(
 st.markdown(
     """
     <style>
-      :root {--line:#dce3ed;--muted:#64748b;--soft:#f8fafc;--ink:#0f172a;}
-      .block-container {max-width: 1520px; padding-top: 1.05rem;}
-      .nika-title {
-        display:flex; align-items:flex-end; justify-content:space-between;
-        gap:1rem; border-bottom:1px solid var(--line); padding-bottom:.75rem;
-        margin-bottom:.9rem;
+      :root {
+        --ink: #0f172a;
+        --muted: #64748b;
+        --panel: rgba(255, 255, 255, 0.78);
+        --panel-strong: #f1f5f9;
+        --line: rgba(15, 23, 42, 0.08);
+        --cyan: #0ea5e9;
+        --blue: #2563eb;
+        --red: #e11d48;
+        --amber: #d97706;
+        --violet: #7c3aed;
       }
-      .nika-title h1 {margin:0; font-size:1.85rem; letter-spacing:0;}
+
+      .stApp {
+        background:
+          radial-gradient(circle at 12% 4%, rgba(203, 213, 225, 0.4), transparent 24rem),
+          radial-gradient(circle at 92% 12%, rgba(186, 230, 253, 0.35), transparent 26rem),
+          #f8fafc;
+        color: var(--ink);
+      }
+      header[data-testid="stHeader"] {display: none !important;}
+      .block-container {max-width: 1480px; padding: 2.8rem 2rem 4rem !important;}
+      section[data-testid="stSidebar"] {
+        background: rgba(241, 245, 249, 0.96);
+        border-right: 1px solid var(--line);
+      }
+      section[data-testid="stSidebar"] .block-container {padding: 1.35rem 1.15rem;}
+      h1, h2, h3 {letter-spacing: -.025em;}
+      h1 {font-size: clamp(2rem, 3vw, 3.15rem) !important; line-height: 1.05 !important;}
+      h2 {font-size: 1.28rem !important;}
+      h3 {font-size: 1.02rem !important; color: #334155 !important;}
+
       .section-card {
-        border:1px solid var(--line); border-radius:8px; padding:1rem;
-        background:#fff; margin:.55rem 0 1rem;
+        border:1px solid var(--line); border-radius:12px; padding:1.2rem;
+        background:var(--panel); margin:.55rem 0 1rem;
+        box-shadow:0 14px 35px rgba(15, 23, 42, 0.04);
       }
-      .section-title {font-weight:800; font-size:.95rem; color:var(--ink); margin-bottom:.65rem;}
+      .section-title {
+        color: #1e293b; font-weight: 750; font-size: 1.1rem; margin: 1.2rem 0 .9rem;
+      }
       .mini-grid {display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:.55rem;}
       .mini-item {
-        border:1px solid var(--line); border-radius:8px; background:var(--soft);
+        border:1px solid var(--line); border-radius:12px; background:rgba(255, 255, 255, 0.7);
         padding:.55rem .65rem; min-height:58px;
       }
       .mini-label {font-size:.7rem; color:var(--muted); font-weight:700;}
-      .mini-value {font-size:.82rem; color:var(--ink); font-weight:750; overflow-wrap:anywhere;}
+      .mini-value {font-size:.82rem; color:#1e293b; font-weight:750; overflow-wrap:anywhere;}
+
       .status-pill {
-        display:inline-flex; align-items:center; gap:.45rem; padding:.36rem .65rem;
-        border-radius:999px; border:1px solid #d7dee8; background:#f8fafc;
-        font-weight:700; font-size:.78rem;
+        display:inline-flex; align-items:center; gap:.45rem; padding:.34rem .65rem;
+        border:1px solid var(--line); border-radius:999px; color:#b9c7d9;
+        background:rgba(255,255,255,.7); font-size:.78rem; font-weight:700;
       }
-      .status-dot {width:9px;height:9px;border-radius:999px;background:#8a98aa;}
-      .status-running .status-dot {background:#059669;}
-      .status-finished .status-dot {background:#2563eb;}
-      .status-failed .status-dot {background:#dc2626;}
-      .status-queued .status-dot {background:#d97706;}
-      div[data-testid="stMetric"] {
-        border:1px solid #d9e1ea; border-radius:8px; padding:.8rem; background:#ffffff;
+      .status-dot {width:7px; height:7px; border-radius:50%; background:#8a98aa;}
+      .status-running .status-dot {background:#10b981; box-shadow:0 0 12px rgba(16,185,129,.45);}
+      .status-finished .status-dot {background:#3b82f6;}
+      .status-failed .status-dot {background:#ff647c; box-shadow:0 0 12px rgba(255,100,124,.65);}
+      .status-queued .status-dot {background:#ffb454; box-shadow:0 0 12px rgba(255,180,84,.65);}
+
+      [data-testid="stMetric"] {
+        min-height: 112px;
+        border: 1px solid var(--line);
+        border-radius: 16px;
+        padding: 17px 18px;
+        background: linear-gradient(145deg, rgba(255, 255, 255, 0.95), rgba(241, 245, 249, 0.9));
+        box-shadow: 0 12px 35px rgba(15, 23, 42, 0.04);
       }
-      section[data-testid="stSidebar"] {border-right:1px solid #e3e8ef;}
-      section[data-testid="stSidebar"] .block-container {padding-top:1rem;}
+      [data-testid="stMetricLabel"] {color: var(--muted); font-size: .78rem;}
+      [data-testid="stMetricValue"] {color: var(--ink); font-weight: 700;}
+
+      [data-testid="stTabs"] [data-baseweb="tab-list"] {
+        gap: .35rem; background: rgba(241, 245, 249, 0.85); border: 1px solid var(--line);
+        border-radius: 14px; padding: .32rem; margin: .7rem 0 1.2rem;
+      }
+      [data-testid="stTabs"] [data-baseweb="tab"] {
+        height: 42px; border-radius: 10px; padding: 0 1.2rem;
+        color: var(--muted);
+      }
+      [data-testid="stTabs"] [aria-selected="true"] {
+        background: rgba(14, 165, 233, 0.1); color: #0284c7;
+      }
+      [data-testid="stDataFrame"] {
+        border: 1px solid var(--line); border-radius: 14px; overflow: hidden;
+      }
+      [data-testid="stExpander"] {
+        border: 1px solid var(--line); border-radius: 13px;
+        background: rgba(255, 255, 255, 0.7);
+      }
+
       div[data-testid="stCheckbox"] label {font-weight:700;}
-      .stButton > button {border-radius:8px; font-weight:800;}
+
+      .stButton > button, .stDownloadButton > button {
+        border-radius: 11px;
+        font-weight: 800;
+        transition: all 0.2s ease;
+      }
+      /* Primary button styling */
+      button[data-testid="baseButton-primary"] {
+        border: 1px solid #0284c7 !important;
+        background: linear-gradient(135deg, #0ea5e9, #0284c7) !important;
+        color: #ffffff !important;
+      }
+      button[data-testid="baseButton-primary"]:hover {
+        border-color: #0284c7 !important;
+        background: linear-gradient(135deg, #38bdf8, #0ea5e9) !important;
+        color: #ffffff !important;
+        box-shadow: 0 0 15px rgba(14, 165, 233, 0.25) !important;
+      }
+      /* Secondary button styling */
+      button[data-testid="baseButton-secondary"], .stDownloadButton > button {
+        border: 1px solid rgba(14, 165, 233, .28) !important;
+        background: rgba(14, 165, 233, .08) !important;
+        color: #0284c7 !important;
+      }
+      button[data-testid="baseButton-secondary"]:hover, .stDownloadButton > button:hover {
+        border-color: #0ea5e9 !important;
+        color: #0369a1 !important;
+        background: rgba(14, 165, 233, .15) !important;
+      }
+
       div[data-testid="stCodeBlock"] {
         border: 1px solid var(--line) !important;
-        border-radius: 8px !important;
+        border-radius: 12px !important;
+        background: #f8fafc !important;
       }
       textarea {
         font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important;
         font-size:.78rem !important;
+        background-color: #f8fafc !important;
+        color: var(--ink) !important;
+        border: 1px solid var(--line) !important;
       }
+
+      .nika-brand {display:flex; align-items:center; gap:.75rem; margin:.2rem 0 1.6rem;}
+      .nika-mark {
+        width:38px; height:38px; display:grid; place-items:center; border-radius:12px;
+        color:#ffffff; background:linear-gradient(135deg,#38bdf8,#0284c7);
+        font-size:1.15rem; font-weight:900; box-shadow:0 0 24px rgba(14, 165, 233, .2);
+      }
+      .nika-brand-title {font-size:1.05rem; font-weight:800; letter-spacing:.08em; color: #0f172a;}
+      .nika-brand-sub {font-size:.72rem; color:var(--muted); letter-spacing:.04em;}
+
+      .eyebrow {
+        color:#0284c7; font-size:.74rem; font-weight:800; letter-spacing:.14em;
+        text-transform:uppercase; margin-bottom:.55rem;
+      }
+
       /* Custom styling for multiselect tags */
       div[data-baseweb="tag"] {
-        background-color: #eff6ff !important;
-        border: 1px solid #bfdbfe !important;
+        background-color: rgba(14, 165, 233, .08) !important;
+        border: 1px solid rgba(14, 165, 233, .2) !important;
         border-radius: 6px !important;
-        color: #1e40af !important;
+        color: #0369a1 !important;
         padding: 2px 8px !important;
       }
       div[data-baseweb="tag"] span {
-        color: #1e40af !important;
+        color: #0369a1 !important;
         font-weight: 600 !important;
       }
       div[data-baseweb="tag"] svg {
-        fill: #1e40af !important;
+        fill: #0369a1 !important;
       }
       @media (max-width: 900px) {.mini-grid {grid-template-columns:1fr 1fr;}}
     </style>
@@ -242,7 +342,7 @@ def _result_rows(*, benchmark_name: str | None = None) -> list[dict[str, object]
         durations: list[float] = []
         submitted = 0
         finished = 0
-        running = 0
+        failed = 0
         result_modules: set[str] = set()
         agents: set[str] = set()
         models: set[str] = set()
@@ -254,10 +354,10 @@ def _result_rows(*, benchmark_name: str | None = None) -> list[dict[str, object]
             metrics = _read_json(session_dir / "eval_metrics.json")
             if meta.get("status") == "finished":
                 finished += 1
-            elif meta.get("status") == "running":
-                running += 1
             if (session_dir / "submission.json").exists():
                 submitted += 1
+            elif meta.get("status") != "running":
+                failed += 1
 
             for key, target in (
                 ("detection_score", detections),
@@ -279,11 +379,11 @@ def _result_rows(*, benchmark_name: str | None = None) -> list[dict[str, object]
 
             root = _top_result_root(run_path)
             if _is_agent_evolution_result(root, run_path):
-                result_modules.add("agent_evolution")
+                result_modules.add("Harness Evolution")
             if meta.get("tool_evolution_enabled"):
-                result_modules.add("tool_evolution")
+                result_modules.add("Tool Evolution")
             if meta.get("memory_mode") and meta.get("memory_mode") != "off":
-                result_modules.add("memory_evolution")
+                result_modules.add("Memory Evolution")
             if meta.get("agent_type"):
                 agents.add(str(meta["agent_type"]))
             if meta.get("model"):
@@ -291,7 +391,7 @@ def _result_rows(*, benchmark_name: str | None = None) -> list[dict[str, object]
             updated = str(meta.get("updated_at") or meta.get("created_at") or updated)
 
         if not result_modules:
-            result_modules.add("baseline")
+            result_modules.add("Baseline")
             
         # Format display name: show parent with generation suffix if grouped under a subfolder
         if gkey.parent == RESULTS_DIR:
@@ -304,7 +404,7 @@ def _result_rows(*, benchmark_name: str | None = None) -> list[dict[str, object]
                 "result_root": display_name,
                 "cases": len(run_paths),
                 "finished": finished,
-                "running": running,
+                "failed": failed,
                 "submitted": submitted,
                 "detection": _avg(detections),
                 "localization": _avg(localizations),
@@ -378,10 +478,15 @@ def _progress_fraction(events: list[dict[str, str]], command_count: int) -> tupl
     return max(0.0, min(1.0, fraction)), label
 
 
+st.markdown('<div class="eyebrow">Experimentation & Benchmarking Suite</div>', unsafe_allow_html=True)
 st.markdown(
     """
-    <div class="nika-title">
-      <div><h1>NIKA Experiment Studio</h1></div>
+    <div class="nika-brand" style="margin-bottom: 2rem;">
+      <div class="nika-mark">N</div>
+      <div>
+        <div class="nika-brand-title" style="font-size: 1.5rem; line-height: 1.1;">NIKA</div>
+        <div class="nika-brand-sub" style="font-size: 0.9rem; letter-spacing: 0.12em;">EXPERIMENTS STUDIO</div>
+      </div>
     </div>
     """,
     unsafe_allow_html=True,
@@ -390,36 +495,36 @@ st.markdown(
 st.markdown('<div class="section-title">Configuration</div>', unsafe_allow_html=True)
 
 # Grid layout for general configuration
-col1, col2, col3, col4 = st.columns(4, gap="medium")
+col1, col2, col3 = st.columns(3, gap="medium")
 with col1:
     benchmark_name = st.text_input("Benchmark Name", value=Path(default_benchmark_csv_path()).stem)
     benchmark_path = _benchmark_path_from_name(benchmark_name)
     row_count = _count_rows(benchmark_path)
 with col2:
-    agent_type = st.selectbox("Agent", ["react", "plan-execute", "reflexion", "mock"])
+    max_steps_str = st.text_input("Steps", value="100")
+    max_steps = int(max_steps_str) if max_steps_str.isdigit() else 100
 with col3:
+    max_attempts_str = st.text_input("Attempts", value="3")
+    max_attempts = int(max_attempts_str) if max_attempts_str.isdigit() else 3
+
+# Grid layout for execution parameters
+col5, col6, col7 = st.columns(3, gap="medium")
+with col5:
+    agent_type = st.selectbox("Agent", ["react", "plan-execute", "reflexion", "mock"])
+with col6:
     llm_backend = st.selectbox("Backend", ["netmind", "openai", "deepseek", "ollama"])
-with col4:
+with col7:
     model = st.text_input("Model", value="openai/gpt-oss-120b")
 
-# Grid layout for execution parameters and modules selector
-col5, col6, col7, col8 = st.columns(4, gap="medium")
-with col5:
-    max_steps = st.number_input("Steps", min_value=1, max_value=500, value=100)
-with col6:
-    max_attempts = st.number_input("Attempts", min_value=1, max_value=20, value=3)
-with col7:
-    parallel = st.number_input("Parallel", min_value=1, max_value=16, value=1)
-with col8:
-    modules_selected = st.multiselect(
-        "Active Modules",
-        options=["Tool Evolution", "Memory Evolution", "Agent Evolution"],
-        default=[]
-    )
-
-tool_selected = "Tool Evolution" in modules_selected
-memory_selected = "Memory Evolution" in modules_selected
-agent_evolution_selected = "Agent Evolution" in modules_selected
+# Active Modules row layout
+st.markdown("<div style='font-size: 0.8rem; font-weight: bold; color: var(--muted); margin-top: 0.5rem; margin-bottom: 0.25rem;'>Active Modules</div>", unsafe_allow_html=True)
+col_m1, col_m2, col_m3 = st.columns(3, gap="medium")
+with col_m1:
+    tool_selected = st.checkbox("Tool Evolution", value=False)
+with col_m2:
+    memory_selected = st.checkbox("Memory Evolution", value=False)
+with col_m3:
+    agent_evolution_selected = st.checkbox("Harness Evolving", value=False)
 
 modules = []
 if tool_selected:
@@ -462,7 +567,7 @@ if tool_selected or memory_selected or agent_evolution_selected:
             
         if agent_evolution_selected:
             with m_cols[col_idx]:
-                st.markdown("**Agent Evolution**")
+                st.markdown("**Harness Evolving**")
                 max_generations = st.number_input("Generations", min_value=1, max_value=20, value=3)
                 feedback_mode = st.selectbox("Feedback mode", ["auto", "deterministic", "llm"])
                 feedback_backend = st.text_input("Feedback backend", value=llm_backend)
@@ -505,7 +610,7 @@ config = {
     "model": model,
     "max_steps": int(max_steps),
     "max_attempts": int(max_attempts),
-    "parallel": int(parallel),
+    "parallel": 1,
     "tool_library_id": tool_library_id,
     "tool_mode": tool_mode,
     "memory_bank": memory_bank,
@@ -645,6 +750,8 @@ def format_event_message(ev: dict) -> str | None:
     elif event == "ui_run_done":
         code = ev.get("exit_code", "0")
         return f"**Run Finished** (Exit: `{code}`)"
+    elif event == "ui_run_stopped":
+        return "**Run Stopped** by user. Starting next queued run if available."
     elif event == "benchmark_start":
         index = ev.get("index") or "?"
         scenario = ev.get("scenario") or "?"
@@ -664,10 +771,10 @@ def format_event_message(ev: dict) -> str | None:
         problem = ev.get("problem") or "?"
         return f"**[Scenario]** Failed: `{scenario} / {problem}`"
     elif event == "evolve_generation_start":
-        gen = ev.get("gen") or ev.get("generation") or "?"
+        gen = ev.get("generation") or "?"
         return f"**Starting Evolution Generation {gen}**"
     elif event == "evolve_generation_done":
-        gen = ev.get("gen") or ev.get("generation") or "?"
+        gen = ev.get("generation") or "?"
         return f"**Completed Evolution Generation {gen}**"
     return None
 
@@ -712,7 +819,7 @@ result_rows = _result_rows(benchmark_name=None)
 if not result_rows:
     import pandas as pd
     cols = [
-        "result_root", "cases", "finished", "running", "submitted",
+        "result_root", "cases", "finished", "failed", "submitted",
         "detection", "localization", "rca", "steps", "tool_calls", "tool_errors",
         "token_in", "token_out", "duration", "modules", "agent", "model", "updated"
     ]

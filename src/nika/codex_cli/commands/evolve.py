@@ -59,13 +59,6 @@ def evolve_run(
         min=1,
         help="Maximum attempts for reflexion; ignored by other agents.",
     ),
-    parallel: int = typer.Option(
-        1,
-        "-j",
-        "--parallel",
-        min=1,
-        help="Number of benchmark cases to run concurrently within each generation.",
-    ),
     tools: str | None = typer.Option(
         None,
         "--tools",
@@ -162,9 +155,6 @@ def evolve_run(
         raise typer.BadParameter(
             "feedback_mode must be one of " + ", ".join(sorted(FEEDBACK_MODES))
         )
-    if memory is not None and parallel != 1:
-        raise typer.BadParameter("online memory evolution requires --parallel 1")
-
     kwargs = {}
     if runtime_root is not None:
         kwargs["runtime_root"] = runtime_root
@@ -180,7 +170,6 @@ def evolve_run(
         model=model,
         max_steps=max_steps,
         max_attempts=max_attempts,
-        parallel=parallel,
         run_judge=run_judge,
         judge_llm_backend=judge_backend or DEFAULT_LLM_BACKEND,
         judge_model=judge_model or DEFAULT_MODEL,
