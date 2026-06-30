@@ -204,24 +204,45 @@ def create_run(config: dict[str, Any]) -> Path:
     }
     (run_dir / SPEC_FILENAME).write_text(json.dumps(spec, indent=2), encoding="utf-8")
     log_path = run_dir / LOG_FILENAME
-    log_handle = log_path.open("a", encoding="utf-8")
-    proc = subprocess.Popen(
-        [sys.executable, "-u", "-m", "nika.visualization.experiment_runner", str(run_dir / SPEC_FILENAME)],
-        cwd=_REPO_ROOT,
-        stdout=log_handle,
-        stderr=subprocess.STDOUT,
-        text=True,
-        start_new_session=True,
-    )
-    log_handle.close()
-    meta = {
-        "run_id": run_id,
-        "pid": proc.pid,
-        "started_at": datetime.now(timezone.utc).isoformat(),
-        "log_path": str(log_path),
-        "spec_path": str(run_dir / SPEC_FILENAME),
-    }
-    (run_dir / META_FILENAME).write_text(json.dumps(meta, indent=2), encoding="utf-8")
+
+    # Check if there is already a run running
+    is_busy = False
+    for r in list_runs():
+        if run_status(r).get("status") == "running":
+            is_busy = True
+            break
+
+    if is_busy:
+        meta = {
+            "run_id": run_id,
+            "pid": 0,
+            "status": "queued",
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "log_path": str(log_path),
+            "spec_path": str(run_dir / SPEC_FILENAME),
+        }
+        (run_dir / META_FILENAME).write_text(json.dumps(meta, indent=2), encoding="utf-8")
+    else:
+        log_handle = log_path.open("a", encoding="utf-8")
+        proc = subprocess.Popen(
+            [sys.executable, "-u", "-m", "nika.visualization.experiment_runner", str(run_dir / SPEC_FILENAME)],
+            cwd=_REPO_ROOT,
+            stdout=log_handle,
+            stderr=subprocess.STDOUT,
+            text=True,
+            start_new_session=True,
+        )
+        log_handle.close()
+        meta = {
+            "run_id": run_id,
+            "pid": proc.pid,
+            "status": "running",
+            "started_at": datetime.now(timezone.utc).isoformat(),
+            "log_path": str(log_path),
+            "spec_path": str(run_dir / SPEC_FILENAME),
+        }
+        (run_dir / META_FILENAME).write_text(json.dumps(meta, indent=2), encoding="utf-8")
+
     return run_dir
 
 
@@ -261,14 +282,39 @@ def _pid_running(pid: int | None) -> bool:
     if not pid:
         return False
     try:
+        # Try to reap the child process if it has exited (this runs inside the Streamlit parent process)
+        reaped_pid, status = os.waitpid(pid, os.WNOHANG)
+        if reaped_pid == pid:
+            return False
+    except ChildProcessError:
+        pass
+    except OSError:
+        pass
+
+    try:
         os.kill(pid, 0)
     except OSError:
         return False
+
+    # Check /proc/<pid>/status as a fallback for zombie state on Linux
+    try:
+        from pathlib import Path
+        status_path = Path(f"/proc/{pid}/status")
+        if status_path.exists():
+            for line in status_path.read_text(encoding="utf-8", errors="replace").splitlines():
+                if line.startswith("State:"):
+                    if "zombie" in line.lower() or "defunct" in line.lower():
+                        return False
+    except Exception:
+        pass
+
     return True
 
 
 def run_status(run_dir: Path) -> dict[str, Any]:
     meta = _read_json(run_dir / META_FILENAME)
+    if meta.get("status") == "queued":
+        return {**meta, "status": "queued", "exit_code": None}
     log_text = read_run_log(run_dir)
     done = [line for line in log_text.splitlines() if line.startswith("ui_run_done ")]
     if done:
@@ -281,6 +327,35 @@ def run_status(run_dir: Path) -> dict[str, Any]:
     return {**meta, "status": "stopped", "exit_code": None}
 
 
+def check_and_start_next_queued() -> None:
+    # list_runs() returns newest first. We reverse it to find the oldest queued run.
+    runs = list(reversed(list_runs()))
+    for r in runs:
+        meta = _read_json(r / META_FILENAME)
+        if meta.get("status") == "queued":
+            spec_file = r / SPEC_FILENAME
+            log_path = r / LOG_FILENAME
+            log_handle = log_path.open("a", encoding="utf-8")
+            try:
+                proc = subprocess.Popen(
+                    [sys.executable, "-u", "-m", "nika.visualization.experiment_runner", str(spec_file)],
+                    cwd=_REPO_ROOT,
+                    stdout=log_handle,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    start_new_session=True,
+                )
+                log_handle.close()
+                meta["pid"] = proc.pid
+                meta["status"] = "running"
+                meta["started_at"] = datetime.now(timezone.utc).isoformat()
+                (r / META_FILENAME).write_text(json.dumps(meta, indent=2), encoding="utf-8")
+                break
+            except Exception as e:
+                log_handle.close()
+                print(f"Failed to auto-start queued run {r.name}: {e}")
+
+
 def stop_run(run_dir: Path) -> None:
     meta = _read_json(run_dir / META_FILENAME)
     pid = _int(meta.get("pid"), 0)
@@ -289,7 +364,14 @@ def stop_run(run_dir: Path) -> None:
     try:
         os.killpg(pid, signal.SIGTERM)
     except ProcessLookupError:
-        return
+        pass
+    
+    # Clean up lingering Kathara container environments
+    try:
+        import subprocess
+        subprocess.run(["kathara", "wipe", "-f"], capture_output=True)
+    except Exception:
+        pass
 
 
 def _parse_json_suffix(line: str, prefix: str) -> dict[str, Any]:
@@ -335,6 +417,13 @@ def parse_progress_events(log_text: str) -> list[dict[str, str]]:
 
 
 def run_spec_file(spec_path: str | Path) -> int:
+    # Auto-clean any leftover Kathara container environments before starting a new experiment run
+    try:
+        import subprocess
+        subprocess.run(["kathara", "wipe", "-f"], capture_output=True)
+    except Exception:
+        pass
+
     spec = _read_json(Path(spec_path))
     commands = spec.get("commands") or []
     exit_code = 0
@@ -385,6 +474,10 @@ def run_spec_file(spec_path: str | Path) -> int:
         "ui_run_done " + json.dumps({"exit_code": exit_code}, ensure_ascii=False),
         flush=True,
     )
+    try:
+        check_and_start_next_queued()
+    except Exception as e:
+        print(f"Error starting next queued run: {e}", flush=True)
     return exit_code
 
 

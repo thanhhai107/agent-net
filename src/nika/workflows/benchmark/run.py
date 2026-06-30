@@ -352,6 +352,14 @@ def run_benchmark_from_csv(
     """
     if parallel < 1:
         raise ValueError("parallel must be >= 1")
+    
+    # Auto-clean any leftover Kathara container environments before starting a new benchmark run
+    try:
+        import subprocess
+        subprocess.run(["kathara", "wipe", "-f"], capture_output=True)
+    except Exception:
+        pass
+
     memory_config = memory or MemoryConfig()
     tool_config = tool_evolution or ToolEvolutionConfig()
     policy_config = policy_overlay or PolicyOverlayConfig()

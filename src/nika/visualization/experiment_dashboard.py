@@ -30,7 +30,7 @@ st.set_page_config(
     page_title="NIKA Experiment Studio",
     page_icon="N",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
 st.markdown(
@@ -65,6 +65,7 @@ st.markdown(
       .status-running .status-dot {background:#059669;}
       .status-finished .status-dot {background:#2563eb;}
       .status-failed .status-dot {background:#dc2626;}
+      .status-queued .status-dot {background:#d97706;}
       div[data-testid="stMetric"] {
         border:1px solid #d9e1ea; border-radius:8px; padding:.8rem; background:#ffffff;
       }
@@ -72,6 +73,10 @@ st.markdown(
       section[data-testid="stSidebar"] .block-container {padding-top:1rem;}
       div[data-testid="stCheckbox"] label {font-weight:700;}
       .stButton > button {border-radius:8px; font-weight:800;}
+      div[data-testid="stCodeBlock"] {
+        border: 1px solid var(--line) !important;
+        border-radius: 8px !important;
+      }
       textarea {
         font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important;
         font-size:.78rem !important;
@@ -156,6 +161,24 @@ def _avg(values: list[float]) -> str:
     return "-" if not values else f"{sum(values) / len(values):.2f}"
 
 
+def _sum(values: list[float]) -> str:
+    return "-" if not values else f"{sum(values):.0f}"
+
+
+def _parse_duration(meta: dict) -> float | None:
+    st = meta.get("start_time")
+    et = meta.get("end_time")
+    if not st or not et:
+        return None
+    try:
+        from datetime import datetime
+        t1 = datetime.fromisoformat(str(st).replace("Z", "+00:00"))
+        t2 = datetime.fromisoformat(str(et).replace("Z", "+00:00"))
+        return (t2 - t1).total_seconds()
+    except Exception:
+        return None
+
+
 def _top_result_root(run_path: Path) -> Path:
     rel = run_path.parent.relative_to(RESULTS_DIR)
     if len(rel.parts) <= 1:
@@ -186,6 +209,11 @@ def _result_rows(*, benchmark_name: str | None = None) -> list[dict[str, object]
         rcas: list[float] = []
         steps: list[float] = []
         tool_calls: list[float] = []
+        in_tokens: list[float] = []
+        out_tokens: list[float] = []
+        tool_errors: list[float] = []
+        durations: list[float] = []
+        failed_subs = 0
         submitted = 0
         finished = 0
         running = 0
@@ -204,16 +232,30 @@ def _result_rows(*, benchmark_name: str | None = None) -> list[dict[str, object]
                 running += 1
             if (session_dir / "submission.json").exists():
                 submitted += 1
+                det = _float(metrics.get("detection_score"))
+                loc = _float(metrics.get("localization_accuracy"))
+                rca = _float(metrics.get("rca_accuracy"))
+                if (det is not None and det < 1.0) or (loc is not None and loc < 1.0) or (rca is not None and rca < 1.0):
+                    failed_subs += 1
+
             for key, target in (
                 ("detection_score", detections),
                 ("localization_accuracy", localizations),
                 ("rca_accuracy", rcas),
                 ("steps", steps),
                 ("tool_calls", tool_calls),
+                ("in_tokens", in_tokens),
+                ("out_tokens", out_tokens),
+                ("tool_errors", tool_errors),
             ):
                 value = _float(metrics.get(key))
                 if value is not None:
                     target.append(value)
+
+            dur = _parse_duration(meta)
+            if dur is not None:
+                durations.append(dur)
+
             if meta.get("tool_evolution_enabled"):
                 result_modules.add("tool")
             if meta.get("memory_mode") and meta.get("memory_mode") != "off":
@@ -233,11 +275,16 @@ def _result_rows(*, benchmark_name: str | None = None) -> list[dict[str, object]
                 "finished": finished,
                 "running": running,
                 "submitted": submitted,
+                "failed_subs": failed_subs,
                 "detection": _avg(detections),
                 "localization": _avg(localizations),
                 "rca": _avg(rcas),
                 "steps": _avg(steps),
                 "tool_calls": _avg(tool_calls),
+                "tool_errors": _sum(tool_errors),
+                "token_in": _sum(in_tokens),
+                "token_out": _sum(out_tokens),
+                "duration": f"{int(sum(durations))}s" if durations else "-",
                 "modules": ", ".join(sorted(result_modules)),
                 "agent": ", ".join(sorted(agents)) or "-",
                 "model": ", ".join(sorted(models)) or "-",
@@ -264,33 +311,38 @@ def _progress_fraction(events: list[dict[str, str]], command_count: int) -> tupl
                 pass
 
     within_step = 0.0
-    label = f"Step {step_index}/{step_total}"
+    
+    # Only show Step prefix if there are multiple steps in the plan
+    prefix = f"Step {step_index}/{step_total}" if step_total > 1 else ""
+    label = prefix
+
     for event in reversed(events):
         if event["event"] == "benchmark_progress":
-            raw_completed = event.get("completed", "0")
+            completed = event.get("completed", "0")
+            total = event.get("total") or "30"
             try:
-                if "/" in raw_completed:
-                    done, total = raw_completed.split("/", 1)
-                    within_step = int(done) / max(1, int(total))
-                elif event.get("index") and "/" in event["index"]:
-                    _, total = event["index"].split("/", 1)
-                    within_step = int(raw_completed) / max(1, int(total))
-                label = f"{label} - benchmark {event.get('completed', '-')}"
-            except ValueError:
-                pass
+                within_step = int(completed) / max(1, int(total))
+                suffix = f"{completed}/{total} completed"
+            except (ValueError, TypeError):
+                suffix = f"{completed} completed"
+            label = f"{prefix}: {suffix}" if prefix else suffix
             break
         if event["event"] == "benchmark_summary":
             within_step = 1.0
-            label = f"{label} - benchmark done"
+            label = f"{prefix}: Completed" if prefix else "Completed"
             break
         if event["event"] == "evolve_generation_done":
             try:
                 generation, total = event.get("generation", "0/1").split("/", 1)
                 within_step = int(generation) / max(1, int(total))
-                label = f"{label} - generation {generation}/{total}"
+                suffix = f"Generation {generation}/{total} completed"
             except ValueError:
-                pass
+                suffix = "Generation completed"
+            label = f"{prefix}: {suffix}" if prefix else suffix
             break
+
+    if not label:
+        label = prefix if prefix else "Running"
 
     fraction = (max(0, step_index - 1) + within_step) / step_total
     return max(0.0, min(1.0, fraction)), label
@@ -305,78 +357,115 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-with st.sidebar:
-    st.header("Benchmark")
-    benchmark_name = st.text_input("Name", value=Path(default_benchmark_csv_path()).stem)
+st.markdown('<div class="section-title">Configuration</div>', unsafe_allow_html=True)
+
+# Grid layout for general configuration
+col1, col2, col3, col4 = st.columns(4, gap="medium")
+with col1:
+    benchmark_name = st.text_input("Benchmark Name", value=Path(default_benchmark_csv_path()).stem)
     benchmark_path = _benchmark_path_from_name(benchmark_name)
     row_count = _count_rows(benchmark_path)
-
-
-    st.header("Baseline")
-    col_a, col_b = st.columns(2)
-    with col_a:
-        agent_type = st.selectbox("Agent", ["react", "plan-execute", "reflexion", "mock"])
-    with col_b:
-        llm_backend = st.selectbox("Backend", ["netmind", "openai", "deepseek", "ollama"])
+with col2:
+    agent_type = st.selectbox("Agent", ["react", "plan-execute", "reflexion", "mock"])
+with col3:
+    llm_backend = st.selectbox("Backend", ["netmind", "openai", "deepseek", "ollama"])
+with col4:
     model = st.text_input("Model", value="openai/gpt-oss-120b")
-    col_c, col_d, col_e = st.columns(3)
-    with col_c:
-        max_steps = st.number_input("Steps", min_value=1, max_value=500, value=100)
-    with col_d:
-        max_attempts = st.number_input("Attempts", min_value=1, max_value=20, value=3)
-    with col_e:
-        parallel = st.number_input("Parallel", min_value=1, max_value=16, value=1)
 
-    st.header("Modules")
-    tool_selected = st.checkbox("Tool Evolution", value=False)
-    memory_selected = st.checkbox("Memory Evolution", value=False)
-    agent_evolution_selected = st.checkbox("Agent Evolution", value=False)
+# Grid layout for execution parameters and modules selector
+col5, col6, col7, col8 = st.columns(4, gap="medium")
+with col5:
+    max_steps = st.number_input("Steps", min_value=1, max_value=500, value=100)
+with col6:
+    max_attempts = st.number_input("Attempts", min_value=1, max_value=20, value=3)
+with col7:
+    parallel = st.number_input("Parallel", min_value=1, max_value=16, value=1)
+with col8:
+    modules_selected = st.multiselect(
+        "Active Modules",
+        options=["Tool Evolution", "Memory Evolution", "Agent Evolution"],
+        default=[]
+    )
 
-    modules = []
-    if tool_selected:
-        modules.append("tool_evolution")
-    if memory_selected:
-        modules.append("memory_evolution")
-    if agent_evolution_selected:
-        modules.append("agent_evolution")
+tool_selected = "Tool Evolution" in modules_selected
+memory_selected = "Memory Evolution" in modules_selected
+agent_evolution_selected = "Agent Evolution" in modules_selected
 
-    if tool_selected:
-        st.subheader("Tool Evolution")
-        tool_library_id = st.text_input("Tool library", value="tools-gptoss120-test")
-        tool_mode = st.selectbox("Tool mode", ["dual", "mastery", "distill"])
-    else:
-        tool_library_id = "tools-gptoss120-test"
-        tool_mode = "dual"
+modules = []
+if tool_selected:
+    modules.append("tool_evolution")
+if memory_selected:
+    modules.append("memory_evolution")
+if agent_evolution_selected:
+    modules.append("agent_evolution")
 
-    if memory_selected:
-        st.subheader("Memory")
-        memory_bank = st.text_input("Memory bank", value="memory-gptoss120-test")
-        memory_k = st.number_input("Memory top-k", min_value=1, max_value=20, value=5)
-        memory_tokens = st.number_input("Memory tokens", min_value=100, max_value=8000, value=1500, step=100)
-        ensure_memory_services = st.checkbox("Start postgres/qdrant", value=True)
-    else:
-        memory_bank = "memory-gptoss120-test"
-        memory_k = 5
-        memory_tokens = 1500
-        ensure_memory_services = False
+# Advanced configurations
+if tool_selected or memory_selected or agent_evolution_selected:
+    with st.expander("Advanced Module Settings", expanded=True):
+        active_modules_count = sum([tool_selected, memory_selected, agent_evolution_selected])
+        m_cols = st.columns(active_modules_count, gap="medium")
+        col_idx = 0
+        
+        if tool_selected:
+            with m_cols[col_idx]:
+                st.markdown("**Tool Evolution**")
+                tool_library_id = st.text_input("Tool library", value="tools-gptoss120-test")
+                tool_mode = st.selectbox("Tool mode", ["dual", "mastery", "distill"])
+            col_idx += 1
+        else:
+            tool_library_id = "tools-gptoss120-test"
+            tool_mode = "dual"
+            
+        if memory_selected:
+            with m_cols[col_idx]:
+                st.markdown("**Memory Evolution**")
+                memory_bank = st.text_input("Memory bank", value="memory-gptoss120-test")
+                memory_k = st.number_input("Memory top-k", min_value=1, max_value=20, value=5)
+                memory_tokens = st.number_input("Memory tokens", min_value=100, max_value=8000, value=1500, step=100)
+                ensure_memory_services = st.checkbox("Start postgres/qdrant", value=True)
+            col_idx += 1
+        else:
+            memory_bank = "memory-gptoss120-test"
+            memory_k = 5
+            memory_tokens = 1500
+            ensure_memory_services = False
+            
+        if agent_evolution_selected:
+            with m_cols[col_idx]:
+                st.markdown("**Agent Evolution**")
+                max_generations = st.number_input("Generations", min_value=1, max_value=20, value=3)
+                feedback_mode = st.selectbox("Feedback mode", ["auto", "deterministic", "llm"])
+                feedback_backend = st.text_input("Feedback backend", value=llm_backend)
+                feedback_model = st.text_input("Feedback model", value=model)
+            col_idx += 1
+        else:
+            max_generations = 3
+            feedback_mode = "auto"
+            feedback_backend = llm_backend
+            feedback_model = model
+else:
+    tool_library_id = "tools-gptoss120-test"
+    tool_mode = "dual"
+    memory_bank = "memory-gptoss120-test"
+    memory_k = 5
+    memory_tokens = 1500
+    ensure_memory_services = False
+    max_generations = 3
+    feedback_mode = "auto"
+    feedback_backend = llm_backend
+    feedback_model = model
 
-    if agent_evolution_selected:
-        st.subheader("Agent Evolution")
-        max_generations = st.number_input("Generations", min_value=1, max_value=20, value=3)
-        feedback_mode = st.selectbox("Feedback mode", ["auto", "deterministic", "llm"])
-        feedback_backend = st.text_input("Feedback backend", value=llm_backend)
-        feedback_model = st.text_input("Feedback model", value=model)
-    else:
-        max_generations = 3
-        feedback_mode = "auto"
-        feedback_backend = llm_backend
-        feedback_model = model
-
-    st.header("Evaluation")
-    run_judge = st.checkbox("Run LLM judge", value=False)
-    judge_backend = st.text_input("Judge backend", value=llm_backend)
-    judge_model = st.text_input("Judge model", value=model)
-    oracle_routing = st.checkbox("Oracle routing", value=False)
+# Evaluation Settings expander
+with st.expander("Evaluation Settings", expanded=False):
+    col_e1, col_e2, col_e3, col_e4 = st.columns(4, gap="medium")
+    with col_e1:
+        run_judge = st.checkbox("Run LLM judge", value=False)
+    with col_e2:
+        judge_backend = st.text_input("Judge backend", value=llm_backend)
+    with col_e3:
+        judge_model = st.text_input("Judge model", value=model)
+    with col_e4:
+        oracle_routing = st.checkbox("Oracle routing", value=False)
 
 config = {
     "benchmark_file": str(benchmark_path),
@@ -404,126 +493,81 @@ config = {
 }
 plan = build_command_plan(config)
 
-st.markdown('<div class="section-title">Current Config</div>', unsafe_allow_html=True)
-mode_text = experiment_label(config)
-st.markdown(
-    f"""
-    <div class="mini-grid">
-      <div class="mini-item"><div class="mini-label">Benchmark</div><div class="mini-value">{benchmark_path.stem}</div></div>
-      <div class="mini-item"><div class="mini-label">Rows</div><div class="mini-value">{row_count if row_count is not None else '-'}</div></div>
-      <div class="mini-item"><div class="mini-label">Agent</div><div class="mini-value">{agent_type}</div></div>
-      <div class="mini-item"><div class="mini-label">Backend</div><div class="mini-value">{llm_backend}</div></div>
-      <div class="mini-item"><div class="mini-label">Model</div><div class="mini-value">{model}</div></div>
-      <div class="mini-item"><div class="mini-label">Steps</div><div class="mini-value">{int(max_steps)}</div></div>
-      <div class="mini-item"><div class="mini-label">Mode</div><div class="mini-value">{mode_text}</div></div>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
-
 # Renders the commands directly under the Current Config grid with a top spacing
 st.markdown('<div style="margin-top: 1rem;"></div>', unsafe_allow_html=True)
 for item in plan:
-    st.code(shlex.join(item.command), language="bash")
-
-# Actions Section (rendered on a separate horizontal row containing all 4 buttons)
-st.markdown('<div class="section-title" style="margin-top: 1.5rem;">Actions</div>', unsafe_allow_html=True)
-action_cols = st.columns(4, gap="medium")
-with action_cols[0]:
-    # Clear Docker Button
-    if st.button("Clear Docker", key="btn_clear_docker", width="stretch"):
-        import subprocess
-        try:
-            res = subprocess.run(["docker", "compose", "down", "-v"], cwd="/home/ngthanhhai/projects/nika", capture_output=True, text=True)
-            if res.returncode == 0:
-                st.success("Docker services cleared successfully!")
+    def format_command_multiline(cmd_parts: list[str]) -> str:
+        if not cmd_parts:
+            return ""
+        lines = []
+        current_line = []
+        for i, part in enumerate(cmd_parts):
+            quoted = shlex.quote(part)
+            if part.startswith("-") and i >= 3:
+                if current_line:
+                    lines.append(" ".join(current_line))
+                current_line = [quoted]
             else:
-                st.error(f"Failed to clear Docker: {res.stderr or res.stdout}")
-        except Exception as e:
-            st.error(f"Error: {e}")
+                current_line.append(quoted)
+        if current_line:
+            lines.append(" ".join(current_line))
+        return " \\\n  ".join(lines)
 
-with action_cols[1]:
-    # Clear Memory Button
-    if st.button("Clear Memory Bank", key="btn_clear_mem", width="stretch"):
-        import socket
-        postgres_running = False
-        try:
-            with socket.create_connection(("127.0.0.1", 5432), timeout=1.0):
-                postgres_running = True
-        except OSError:
-            pass
+    st.code(format_command_multiline(item.command), language="bash")
 
-        if not postgres_running:
-            st.info(f"Memory database (Postgres) is not running, so bank '{config['memory_bank']}' is already empty/cleared!")
-        else:
-            import sys
-            import subprocess
-            try:
-                res = subprocess.run([
-                    sys.executable, "-m", "nika.codex_cli.main", 
-                    "memory", "clear", "--bank", config["memory_bank"], "-y"
-                ], cwd="/home/ngthanhhai/projects/nika", capture_output=True, text=True)
-                if res.returncode == 0:
-                    st.success(f"Cleared memory bank '{config['memory_bank']}'!")
-                else:
-                    st.error(f"Failed to clear memory bank: {res.stderr or res.stdout}")
-            except Exception as e:
-                st.error(f"Error: {e}")
 
-with action_cols[2]:
-    # Clear Tool Library Button
-    if st.button("Clear Tool Library", key="btn_clear_tools", width="stretch"):
-        from nika.config import TOOL_EVOLUTION_DIR
-        lib_dir = TOOL_EVOLUTION_DIR / config["tool_library_id"]
-        if not lib_dir.exists():
-            st.info(f"Tool library '{config['tool_library_id']}' is already empty/cleared!")
-        else:
-            import sys
-            import subprocess
-            try:
-                res = subprocess.run([
-                    sys.executable, "-m", "nika.codex_cli.main", 
-                    "tools", "reset", config["tool_library_id"], "-y"
-                ], cwd="/home/ngthanhhai/projects/nika", capture_output=True, text=True)
-                if res.returncode == 0:
-                    st.success(f"Cleared tool library '{config['tool_library_id']}'!")
-                else:
-                    st.error(f"Failed to clear tool library: {res.stderr or res.stdout}")
-            except Exception as e:
-                st.error(f"Error: {e}")
+# Run / Stop Button
+all_runs = list_runs()
+running_run = None
+for r in all_runs[:3]:
+    if run_status(r).get("status") == "running":
+        running_run = r
+        break
 
-with action_cols[3]:
-    # Run / Stop Button
-    active_run = _selected_run_dir()
-    is_running = False
-    if active_run is not None:
-        active_status = run_status(active_run)
-        if active_status.get("status") == "running":
-            is_running = True
+is_running = running_run is not None
 
-    if is_running:
-        if st.button("Stop", type="primary", width="stretch"):
-            stop_run(active_run)
-            st.rerun()
-    else:
-        if st.button("Run", type="primary", disabled=row_count is None, width="stretch"):
+if is_running:
+    col1, col2 = st.columns(2, gap="medium")
+    with col1:
+        if st.button("Queue Run", type="secondary", disabled=row_count is None, width="stretch"):
             run_dir = create_run(config)
             st.session_state["active_run_dir"] = str(run_dir)
             st.rerun()
+    with col2:
+        if st.button("Stop", type="primary", width="stretch"):
+            with st.spinner("Stopping run and wiping Kathara containers..."):
+                stop_run(running_run)
+            st.rerun()
+else:
+    if st.button("Run", type="primary", disabled=row_count is None, width="stretch"):
+        run_dir = create_run(config)
+        st.session_state["active_run_dir"] = str(run_dir)
+        st.rerun()
 if row_count is None:
     st.error("Benchmark CSV not found.")
 
 runs = list_runs()
 selected = _selected_run_dir()
 if runs:
-    run_labels = [path.name for path in runs]
-    selected_label = selected.name if selected is not None else None
+    run_labels = []
+    run_map = {}
+    for path in runs:
+        status_val = run_status(path).get("status") or "unknown"
+        label = f"{path.name} ({status_val})"
+        run_labels.append(label)
+        run_map[label] = path
+
+    selected_label = None
+    if selected is not None:
+        selected_status = run_status(selected).get("status") or "unknown"
+        selected_label = f"{selected.name} ({selected_status})"
+
     selected_label = st.selectbox(
         "Run history",
         options=run_labels,
         index=run_labels.index(selected_label) if selected_label in run_labels else 0,
     )
-    selected = next(path for path in runs if path.name == selected_label)
+    selected = run_map[selected_label]
     st.session_state["active_run_dir"] = str(selected)
 else:
     selected = None
@@ -534,197 +578,121 @@ if selected is not None:
     spec = read_run_spec(selected)
     events = parse_progress_events(log_text)
     fraction, progress_label = _progress_fraction(events, len(spec.get("commands") or []))
+    log_key = f"log-{selected.name}"
+    is_running = (status.get("status") == "running")
+else:
+    status = {}
+    log_text = ""
+    events = []
+    fraction, progress_label = 0.0, "No active run"
+    log_key = "log-none"
+    is_running = False
 
 
 
-    def format_event_message(ev: dict) -> str | None:
-        event = ev.get("event")
-        if event == "ui_step_start":
-            cmd = ev.get("command") or ""
-            if isinstance(cmd, str) and cmd.startswith("[") and cmd.endswith("]"):
-                try:
-                    import ast
-                    cmd = ast.literal_eval(cmd)
-                except Exception:
-                    pass
-            if isinstance(cmd, list):
-                import shlex
-                cmd_str = shlex.join(cmd)
-            else:
-                cmd_str = str(cmd)
-            if len(cmd_str) > 80:
-                cmd_str = cmd_str[:77] + "..."
-            return f"**[Step {ev.get('index')}/{ev.get('total')}]** Starting: `{cmd_str}`"
-        elif event == "ui_step_done":
-            ret = ev.get("returncode", "0")
-            status_word = "Completed" if str(ret) == "0" else "Failed"
-            return f"**[Step {ev.get('index')}/{ev.get('total')}]** {status_word} (Exit: `{ret}`)"
-        elif event == "ui_run_done":
-            code = ev.get("exit_code", "0")
-            return f"**Run Finished** (Exit: `{code}`)"
-        elif event == "benchmark_start":
-            index = ev.get("index") or "?"
-            scenario = ev.get("scenario") or "?"
-            problem = ev.get("problem") or "?"
-            return f"**[Scenario {index}]** Starting: `{scenario} / {problem}`"
-        elif event == "benchmark_progress":
-            completed = ev.get("completed", "0")
-            failed = ev.get("failed", "0")
-            total = ev.get("total") or "30"
-            return f"**Benchmark Progress**: {completed}/{total} completed (Failed: {failed})"
-        elif event == "benchmark_done":
-            scenario = ev.get("scenario") or "?"
-            problem = ev.get("problem") or "?"
-            return f"**[Scenario]** Finished: `{scenario} / {problem}`"
-        elif event == "benchmark_failed":
-            scenario = ev.get("scenario") or "?"
-            problem = ev.get("problem") or "?"
-            return f"**[Scenario]** Failed: `{scenario} / {problem}`"
-        elif event == "evolve_generation_start":
-            gen = ev.get("gen") or ev.get("generation") or "?"
-            return f"**Starting Evolution Generation {gen}**"
-        elif event == "evolve_generation_done":
-            gen = ev.get("gen") or ev.get("generation") or "?"
-            return f"**Completed Evolution Generation {gen}**"
-        return None
-
-    tab_progress, tab_logs = st.tabs(["Progress", "Logs"])
-    
-    with tab_progress:
-        st.markdown('<div style="margin-top: 0.5rem;"></div>', unsafe_allow_html=True)
-        st.progress(fraction, text=progress_label)
-        
-        formatted_msgs = []
-        for ev in events:
-            msg = format_event_message(ev)
-            if msg:
-                formatted_msgs.append(msg)
-        
-        if formatted_msgs:
-            st.markdown('<div style="margin-top: 1rem;"></div>', unsafe_allow_html=True)
-            for msg in formatted_msgs[-12:]:
-                st.markdown(msg)
+def format_event_message(ev: dict) -> str | None:
+    event = ev.get("event")
+    if event == "ui_step_start":
+        cmd = ev.get("command") or ""
+        if isinstance(cmd, str) and cmd.startswith("[") and cmd.endswith("]"):
+            try:
+                import ast
+                cmd = ast.literal_eval(cmd)
+            except Exception:
+                pass
+        if isinstance(cmd, list):
+            import shlex
+            cmd_str = shlex.join(cmd)
         else:
-            st.info("No progress events yet.")
-            
-    with tab_logs:
-        st.markdown('<div style="margin-top: 0.5rem;"></div>', unsafe_allow_html=True)
-        # Keep only the last 1000 lines to avoid UI freezes with large logs
-        log_lines = log_text.splitlines() if log_text else []
-        truncated_log = "\n".join(log_lines[-1000:])
-        if len(log_lines) > 1000:
-            truncated_log = f"... [Truncated {len(log_lines) - 1000} lines from start] ...\n" + truncated_log
+            cmd_str = str(cmd)
+        if len(cmd_str) > 80:
+            cmd_str = cmd_str[:77] + "..."
+        return f"**[Step {ev.get('index')}/{ev.get('total')}]** Starting: `{cmd_str}`"
+    elif event == "ui_step_done":
+        ret = ev.get("returncode", "0")
+        status_word = "Completed" if str(ret) == "0" else "Failed"
+        return f"**[Step {ev.get('index')}/{ev.get('total')}]** {status_word} (Exit: `{ret}`)"
+    elif event == "ui_run_done":
+        code = ev.get("exit_code", "0")
+        return f"**Run Finished** (Exit: `{code}`)"
+    elif event == "benchmark_start":
+        index = ev.get("index") or "?"
+        scenario = ev.get("scenario") or "?"
+        problem = ev.get("problem") or "?"
+        return f"**[Scenario {index}]** Starting: `{scenario} / {problem}`"
+    elif event == "benchmark_progress":
+        completed = ev.get("completed", "0")
+        failed = ev.get("failed", "0")
+        total = ev.get("total") or "30"
+        return f"**Benchmark Progress**: {completed}/{total} completed (Failed: {failed})"
+    elif event == "benchmark_done":
+        scenario = ev.get("scenario") or "?"
+        problem = ev.get("problem") or "?"
+        return f"**[Scenario]** Finished: `{scenario} / {problem}`"
+    elif event == "benchmark_failed":
+        scenario = ev.get("scenario") or "?"
+        problem = ev.get("problem") or "?"
+        return f"**[Scenario]** Failed: `{scenario} / {problem}`"
+    elif event == "evolve_generation_start":
+        gen = ev.get("gen") or ev.get("generation") or "?"
+        return f"**Starting Evolution Generation {gen}**"
+    elif event == "evolve_generation_done":
+        gen = ev.get("gen") or ev.get("generation") or "?"
+        return f"**Completed Evolution Generation {gen}**"
+    return None
 
-        st.text_area(
-            "Full log",
-            value=truncated_log or "No log lines yet.",
-            height=420,
-            label_visibility="collapsed",
-            key=f"log-{selected.name}",
-        )
+st.markdown('<div class="section-title" style="margin-top: 1.5rem;">Tracking</div>', unsafe_allow_html=True)
+tab_progress, tab_logs = st.tabs(["Progress", "Logs"])
 
-    if status.get("status") == "running":
-        time.sleep(2)
-        st.rerun()
+with tab_progress:
+    st.markdown('<div style="margin-top: 0.5rem;"></div>', unsafe_allow_html=True)
+    st.progress(fraction, text=progress_label)
+    
+    formatted_msgs = []
+    for ev in events:
+        msg = format_event_message(ev)
+        if msg:
+            formatted_msgs.append(msg)
+    
+    if formatted_msgs:
+        st.markdown('<div style="margin-top: 1rem;"></div>', unsafe_allow_html=True)
+        for msg in formatted_msgs[-12:]:
+            st.markdown(msg)
+        
+with tab_logs:
+    st.markdown('<div style="margin-top: 0.5rem;"></div>', unsafe_allow_html=True)
+    # Keep only the last 1000 lines to avoid UI freezes with large logs
+    log_lines = log_text.splitlines() if log_text else []
+    truncated_log = "\n".join(log_lines[-1000:])
+    if len(log_lines) > 1000:
+        truncated_log = f"... [Truncated {len(log_lines) - 1000} lines from start] ...\n" + truncated_log
+
+    st.text_area(
+        "Full log",
+        value=truncated_log or "No log lines yet.",
+        height=420,
+        label_visibility="collapsed",
+        key=log_key,
+    )
+
+if is_running:
+    time.sleep(2)
+    st.rerun()
 
 
 st.markdown('<div class="section-title" style="margin-top: 1.5rem;">Results</div>', unsafe_allow_html=True)
 
-# List all available result directories for comparison & management
-all_dirs = []
-if RESULTS_DIR.exists():
-    for run_path in RESULTS_DIR.rglob("run.json"):
-        if "0_summary" in run_path.relative_to(RESULTS_DIR).parts:
-            continue
-        root = _top_result_root(run_path)
-        all_dirs.append(root.name)
-all_dirs = sorted(list(set(all_dirs)))
-
-# Premium Toolbar UIUX for selection
-if "compare_dirs" not in st.session_state:
-    st.session_state["compare_dirs"] = all_dirs
-else:
-    # Auto-add newly created/imported folders to the selection
-    current_stored = set(st.session_state["compare_dirs"])
-    new_dirs = [d for d in all_dirs if d not in current_stored]
-    if new_dirs:
-        st.session_state["compare_dirs"] = list(current_stored) + new_dirs
-
-# Clean up deleted folders from selection
-st.session_state["compare_dirs"] = [d for d in st.session_state["compare_dirs"] if d in all_dirs]
-
-# Callbacks for programmatic selection to avoid state errors
-def select_all_dirs():
-    st.session_state["compare_dirs"] = all_dirs
-
-def clear_all_dirs():
-    st.session_state["compare_dirs"] = []
-
-col_tool_a, col_tool_b, col_tool_c = st.columns([0.76, 0.12, 0.12], gap="small")
-with col_tool_a:
-    selected_compare_dirs = st.multiselect(
-        "Select experiments to compare (Add/Remove from view)",
-        options=all_dirs,
-        key="compare_dirs",
-        placeholder="Choose experiment folders...",
-        label_visibility="collapsed",
-    )
-with col_tool_b:
-    st.button("Select All", key="btn_select_all", on_click=select_all_dirs, width="stretch")
-with col_tool_c:
-    st.button("Clear All", key="btn_clear_all", on_click=clear_all_dirs, width="stretch")
-
-col_act_a, col_act_b = st.columns(2)
-with col_act_a:
-    with st.expander("Import external experiment folder", expanded=False):
-        import_path = st.text_input("Source folder path", placeholder="/path/to/experiment_run")
-        if st.button("Import Folder", width="stretch"):
-            if import_path:
-                src_path = Path(import_path).expanduser().resolve()
-                if src_path.exists() and src_path.is_dir():
-                    # Sanity check: must contain run.json or have subfolders with run.json
-                    if (src_path / "run.json").exists() or any(src_path.rglob("run.json")):
-                        import shutil
-                        dest_path = RESULTS_DIR / src_path.name
-                        if dest_path.exists():
-                            st.error(f"Folder '{src_path.name}' already exists in results.")
-                        else:
-                            try:
-                                shutil.copytree(src_path, dest_path)
-                                st.success(f"Imported '{src_path.name}' successfully!")
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"Failed to import: {e}")
-                    else:
-                        st.error("Target directory is not a valid experiment (must contain run.json).")
-                else:
-                    st.error("Invalid path or not a directory.")
-with col_act_b:
-    with st.expander("Delete experiment from disk", expanded=False):
-        dir_to_delete = st.selectbox("Folder to delete", options=[""] + all_dirs)
-        if dir_to_delete:
-            st.warning(f"This will permanently delete '{dir_to_delete}'.")
-            if st.button("Delete Permanently", type="primary", width="stretch"):
-                import shutil
-                path_to_del = RESULTS_DIR / dir_to_delete
-                if path_to_del.exists():
-                    try:
-                        shutil.rmtree(path_to_del)
-                        st.success(f"Deleted '{dir_to_delete}' successfully!")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Failed to delete: {e}")
-
+# List and display all available experiment results automatically
 result_rows = _result_rows(benchmark_name=None)
-if result_rows:
-    # Filter by user multiselect choice
-    if selected_compare_dirs:
-        result_rows = [row for row in result_rows if row["result_root"] in selected_compare_dirs]
-    else:
-        result_rows = []
-    
-    if result_rows:
-        st.dataframe(result_rows, width="stretch", hide_index=True)
-    else:
-        st.info("No selected experiments to display.")
+if not result_rows:
+    import pandas as pd
+    cols = [
+        "result_root", "cases", "finished", "running", "submitted", "failed_subs",
+        "detection", "localization", "rca", "steps", "tool_calls", "tool_errors",
+        "token_in", "token_out", "duration", "modules", "agent", "model", "updated"
+    ]
+    df = pd.DataFrame(columns=cols)
+    st.dataframe(df, width="stretch", hide_index=True)
+else:
+    st.dataframe(result_rows, width="stretch", hide_index=True)
 

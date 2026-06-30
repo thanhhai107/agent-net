@@ -589,6 +589,14 @@ def run_agent_evolution(
 ) -> list[EvolutionGenerationSummary]:
     if max_generations < 1:
         raise ValueError("max_generations must be >= 1")
+    
+    # Auto-clean any leftover Kathara container environments before starting a new agent evolution run
+    try:
+        import subprocess
+        subprocess.run(["kathara", "wipe", "-f"], capture_output=True)
+    except Exception:
+        pass
+
     if feedback_mode not in FEEDBACK_MODES:
         raise ValueError(
             "feedback_mode must be one of: " + ", ".join(sorted(FEEDBACK_MODES))
@@ -596,7 +604,10 @@ def run_agent_evolution(
     run_id = run_id or datetime.now().strftime("%Y%m%d-%H%M%S") + f"-{uuid4().hex[:6]}"
 
     runtime_dir = Path(runtime_root) / run_id
-    benchmark_results_dir = Path(results_root) / f"agent-evolution-{run_id}"
+    raw_name = Path(benchmark_file).stem
+    benchmark_name = re.sub(r"[^A-Za-z0-9_.-]+", "-", raw_name).strip(".-")
+    benchmark_name = benchmark_name or "benchmark"
+    benchmark_results_dir = Path(results_root) / f"{benchmark_name}-{run_id}"
     runtime_dir.mkdir(parents=True, exist_ok=False)
     benchmark_results_dir.mkdir(parents=True, exist_ok=False)
 
