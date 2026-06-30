@@ -15,7 +15,6 @@ from pydantic import ValidationError
 from agent.composition import (
     AgentRunConfig,
     MemoryConfig,
-    PolicyOverlayConfig,
     ToolEvolutionConfig,
     workflow_agent_kwargs,
 )
@@ -63,7 +62,6 @@ def _agent_run_config(
     max_attempts: int = 3,
     tool_evolution: ToolEvolutionConfig | None = None,
     memory: MemoryConfig | None = None,
-    policy_overlay: PolicyOverlayConfig | None = None,
 ) -> AgentRunConfig:
     return AgentRunConfig(
         agent_type=agent_type,
@@ -74,7 +72,6 @@ def _agent_run_config(
         max_attempts=max_attempts,
         tool_evolution=tool_evolution or ToolEvolutionConfig(),
         memory=memory or MemoryConfig(),
-        policy_overlay=policy_overlay or PolicyOverlayConfig(),
     )
 
 
@@ -301,14 +298,13 @@ class WorkflowRegistrationTest(unittest.TestCase):
                 mode="mastery",
             ),
             memory=MemoryConfig(mode="read", bank="memory-a"),
-            policy_overlay=PolicyOverlayConfig(path="/tmp/policy.md"),
         )
 
         kwargs = workflow_agent_kwargs(config)
 
         self.assertEqual(kwargs["tool_library_id"], "tools-a")
         self.assertEqual(kwargs["tool_evolution_mode"], "mastery")
-        self.assertEqual(kwargs["policy_overlay_path"], "/tmp/policy.md")
+        self.assertNotIn("policy_overlay_path", kwargs)
         self.assertFalse(kwargs["use_problem_tool_hints"])
 
 

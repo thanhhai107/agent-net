@@ -10,6 +10,8 @@ from typing import Any
 
 import streamlit as st
 
+from agent.defaults import DEFAULT_MAX_STEPS
+from agent.llm.model_factory import DEFAULT_LLM_BACKEND, DEFAULT_MODEL
 from nika.config import BENCHMARK_DIR, RESULTS_DIR
 from nika.visualization.experiment_runner import (
     build_command_plan,
@@ -291,7 +293,7 @@ def _top_result_root(run_path: Path) -> Path:
     return RESULTS_DIR / rel.parts[0]
 
 
-def _is_agent_evolution_result(root: Path, run_path: Path) -> bool:
+def _is_harness_evolution_result(root: Path, run_path: Path) -> bool:
     if root.name.startswith("agent-evolution-"):
         return True
     try:
@@ -312,7 +314,7 @@ def _result_rows(*, benchmark_name: str | None = None) -> list[dict[str, object]
         if benchmark_name and not root.name.startswith(benchmark_name):
             continue
         
-        # Group by generation subfolder if it is part of Agent Evolution
+        # Group by generation subfolder if it is part of Harness Evolution.
         group_key = root
         try:
             rel_parts = run_path.relative_to(root).parts
@@ -378,8 +380,8 @@ def _result_rows(*, benchmark_name: str | None = None) -> list[dict[str, object]
                 durations.append(dur)
 
             root = _top_result_root(run_path)
-            if _is_agent_evolution_result(root, run_path):
-                result_modules.add("Harness Evolution")
+            if _is_harness_evolution_result(root, run_path):
+                result_modules.add("Harness Evolution (SIA-H)")
             if meta.get("tool_evolution_enabled"):
                 result_modules.add("Tool Evolution")
             if meta.get("memory_mode") and meta.get("memory_mode") != "off":
@@ -501,8 +503,8 @@ with col1:
     benchmark_path = _benchmark_path_from_name(benchmark_name)
     row_count = _count_rows(benchmark_path)
 with col2:
-    max_steps_str = st.text_input("Steps", value="100")
-    max_steps = int(max_steps_str) if max_steps_str.isdigit() else 100
+    max_steps_str = st.text_input("Steps", value=str(DEFAULT_MAX_STEPS))
+    max_steps = int(max_steps_str) if max_steps_str.isdigit() else DEFAULT_MAX_STEPS
 with col3:
     max_attempts_str = st.text_input("Attempts", value="3")
     max_attempts = int(max_attempts_str) if max_attempts_str.isdigit() else 3
@@ -512,9 +514,16 @@ col5, col6, col7 = st.columns(3, gap="medium")
 with col5:
     agent_type = st.selectbox("Agent", ["react", "plan-execute", "reflexion", "mock"])
 with col6:
-    llm_backend = st.selectbox("Backend", ["netmind", "openai", "deepseek", "ollama"])
+    backend_options = ["netmind", "openai", "deepseek", "ollama"]
+    llm_backend = st.selectbox(
+        "Backend",
+        backend_options,
+        index=backend_options.index(DEFAULT_LLM_BACKEND)
+        if DEFAULT_LLM_BACKEND in backend_options
+        else 0,
+    )
 with col7:
-    model = st.text_input("Model", value="openai/gpt-oss-120b")
+    model = st.text_input("Model", value=DEFAULT_MODEL)
 
 # Active Modules row layout
 st.markdown("<div style='font-size: 0.8rem; font-weight: bold; color: var(--muted); margin-top: 0.5rem; margin-bottom: 0.25rem;'>Active Modules</div>", unsafe_allow_html=True)
@@ -524,20 +533,22 @@ with col_m1:
 with col_m2:
     memory_selected = st.checkbox("Memory Evolution", value=False)
 with col_m3:
-    agent_evolution_selected = st.checkbox("Harness Evolving", value=False)
+    harness_evolution_selected = st.checkbox("Harness Evolution (SIA-H)", value=False)
 
 modules = []
 if tool_selected:
     modules.append("tool_evolution")
 if memory_selected:
     modules.append("memory_evolution")
-if agent_evolution_selected:
-    modules.append("agent_evolution")
+if harness_evolution_selected:
+    modules.append("harness_evolution")
 
 # Advanced configurations
-if tool_selected or memory_selected or agent_evolution_selected:
+if tool_selected or memory_selected or harness_evolution_selected:
     with st.expander("Advanced Module Settings", expanded=True):
-        active_modules_count = sum([tool_selected, memory_selected, agent_evolution_selected])
+        active_modules_count = sum(
+            [tool_selected, memory_selected, harness_evolution_selected]
+        )
         m_cols = st.columns(active_modules_count, gap="medium")
         col_idx = 0
         
@@ -565,9 +576,9 @@ if tool_selected or memory_selected or agent_evolution_selected:
             memory_tokens = 1500
             ensure_memory_services = False
             
-        if agent_evolution_selected:
+        if harness_evolution_selected:
             with m_cols[col_idx]:
-                st.markdown("**Harness Evolving**")
+                st.markdown("**Harness Evolution (SIA-H)**")
                 max_generations = st.number_input("Generations", min_value=1, max_value=20, value=3)
                 feedback_mode = st.selectbox("Feedback mode", ["auto", "deterministic", "llm"])
                 feedback_backend = st.text_input("Feedback backend", value=llm_backend)

@@ -12,6 +12,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from agent.defaults import DEFAULT_MAX_STEPS
+from agent.llm.model_factory import DEFAULT_LLM_BACKEND, DEFAULT_MODEL
 from nika.config import RUNTIME_DIR, _REPO_ROOT
 from nika.utils.kathara_cleanup import ensure_kathara_clean
 from nika.workflows.benchmark.run import default_benchmark_csv_path
@@ -24,7 +26,7 @@ META_FILENAME = "meta.json"
 MODULE_LABELS = {
     "tool_evolution": "Tool Evolution",
     "memory_evolution": "Memory Evolution",
-    "agent_evolution": "Harness Evolving",
+    "harness_evolution": "Harness Evolution (SIA-H)",
 }
 
 
@@ -56,18 +58,33 @@ def _int(value: Any, default: int) -> int:
         return default
 
 
-def _common_agent_args(config: dict[str, Any]) -> list[str]:
+def _common_agent_args(
+    config: dict[str, Any],
+    *,
+    default_agent: str = "react",
+) -> list[str]:
     return [
         "-a",
-        _str(config.get("agent_type"), "react"),
+        _str(config.get("agent_type"), default_agent),
         "-b",
-        _str(config.get("llm_backend"), "netmind"),
+        _str(config.get("llm_backend"), DEFAULT_LLM_BACKEND),
         "-m",
-        _str(config.get("model"), "openai/gpt-oss-120b"),
+        _str(config.get("model"), DEFAULT_MODEL),
         "-n",
-        str(_int(config.get("max_steps"), 100)),
+        str(_int(config.get("max_steps"), DEFAULT_MAX_STEPS)),
         "-r",
         str(_int(config.get("max_attempts"), 3)),
+    ]
+
+
+def _harness_model_args(config: dict[str, Any]) -> list[str]:
+    return [
+        "-b",
+        _str(config.get("llm_backend"), DEFAULT_LLM_BACKEND),
+        "-m",
+        _str(config.get("model"), DEFAULT_MODEL),
+        "-n",
+        str(_int(config.get("max_steps"), DEFAULT_MAX_STEPS)),
     ]
 
 
@@ -77,9 +94,9 @@ def _judge_args(config: dict[str, Any]) -> list[str]:
     return [
         "--judge",
         "--judge-backend",
-        _str(config.get("judge_backend"), _str(config.get("llm_backend"), "netmind")),
+        _str(config.get("judge_backend"), _str(config.get("llm_backend"), DEFAULT_LLM_BACKEND)),
         "--judge-model",
-        _str(config.get("judge_model"), _str(config.get("model"), "openai/gpt-oss-120b")),
+        _str(config.get("judge_model"), _str(config.get("model"), DEFAULT_MODEL)),
     ]
 
 
@@ -106,7 +123,7 @@ def experiment_label(config: dict[str, Any]) -> str:
     modules = selected_modules(config)
     if not modules:
         return "Baseline"
-    ordered = ["agent_evolution", "tool_evolution", "memory_evolution"]
+    ordered = ["harness_evolution", "tool_evolution", "memory_evolution"]
     return " + ".join(MODULE_LABELS[item] for item in ordered if item in modules)
 
 
@@ -115,9 +132,9 @@ def build_experiment_command(config: dict[str, Any]) -> list[str]:
     modules = selected_modules(config)
     tool_enabled = "tool_evolution" in modules
     memory_enabled = "memory_evolution" in modules
-    agent_evolution_enabled = "agent_evolution" in modules
+    harness_evolution_enabled = "harness_evolution" in modules
 
-    if agent_evolution_enabled:
+    if harness_evolution_enabled:
         command = _python_module_command(
             "evolve",
             "run",
@@ -125,17 +142,15 @@ def build_experiment_command(config: dict[str, Any]) -> list[str]:
             _str(config.get("benchmark_file"), default_benchmark_csv_path()),
             "--max-gen",
             str(_int(config.get("max_generations"), 3)),
-            *_common_agent_args(config),
+            *_harness_model_args(config),
             "--feedback-mode",
             _str(config.get("feedback_mode"), "auto"),
             "--feedback-backend",
-            _str(config.get("feedback_backend"), _str(config.get("llm_backend"), "netmind")),
+            _str(config.get("feedback_backend"), _str(config.get("llm_backend"), DEFAULT_LLM_BACKEND)),
             "--feedback-model",
-            _str(config.get("feedback_model"), _str(config.get("model"), "openai/gpt-oss-120b")),
+            _str(config.get("feedback_model"), _str(config.get("model"), DEFAULT_MODEL)),
             *_judge_args(config),
         )
-        if config.get("oracle_routing"):
-            command.append("--oracle-routing")
     else:
         command = _benchmark_command(config)
 
@@ -178,7 +193,11 @@ def build_command_plan(config: dict[str, Any]) -> list[CommandPlan]:
         CommandPlan(
             name=experiment_label(config),
             command=build_experiment_command(config),
-            variant="agent_evolution" if "agent_evolution" in modules else "benchmark",
+            variant=(
+                "harness_evolution"
+                if "harness_evolution" in modules
+                else "benchmark"
+            ),
         )
     )
     return plan

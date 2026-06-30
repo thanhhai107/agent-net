@@ -14,14 +14,17 @@ from pathlib import Path
 
 from agent.composition import (
     AgentRunConfig,
+    HarnessConfig,
     MemoryConfig,
-    PolicyOverlayConfig,
     ToolEvolutionConfig,
     validate_agent_extensions,
 )
+from agent.harness.dataset import build_public_case_dataset
+from agent.harness.runner import HarnessExecutionConfig, run_harness_target
 from nika.config import BENCHMARK_DIR, RESULTS_DIR
 from nika.net_env.net_env_pool import scenario_requires_topo_tier
 from nika.utils.kathara_cleanup import ensure_kathara_clean
+from nika.utils.logger import bind_session_dir, log_event
 from nika.workflows.agent.run import start_agent
 from nika.workflows.env.start import start_net_env
 from nika.workflows.eval.session import eval_results
@@ -78,13 +81,14 @@ def _benchmark_row_cli_args(
     judge_model: str | None = None,
     oracle_routing: bool = False,
     tool_evolution: ToolEvolutionConfig | None = None,
-    policy_overlay: PolicyOverlayConfig | None = None,
+    harness: HarnessConfig | None = None,
+    harness_allow_failure: bool = False,
     result_root: str | Path | None = None,
     fault_seed: str | None = None,
 ) -> list[str]:
     memory = memory or MemoryConfig()
     tool_evolution = tool_evolution or ToolEvolutionConfig()
-    policy_overlay = policy_overlay or PolicyOverlayConfig()
+    harness = harness or HarnessConfig()
     args = [
         row["scenario"],
         "--problem",
@@ -138,8 +142,10 @@ def _benchmark_row_cli_args(
             "--judge-model",
             judge_model,
         ]
-    if policy_overlay.enabled:
-        args += ["--policy-overlay", str(policy_overlay.path)]
+    if harness.enabled:
+        args += ["--harness", str(harness.target_agent_path)]
+    if harness_allow_failure:
+        args.append("--harness-allow-failure")
     if result_root is not None:
         args += ["--result-root", str(result_root)]
     if fault_seed is not None:
@@ -163,7 +169,8 @@ def _run_benchmark_row_subprocess(
     judge_model: str | None,
     oracle_routing: bool,
     tool_evolution: ToolEvolutionConfig,
-    policy_overlay: PolicyOverlayConfig,
+    harness: HarnessConfig,
+    harness_allow_failure: bool,
     result_root: str | Path | None = None,
     fault_seed: str | None = None,
 ) -> str | None:
@@ -181,7 +188,8 @@ def _run_benchmark_row_subprocess(
         judge_model=judge_model,
         oracle_routing=oracle_routing,
         tool_evolution=tool_evolution,
-        policy_overlay=policy_overlay,
+        harness=harness,
+        harness_allow_failure=harness_allow_failure,
         result_root=result_root,
         fault_seed=fault_seed,
     )
@@ -235,7 +243,8 @@ def run_single_benchmark(
     judge_model: str | None = None,
     oracle_routing: bool = False,
     tool_evolution: ToolEvolutionConfig | None = None,
-    policy_overlay: PolicyOverlayConfig | None = None,
+    harness: HarnessConfig | None = None,
+    harness_allow_failure: bool = False,
     result_root: str | Path | None = None,
     fault_seed: str | None = None,
     benchmark_index: int | None = None,
@@ -251,20 +260,24 @@ def run_single_benchmark(
     )
     memory = memory or MemoryConfig()
     tool_evolution = tool_evolution or ToolEvolutionConfig()
-    policy_overlay = policy_overlay or PolicyOverlayConfig()
-    validate_agent_extensions(
-        AgentRunConfig(
-            agent_type=agent_type,
-            llm_backend=llm_backend,
-            model=model,
-            max_steps=max_steps,
-            max_attempts=max_attempts,
-            oracle_routing=oracle_routing,
-            tool_evolution=tool_evolution,
-            memory=memory,
-            policy_overlay=policy_overlay,
+    harness = harness or HarnessConfig()
+    if not harness.enabled and agent_type.lower() == "harness":
+        raise ValueError(
+            "agent_type 'harness' requires the internal --harness target_agent.py path."
         )
-    )
+    if not harness.enabled:
+        validate_agent_extensions(
+            AgentRunConfig(
+                agent_type=agent_type,
+                llm_backend=llm_backend,
+                model=model,
+                max_steps=max_steps,
+                max_attempts=max_attempts,
+                oracle_routing=oracle_routing,
+                tool_evolution=tool_evolution,
+                memory=memory,
+            )
+        )
 
     tier = topo_size if topo_size else None
     if scenario_requires_topo_tier(scenario) and not tier:
@@ -287,23 +300,81 @@ def run_single_benchmark(
         session.update_session("benchmark_index", benchmark_index)
 
     inject_failure(problem_names=[problem], session_id=session_id)
+    session = Session().load_running_session(session_id=session_id)
+    session_dir = Path(
+        getattr(session, "session_dir", Path(result_root or RESULTS_DIR) / session_id)
+    )
 
     try:
-        start_agent(
-            AgentRunConfig(
-                agent_type=agent_type,
-                llm_backend=llm_backend,
+        if harness.enabled:
+            session.update_session("agent_type", "harness")
+            session.update_session("harness_target_agent_path", harness.target_agent_path)
+            session.update_session("llm_backend", llm_backend)
+            session.update_session("model", model)
+            session.update_session("max_steps", max_steps)
+            session.update_session("memory_mode", memory.mode)
+            if memory.enabled:
+                session.update_session("memory_bank", memory.bank)
+                session.update_session("memory_top_k", memory.top_k)
+                session.update_session("memory_token_budget", memory.token_budget)
+            session.update_session("oracle_routing", oracle_routing)
+            session.update_session("tool_evolution_enabled", tool_evolution.enabled)
+            if tool_evolution.enabled:
+                session.update_session("tool_library_id", tool_evolution.library_id)
+                session.update_session("tool_evolution_mode", tool_evolution.mode)
+            session.start_session()
+            bind_session_dir(session.session_dir)
+            log_event(
+                "harness_start",
+                f"Starting harness target agent in session {session_id}",
+                session_id=session_id,
+                target_agent_path=harness.target_agent_path,
                 model=model,
-                max_steps=max_steps,
-                max_attempts=max_attempts,
-                stream_output=False,
-                oracle_routing=oracle_routing,
-                tool_evolution=tool_evolution,
-                memory=memory,
-                policy_overlay=policy_overlay,
-            ),
-            session_id=session_id,
-        )
+            )
+            try:
+                dataset_dir = build_public_case_dataset(
+                    session=session,
+                    output_dir=session_dir / "public_case",
+                    memory=memory,
+                    tool_evolution=tool_evolution,
+                    llm_backend=llm_backend,
+                    model=model,
+                )
+                result = run_harness_target(
+                    HarnessExecutionConfig(
+                        target_agent_path=str(harness.target_agent_path),
+                        session_id=session_id,
+                        dataset_dir=dataset_dir,
+                        working_dir=session_dir,
+                        llm_backend=llm_backend,
+                        model=model,
+                        max_steps=max_steps,
+                        allow_failure=harness_allow_failure,
+                    )
+                )
+                session.update_session("harness_returncode", result.returncode)
+            finally:
+                session.end_session()
+                log_event(
+                    "harness_end",
+                    f"Harness target agent ended for session {session_id}",
+                    session_id=session_id,
+                )
+        else:
+            start_agent(
+                AgentRunConfig(
+                    agent_type=agent_type,
+                    llm_backend=llm_backend,
+                    model=model,
+                    max_steps=max_steps,
+                    max_attempts=max_attempts,
+                    stream_output=False,
+                    oracle_routing=oracle_routing,
+                    tool_evolution=tool_evolution,
+                    memory=memory,
+                ),
+                session_id=session_id,
+            )
         eval_results(
             session_id=session_id,
             run_judge=run_judge,
@@ -338,7 +409,8 @@ def run_benchmark_from_csv(
     judge_model: str | None = None,
     oracle_routing: bool = False,
     tool_evolution: ToolEvolutionConfig | None = None,
-    policy_overlay: PolicyOverlayConfig | None = None,
+    harness: HarnessConfig | None = None,
+    harness_allow_failure: bool = False,
     result_root: str | Path | None = None,
 ) -> None:
     """
@@ -353,20 +425,24 @@ def run_benchmark_from_csv(
 
     memory_config = memory or MemoryConfig()
     tool_config = tool_evolution or ToolEvolutionConfig()
-    policy_config = policy_overlay or PolicyOverlayConfig()
-    validate_agent_extensions(
-        AgentRunConfig(
-            agent_type=agent_type,
-            llm_backend=llm_backend,
-            model=model,
-            max_steps=max_steps,
-            max_attempts=max_attempts,
-            oracle_routing=oracle_routing,
-            tool_evolution=tool_config,
-            memory=memory_config,
-            policy_overlay=policy_config,
+    harness_config = harness or HarnessConfig()
+    if not harness_config.enabled and agent_type.lower() == "harness":
+        raise ValueError(
+            "agent_type 'harness' requires the internal --harness target_agent.py path."
         )
-    )
+    if not harness_config.enabled:
+        validate_agent_extensions(
+            AgentRunConfig(
+                agent_type=agent_type,
+                llm_backend=llm_backend,
+                model=model,
+                max_steps=max_steps,
+                max_attempts=max_attempts,
+                oracle_routing=oracle_routing,
+                tool_evolution=tool_config,
+                memory=memory_config,
+            )
+        )
     with open(benchmark_file, newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         fieldnames = set(reader.fieldnames or [])
@@ -389,7 +465,11 @@ def run_benchmark_from_csv(
         print(f"No benchmark rows found in {benchmark_file}")
         return
     benchmark_name = Path(benchmark_file).stem
-    benchmark_root = Path(result_root) if result_root is not None else _new_benchmark_results_root(benchmark_name)
+    benchmark_root = (
+        Path(result_root)
+        if result_root is not None
+        else _new_benchmark_results_root(benchmark_name)
+    )
     benchmark_root.mkdir(parents=True, exist_ok=True)
     if tool_config.enabled and tool_config.library_id == "default":
         tool_config = ToolEvolutionConfig(
@@ -442,7 +522,8 @@ def run_benchmark_from_csv(
                     judge_model=judge_model,
                     oracle_routing=oracle_routing,
                     tool_evolution=tool_config,
-                    policy_overlay=policy_config,
+                    harness=harness_config,
+                    harness_allow_failure=harness_allow_failure,
                     result_root=benchmark_root,
                     fault_seed=row.get("fault_seed"),
                 )
@@ -466,7 +547,8 @@ def run_benchmark_from_csv(
                     judge_model=judge_model,
                     oracle_routing=oracle_routing,
                     tool_evolution=tool_config,
-                    policy_overlay=policy_config,
+                    harness=harness_config,
+                    harness_allow_failure=harness_allow_failure,
                     result_root=benchmark_root,
                     fault_seed=row.get("fault_seed"),
                     benchmark_index=int(row["benchmark_index"]),

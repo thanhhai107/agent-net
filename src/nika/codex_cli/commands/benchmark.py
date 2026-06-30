@@ -5,8 +5,8 @@ from pathlib import Path
 import typer
 
 from agent.composition import (
+    HarnessConfig,
     MemoryConfig,
-    PolicyOverlayConfig,
     ToolEvolutionConfig,
 )
 from agent.defaults import DEFAULT_MAX_STEPS
@@ -148,11 +148,17 @@ def benchmark_run(
         hidden=True,
         help="Internal zero-based CSV row index for timeline reporting.",
     ),
-    policy_overlay: Path | None = typer.Option(
+    harness: Path | None = typer.Option(
         None,
-        "--policy-overlay",
+        "--harness",
         hidden=True,
-        help="Internal agent-evolution policy overlay injected into LangGraph diagnosis prompts.",
+        help="Internal SIA-H target_agent.py path.",
+    ),
+    harness_allow_failure: bool = typer.Option(
+        False,
+        "--harness-allow-failure",
+        hidden=True,
+        help="Internal flag for evolution runs that should score crashed targets.",
     ),
 ) -> None:
     """Run one benchmark row from CSV, or a single case when SCENARIO and --problem are set."""
@@ -186,8 +192,8 @@ def benchmark_run(
         library_id=tool_library_id,
         mode=tool_mode,
     )
-    policy_config = PolicyOverlayConfig(
-        path=str(policy_overlay) if policy_overlay else None
+    harness_config = HarnessConfig(
+        target_agent_path=str(harness) if harness else None
     )
 
     if scenario is not None and file is not None:
@@ -225,7 +231,8 @@ def benchmark_run(
             judge_model=judge_model,
             oracle_routing=oracle_routing,
             tool_evolution=tool_config,
-            policy_overlay=policy_config,
+            harness=harness_config,
+            harness_allow_failure=harness_allow_failure,
             result_root=benchmark_root,
             fault_seed=fault_seed,
             benchmark_index=benchmark_index,
@@ -250,6 +257,7 @@ def benchmark_run(
         judge_model=judge_model,
         oracle_routing=oracle_routing,
         tool_evolution=tool_config,
-        policy_overlay=policy_config,
+        harness=harness_config,
+        harness_allow_failure=harness_allow_failure,
         result_root=result_root,
     )

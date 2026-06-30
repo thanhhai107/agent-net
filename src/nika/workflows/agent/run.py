@@ -36,8 +36,6 @@ def start_agent(agent_config: AgentRunConfig, *, session_id: str | None = None) 
         session.update_session("memory_token_budget", agent_config.memory.token_budget)
     if agent_config.reasoning_effort is not None:
         session.update_session("reasoning_effort", agent_config.reasoning_effort)
-    if agent_config.policy_overlay.enabled:
-        session.update_session("policy_overlay_path", agent_config.policy_overlay.path)
     session.update_session("oracle_routing", agent_config.oracle_routing)
     session.update_session("tool_evolution_enabled", agent_config.tool_evolution.enabled)
     if agent_config.tool_evolution.enabled:

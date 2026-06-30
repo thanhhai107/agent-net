@@ -11,16 +11,16 @@ learning logic belongs to the evaluated agent side.
 
 | Layer | Owns | Must not own |
 |---|---|---|
-| NIKA core | scenarios, sessions, env startup, fault injection, evaluation | agent memory contents, evolved tools, prompt-policy learning |
+| NIKA core | scenarios, sessions, env startup, fault injection, public case datasets, evaluation | agent memory contents, evolved tools, target-agent source strategy |
 | Agent runtime | diagnosis workflows, prompt construction, MCP tool loading, submission | benchmark scoring or hidden ground truth |
-| Learning modules | memory notes, tool libraries, policy overlays | hidden-answer mutation or benchmark selection |
+| Learning modules | memory notes, tool libraries, executable target-agent source | hidden-answer mutation or benchmark selection |
 | Experiment runners | repeatable command workflows | low-level learning implementation details |
 
 `src/agent/composition.py` is the typed boundary for optional extensions:
 
 - `MemoryConfig` controls procedural-memory retrieval and update mode.
 - `ToolEvolutionConfig` controls evolved-tool library exposure and update mode.
-- `PolicyOverlayConfig` controls prompt-policy injection from Agent Evolution.
+- `HarnessConfig` points benchmark rows at an executable `target_agent.py`.
 - `AgentRunConfig` groups the base agent run and extension config.
 
 ## Online Timeline
@@ -39,8 +39,8 @@ Benchmark CSV runs are intentionally sequential:
 
 - evolving memory updates the memory bank after each evaluated episode;
 - Tool Evolution updates the selected tool library after each evaluated episode;
-- Agent Evolution learns from all rows in each generation before writing the
-  next `policy_overlay.md`.
+- Harness Evolution learns from all rows in each generation before writing the
+  next `target_agent.py`.
 
 ## Procedural Memory
 
@@ -88,16 +88,18 @@ Modes:
 Persistent libraries live under `runtime/tool_evolution/<library_id>/`. Use a
 fresh library id per experimental condition.
 
-## Agent Evolution
+## Harness Evolution
 
-Agent Evolution is the outer loop for policy overlays. Each generation runs a
-full benchmark batch, writes scored context, and creates a policy overlay for
-the next generation.
+Harness Evolution is the SIA-H style outer loop for executable target agents.
+Each generation runs a full benchmark batch with one `target_agent.py`, writes
+scored context plus per-case execution artifacts, and creates the next
+generation's `target_agent.py`. The target agent is run in a subprocess and
+receives only public case files plus MCP access for the current session; NIKA
+does not train or modify model weights.
 
 ```bash
 nika evolve run --file benchmark/benchmark_test.csv \
   --max-gen 3 \
-  -a react \
   -b netmind \
   -m openai/gpt-oss-120b \
   -n 100
@@ -106,13 +108,19 @@ nika evolve run --file benchmark/benchmark_test.csv \
 Artifacts:
 
 ```text
-runtime/agent_evolution/<run_id>/
-results/agent-evolution-<run_id>/
+runtime/harness_evolution/<run_id>/
+  gen_1/target_agent.py
+  gen_1/context.md
+  gen_1/agent_execution/
+  gen_2/improvement.md
+  gen_2/target_agent.py
+results/<benchmark>-<run_id>/gen_<n>/
 ```
 
-Every CSV row contributes to the next policy. `--feedback-mode deterministic`
-uses the deterministic planner; `--feedback-mode llm` requires the structured
-feedback agent; `auto` tries the LLM and falls back.
+Every CSV row contributes to the next target-agent update. `--feedback-mode
+deterministic` carries forward the current executable for smoke tests;
+`--feedback-mode llm` requires structured meta-agent source output; `auto`
+tries the LLM and falls back to deterministic carry-forward.
 
 ## Clean Ablations
 
@@ -133,9 +141,9 @@ nika benchmark run --file benchmark/benchmark_test.csv \
   -a react -b netmind -m openai/gpt-oss-120b -n 100 \
   --tools tools-gptoss120 --tool-mode dual
 
-# agent evolution only
+# harness evolution only
 nika evolve run --file benchmark/benchmark_test.csv \
-  -a react -b netmind -m openai/gpt-oss-120b -n 100 \
+  -b netmind -m openai/gpt-oss-120b -n 100 \
   --max-gen 3
 ```
 

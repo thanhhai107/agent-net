@@ -1,9 +1,10 @@
-"""SIA-style outer loop for evolving agent prompt policy over benchmark generations."""
+"""SIA-H style harness loop for evolving executable target agents."""
 
 from __future__ import annotations
 
 import json
 import re
+import shutil
 from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
@@ -12,14 +13,15 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
-from agent.composition import MemoryConfig, PolicyOverlayConfig, ToolEvolutionConfig
+from agent.composition import HarnessConfig, MemoryConfig, ToolEvolutionConfig
 from agent.defaults import DEFAULT_MAX_STEPS
+from agent.harness.runner import validate_target_agent_source
 from agent.llm.model_factory import DEFAULT_LLM_BACKEND, DEFAULT_MODEL, load_model
 from nika.config import RESULTS_DIR, RUNTIME_DIR
 from nika.utils.kathara_cleanup import ensure_kathara_clean
 from nika.workflows.benchmark.run import default_benchmark_csv_path, run_benchmark_from_csv
 
-AGENT_EVOLUTION_DIR = RUNTIME_DIR / "agent_evolution"
+HARNESS_EVOLUTION_DIR = RUNTIME_DIR / "harness_evolution"
 FEEDBACK_MODES = frozenset({"auto", "deterministic", "llm"})
 _RESULT_FIELDS = (
     "detection_score",
@@ -31,21 +33,23 @@ _RESULT_FIELDS = (
     "in_tokens",
     "out_tokens",
 )
+_REPO_ROOT = Path(__file__).resolve().parents[4]
+_REFERENCE_TARGET_AGENT = _REPO_ROOT / "src" / "agent" / "harness" / "reference_target_agent.py"
 _IP_ADDRESS_PATTERN = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 _SESSION_ID_PATTERN = re.compile(r"\b\d{8}-\d{6}-[0-9a-f]{6}\b")
 
 
-class AgentEvolutionFeedback(BaseModel):
-    """Structured output produced by the outer-loop feedback agent."""
+class TargetAgentArtifact(BaseModel):
+    """Structured source artifact produced by the meta-agent."""
 
-    observations: list[str] = Field(min_length=1)
-    improvement_plan: list[str] = Field(min_length=1)
-    policy_rules: list[str] = Field(min_length=3)
+    improvement_md: str = Field(min_length=1)
+    target_agent_py: str = Field(min_length=200)
 
 
 @dataclass
 class EvolutionCaseResult:
     session_id: str
+    session_dir: str
     scenario: str
     problem: str
     benchmark_index: int | None
@@ -71,12 +75,13 @@ class EvolutionGenerationSummary:
     generation: int
     benchmark_root: str
     context_path: str
+    target_agent_path: str
     cases: int
     submitted: int
     detection_hits: int
     localization_hits: int
     rca_hits: int
-    next_policy_path: str | None = None
+    next_target_agent_path: str | None = None
     feedback_source: str | None = None
 
 
@@ -131,6 +136,7 @@ def load_generation_results(benchmark_root: str | Path) -> list[EvolutionCaseRes
         rows.append(
             EvolutionCaseResult(
                 session_id=str(run_meta.get("session_id") or session_dir.name),
+                session_dir=str(session_dir),
                 scenario=str(run_meta.get("scenario_name") or ""),
                 problem=str(problem_names[0] if problem_names else ""),
                 benchmark_index=benchmark_index,
@@ -162,7 +168,8 @@ def _score_line(rows: list[EvolutionCaseResult]) -> str:
 
 def _metric_table(rows: list[EvolutionCaseResult]) -> str:
     lines = [
-        "| Index | Session | Scenario | Problem | Submitted | Detection | Localization | RCA | Steps | Tool calls |",
+        "| Index | Session | Scenario | Problem | Submitted | Detection | "
+        "Localization | RCA | Steps | Tool calls |",
         "|---:|---|---|---|---:|---:|---:|---:|---:|---:|",
     ]
     for row in rows:
@@ -194,22 +201,21 @@ def build_generation_context(
     generation: int,
     benchmark_file: str | Path,
     benchmark_root: str | Path,
-    policy_overlay_path: str | Path | None,
+    target_agent_path: str | Path,
     rows: list[EvolutionCaseResult],
 ) -> str:
     lines = [
-        f"# Agent Evolution Context: {run_id} / Generation {generation}",
+        f"# Harness Evolution Context: {run_id} / Generation {generation}",
         "",
         f"**Started**: {datetime.now().isoformat(timespec='seconds')}",
         f"**Benchmark CSV**: {benchmark_file}",
         f"**Benchmark Root**: {benchmark_root}",
-        f"**Input Policy Overlay**: {policy_overlay_path or 'None'}",
+        f"**Target Agent**: {target_agent_path}",
         "**Feedback Scope**: all benchmark rows",
         "",
         "## Summary",
         "",
         f"- All cases: {_score_line(rows)}",
-        f"- Feedback cases: {_score_line(rows)}",
         "",
         "## Averages",
         "",
@@ -222,30 +228,116 @@ def build_generation_context(
     return "\n".join(lines)
 
 
+def _safe_text(
+    value: Any,
+    *,
+    limit: int = 2400,
+    forbidden_terms: tuple[str, ...] = (),
+) -> str:
+    text = str(value or "")
+    text = _IP_ADDRESS_PATTERN.sub("<ip>", text)
+    text = _SESSION_ID_PATTERN.sub("<session>", text)
+    for term in forbidden_terms:
+        term = str(term or "").strip()
+        if not term:
+            continue
+        variants = {
+            term,
+            term.replace("_", " "),
+            term.replace("-", " "),
+        }
+        for variant in variants:
+            if variant:
+                text = re.sub(
+                    re.escape(variant),
+                    "<case-term>",
+                    text,
+                    flags=re.IGNORECASE,
+                )
+    return text[:limit]
+
+
+def _submission_terms(submission: dict[str, Any] | None) -> tuple[str, ...]:
+    if not submission:
+        return ()
+    terms: list[str] = []
+    for key in ("root_cause_name", "faulty_devices"):
+        value = submission.get(key)
+        if isinstance(value, str):
+            terms.append(value)
+        elif isinstance(value, list):
+            terms.extend(str(item) for item in value if item)
+    return tuple(terms)
+
+
+def _execution_digest(
+    path: Path,
+    *,
+    forbidden_terms: tuple[str, ...] = (),
+) -> dict[str, Any] | None:
+    payload = _load_json(path)
+    if not payload:
+        return None
+    messages = payload.get("messages") or []
+    if not isinstance(messages, list):
+        messages = []
+    compact_messages: list[dict[str, Any]] = []
+    for item in messages[-16:]:
+        if not isinstance(item, dict):
+            continue
+        compact_messages.append(
+            {
+                "event": item.get("event") or item.get("type"),
+                "agent": item.get("agent"),
+                "name": item.get("name"),
+                "content": _safe_text(
+                    item.get("content") or item.get("message") or item,
+                    limit=800,
+                    forbidden_terms=forbidden_terms,
+                ),
+            }
+        )
+    return {
+        "case": payload.get("case"),
+        "diagnosis_report": _safe_text(
+            payload.get("diagnosis_report"),
+            forbidden_terms=forbidden_terms,
+        ),
+        "submission_result": _safe_text(
+            payload.get("submission_result"),
+            forbidden_terms=forbidden_terms,
+        ),
+        "error": _safe_text(
+            payload.get("error"),
+            limit=1200,
+            forbidden_terms=forbidden_terms,
+        ),
+        "messages_tail": compact_messages,
+    }
+
+
 def build_feedback_context(
     *,
     generation: int,
     rows: list[EvolutionCaseResult],
+    target_agent_path: str | Path | None = None,
 ) -> str:
-    """Build a sanitized context for the feedback agent.
-
-    The human-facing context can include case labels. The feedback-agent context
-    intentionally omits hidden problem ids, concrete session ids, device names,
-    and addresses so generated policy remains general.
-    """
+    """Build a bounded, non-ground-truth context for the target-agent meta loop."""
     lines = [
-        f"# Sanitized Agent Evolution Feedback Context: Generation {generation}",
+        f"# Harness Evolution Feedback Context: Generation {generation}",
         "",
-        "Do not infer or output incident labels, device names, IP addresses, or session ids.",
+        "NIKA is the harness and evaluator. Improve only the executable target agent.",
+        "Do not memorize benchmark ids, session ids, concrete addresses, or hidden labels.",
         "",
         "## Score Summary",
         "",
         f"- All cases: {_score_line(rows)}",
-        f"- Feedback cases: {_score_line(rows)}",
+        f"- Target agent: {target_agent_path or '-'}",
         "",
-        "## Feedback Cases",
+        "## Case Metrics",
         "",
-        "| Case | Benchmark index | Submitted | Detection | Localization | RCA | Steps | Tool calls | Tool errors |",
+        "| Case | Benchmark index | Submitted | Detection | Localization | RCA | "
+        "Steps | Tool calls | Tool errors |",
         "|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for index, row in enumerate(rows, start=1):
@@ -267,312 +359,360 @@ def build_feedback_context(
             )
             + " |"
         )
-    lines.extend(
-        [
-            "",
-            "## Allowed Feedback Scope",
-            "",
-            "- Improve investigation procedure, evidence discipline, budget management, and tool-use strategy.",
-            "- Do not mention benchmark problem ids, host/router/interface names, IP addresses, or session ids.",
-            "- Do not tell the agent an answer. The policy must remain useful for unseen transfer cases.",
-        ]
-    )
+
+    lines.extend(["", "## Execution Samples", ""])
+    for row in rows[:6]:
+        forbidden_terms = tuple(
+            term
+            for term in (
+                row.session_id,
+                row.problem,
+                *_submission_terms(row.submission),
+            )
+            if term
+        )
+        digest = _execution_digest(
+            Path(row.session_dir) / "agent_execution.json",
+            forbidden_terms=forbidden_terms,
+        )
+        if digest is None:
+            error = _load_json(Path(row.session_dir) / "harness_error.json")
+            digest = (
+                {"error": _safe_text(error, limit=1200, forbidden_terms=forbidden_terms)}
+                if error
+                else {}
+            )
+        lines.append(
+            "```json\n"
+            + json.dumps(digest, indent=2, ensure_ascii=False, default=str)[:7000]
+            + "\n```"
+        )
     return "\n".join(lines) + "\n"
 
 
-def _submission_failures(rows: list[EvolutionCaseResult]) -> int:
-    return sum(not row.submitted for row in rows)
+def _write_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False, default=str),
+        encoding="utf-8",
+    )
 
 
-def _normal_submissions(rows: list[EvolutionCaseResult]) -> int:
-    total = 0
-    for row in rows:
-        submission = row.submission or {}
-        if submission.get("is_anomaly") is False:
-            total += 1
-    return total
+def _reference_target_agent_source() -> str:
+    return _REFERENCE_TARGET_AGENT.read_text(encoding="utf-8")
 
 
-def _case_specific_terms(rows: list[EvolutionCaseResult]) -> set[str]:
-    terms: set[str] = set()
-    for row in rows:
-        for value in (row.session_id, row.problem):
-            if value:
-                terms.add(value.lower())
-    return terms
+def _strip_code_fence(source: str) -> str:
+    text = source.strip()
+    if not text.startswith("```"):
+        return text + "\n"
+    lines = text.splitlines()
+    if len(lines) >= 2 and lines[-1].strip() == "```":
+        return "\n".join(lines[1:-1]).strip() + "\n"
+    return text + "\n"
 
 
-def _policy_has_forbidden_terms(policy: str, rows: list[EvolutionCaseResult]) -> bool:
-    lowered = policy.lower()
-    if _IP_ADDRESS_PATTERN.search(policy) or _SESSION_ID_PATTERN.search(policy):
-        return True
-    return any(term and term in lowered for term in _case_specific_terms(rows))
+def _write_target_agent(path: Path, source: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(_strip_code_fence(source), encoding="utf-8")
+    validate_target_agent_source(path)
 
 
-def build_policy_update(
-    *,
-    generation: int,
-    max_generations: int,
-    rows: list[EvolutionCaseResult],
-) -> tuple[str, str]:
-    total = len(rows)
-    submitted = sum(row.submitted for row in rows)
-    detected = sum(row.detection_hit for row in rows)
-    localized = sum(row.localization_hit for row in rows)
-    rca = sum(row.rca_hit for row in rows)
-    missing = _submission_failures(rows)
-    normal_submissions = _normal_submissions(rows)
-
-    observations = [
-        f"- Feedback timeline score: submitted={submitted}/{total}, detection={detected}/{total}, localization={localized}/{total}, RCA={rca}/{total}.",
-    ]
-    if missing:
-        observations.append(
-            f"- {missing} feedback case(s) did not produce a submission; preserve enough budget for the submission phase."
-        )
-    if normal_submissions:
-        observations.append(
-            f"- {normal_submissions} feedback submission(s) marked the injected incident as normal; require positive evidence before declaring normal operation."
-        )
-    if rca == 0 and total:
-        observations.append(
-            "- RCA did not score on the feedback timeline; force an explicit final mapping from evidence to a known root-cause class."
-        )
-
-    policy_lines = [
-        "# Agent Evolution Policy Overlay",
-        "",
-        f"Generated after generation {generation} of {max_generations}.",
-        "",
-        "Apply this policy to the next diagnosis run. Keep it general; do not memorize case ids, device ids, or hidden labels.",
-        "",
-        "## Investigation Discipline",
-        "",
-        "- Spend the first calls establishing the symptom from reachability or service checks, then localize from the affected edge inward.",
-        "- Treat timeouts, missing reachability, failed service checks, and control-plane inconsistencies as anomaly evidence until contradicted by stronger evidence.",
-        "- Do not submit an empty or normal diagnosis while any observed end-to-end symptom remains unexplained.",
-        "- Before finalizing, write a short evidence ledger: symptom, affected endpoint or service, nearest faulty device or interface, and root-cause hypothesis.",
-        "- In the submission phase, map the evidence ledger to one of the available problem names instead of inventing a free-form cause.",
-        "",
-        "## Tool Use Discipline",
-        "",
-        "- Prefer targeted protocol or service tools after the initial symptom check; avoid repeating the same ping or config query without a new hypothesis.",
-        "- If a multi-step evidence pattern is repeated or missing, use the Tool Evolution manager tools to identify the capability gap, propose a parameterized composite or pure Python helper, and execute it once for verification.",
-        "- Use generated or composite candidates as evidence collectors only; verify their observations against primitive tool output before concluding.",
-    ]
-    if missing:
-        policy_lines.extend(
-            [
-                "",
-                "## Budget Guardrail",
-                "",
-                "- Reserve enough remaining steps for `list_avail_problems` and `submit`; stop exploration once the evidence ledger can support detection, localization, and RCA.",
-            ]
-        )
-    if rca == 0 and total:
-        policy_lines.extend(
-            [
-                "",
-                "## RCA Guardrail",
-                "",
-                "- Never leave `root_cause_name` empty for an anomalous incident. If multiple causes seem plausible, choose the one best supported by direct failed evidence.",
-            ]
-        )
-
-    improvement_lines = [
-        f"# Improvement Plan: Generation {generation + 1}",
-        "",
-        "## Observations",
-        "",
-        *observations,
-        "",
-        "## Policy Changes",
-        "",
-        "- Add an explicit evidence ledger before submission.",
-        "- Add a step-budget guardrail when submissions are missing.",
-        "- Add a RCA mapping guardrail when root-cause accuracy is weak.",
-        "- Make tool synthesis an explicit fallback when repeated primitive sequences appear.",
-        "",
-        "## Produced Artifact",
-        "",
-        "- `policy_overlay.md` is injected into the diagnosis system prompt for the next generation.",
-    ]
-    return "\n".join(improvement_lines) + "\n", "\n".join(policy_lines) + "\n"
+def _copy_initial_target(path: Path, initial_target_agent: str | Path | None) -> None:
+    if initial_target_agent is None:
+        _write_target_agent(path, _reference_target_agent_source())
+        return
+    source_path = Path(initial_target_agent)
+    _write_target_agent(path, source_path.read_text(encoding="utf-8"))
 
 
-def _format_feedback_markdown(feedback: AgentEvolutionFeedback) -> tuple[str, str]:
-    improvement_lines = [
-        "# Improvement Plan",
-        "",
-        "## Observations",
-        "",
-        *[f"- {item}" for item in feedback.observations],
-        "",
-        "## Policy Changes",
-        "",
-        *[f"- {item}" for item in feedback.improvement_plan],
-        "",
-        "## Produced Artifact",
-        "",
-        "- `policy_overlay.md` is injected into the diagnosis system prompt for the next generation.",
-    ]
-    policy_lines = [
-        "# Agent Evolution Policy Overlay",
-        "",
-        "Generated by the Agent Evolution feedback agent.",
-        "",
-        "Apply this policy to the next diagnosis run. Keep it general; do not memorize case ids, device ids, IP addresses, or hidden labels.",
-        "",
-        "## Feedback-Agent Rules",
-        "",
-        *[f"- {item}" for item in feedback.policy_rules],
-    ]
-    return "\n".join(improvement_lines) + "\n", "\n".join(policy_lines) + "\n"
+def _build_initial_target_prompt(*, benchmark_file: str | Path, reference_source: str) -> str:
+    return f"""You are the SIA-H meta-agent for NIKA.
+
+Write a complete, standalone Python file named target_agent.py. It will be run by
+the NIKA harness for each benchmark case.
+
+Runtime contract:
+- Parse --session-id, --dataset-dir, --working-dir, --backend, --model, --max-steps.
+- Read only public files from --dataset-dir, especially case_context.json.
+- Use MCP tools through the current session id to diagnose and submit.
+- Write useful execution artifacts under --working-dir.
+- Do not import benchmark CSV readers, failure injection, ground truth, or private labels.
+- Do not train or modify model weights.
+
+Benchmark CSV for this evolution run: {benchmark_file}
+
+Reference implementation to improve from:
+```python
+{reference_source}
+```
+
+Return structured fields:
+- improvement_md: concise explanation of the initial executable strategy.
+- target_agent_py: the full Python source for target_agent.py.
+"""
 
 
 def _build_feedback_prompt(
     *,
     generation: int,
     max_generations: int,
-    sanitized_context: str,
-    previous_policy: str,
+    feedback_context: str,
+    current_source: str,
 ) -> str:
-    previous_policy_block = previous_policy.strip() or "No previous policy overlay."
-    return f"""You are the Agent Evolution feedback agent for NIKA.
+    return f"""You are the SIA-H feedback/meta agent for NIKA.
 
-NIKA is the benchmark/orchestrator. You improve only the evaluated agent's
-general diagnosis policy for the next benchmark generation.
+The target agent is an executable Python program, not a prompt overlay. Improve
+the source code for the next generation based on public execution artifacts and
+scores from the current generation.
 
 Current generation: {generation}
 Maximum generations: {max_generations}
 
 Rules:
-- Use only the sanitized metrics/context below.
-- Do not output benchmark problem ids, hidden labels, concrete device names,
-  interface names, IP addresses, or session ids.
-- Do not give the agent case-specific answers.
-- Produce general troubleshooting policy that can transfer to unseen incidents.
-- Keep rules concise and directly actionable inside a system prompt.
+- Preserve the CLI contract.
+- Read only --dataset-dir public files and use MCP tools for live diagnosis.
+- Keep submission through list_avail_problems() and submit().
+- Do not reference benchmark CSV files, ground_truth.json, failure injection,
+  private problem labels, or hard-coded case/session ids.
+- Do not train or modify model weights.
+- Prefer general improvements: planning, evidence ledger, retry behavior, tool
+  selection, budget management, robust parsing, and crash recovery.
 
-Previous policy overlay:
+Feedback context:
 ```markdown
-{previous_policy_block}
+{feedback_context}
 ```
 
-Sanitized generation context:
-```markdown
-{sanitized_context}
+Current target_agent.py:
+```python
+{current_source}
 ```
 
 Return structured fields:
-- observations: short evidence-grounded findings from the generation.
-- improvement_plan: concrete changes to apply next generation.
-- policy_rules: prompt-ready rules for the diagnosis agent.
+- improvement_md: what changed and why.
+- target_agent_py: the full next-generation Python source.
 """
 
 
-def _run_llm_feedback_agent(
+def _invoke_target_meta_agent(
     *,
-    generation: int,
-    max_generations: int,
-    rows: list[EvolutionCaseResult],
-    previous_policy_path: Path | None,
+    prompt: str,
+    feedback_llm_backend: str,
+    feedback_model: str,
+) -> TargetAgentArtifact:
+    model = load_model(feedback_llm_backend, feedback_model).with_structured_output(
+        TargetAgentArtifact
+    )
+    artifact = model.invoke(prompt)
+    if not isinstance(artifact, TargetAgentArtifact):
+        artifact = TargetAgentArtifact.model_validate(artifact)
+    return artifact
+
+
+def build_initial_target_agent(
+    *,
+    output_path: str | Path,
+    benchmark_file: str | Path,
+    feedback_mode: str,
     feedback_llm_backend: str,
     feedback_model: str,
 ) -> tuple[str, str]:
-    sanitized_context = build_feedback_context(
-        generation=generation,
-        rows=rows,
+    """Create generation-1 target_agent.py."""
+    if feedback_mode not in FEEDBACK_MODES:
+        raise ValueError(
+            "feedback_mode must be one of: " + ", ".join(sorted(FEEDBACK_MODES))
+        )
+
+    target_path = Path(output_path)
+    reference_source = _reference_target_agent_source()
+    if feedback_mode in {"auto", "llm"}:
+        prompt = _build_initial_target_prompt(
+            benchmark_file=benchmark_file,
+            reference_source=reference_source,
+        )
+        (target_path.parent / "initial_meta_prompt.md").write_text(
+            prompt,
+            encoding="utf-8",
+        )
+        try:
+            artifact = _invoke_target_meta_agent(
+                prompt=prompt,
+                feedback_llm_backend=feedback_llm_backend,
+                feedback_model=feedback_model,
+            )
+            _write_target_agent(target_path, artifact.target_agent_py)
+            (target_path.parent / "improvement.md").write_text(
+                artifact.improvement_md,
+                encoding="utf-8",
+            )
+            return artifact.improvement_md, "llm"
+        except Exception as exc:
+            if feedback_mode == "llm":
+                raise
+            note = (
+                "# Initial Target Agent\n\n"
+                f"- Meta-agent failed with `{type(exc).__name__}`; "
+                "using the reference executable target.\n"
+            )
+            _write_target_agent(target_path, reference_source)
+            (target_path.parent / "improvement.md").write_text(note, encoding="utf-8")
+            return note, "deterministic-fallback"
+
+    note = (
+        "# Initial Target Agent\n\n"
+        "- Deterministic mode uses the checked-in reference executable target.\n"
     )
-    previous_policy = (
-        previous_policy_path.read_text(encoding="utf-8")
-        if previous_policy_path is not None and previous_policy_path.exists()
-        else ""
-    )
-    prompt = _build_feedback_prompt(
-        generation=generation,
-        max_generations=max_generations,
-        sanitized_context=sanitized_context,
-        previous_policy=previous_policy,
-    )
-    model = load_model(feedback_llm_backend, feedback_model).with_structured_output(
-        AgentEvolutionFeedback
-    )
-    feedback = model.invoke(prompt)
-    if not isinstance(feedback, AgentEvolutionFeedback):
-        feedback = AgentEvolutionFeedback.model_validate(feedback)
-    improvement, policy = _format_feedback_markdown(feedback)
-    if _policy_has_forbidden_terms(policy, rows):
-        raise ValueError("feedback policy contained case-specific terms")
-    return improvement, policy
+    _write_target_agent(target_path, reference_source)
+    (target_path.parent / "improvement.md").write_text(note, encoding="utf-8")
+    return note, "deterministic"
 
 
-def build_next_policy_update(
+def build_next_target_update(
     *,
     generation: int,
     max_generations: int,
     rows: list[EvolutionCaseResult],
     feedback_mode: str,
-    previous_policy_path: Path | None,
+    current_target_path: str | Path,
+    next_target_path: str | Path,
     feedback_llm_backend: str,
     feedback_model: str,
-) -> tuple[str, str, str]:
+) -> tuple[str, str]:
     if feedback_mode not in FEEDBACK_MODES:
         raise ValueError(
             "feedback_mode must be one of: " + ", ".join(sorted(FEEDBACK_MODES))
         )
+
+    current_path = Path(current_target_path)
+    next_path = Path(next_target_path)
+    current_source = current_path.read_text(encoding="utf-8")
+    feedback_context = build_feedback_context(
+        generation=generation,
+        rows=rows,
+        target_agent_path=current_path,
+    )
+    next_path.parent.mkdir(parents=True, exist_ok=True)
+    (next_path.parent / "feedback_context.md").write_text(
+        feedback_context,
+        encoding="utf-8",
+    )
+    prompt = _build_feedback_prompt(
+        generation=generation,
+        max_generations=max_generations,
+        feedback_context=feedback_context,
+        current_source=current_source,
+    )
+    (next_path.parent / "feedback_prompt.md").write_text(prompt, encoding="utf-8")
+
     if feedback_mode in {"auto", "llm"}:
         try:
-            improvement, policy = _run_llm_feedback_agent(
-                generation=generation,
-                max_generations=max_generations,
-                rows=rows,
-                previous_policy_path=previous_policy_path,
+            artifact = _invoke_target_meta_agent(
+                prompt=prompt,
                 feedback_llm_backend=feedback_llm_backend,
                 feedback_model=feedback_model,
             )
-            return improvement, policy, "llm"
+            _write_target_agent(next_path, artifact.target_agent_py)
+            (next_path.parent / "improvement.md").write_text(
+                artifact.improvement_md,
+                encoding="utf-8",
+            )
+            return artifact.improvement_md, "llm"
         except Exception as exc:
             if feedback_mode == "llm":
                 raise
-            fallback_note = (
-                "\n## Feedback-Agent Fallback\n\n"
-                f"- LLM feedback failed with `{type(exc).__name__}`; used deterministic fallback.\n"
+            improvement = (
+                f"# Improvement Plan: Generation {generation + 1}\n\n"
+                f"- Meta-agent failed with `{type(exc).__name__}`; "
+                "carrying forward the current target agent.\n"
+                "- Continue scoring this executable while preserving all artifacts "
+                "for later manual or LLM feedback.\n"
             )
-            improvement, policy = build_policy_update(
-                generation=generation,
-                max_generations=max_generations,
-                rows=rows,
+            _write_target_agent(next_path, current_source)
+            (next_path.parent / "improvement.md").write_text(
+                improvement,
+                encoding="utf-8",
             )
-            return improvement + fallback_note, policy, "deterministic-fallback"
+            return improvement, "deterministic-fallback"
 
-    improvement, policy = build_policy_update(
-        generation=generation,
-        max_generations=max_generations,
-        rows=rows,
+    improvement = (
+        f"# Improvement Plan: Generation {generation + 1}\n\n"
+        "- Deterministic feedback mode carries forward the current executable "
+        "target agent without LLM source rewriting.\n"
     )
-    return improvement, policy, "deterministic"
+    _write_target_agent(next_path, current_source)
+    (next_path.parent / "improvement.md").write_text(improvement, encoding="utf-8")
+    return improvement, "deterministic"
 
 
-def _write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+def collect_generation_artifacts(
+    *,
+    rows: list[EvolutionCaseResult],
+    gen_dir: str | Path,
+) -> None:
+    gen_path = Path(gen_dir)
+    execution_dir = gen_path / "agent_execution"
+    execution_dir.mkdir(parents=True, exist_ok=True)
+
+    copied: list[dict[str, Any]] = []
+    for row in rows:
+        session_dir = Path(row.session_dir)
+        suffix = (
+            str(row.benchmark_index)
+            if row.benchmark_index is not None
+            else row.session_id
+        )
+        execution_path = session_dir / "agent_execution.json"
+        error_path = session_dir / "harness_error.json"
+        target_execution = execution_dir / f"execution_{suffix}.json"
+        if execution_path.exists():
+            shutil.copy2(execution_path, target_execution)
+        if error_path.exists():
+            shutil.copy2(error_path, execution_dir / f"harness_error_{suffix}.json")
+        copied.append(
+            {
+                "session_id": row.session_id,
+                "benchmark_index": row.benchmark_index,
+                "session_dir": row.session_dir,
+                "execution_artifact": (
+                    str(target_execution) if target_execution.exists() else None
+                ),
+                "harness_error": (
+                    str(execution_dir / f"harness_error_{suffix}.json")
+                    if (execution_dir / f"harness_error_{suffix}.json").exists()
+                    else None
+                ),
+                "metrics": row.metrics,
+                "submitted": row.submitted,
+            }
+        )
+
+    _write_json(
+        gen_path / "results.json",
+        {
+            "cases": copied,
+            "score": {
+                "submitted": sum(row.submitted for row in rows),
+                "detection_hits": sum(row.detection_hit for row in rows),
+                "localization_hits": sum(row.localization_hit for row in rows),
+                "rca_hits": sum(row.rca_hit for row in rows),
+                "total": len(rows),
+            },
+        },
+    )
 
 
-def run_agent_evolution(
+def run_harness_evolution(
     *,
     benchmark_file: str | Path = default_benchmark_csv_path(),
     max_generations: int = 3,
     run_id: str | None = None,
-    agent_type: str = "react",
     llm_backend: str = "netmind",
     model: str = "openai/gpt-oss-120b",
     max_steps: int = DEFAULT_MAX_STEPS,
-    max_attempts: int = 3,
     run_judge: bool = False,
     judge_llm_backend: str | None = None,
     judge_model: str | None = None,
-    oracle_routing: bool = False,
     tool_evolution_enabled: bool = False,
     tool_library_id: str | None = None,
     tool_evolution_mode: str = "dual",
@@ -580,24 +720,23 @@ def run_agent_evolution(
     memory_bank: str = "default",
     memory_top_k: int = 5,
     memory_token_budget: int = 1500,
-    initial_policy_overlay: str | Path | None = None,
+    initial_target_agent: str | Path | None = None,
     feedback_mode: str = "auto",
     feedback_llm_backend: str = DEFAULT_LLM_BACKEND,
     feedback_model: str = DEFAULT_MODEL,
-    runtime_root: str | Path = AGENT_EVOLUTION_DIR,
+    runtime_root: str | Path = HARNESS_EVOLUTION_DIR,
     results_root: str | Path = RESULTS_DIR,
 ) -> list[EvolutionGenerationSummary]:
     if max_generations < 1:
         raise ValueError("max_generations must be >= 1")
-    
-    ensure_kathara_clean(context="agent evolution run")
-
     if feedback_mode not in FEEDBACK_MODES:
         raise ValueError(
             "feedback_mode must be one of: " + ", ".join(sorted(FEEDBACK_MODES))
         )
-    run_id = run_id or datetime.now().strftime("%Y%m%d-%H%M%S") + f"-{uuid4().hex[:6]}"
 
+    ensure_kathara_clean(context="harness evolution run")
+
+    run_id = run_id or datetime.now().strftime("%Y%m%d-%H%M%S") + f"-{uuid4().hex[:6]}"
     runtime_dir = Path(runtime_root) / run_id
     raw_name = Path(benchmark_file).stem
     benchmark_name = re.sub(r"[^A-Za-z0-9_.-]+", "-", raw_name).strip(".-")
@@ -606,24 +745,43 @@ def run_agent_evolution(
     runtime_dir.mkdir(parents=True, exist_ok=False)
     benchmark_results_dir.mkdir(parents=True, exist_ok=False)
 
-    summaries: list[EvolutionGenerationSummary] = []
-    policy_overlay_path = Path(initial_policy_overlay) if initial_policy_overlay else None
     resolved_tool_library = tool_library_id or f"{run_id}-tools"
+    summaries: list[EvolutionGenerationSummary] = []
+
+    gen1_dir = runtime_dir / "gen_1"
+    gen1_dir.mkdir(parents=True, exist_ok=True)
+    target_agent_path = gen1_dir / "target_agent.py"
+    if initial_target_agent is None:
+        _, initial_source = build_initial_target_agent(
+            output_path=target_agent_path,
+            benchmark_file=benchmark_file,
+            feedback_mode=feedback_mode,
+            feedback_llm_backend=feedback_llm_backend,
+            feedback_model=feedback_model,
+        )
+    else:
+        _copy_initial_target(target_agent_path, initial_target_agent)
+        initial_source = "user-provided"
+        (gen1_dir / "improvement.md").write_text(
+            "# Initial Target Agent\n\n- Copied from user-provided source.\n",
+            encoding="utf-8",
+        )
 
     _write_json(
         runtime_dir / "run.json",
         {
             "run_id": run_id,
+            "mode": "sia_harness",
             "benchmark_file": str(benchmark_file),
             "max_generations": max_generations,
-            "agent_type": agent_type,
+            "agent_type": "harness",
             "llm_backend": llm_backend,
             "model": model,
             "max_steps": max_steps,
-            "max_attempts": max_attempts,
             "feedback_mode": feedback_mode,
             "feedback_llm_backend": feedback_llm_backend,
             "feedback_model": feedback_model,
+            "initial_target_agent_source": initial_source,
             "tool_evolution_enabled": tool_evolution_enabled,
             "tool_library_id": resolved_tool_library if tool_evolution_enabled else None,
             "tool_evolution_mode": tool_evolution_mode if tool_evolution_enabled else None,
@@ -640,25 +798,26 @@ def run_agent_evolution(
         gen_results_dir = benchmark_results_dir / f"gen_{generation}"
         gen_dir.mkdir(parents=True, exist_ok=True)
         gen_results_dir.mkdir(parents=True, exist_ok=False)
+        target_agent_path = gen_dir / "target_agent.py"
+        validate_target_agent_source(target_agent_path)
 
         print(
             "evolve_generation_start "
             f"run_id={run_id} generation={generation}/{max_generations} "
-            f"policy_overlay={policy_overlay_path or '-'} "
-            f"result_root={gen_results_dir}",
+            f"target_agent={target_agent_path} result_root={gen_results_dir}",
             flush=True,
         )
         run_benchmark_from_csv(
             benchmark_file=str(benchmark_file),
-            agent_type=agent_type,
+            agent_type="harness",
             llm_backend=llm_backend,
             model=model,
             max_steps=max_steps,
-            max_attempts=max_attempts,
+            max_attempts=1,
             run_judge=run_judge,
             judge_llm_backend=judge_llm_backend,
             judge_model=judge_model,
-            oracle_routing=oracle_routing,
+            oracle_routing=False,
             tool_evolution=ToolEvolutionConfig(
                 enabled=tool_evolution_enabled,
                 library_id=resolved_tool_library,
@@ -670,28 +829,28 @@ def run_agent_evolution(
                 top_k=memory_top_k,
                 token_budget=memory_token_budget,
             ),
-            policy_overlay=PolicyOverlayConfig(
-                path=str(policy_overlay_path) if policy_overlay_path else None
-            ),
+            harness=HarnessConfig(target_agent_path=str(target_agent_path)),
+            harness_allow_failure=True,
             result_root=gen_results_dir,
         )
 
         rows = load_generation_results(gen_results_dir)
+        collect_generation_artifacts(rows=rows, gen_dir=gen_dir)
         context = build_generation_context(
             run_id=run_id,
             generation=generation,
             benchmark_file=benchmark_file,
             benchmark_root=gen_results_dir,
-            policy_overlay_path=policy_overlay_path,
+            target_agent_path=target_agent_path,
             rows=rows,
         )
         context_path = gen_dir / "context.md"
         context_path.write_text(context, encoding="utf-8")
-        feedback_context_path = gen_dir / "feedback_context.md"
-        feedback_context_path.write_text(
+        (gen_dir / "feedback_context.md").write_text(
             build_feedback_context(
                 generation=generation,
                 rows=rows,
+                target_agent_path=target_agent_path,
             ),
             encoding="utf-8",
         )
@@ -700,6 +859,7 @@ def run_agent_evolution(
             generation=generation,
             benchmark_root=str(gen_results_dir),
             context_path=str(context_path),
+            target_agent_path=str(target_agent_path),
             cases=len(rows),
             submitted=sum(row.submitted for row in rows),
             detection_hits=sum(row.detection_hit for row in rows),
@@ -708,25 +868,20 @@ def run_agent_evolution(
         )
 
         if generation < max_generations:
-            improvement, policy, feedback_source = build_next_policy_update(
+            next_dir = runtime_dir / f"gen_{generation + 1}"
+            next_dir.mkdir(parents=True, exist_ok=True)
+            next_target = next_dir / "target_agent.py"
+            _, feedback_source = build_next_target_update(
                 generation=generation,
                 max_generations=max_generations,
                 rows=rows,
                 feedback_mode=feedback_mode,
-                previous_policy_path=policy_overlay_path,
+                current_target_path=target_agent_path,
+                next_target_path=next_target,
                 feedback_llm_backend=feedback_llm_backend,
                 feedback_model=feedback_model,
             )
-            next_dir = runtime_dir / f"gen_{generation + 1}"
-            next_dir.mkdir(parents=True, exist_ok=True)
-            (next_dir / "improvement.md").write_text(
-                improvement,
-                encoding="utf-8",
-            )
-            next_policy = next_dir / "policy_overlay.md"
-            next_policy.write_text(policy, encoding="utf-8")
-            policy_overlay_path = next_policy
-            summary.next_policy_path = str(next_policy)
+            summary.next_target_agent_path = str(next_target)
             summary.feedback_source = feedback_source
 
         _write_json(

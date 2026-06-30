@@ -133,7 +133,7 @@ def inject_failure(
         raise ValueError("When using --set parameters, inject exactly one problem at a time.")
 
     tot_tasks = []
-    fault_seed = str(getattr(session, "fault_seed", "") or session.session_id[-4:])
+    fault_seed = str(getattr(session, "fault_seed", "") or "2026")
     for task_level in TaskLevel:
         random.seed(fault_seed)
         problem = get_problem_instance(

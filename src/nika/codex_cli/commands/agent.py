@@ -1,14 +1,11 @@
 """Commands for running diagnosis agents."""
 
-from pathlib import Path
-
 import typer
 
 from agent.cli.codex_worker import REASONING_EFFORT_LEVELS
 from agent.composition import (
     AgentRunConfig,
     MemoryConfig,
-    PolicyOverlayConfig,
     ToolEvolutionConfig,
 )
 from agent.defaults import DEFAULT_MAX_STEPS
@@ -128,12 +125,6 @@ def agent_run(
         min=100,
         help="Maximum estimated tokens used by retrieved memory.",
     ),
-    policy_overlay: Path | None = typer.Option(
-        None,
-        "--policy-overlay",
-        hidden=True,
-        help="Internal agent-evolution policy overlay injected into LangGraph diagnosis prompts.",
-    ),
 ) -> None:
     """Run the agent on the current session task."""
     from nika.workflows.agent.run import start_agent
@@ -174,9 +165,6 @@ def agent_run(
                     bank=memory_bank,
                     top_k=memory_k,
                     token_budget=memory_tokens,
-                ),
-                policy_overlay=PolicyOverlayConfig(
-                    path=str(policy_overlay) if policy_overlay else None
                 ),
             ),
             session_id=session_id,

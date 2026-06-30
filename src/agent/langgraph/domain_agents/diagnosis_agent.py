@@ -1,5 +1,3 @@
-from pathlib import Path
-
 from dotenv import load_dotenv
 from langchain.agents import create_agent
 from langchain_core.tools import BaseTool
@@ -16,24 +14,10 @@ load_dotenv()
 OVERALL_DIAGNOSIS_PROMPT = """\
     You are a network troubleshooting expert.
     Focus on (1) detecting if there is an anomaly, (2) localizing the faulty devices, and (3) identifying the root cause.
-    
+
     Basic requirements:
     - Use the provided tools to gather necessary information.
     - Do not provide mitigation unless explicitly required.
-"""
-
-
-def _load_policy_overlay(policy_overlay_path: str | None) -> str:
-    if not policy_overlay_path:
-        return ""
-    path = Path(policy_overlay_path)
-    text = path.read_text(encoding="utf-8").strip()
-    if not text:
-        return ""
-    return f"""\
-
-Agent-evolution policy overlay:
-{text}
 """
 
 
@@ -52,7 +36,6 @@ class DiagnosisAgent:
         tool_evolution_enabled: bool = False,
         tool_library_id: str = "default",
         tool_evolution_mode: str = "dual",
-        policy_overlay_path: str | None = None,
     ):
         mcp_cfg = MCPServerConfig(session_id=session_id)
         if load_all_tools:
@@ -77,7 +60,6 @@ class DiagnosisAgent:
             else None
         )
         self.tool_evolution_runtime: ToolEvolutionRuntime | None = None
-        self.policy_overlay = _load_policy_overlay(policy_overlay_path)
 
     async def load_tools(self):
         self.tools = await self.client.get_tools()
@@ -99,8 +81,6 @@ class DiagnosisAgent:
 
     def prompt_suffix(self) -> str:
         parts: list[str] = []
-        if self.policy_overlay:
-            parts.append(self.policy_overlay)
         if self.tool_evolution_runtime is not None:
             parts.append(self.tool_evolution_runtime.prompt_suffix())
         return "\n".join(parts)

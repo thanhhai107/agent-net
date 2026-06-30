@@ -7,7 +7,7 @@ understanding the current system boundary.
 
 | Path | Purpose |
 |---|---|
-| `learning_modules.md` | Current boundary and usage for memory, Tool Evolution, and Agent Evolution |
+| `learning_modules.md` | Current boundary and usage for memory, Tool Evolution, and Harness Evolution |
 | `memory/README.md` | Detailed procedural-memory design notes and implementation rationale |
 | `report/` | Thesis/report source moved from the old top-level `report/` directory |
 

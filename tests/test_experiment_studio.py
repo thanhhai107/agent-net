@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import sys
 
+from agent.defaults import DEFAULT_MAX_STEPS
+from agent.llm.model_factory import DEFAULT_LLM_BACKEND, DEFAULT_MODEL
 from nika.visualization.experiment_runner import (
     build_experiment_command,
     build_command_plan,
@@ -43,6 +45,18 @@ def test_baseline_command_uses_default_sequential_execution() -> None:
     assert "--parallel" not in command
 
 
+def test_command_fallbacks_match_shared_agent_defaults() -> None:
+    config = _config()
+    for key in ("llm_backend", "model", "max_steps"):
+        config.pop(key)
+
+    command = build_experiment_command(config)
+
+    assert command[command.index("-b") + 1] == DEFAULT_LLM_BACKEND
+    assert command[command.index("-m", command.index("-b")) + 1] == DEFAULT_MODEL
+    assert command[command.index("-n") + 1] == str(DEFAULT_MAX_STEPS)
+
+
 def test_tool_and_memory_modules_share_one_sequential_command() -> None:
     command = build_experiment_command(
         _config(modules=["tool_evolution", "memory_evolution"])
@@ -55,14 +69,17 @@ def test_tool_and_memory_modules_share_one_sequential_command() -> None:
     assert command[command.index("--memory") + 1] == "memory-test"
 
 
-def test_agent_evolution_modules_share_one_evolve_command() -> None:
+def test_harness_evolution_modules_share_one_evolve_command() -> None:
     command = build_experiment_command(
-        _config(modules=["agent_evolution", "tool_evolution", "memory_evolution"])
+        _config(modules=["harness_evolution", "tool_evolution", "memory_evolution"])
     )
 
     assert command[3:6] == ["evolve", "run", "--file"]
     assert command[command.index("--max-gen") + 1] == "3"
     assert command[command.index("--feedback-mode") + 1] == "deterministic"
+    assert "-a" not in command
+    assert "-r" not in command
+    assert "--oracle-routing" not in command
     assert "-j" not in command
     assert "--parallel" not in command
     assert command[command.index("--tools") + 1] == "tools-test"

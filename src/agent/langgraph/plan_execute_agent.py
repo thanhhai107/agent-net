@@ -87,7 +87,6 @@ class PlanExecuteAgent:
         tool_library_id: str = "default",
         tool_evolution_mode: str = "dual",
         use_problem_tool_hints: bool = True,
-        policy_overlay_path: str | None = None,
     ) -> None:
         if max_steps < 1:
             raise ValueError("max_steps must be >= 1")
@@ -114,7 +113,6 @@ class PlanExecuteAgent:
             tool_evolution_enabled=tool_evolution_enabled,
             tool_library_id=tool_library_id,
             tool_evolution_mode=tool_evolution_mode,
-            policy_overlay_path=policy_overlay_path,
         )
         asyncio.run(diagnosis.load_tools())
         self.tool_evolution_runtime = diagnosis.tool_evolution_runtime

@@ -37,12 +37,12 @@ class MemoryConfig:
 
 
 @dataclass(frozen=True)
-class PolicyOverlayConfig:
-    path: str | None = None
+class HarnessConfig:
+    target_agent_path: str | None = None
 
     @property
     def enabled(self) -> bool:
-        return self.path is not None
+        return self.target_agent_path is not None
 
 
 @dataclass(frozen=True)
@@ -58,7 +58,6 @@ class AgentRunConfig:
     oracle_routing: bool = False
     tool_evolution: ToolEvolutionConfig = field(default_factory=ToolEvolutionConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
-    policy_overlay: PolicyOverlayConfig = field(default_factory=PolicyOverlayConfig)
 
     @property
     def normalized_agent_type(self) -> str:
@@ -107,8 +106,6 @@ def workflow_agent_kwargs(
     }
     if reflexion:
         kwargs["max_attempts"] = config.max_attempts
-    if config.policy_overlay.enabled:
-        kwargs["policy_overlay_path"] = config.policy_overlay.path
     if config.memory.enabled:
         kwargs["use_problem_tool_hints"] = False
     return kwargs

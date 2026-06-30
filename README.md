@@ -27,7 +27,7 @@ This repository is a unified platform that can offer:
 - Session-based workflow with multi-session support (`nika session`, `--session-id`)
 - Parameterized fault injection (`nika failure describe`, `--set key=value`)
 - MCP-based tool support and persistent Tool-Evolving experiments
-- SIA-style outer-loop Agent Evolution experiments (`nika evolve run`)
+- SIA-H style executable Harness Evolution experiments (`nika evolve run`)
 - Pre-built network scenarios and fault injection mechanisms
 - Reproducible evaluation framework with batch summary (`nika eval summary`)
 - Support for various network topologies and configurations
@@ -348,26 +348,29 @@ selection recall, argument validity, recovery, reuse, promotion, Tool Card
 revisions, capability gaps, verified composites, verified generated Python
 tools, library health, cross-model reuse, and sequential efficiency metrics.
 
-### Agent Evolution outer loop (`nika evolve run`)
+### Harness Evolution outer loop (`nika evolve run`)
 
-Agent Evolution runs full benchmark generations, writes a scored
-`context.md`, then creates `improvement.md` and `policy_overlay.md` for the next
-generation. The overlay is injected into the evaluated agent's diagnosis prompt;
-ground truth, fault injection, submission tools, and primitive MCP tools remain
-unchanged.
+Harness Evolution follows the SIA-H shape: each generation runs a complete
+benchmark batch with an executable `target_agent.py`, writes scored
+`context.md` plus `agent_execution/` artifacts, then creates the next
+generation's `target_agent.py`. NIKA stays the harness: it starts the network,
+injects the fault, builds a public per-case dataset, runs the target agent in a
+subprocess, and evaluates the resulting submission. It does not train or modify
+model weights.
 
 ```shell
 nika evolve run --file benchmark/benchmark_test.csv \
   --max-gen 3 \
-  -a react -b netmind -m openai/gpt-oss-120b -n 50
+  -b netmind -m openai/gpt-oss-120b -n 100
 ```
 
-Artifacts are stored under `runtime/agent_evolution/<run_id>/`; per-generation
-benchmark sessions are stored under `results/agent-evolution-<run_id>/`.
-Every CSV row contributes to the next policy in order. See
+Artifacts are stored under `runtime/harness_evolution/<run_id>/`;
+per-generation benchmark sessions are stored under
+`results/<benchmark>-<run_id>/gen_<n>/`. Every CSV row contributes to the next
+target-agent update in order. See
 [`docs/learning_modules.md`](docs/learning_modules.md).
 Use `--feedback-mode deterministic` for a no-extra-LLM smoke path, or
-`--feedback-mode llm` to require the structured feedback agent.
+`--feedback-mode llm` to require the structured meta-agent source update.
 
 See [`docs/README.md`](docs/README.md) for the current documentation map.
 

@@ -51,7 +51,6 @@ class BasicReActAgent:
         tool_library_id: str = "default",
         tool_evolution_mode: str = "dual",
         use_problem_tool_hints: bool = True,
-        policy_overlay_path: str | None = None,
     ):
         self.session_id = session_id
         self.max_steps = max_steps
@@ -75,7 +74,6 @@ class BasicReActAgent:
             tool_evolution_enabled=tool_evolution_enabled,
             tool_library_id=tool_library_id,
             tool_evolution_mode=tool_evolution_mode,
-            policy_overlay_path=policy_overlay_path,
         )
         asyncio.run(diagnosis_agent.load_tools())
         self.llm = diagnosis_agent.llm

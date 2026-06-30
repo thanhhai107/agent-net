@@ -229,12 +229,14 @@ def load_model(
     if llm_backend == "openai":
         return ChatOpenAI(
             model_name=model,
+            temperature=0,
         )
 
     if llm_backend == "deepseek":
         return ChatDeepSeek(
             model=model,
             base_url="https://api.deepseek.com",
+            temperature=0,
         )
 
     if llm_backend == "netmind":

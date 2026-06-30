@@ -1,4 +1,4 @@
-"""Commands for SIA-style agent evolution runs."""
+"""Commands for SIA-H style executable harness evolution runs."""
 
 from pathlib import Path
 
@@ -8,10 +8,10 @@ from agent.defaults import DEFAULT_MAX_STEPS
 from agent.llm.model_factory import DEFAULT_LLM_BACKEND, DEFAULT_MODEL
 from agent.tool_evolution.models import ToolEvolutionMode
 from nika.workflows.benchmark.run import default_benchmark_csv_path
-from nika.workflows.evolve.run import FEEDBACK_MODES, run_agent_evolution
+from nika.workflows.evolve.run import FEEDBACK_MODES, run_harness_evolution
 
 evolve_app = typer.Typer(
-    help="Run an outer-loop agent evolution experiment over benchmark generations."
+    help="Run a SIA-H executable target-agent evolution experiment."
 )
 
 
@@ -34,9 +34,6 @@ def evolve_run(
         "--run-id",
         help="Stable id for this evolution run. Defaults to a timestamp id.",
     ),
-    agent_type: str = typer.Option(
-        "react", "-a", "--agent", help="Agent implementation."
-    ),
     llm_backend: str = typer.Option(
         DEFAULT_LLM_BACKEND,
         "-b",
@@ -50,14 +47,7 @@ def evolve_run(
         DEFAULT_MAX_STEPS,
         "-n",
         "--max-steps",
-        help="Per-worker step limit for LangGraph agents.",
-    ),
-    max_attempts: int = typer.Option(
-        3,
-        "-r",
-        "--max-attempts",
-        min=1,
-        help="Maximum attempts for reflexion; ignored by other agents.",
+        help="Target-agent recursion/tool budget per benchmark case.",
     ),
     tools: str | None = typer.Option(
         None,
@@ -86,15 +76,15 @@ def evolve_run(
         min=100,
         help="Maximum memory context tokens injected into each case.",
     ),
-    initial_policy: Path | None = typer.Option(
+    initial_target_agent: Path | None = typer.Option(
         None,
-        "--initial-policy",
-        help="Optional policy overlay injected into generation 1.",
+        "--initial-target-agent",
+        help="Optional target_agent.py copied into generation 1.",
     ),
     feedback_mode: str = typer.Option(
         "auto",
         "--feedback-mode",
-        help="Next-policy planner: auto, deterministic, or llm.",
+        help="Target-agent source planner: auto, deterministic, or llm.",
     ),
     feedback_backend: str | None = typer.Option(
         None,
@@ -121,11 +111,6 @@ def evolve_run(
         "--judge-model",
         help="Model id for the judge when --judge is set.",
     ),
-    oracle_routing: bool = typer.Option(
-        False,
-        "--oracle-routing",
-        help="Use hidden problem labels for MCP server selection (oracle baseline).",
-    ),
     runtime_root: Path | None = typer.Option(
         None,
         "--runtime-root",
@@ -139,7 +124,7 @@ def evolve_run(
         help="Internal test hook for benchmark result root.",
     ),
 ) -> None:
-    """Run benchmark generations and feed scored artifacts into the next policy overlay."""
+    """Run benchmark generations and evolve executable target_agent.py files."""
     if not run_judge and (judge_backend is not None or judge_model is not None):
         raise typer.BadParameter(
             "Pass --judge to enable LLM judge; omit --judge-backend/--judge-model otherwise."
@@ -161,19 +146,16 @@ def evolve_run(
     if results_root is not None:
         kwargs["results_root"] = results_root
 
-    run_agent_evolution(
+    run_harness_evolution(
         benchmark_file=file,
         max_generations=max_gen,
         run_id=run_id,
-        agent_type=agent_type,
         llm_backend=llm_backend,
         model=model,
         max_steps=max_steps,
-        max_attempts=max_attempts,
         run_judge=run_judge,
         judge_llm_backend=judge_backend or DEFAULT_LLM_BACKEND,
         judge_model=judge_model or DEFAULT_MODEL,
-        oracle_routing=oracle_routing,
         tool_evolution_enabled=tools is not None,
         tool_library_id=tools,
         tool_evolution_mode=tool_mode,
@@ -181,7 +163,7 @@ def evolve_run(
         memory_bank=memory or "default",
         memory_top_k=memory_k,
         memory_token_budget=memory_tokens,
-        initial_policy_overlay=initial_policy,
+        initial_target_agent=initial_target_agent,
         feedback_mode=feedback_mode,
         feedback_llm_backend=feedback_backend or llm_backend,
         feedback_model=feedback_model or model,

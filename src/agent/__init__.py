@@ -3,8 +3,8 @@
 from agent.cli.agent import CliAgent
 from agent.composition import (
     AgentRunConfig,
+    HarnessConfig,
     MemoryConfig,
-    PolicyOverlayConfig,
     ToolEvolutionConfig,
 )
 from agent.langgraph.plan_execute_agent import PlanExecuteAgent
@@ -17,10 +17,10 @@ __all__ = [
     "BasicReActAgent",
     "AgentRunConfig",
     "CliAgent",
+    "HarnessConfig",
     "MemoryConfig",
     "MockAgent",
     "PlanExecuteAgent",
-    "PolicyOverlayConfig",
     "ReflexionAgent",
     "ToolEvolutionConfig",
     "create_agent",

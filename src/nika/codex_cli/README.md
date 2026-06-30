@@ -207,21 +207,22 @@ Evolution and evolving memory update after each row in that fixed order.
 
 Agent and judge options use the same flags as below (including `-a cli` and `-e` for Codex runs; `-n` applies to all agents except `cli`).
 
-### Agent evolution mode
+### Harness evolution mode
 
-`nika evolve run` wraps benchmark batches in an outer generation loop. After
-each generation it writes scored context under `runtime/agent_evolution/` and
-injects the next generation's `policy_overlay.md` into the diagnosis prompt.
+`nika evolve run` wraps benchmark batches in a SIA-H style outer loop. Each
+generation runs an executable `target_agent.py` in a subprocess, scores the
+benchmark batch, writes `context.md` and `agent_execution/`, then creates the
+next generation's `target_agent.py`.
 
 ```shell
 nika evolve run --file benchmark/benchmark_test.csv --max-gen 3 \
-  -a react -b netmind -m openai/gpt-oss-120b -n 50
+  -b netmind -m openai/gpt-oss-120b -n 100
 ```
 
-Every CSV row contributes to the next policy. `--feedback-mode auto` tries the
+Every CSV row contributes to the next source update. `--feedback-mode auto` tries the
 structured feedback LLM and falls back to the
-deterministic planner; use `deterministic` for smoke tests or `llm` to require
-feedback-agent output.
+deterministic carry-forward path; use `deterministic` for smoke tests or `llm`
+to require meta-agent output.
 
 ### Streamlit experiment studio
 
@@ -230,7 +231,7 @@ nika studio
 nika studio --host 0.0.0.0 --port 8502 --no-browser
 ```
 
-The studio toggles Tool Evolution, memory evolution, and Agent Evolution as
+The studio toggles Tool Evolution, memory evolution, and Harness Evolution as
 modules in one run, then shows live log and progress events from the same CLI
 workflows.
 
