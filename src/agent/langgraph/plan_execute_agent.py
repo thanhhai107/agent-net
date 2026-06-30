@@ -9,8 +9,6 @@ from typing import Any
 from dotenv import load_dotenv
 from langchain.agents import create_agent
 from langchain_core.messages import HumanMessage, SystemMessage
-from langfuse import get_client
-from langfuse.langchain import CallbackHandler
 from langgraph.errors import GraphRecursionError
 from langgraph.graph import END, START, StateGraph
 from typing_extensions import TypedDict
@@ -18,6 +16,7 @@ from typing_extensions import TypedDict
 from agent.defaults import DEFAULT_MAX_STEPS
 from agent.langgraph.domain_agents.diagnosis_agent import DiagnosisAgent
 from agent.langgraph.domain_agents.submission_agent import SubmissionAgent
+from agent.langgraph.langfuse_tracing import callback_config, create_langfuse_callbacks
 from agent.langgraph.workflow_models import (
     InvestigationPlan,
     PlanStep,
@@ -28,7 +27,6 @@ from agent.llm.model_factory import DEFAULT_LLM_BACKEND, DEFAULT_MODEL, load_mod
 from agent.tool_evolution.integration import write_tool_evolution_session
 from agent.utils.loggers import AgentCallbackLogger
 from agent.utils.tracing import langsmith_tracing_context
-from nika.utils.logger import system_logger
 from nika.utils.session import Session
 
 load_dotenv()
@@ -136,13 +134,7 @@ class PlanExecuteAgent:
         asyncio.run(submission.load_tools())
         self.submission_agent = submission.get_agent()
 
-        self.langfuse_handler = CallbackHandler()
-        if get_client().auth_check():
-            system_logger.info("Authentication to Langfuse successful.")
-        else:
-            system_logger.warning(
-                "Authentication to Langfuse failed. Please check your LANGFUSE_API_KEY."
-            )
+        self.langfuse_callbacks = create_langfuse_callbacks()
 
         builder = StateGraph(PlanExecuteState)
         builder.add_node("planner", self._plan)
@@ -200,7 +192,7 @@ class PlanExecuteAgent:
                         "messages": [HumanMessage(content=task_description)],
                     },
                     config={
-                        "callbacks": [self.langfuse_handler],
+                        **callback_config(self.langfuse_callbacks),
                         "recursion_limit": self.max_steps * 3 + 10,
                     },
                 )

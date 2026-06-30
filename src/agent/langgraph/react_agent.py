@@ -4,8 +4,6 @@ import os
 
 from dotenv import load_dotenv
 from langchain_core.messages import BaseMessage, HumanMessage
-from langfuse import get_client
-from langfuse.langchain import CallbackHandler
 from langgraph.errors import GraphRecursionError
 from langgraph.graph import END, START, StateGraph
 from pydantic import Field, ValidationError
@@ -14,11 +12,11 @@ from typing_extensions import TypedDict
 from agent.defaults import DEFAULT_MAX_STEPS
 from agent.langgraph.domain_agents.diagnosis_agent import DiagnosisAgent
 from agent.langgraph.domain_agents.submission_agent import SubmissionAgent
+from agent.langgraph.langfuse_tracing import callback_config, create_langfuse_callbacks
 from agent.llm.model_factory import DEFAULT_LLM_BACKEND, DEFAULT_MODEL
 from agent.tool_evolution.integration import write_tool_evolution_session
 from agent.utils.loggers import AgentCallbackLogger
 from agent.utils.tracing import langsmith_tracing_context
-from nika.utils.logger import system_logger
 from nika.utils.session import Session
 
 load_dotenv()
@@ -61,19 +59,7 @@ class BasicReActAgent:
         self.session.load_running_session(session_id=session_id)
         self.session_dir = self.session.session_dir
 
-        # Set up Langfuse callback handler
-        # Initialize Langfuse client
-        langfuse = get_client()
-
-        # Initialize Langfuse CallbackHandler for Langchain (tracing)
-        self.langfuse_handler = CallbackHandler()
-
-        if langfuse.auth_check():
-            system_logger.info("Authentication to Langfuse successful.")
-        else:
-            system_logger.warning(
-                "Authentication to Langfuse failed. Please check your LANGFUSE_API_KEY."
-            )
+        self.langfuse_callbacks = create_langfuse_callbacks()
 
         # load agent and tools
         diagnosis_agent = DiagnosisAgent(
@@ -140,7 +126,7 @@ class BasicReActAgent:
                     {
                         "messages": [HumanMessage(content=task_description)],
                     },
-                    config={"callbacks": [self.langfuse_handler]},
+                    config=callback_config(self.langfuse_callbacks),
                 )
             finally:
                 write_tool_evolution_session(

@@ -21,6 +21,10 @@ from agent.composition import (
 )
 from agent.langgraph.plan_execute_agent import PlanExecuteAgent
 from agent.langgraph.reflexion_agent import ReflexionAgent
+from agent.langgraph.langfuse_tracing import (
+    callback_config,
+    create_langfuse_callbacks,
+)
 from agent.langgraph.workflow_models import (
     InvestigationPlan,
     PlanStep,
@@ -102,6 +106,21 @@ class WorkflowModelTest(unittest.TestCase):
 
 
 class WorkflowRegistrationTest(unittest.TestCase):
+    def test_langfuse_auth_errors_disable_tracing_without_failing(self) -> None:
+        with (
+            patch("agent.langgraph.langfuse_tracing.CallbackHandler") as handler,
+            patch("agent.langgraph.langfuse_tracing.get_client") as get_client,
+        ):
+            get_client.return_value.auth_check.side_effect = TimeoutError("slow")
+
+            self.assertEqual(create_langfuse_callbacks(), [])
+            handler.assert_called_once_with()
+
+    def test_callback_config_omits_empty_callbacks(self) -> None:
+        self.assertEqual(callback_config([]), {})
+        callback = object()
+        self.assertEqual(callback_config([callback]), {"callbacks": [callback]})
+
     def test_cli_lists_all_agent_types(self) -> None:
         self.assertEqual(
             SUPPORTED_AGENT_TYPES,

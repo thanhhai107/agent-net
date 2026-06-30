@@ -137,7 +137,12 @@ def _selected_run_dir() -> Path | None:
         if path.exists():
             return path
     runs = list_runs()
-    return runs[0] if runs else None
+    if not runs:
+        return None
+    for r in reversed(runs):
+        if run_status(r).get("status") == "running":
+            return r
+    return runs[0]
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -186,6 +191,16 @@ def _top_result_root(run_path: Path) -> Path:
     return RESULTS_DIR / rel.parts[0]
 
 
+def _is_agent_evolution_result(root: Path, run_path: Path) -> bool:
+    if root.name.startswith("agent-evolution-"):
+        return True
+    try:
+        rel_parts = run_path.relative_to(root).parts
+    except ValueError:
+        return False
+    return any(part.startswith("gen_") and part[4:].isdigit() for part in rel_parts)
+
+
 def _result_rows(*, benchmark_name: str | None = None) -> list[dict[str, object]]:
     if not RESULTS_DIR.exists():
         return []
@@ -196,10 +211,22 @@ def _result_rows(*, benchmark_name: str | None = None) -> list[dict[str, object]
         root = _top_result_root(run_path)
         if benchmark_name and not root.name.startswith(benchmark_name):
             continue
-        grouped.setdefault(root, []).append(run_path)
+        
+        # Group by generation subfolder if it is part of Agent Evolution
+        group_key = root
+        try:
+            rel_parts = run_path.relative_to(root).parts
+            for part in rel_parts:
+                if part.startswith("gen_") and part[4:].isdigit():
+                    group_key = root / part
+                    break
+        except ValueError:
+            pass
+            
+        grouped.setdefault(group_key, []).append(run_path)
 
     rows: list[dict[str, object]] = []
-    for root, run_paths in sorted(
+    for gkey, run_paths in sorted(
         grouped.items(),
         key=lambda item: item[0].stat().st_mtime if item[0].exists() else 0,
         reverse=True,
@@ -213,7 +240,6 @@ def _result_rows(*, benchmark_name: str | None = None) -> list[dict[str, object]
         out_tokens: list[float] = []
         tool_errors: list[float] = []
         durations: list[float] = []
-        failed_subs = 0
         submitted = 0
         finished = 0
         running = 0
@@ -232,11 +258,6 @@ def _result_rows(*, benchmark_name: str | None = None) -> list[dict[str, object]
                 running += 1
             if (session_dir / "submission.json").exists():
                 submitted += 1
-                det = _float(metrics.get("detection_score"))
-                loc = _float(metrics.get("localization_accuracy"))
-                rca = _float(metrics.get("rca_accuracy"))
-                if (det is not None and det < 1.0) or (loc is not None and loc < 1.0) or (rca is not None and rca < 1.0):
-                    failed_subs += 1
 
             for key, target in (
                 ("detection_score", detections),
@@ -256,10 +277,13 @@ def _result_rows(*, benchmark_name: str | None = None) -> list[dict[str, object]
             if dur is not None:
                 durations.append(dur)
 
+            root = _top_result_root(run_path)
+            if _is_agent_evolution_result(root, run_path):
+                result_modules.add("agent_evolution")
             if meta.get("tool_evolution_enabled"):
-                result_modules.add("tool")
+                result_modules.add("tool_evolution")
             if meta.get("memory_mode") and meta.get("memory_mode") != "off":
-                result_modules.add(str(meta.get("memory_mode")))
+                result_modules.add("memory_evolution")
             if meta.get("agent_type"):
                 agents.add(str(meta["agent_type"]))
             if meta.get("model"):
@@ -268,14 +292,20 @@ def _result_rows(*, benchmark_name: str | None = None) -> list[dict[str, object]
 
         if not result_modules:
             result_modules.add("baseline")
+            
+        # Format display name: show parent with generation suffix if grouped under a subfolder
+        if gkey.parent == RESULTS_DIR:
+            display_name = gkey.name
+        else:
+            display_name = f"{gkey.parent.name} ({gkey.name})"
+
         rows.append(
             {
-                "result_root": root.name,
+                "result_root": display_name,
                 "cases": len(run_paths),
                 "finished": finished,
                 "running": running,
                 "submitted": submitted,
-                "failed_subs": failed_subs,
                 "detection": _avg(detections),
                 "localization": _avg(localizations),
                 "rca": _avg(rcas),
@@ -675,11 +705,6 @@ with tab_logs:
         key=log_key,
     )
 
-if is_running:
-    time.sleep(2)
-    st.rerun()
-
-
 st.markdown('<div class="section-title" style="margin-top: 1.5rem;">Results</div>', unsafe_allow_html=True)
 
 # List and display all available experiment results automatically
@@ -687,7 +712,7 @@ result_rows = _result_rows(benchmark_name=None)
 if not result_rows:
     import pandas as pd
     cols = [
-        "result_root", "cases", "finished", "running", "submitted", "failed_subs",
+        "result_root", "cases", "finished", "running", "submitted",
         "detection", "localization", "rca", "steps", "tool_calls", "tool_errors",
         "token_in", "token_out", "duration", "modules", "agent", "model", "updated"
     ]
@@ -696,3 +721,6 @@ if not result_rows:
 else:
     st.dataframe(result_rows, width="stretch", hide_index=True)
 
+if is_running:
+    time.sleep(2)
+    st.rerun()
