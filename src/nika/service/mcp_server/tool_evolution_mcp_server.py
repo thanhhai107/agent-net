@@ -34,12 +34,16 @@ def list_refined_tool_docs(include_frozen: bool = True) -> list[dict[str, Any]]:
                 "name": doc.name,
                 "version": doc.version,
                 "frozen": doc.frozen,
+                "tool_usage_description": doc.tool_usage_description,
                 "description": doc.refined_description(),
                 "parameters": {
                     key: value.model_dump() for key, value in doc.parameters.items()
                 },
                 "usage_notes": doc.usage_notes,
                 "failure_modes": doc.failure_modes,
+                "exploration_suggestions": doc.exploration_suggestions,
+                "mastery_score": doc.mastery_score,
+                "last_convergence_score": doc.last_convergence_score,
             }
         )
     return sorted(docs, key=lambda item: item["name"])

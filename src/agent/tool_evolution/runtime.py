@@ -39,7 +39,9 @@ class ToolEvolutionRuntime:
             refined = doc.refined_description()
             original = getattr(tool, "description", "") or ""
             if refined and refined not in original:
-                tool.description = f"{original.strip()}\n\nDRAFT refined guidance:\n{refined}"
+                tool.description = (
+                    f"{original.strip()}\n\nDRAFT refined guidance:\n{refined}"
+                )
         return self.primitive_tools
 
     def prompt_suffix(self) -> str:
@@ -48,22 +50,37 @@ class ToolEvolutionRuntime:
         active_docs = [doc for doc in self._docs.values() if not doc.frozen]
         if not active_docs:
             active_docs = list(self._docs.values())
+        state = self.store.load()
         snippets = []
         for doc in sorted(active_docs, key=lambda item: item.name)[:8]:
             snippets.append(f"- {doc.name}: {doc.refined_description(max_chars=600)}")
         return (
             "\n\nDRAFT tool documentation memory:\n"
             "The primitive tool surface is fixed. Use the following refined docs "
-            "to choose valid arguments and avoid known failure modes.\n"
+            "to choose valid arguments, avoid known failure modes, and follow "
+            "DRAFT next-check suggestions when more evidence is needed.\n"
+            + (
+                f"{state.library_usage_description}\n"
+                if state.library_usage_description
+                else ""
+            )
             + "\n".join(snippets)
         )
 
     def snapshot(self) -> dict[str, Any]:
+        state = self.store.load()
         return {
             "library_id": self.library_id,
             "model": self.model,
             "task_description": self.task_description,
             "available_documents": sorted(self._docs),
+            "library_usage_description": state.library_usage_description,
+            "tool_stats": {
+                name: stat.model_dump(mode="json")
+                for name, stat in sorted(state.tool_stats.items())
+            },
+            "explorations": len(state.explorations),
+            "analyzer_suggestions": len(state.analyzer_suggestions),
             "primitive_tools": [tool.name for tool in self.primitive_tools],
         }
 

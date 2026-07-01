@@ -49,7 +49,7 @@ Aligned with `nika agent run`:
 - **`-n` / `--max-steps`**: per-worker recursion limit for LangGraph agents; also caps executed plan items for `plan-execute`.
 - **`-r` / `--max-attempts`**: maximum Reflexion attempts for `reflexion` (default: `3`).
 - **`-e` / `--reasoning-effort`**: Codex `model_reasoning_effort` (`cli` only): `none`, `minimal`, `low`, `medium`, `high`, `xhigh`.
-- **`--tools <library-id>`**: enable DRAFT Tool Evolution for a LangGraph workflow. It refines documentation for fixed primitive tools and stores JSON state under `runtime/tool_evolution/<library-id>/`.
+- **`--tools <library-id>`**: enable DRAFT Tool Evolution for a LangGraph workflow. It refines documentation for fixed primitive tools, stores Explorer/Analyzer/Rewriter artifacts, tracks path-rate/mastery stats, and writes JSON state under `runtime/tool_evolution/<library-id>/`.
 
 `nika eval judge` uses **`-b`** and **`-m`** for the judge only (no agent in that command).
 

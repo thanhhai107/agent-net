@@ -106,8 +106,10 @@ nika benchmark run --file benchmark/benchmark_test.yaml \
 
 Persistent libraries live under `runtime/tool_evolution/<library_id>/state.json`.
 They store tool trials, comprehension gaps, structured LLM documentation
-rewrites, revisions, and frozen documents. Use a fresh library id per
-experimental condition.
+rewrites, Explorer observations, Analyzer suggestions, rewrite history,
+tool-level usage summaries, path-rate metrics, mastery/convergence stats,
+revisions, and frozen documents. Use a fresh library id per experimental
+condition.
 
 ## Clean Ablations
 

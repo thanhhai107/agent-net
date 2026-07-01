@@ -282,19 +282,24 @@ The module augments `react`, `plan-execute`, or `reflexion` with DRAFT-style
 documentation refinement for the fixed primitive MCP tool surface. It does not
 create new executable tools or MCP servers.
 
-- **Experience gathering** reads diagnosis `messages.jsonl` and stores tool
-  trials: tool name, arguments, success/error status, output summary, and error
-  summary.
-- **Learning from experience** turns failed trials into comprehension gaps such
-  as invalid argument schema, wrong environment reference, or missing
-  precondition.
-- **Documentation rewriting** asks a structured LLM DRAFT curator to update
-  each primitive tool document with clearer descriptions, preconditions,
-  parameter constraints, positive/negative examples, usage notes, and known
-  failure modes. If the curator is unavailable, the deterministic trial-derived
+- **Explorer adaptation** reads diagnosis `messages.jsonl` as real tool
+  explorations and stores the task, arguments, success/error status, output
+  summary, and error summary.
+- **Analyzer adaptation** turns explored outputs into comprehension gaps and
+  next-exploration suggestions, such as invalid argument schema, wrong
+  environment reference, or missing precondition.
+- **Rewriter adaptation** asks a structured LLM DRAFT curator to update each
+  primitive tool document with clearer descriptions, preconditions, parameter
+  constraints, positive/negative examples, usage notes, known failure modes,
+  suggestions for the next useful trial, and a concise tool-level usage
+  summary. If the curator is unavailable, the deterministic trial-derived
   rewrite still keeps evaluation running.
-- **Tool-adaptive termination** freezes a document when repeated updates stop
-  changing the document or fail to improve useful evidence.
+- **Tool-adaptive termination** tracks rewrite history, convergence, and
+  mastery score, then freezes a document when repeated updates stop changing
+  useful guidance.
+- **Path-rate reporting** mirrors DRAFT evaluation by reporting how much of the
+  session tool path was already covered by refined docs and how much executed
+  successfully.
 
 ```shell
 nika benchmark run --file benchmark/benchmark_test.yaml \
@@ -308,7 +313,8 @@ nika tools reset bgp-study
 
 The persistent library is `runtime/tool_evolution/<library_id>/state.json`.
 Tool-evolving sessions write `tool_evolution.json` with trial counts,
-documentation revisions, LLM rewrite counts, gaps, and frozen-document counts.
+documentation revisions, LLM rewrite counts, gaps, exploration/analyzer counts,
+mastered tools, path rates, and frozen-document counts.
 
 See [`docs/README.md`](docs/README.md) for the current learning-module boundary.
 

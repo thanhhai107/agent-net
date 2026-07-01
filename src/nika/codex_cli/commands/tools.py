@@ -24,8 +24,12 @@ def list_libraries() -> None:
             stats = ToolEvolutionStore(path.name).stats()
             typer.echo(
                 f"{path.name}\tdocs={stats['documents']}\t"
-                f"trials={stats['trials']}\tgaps={stats['gaps']}\t"
-                f"revisions={stats['revisions']}\tfrozen={stats['frozen_documents']}"
+                f"trials={stats['trials']}\texplore={stats['explorations']}\t"
+                f"analyze={stats['analyzer_suggestions']}\tgaps={stats['gaps']}\t"
+                f"revisions={stats['revisions']}\tfrozen={stats['frozen_documents']}\t"
+                f"mastered={stats['mastered_tools']}\t"
+                f"doc_path={stats['avg_documented_path_rate']:.2f}\t"
+                f"success_path={stats['avg_success_path_rate']:.2f}"
             )
 
 

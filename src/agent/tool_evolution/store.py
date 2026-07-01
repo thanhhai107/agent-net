@@ -28,7 +28,11 @@ def safe_library_id(library_id: str) -> str:
 class ToolEvolutionStore:
     """Persistent DRAFT library under ``runtime/tool_evolution/<library_id>``."""
 
-    def __init__(self, library_id: str = "default", root: str | Path | None = None) -> None:
+    def __init__(
+        self,
+        library_id: str = "default",
+        root: str | Path | None = None,
+    ) -> None:
         self.library_id = safe_library_id(library_id)
         self.root = Path(root) if root is not None else TOOL_EVOLUTION_DIR
         self.library_dir = self.root / self.library_id
@@ -89,7 +93,9 @@ class ToolEvolutionStore:
 
     def record_revision(self, revision: DocumentationRevision) -> None:
         state = self.load()
-        if not any(item.revision_id == revision.revision_id for item in state.revisions):
+        if not any(
+            item.revision_id == revision.revision_id for item in state.revisions
+        ):
             state.revisions.append(revision)
             self.save(state)
 
@@ -99,15 +105,38 @@ class ToolEvolutionStore:
         successes = sum(trial.status == "success" for trial in state.trials)
         errors = sum(trial.status == "error" for trial in state.trials)
         frozen = sum(doc.frozen for doc in state.documents.values())
+        mastered = sum(stat.mastered for stat in state.tool_stats.values())
+        documented_rates = [
+            stat.documented_path_rate for stat in state.tool_stats.values()
+        ]
+        success_rates = [stat.success_path_rate for stat in state.tool_stats.values()]
         return {
             "library_id": state.library_id,
             "documents": len(state.documents),
+            "library_usage_description": state.library_usage_description,
             "trials": total,
             "successful_trials": successes,
             "error_trials": errors,
+            "explorations": len(state.explorations),
+            "analyzer_suggestions": len(state.analyzer_suggestions),
             "gaps": len(state.gaps),
             "revisions": len(state.revisions),
             "frozen_documents": frozen,
+            "mastered_tools": mastered,
+            "avg_documented_path_rate": (
+                sum(documented_rates) / len(documented_rates)
+                if documented_rates
+                else 0.0
+            ),
+            "avg_success_path_rate": (
+                sum(success_rates) / len(success_rates)
+                if success_rates
+                else 0.0
+            ),
+            "tool_stats": {
+                name: stat.model_dump(mode="json")
+                for name, stat in sorted(state.tool_stats.items())
+            },
         }
 
     def as_json(self) -> str:

@@ -52,6 +52,12 @@ class EvalResult:
     draft_frozen_documents: int = None
     draft_documented_tools: int = None
     draft_unique_trial_tools: int = None
+    draft_explorations: int = None
+    draft_analyzer_suggestions: int = None
+    draft_mastered_tools: int = None
+    draft_documented_path_rate: float = None
+    draft_success_path_rate: float = None
+    draft_converged_documents: int = None
     draft_llm_revisions: int = None
     incident_success: bool = None
     efficiency_evolution_rate: float = None
@@ -203,6 +209,13 @@ def build_eval_result_from_session_dir(session_dir: Path) -> EvalResult:
         draft_frozen_documents=metrics_blob.get("draft_frozen_documents"),
         draft_documented_tools=metrics_blob.get("draft_documented_tools"),
         draft_unique_trial_tools=metrics_blob.get("draft_unique_trial_tools"),
+        draft_explorations=metrics_blob.get("draft_explorations"),
+        draft_analyzer_suggestions=metrics_blob.get("draft_analyzer_suggestions"),
+        draft_mastered_tools=metrics_blob.get("draft_mastered_tools"),
+        draft_documented_path_rate=metrics_blob.get("draft_documented_path_rate"),
+        draft_success_path_rate=metrics_blob.get("draft_success_path_rate"),
+        draft_converged_documents=metrics_blob.get("draft_converged_documents"),
+        draft_llm_revisions=metrics_blob.get("draft_llm_revisions"),
         incident_success=all(
             metrics_blob.get(key) == 1.0
             for key in (

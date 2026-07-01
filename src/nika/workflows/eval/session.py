@@ -132,6 +132,20 @@ def run_eval_metrics(*, session_id: str | None = None) -> None:
                 "draft_unique_trial_tools": evolution.get(
                     "draft_unique_trial_tools"
                 ),
+                "draft_explorations": evolution.get("draft_explorations"),
+                "draft_analyzer_suggestions": evolution.get(
+                    "draft_analyzer_suggestions"
+                ),
+                "draft_mastered_tools": evolution.get("draft_mastered_tools"),
+                "draft_documented_path_rate": evolution.get(
+                    "draft_documented_path_rate"
+                ),
+                "draft_success_path_rate": evolution.get(
+                    "draft_success_path_rate"
+                ),
+                "draft_converged_documents": evolution.get(
+                    "draft_converged_documents"
+                ),
                 "draft_llm_revisions": evolution.get("draft_llm_revisions"),
             }
         )
