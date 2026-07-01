@@ -21,12 +21,10 @@ def _config(**overrides: object) -> dict[str, object]:
         "max_steps": 100,
         "max_attempts": 3,
         "tool_library_id": "tools-test",
-        "tool_mode": "dual",
         "memory_bank": "memory-test",
         "memory_k": 5,
         "memory_tokens": 1500,
         "max_generations": 3,
-        "feedback_mode": "deterministic",
         "feedback_backend": "netmind",
         "feedback_model": "openai/gpt-oss-120b",
     }
@@ -43,6 +41,15 @@ def test_baseline_command_uses_default_sequential_execution() -> None:
     assert command[command.index("-n") + 1] == "100"
     assert "-j" not in command
     assert "--parallel" not in command
+
+
+def test_standard_agent_label_uses_selected_baseline_name() -> None:
+    plan = build_command_plan(
+        _config(agent_type="reflexion", modules=["memory_evolution"])
+    )
+
+    assert plan[0].variant == "benchmark"
+    assert plan[0].name == "Reflexion + Memory Evolution"
 
 
 def test_command_fallbacks_match_shared_agent_defaults() -> None:
@@ -69,35 +76,40 @@ def test_tool_and_memory_modules_share_one_sequential_command() -> None:
     assert command[command.index("--memory") + 1] == "memory-test"
 
 
-def test_harness_evolution_modules_share_one_evolve_command() -> None:
+def test_sia_h_agent_uses_one_evolve_command_with_optional_modules() -> None:
     command = build_experiment_command(
-        _config(modules=["harness_evolution", "tool_evolution", "memory_evolution"])
+        _config(agent_type="sia-h", modules=["tool_evolution", "memory_evolution"])
     )
 
     assert command[3:6] == ["evolve", "run", "--file"]
     assert command[command.index("--max-gen") + 1] == "3"
-    assert command[command.index("--feedback-mode") + 1] == "deterministic"
     assert "-a" not in command
     assert "-r" not in command
-    assert "--oracle-routing" not in command
     assert "-j" not in command
     assert "--parallel" not in command
     assert command[command.index("--tools") + 1] == "tools-test"
     assert command[command.index("--memory") + 1] == "memory-test"
 
 
-def test_command_plan_can_start_memory_services() -> None:
+def test_sia_h_agent_is_labeled_as_agent_not_module() -> None:
+    plan = build_command_plan(
+        _config(agent_type="sia-h", modules=["tool_evolution"])
+    )
+
+    assert plan[0].variant == "sia_h"
+    assert plan[0].name == "SIA-H + Tool Evolution"
+
+
+def test_command_plan_for_memory_has_no_service_prerequisite() -> None:
     plan = build_command_plan(
         _config(
             modules=["memory_evolution"],
-            ensure_memory_services=True,
         )
     )
 
-    assert plan[0].name == "Memory services"
-    assert plan[0].command == ["docker", "compose", "up", "-d", "postgres", "qdrant"]
-    assert plan[1].variant == "benchmark"
-    assert plan[1].name == "Memory Evolution"
+    assert len(plan) == 1
+    assert plan[0].variant == "benchmark"
+    assert plan[0].name == "ReAct + Memory Evolution"
 
 
 def test_parse_progress_events_reads_benchmark_and_ui_events() -> None:

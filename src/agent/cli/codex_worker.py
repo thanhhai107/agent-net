@@ -92,8 +92,6 @@ class CodexWorker:
     scenario_name:
         Used by :func:`~agent.utils.mcp_servers.select_diagnosis_servers` to pick relevant servers.
         Ignored for the submission phase (which always uses the task server).
-    problem_names:
-        Used together with *scenario_name* for server selection.
     """
 
     def __init__(
@@ -105,8 +103,6 @@ class CodexWorker:
         reasoning_effort: str | None = None,
         timeout: int = 600,
         scenario_name: str = "",
-        problem_names: list[str] | None = None,
-        oracle_routing: bool = False,
         *,
         stream_output: bool = True,
     ) -> None:
@@ -123,8 +119,6 @@ class CodexWorker:
         self.reasoning_effort = reasoning_effort
         self.timeout = timeout
         self.scenario_name = scenario_name
-        self.problem_names = problem_names or []
-        self.oracle_routing = oracle_routing
 
         self.workspace = Path(session_dir) / "codex_workspace"
         self._codex_home = self.workspace / ".codex_home"
@@ -162,11 +156,7 @@ class CodexWorker:
         if self.phase == "submission":
             servers = mcp_cfg.load_config(if_submit=True)
         else:
-            server_names = select_diagnosis_servers(
-                self.scenario_name,
-                self.problem_names,
-                oracle=self.oracle_routing,
-            )
+            server_names = select_diagnosis_servers(self.scenario_name)
             servers = mcp_cfg.load_filtered_config(server_names)
 
         self._logger.log(

@@ -1,47 +1,187 @@
-# NIKA Documentation
+# Learning Modules And Agent Baselines
 
-This directory keeps project notes that are useful for running experiments and
-understanding the current system boundary.
+This document is the compact source of truth for agent-side learning modules and
+agent baselines in the current NIKA checkout.
 
-## Current Docs
+## Boundary
 
-| Path | Purpose |
-|---|---|
-| `learning_modules.md` | Current boundary and usage for memory, Tool Evolution, and Harness Evolution |
-| `memory/README.md` | Detailed procedural-memory design notes and implementation rationale |
-| `report/` | Thesis/report source moved from the old top-level `report/` directory |
+NIKA is the benchmark and orchestration platform. It owns scenarios, sessions,
+environment startup, fault injection, evaluation, and result artifacts. The
+learning logic belongs to the evaluated agent side.
 
-## Experiment Studio
+| Layer | Owns | Must not own |
+|---|---|---|
+| NIKA core | scenarios, sessions, env startup, fault injection, public case datasets, evaluation | agent skill contents, refined tool docs, target-agent source strategy |
+| Agent runtime | diagnosis workflows, prompt construction, MCP tool loading, submission | benchmark scoring or hidden ground truth |
+| Learning modules | Skill-Pro procedural skills, DRAFT tool documentation libraries | hidden-answer mutation or benchmark selection |
+| Agent baselines | static agents, SIA-H executable target-agent source | benchmark scoring or hidden ground truth |
+| Experiment runners | repeatable command workflows | low-level learning implementation details |
 
-Launch the Streamlit runner UI:
+`src/agent/composition.py` is the typed boundary for optional extensions:
 
-```bash
-uv run nika studio
-```
+- `MemoryConfig` controls procedural-memory retrieval and update mode.
+- `ToolEvolutionConfig` controls evolved-tool library exposure and update mode.
+- `HarnessConfig` points SIA-H benchmark rows at an executable `target_agent.py`.
+- `AgentRunConfig` groups the base agent run and extension config.
 
-The studio writes run specs and logs under `runtime/streamlit_runs/`. It runs
-the same CLI workflows as the terminal commands, so benchmark artifacts still
-land under `results/` and can be inspected with `nika visualize`.
+## Online Timeline
 
-## Benchmark Contract
-
-Benchmark CSV files should use the minimal online-timeline schema:
+Benchmark CSV files are one online timeline:
 
 ```csv
 problem,scenario,topo_size
 ```
 
-The row order is the evaluation order. Stateful modules such as memory evolution
-and Tool Evolution update after each row, so evolving runs must stay sequential
-unless the experiment isolates state per worker.
+The runner writes an internal `benchmark_index` into `run.json` based on row
+order. It no longer reads `stream_id`, `split`, or `sequence_index` from CSV.
+Every row can influence later rows through enabled learning modules.
 
-`benchmark/benchmark_test.csv` is the lightweight 30-case suite for quick
-comparisons. `benchmark/benchmark_selected.csv` and `benchmark/benchmark_full.csv`
-remain larger sources for expanded runs.
+Benchmark CSV runs are intentionally sequential:
 
-## Report Notes
+- evolving memory updates the Skill-Pro skill bank after each evaluated episode;
+- Tool Evolution updates DRAFT documentation for fixed primitive tools after each evaluated episode;
+- SIA-H learns from all rows in each generation before writing the next
+  `target_agent.py`.
 
-The report source lives under `docs/report/`. Keep source files such as `.tex`,
-`.bib`, images, and final PDFs there. LaTeX build products such as `.aux`,
-`.log`, `.toc`, `.fls`, `.fdb_latexmk`, `.bbl`, and `.blg` are ignored by the
-root `.gitignore` and should not be committed.
+## Skill-Pro Memory
+
+Memory wraps an existing agent. It retrieves reusable Skill-MDP procedures
+before diagnosis and writes candidate skills after evaluation.
+
+```bash
+nika benchmark run --file benchmark/benchmark_test.csv \
+  -a react \
+  -b netmind \
+  -m openai/gpt-oss-120b \
+  -n 100 \
+  --memory memory-gptoss120
+```
+
+Use `--memory-read <bank>` for read-only retrieval. Persistent state is local
+JSON under `runtime/memory/<bank>/skills.json`.
+
+Each skill has:
+
+- activation condition;
+- execution steps;
+- termination condition.
+
+Offline learning stores structured LLM semantic-gradient critiques and uses a
+non-parametric PPO gate to accept a candidate only when it beats the best
+existing/default policy on accuracy, step cost, and tool-call cost.
+Score-based maintenance retires duplicate or low-value skills.
+`memory_update.json` records whether each accepted/rejected candidate used an
+LLM or deterministic semantic gradient, and memory-bank stats count both total
+and LLM-produced gradients.
+
+## Tool Evolution
+
+Tool Evolution is not a separate agent type. It is an optional agent-side module
+that improves model-facing documentation for fixed primitive MCP tools using
+DRAFT. It does not create new executable tools or MCP servers.
+
+```bash
+nika benchmark run --file benchmark/benchmark_test.csv \
+  -a react \
+  -b netmind \
+  -m openai/gpt-oss-120b \
+  -n 100 \
+  --tools tools-gptoss120
+```
+
+Persistent libraries live under `runtime/tool_evolution/<library_id>/state.json`.
+They store tool trials, comprehension gaps, structured LLM documentation
+rewrites, revisions, and frozen documents. Use a fresh library id per
+experimental condition.
+
+## SIA-H Baseline
+
+SIA-H is an agent baseline with an evolution outer loop for executable target
+agents.
+The Meta-Agent creates the initial `gen_1/target_agent.py` from the benchmark
+task and reference executable. Each generation then runs a full benchmark batch
+with one `target_agent.py`, writes scored context plus per-case execution
+artifacts, and the Feedback-Agent creates the next generation's
+`target_agent.py`. The target agent is run in a subprocess and receives only
+public case files plus MCP access for the current session; NIKA does not train
+or modify model weights.
+
+SIA-H does not start from `react`, `plan-execute`, or `reflexion`. Those remain
+static baselines for `nika benchmark run -a ...`; SIA-H starts from an
+executable `target_agent.py` scaffold generated by the Meta-Agent or copied from
+`--initial-target-agent`.
+
+The benchmark tool surface is fixed by NIKA. Meta-Agent and Feedback-Agent may
+change prompts, planning, retry loops, local helper functions, parsing,
+evidence handling, and submission strategy, but they must not invent new
+benchmark primitive tools or private MCP APIs. When Tool Evolution is enabled,
+SIA-H may read DRAFT-refined primitive-tool docs exposed in `case_context.json`,
+but it still cannot create new benchmark tools.
+
+Overlap controls:
+
+- SIA-H Feedback-Agent learns from scores and sanitized execution digests, not
+  from raw skill-bank contents or raw refined-doc listings.
+- Procedural memory, when enabled, retrieves context before a case and updates
+  after evaluation through the memory workflow; it remains a separate module.
+- Tool Evolution, when enabled, owns primitive-tool documentation refinement;
+  SIA-H may use the exposed docs but must not copy runtime extension context
+  into `target_agent.py`.
+
+```bash
+nika evolve run --file benchmark/benchmark_test.csv \
+  --max-gen 3 \
+  -b netmind \
+  -m openai/gpt-oss-120b \
+  -n 100
+```
+
+Artifacts:
+
+```text
+runtime/harness_evolution/<run_id>/
+  gen_1/target_agent.py
+  gen_1/meta_agent_prompt.md
+  gen_1/context.md
+  gen_1/agent_execution/
+  gen_2/improvement.md
+  gen_2/feedback_agent_prompt.md
+  gen_2/target_agent.py
+results/<benchmark>-<run_id>/gen_<n>/
+```
+
+Every CSV row contributes to the next target-agent update. SIA-H always uses
+structured Meta-Agent and Feedback-Agent source generation; if source generation
+fails, the evolution run fails instead of carrying forward a deterministic target.
+
+## Clean Ablations
+
+Run one module or baseline at a time before combined experiments:
+
+```bash
+# baseline
+nika benchmark run --file benchmark/benchmark_test.csv \
+  -a react -b netmind -m openai/gpt-oss-120b -n 100
+
+# memory only
+nika benchmark run --file benchmark/benchmark_test.csv \
+  -a react -b netmind -m openai/gpt-oss-120b -n 100 \
+  --memory memory-gptoss120
+
+# tool evolution only
+nika benchmark run --file benchmark/benchmark_test.csv \
+  -a react -b netmind -m openai/gpt-oss-120b -n 100 \
+  --tools tools-gptoss120
+
+# SIA-H baseline only
+nika evolve run --file benchmark/benchmark_test.csv \
+  -b netmind -m openai/gpt-oss-120b -n 100 \
+  --max-gen 3
+```
+
+Tool and memory modules can be composed with either static baselines or SIA-H
+from the Streamlit UI:
+
+```bash
+uv run nika studio
+```

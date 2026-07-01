@@ -108,11 +108,6 @@ def run_eval_metrics(*, session_id: str | None = None) -> None:
         "steps": trace_metrics.get("steps"),
         "tool_calls": trace_metrics.get("tool_calls"),
         "tool_errors": trace_metrics.get("tool_errors"),
-        "primitive_calls": trace_metrics.get("primitive_calls"),
-        "composite_calls": trace_metrics.get("composite_calls"),
-        "generated_tool_calls": trace_metrics.get("generated_tool_calls"),
-        "evolved_tools_created": trace_metrics.get("evolved_tools_created"),
-        "mastery_updates": trace_metrics.get("mastery_updates"),
     }
     if bool(getattr(session, "tool_evolution_enabled", False)):
         from agent.tool_evolution.curator import finalize_tool_evolution_session
@@ -123,60 +118,21 @@ def run_eval_metrics(*, session_id: str | None = None) -> None:
         )
         payload.update(
             {
-                "primitive_calls": (
-                    (evolution.get("primitive_calls") or 0)
-                    + (trace_metrics.get("primitive_calls") or 0)
-                ),
-                "composite_calls": evolution.get("composite_calls", 0),
-                "generated_tool_calls": evolution.get("generated_tool_calls", 0),
-                "evolved_tools_created": len(evolution.get("created_tools", [])),
-                "mastery_updates": evolution.get("mastery_updates", 0),
                 "tool_library_id": evolution.get("library_id"),
-                "tool_evolution_mode": evolution.get("mode"),
-                "tool_selection_recall": evolution.get("tool_selection_recall"),
-                "argument_validity": evolution.get("argument_validity"),
-                "error_recovery_count": evolution.get("error_recovery_count"),
-                "tool_reuse_count": evolution.get("tool_reuse_count"),
-                "tool_promotion_count": len(evolution.get("promoted_tools", [])),
-                "tool_regression_count": len(evolution.get("regressed_tools", [])),
-                "library_candidates": evolution.get("library_candidates"),
-                "library_promoted": evolution.get("library_promoted"),
-                "library_generated_tools": evolution.get("library_generated_tools"),
-                "library_generated_candidates": evolution.get(
-                    "library_generated_candidates"
+                "draft_trials": evolution.get("draft_trials"),
+                "draft_trials_added": evolution.get("draft_trials_added"),
+                "draft_document_revisions": evolution.get(
+                    "draft_document_revisions"
                 ),
-                "library_generated_promoted": evolution.get(
-                    "library_generated_promoted"
+                "draft_comprehension_gaps": evolution.get(
+                    "draft_comprehension_gaps"
                 ),
-                "library_mastered_primitives": evolution.get(
-                    "library_mastered_primitives"
+                "draft_frozen_documents": evolution.get("draft_frozen_documents"),
+                "draft_documented_tools": evolution.get("draft_documented_tools"),
+                "draft_unique_trial_tools": evolution.get(
+                    "draft_unique_trial_tools"
                 ),
-                "tool_card_revisions": evolution.get("tool_card_revisions"),
-                "capability_gaps": evolution.get("capability_gaps"),
-                "verified_composites": evolution.get("verified_composites"),
-                "verified_generated_tools": evolution.get("verified_generated_tools"),
-                "unverified_ephemeral_tools": evolution.get(
-                    "unverified_ephemeral_tools"
-                ),
-                "cross_model_reused_tools": evolution.get("cross_model_reused_tools"),
-                "generated_tool_reuse_count": evolution.get(
-                    "generated_tool_reuse_count"
-                ),
-                "retrieved_tool_available_count": evolution.get(
-                    "retrieved_tool_available_count"
-                ),
-                "retrieved_tool_started_count": evolution.get(
-                    "retrieved_tool_started_count"
-                ),
-                "retrieved_tool_started_unique_count": evolution.get(
-                    "retrieved_tool_started_unique_count"
-                ),
-                "retrieved_tool_called_count": evolution.get(
-                    "retrieved_tool_called_count"
-                ),
-                "retrieved_tool_called_unique_count": evolution.get(
-                    "retrieved_tool_called_unique_count"
-                ),
+                "draft_llm_revisions": evolution.get("draft_llm_revisions"),
             }
         )
     out_path = Path(session.session_dir) / EVAL_METRICS_FILENAME

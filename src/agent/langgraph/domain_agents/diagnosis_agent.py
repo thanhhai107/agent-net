@@ -4,7 +4,6 @@ from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
 from agent.llm.model_factory import DEFAULT_LLM_BACKEND, DEFAULT_MODEL, load_model
-from agent.tool_evolution.models import ToolEvolutionMode
 from agent.tool_evolution.runtime import ToolEvolutionRuntime
 from agent.utils.mcp_servers import MCPServerConfig, select_diagnosis_servers
 from nika.utils.session import Session
@@ -30,22 +29,15 @@ class DiagnosisAgent:
         llm_backend: str = DEFAULT_LLM_BACKEND,
         model: str = DEFAULT_MODEL,
         scenario_name: str = "",
-        problem_names: list[str] | None = None,
-        oracle_routing: bool = False,
         load_all_tools: bool = False,
         tool_evolution_enabled: bool = False,
         tool_library_id: str = "default",
-        tool_evolution_mode: str = "dual",
     ):
         mcp_cfg = MCPServerConfig(session_id=session_id)
         if load_all_tools:
             mcp_server_config = mcp_cfg.load_config(if_submit=False)
         else:
-            server_names = select_diagnosis_servers(
-                scenario_name,
-                problem_names or [],
-                oracle=oracle_routing,
-            )
+            server_names = select_diagnosis_servers(scenario_name)
             mcp_server_config = mcp_cfg.load_filtered_config(server_names)
         self.client = MultiServerMCPClient(connections=mcp_server_config)
         self.tools: list[BaseTool] = []
@@ -54,11 +46,6 @@ class DiagnosisAgent:
         self.model = model
         self.tool_evolution_enabled = tool_evolution_enabled
         self.tool_library_id = tool_library_id
-        self.tool_evolution_mode = (
-            ToolEvolutionMode(tool_evolution_mode)
-            if tool_evolution_enabled
-            else None
-        )
         self.tool_evolution_runtime: ToolEvolutionRuntime | None = None
 
     async def load_tools(self):
@@ -68,12 +55,10 @@ class DiagnosisAgent:
             tool.handle_validation_error = True
         if self.tool_evolution_enabled:
             session = Session().load_running_session(session_id=self.session_id)
-            assert self.tool_evolution_mode is not None
             self.tool_evolution_runtime = ToolEvolutionRuntime(
                 session=session,
                 primitive_tools=self.tools,
                 library_id=self.tool_library_id,
-                mode=self.tool_evolution_mode,
                 model=self.model,
                 task_description=getattr(session, "task_description", ""),
             )

@@ -21,6 +21,9 @@ FORBIDDEN_SOURCE_PATTERNS = (
     "benchmark_test.csv",
     "run_benchmark_from_csv",
     "inject_failure",
+    "tool_evolution_mcp_server",
+    "fastmcp",
+    "mcp.server.fastmcp",
 )
 
 

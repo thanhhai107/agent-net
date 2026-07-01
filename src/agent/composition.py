@@ -21,7 +21,6 @@ LANGGRAPH_DIAGNOSIS_AGENT_TYPES = frozenset({"react", "plan-execute", "reflexion
 class ToolEvolutionConfig:
     enabled: bool = False
     library_id: str = "default"
-    mode: str = "dual"
 
 
 @dataclass(frozen=True)
@@ -55,7 +54,6 @@ class AgentRunConfig:
     max_attempts: int = 3
     reasoning_effort: str | None = None
     stream_output: bool = True
-    oracle_routing: bool = False
     tool_evolution: ToolEvolutionConfig = field(default_factory=ToolEvolutionConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
 
@@ -99,10 +97,8 @@ def workflow_agent_kwargs(
         "llm_backend": config.llm_backend,
         "model": config.model,
         "max_steps": config.max_steps,
-        "oracle_routing": config.oracle_routing,
         "tool_evolution_enabled": config.tool_evolution.enabled,
         "tool_library_id": config.tool_evolution.library_id,
-        "tool_evolution_mode": config.tool_evolution.mode,
     }
     if reflexion:
         kwargs["max_attempts"] = config.max_attempts

@@ -1,4 +1,4 @@
-"""Streamlit experiment runner for NIKA benchmark modules."""
+"""Streamlit experiment runner for NIKA agent baselines and modules."""
 
 from __future__ import annotations
 
@@ -381,20 +381,18 @@ def _result_rows(*, benchmark_name: str | None = None) -> list[dict[str, object]
 
             root = _top_result_root(run_path)
             if _is_harness_evolution_result(root, run_path):
-                result_modules.add("Harness Evolution (SIA-H)")
+                agents.add("SIA-H")
             if meta.get("tool_evolution_enabled"):
                 result_modules.add("Tool Evolution")
             if meta.get("memory_mode") and meta.get("memory_mode") != "off":
                 result_modules.add("Memory Evolution")
             if meta.get("agent_type"):
-                agents.add(str(meta["agent_type"]))
+                agent_name = str(meta["agent_type"])
+                agents.add("SIA-H" if agent_name == "harness" else agent_name)
             if meta.get("model"):
                 models.add(str(meta["model"]))
             updated = str(meta.get("updated_at") or meta.get("created_at") or updated)
 
-        if not result_modules:
-            result_modules.add("Baseline")
-            
         # Format display name: show parent with generation suffix if grouped under a subfolder
         if gkey.parent == RESULTS_DIR:
             display_name = gkey.name
@@ -417,7 +415,7 @@ def _result_rows(*, benchmark_name: str | None = None) -> list[dict[str, object]
                 "token_in": _sum(in_tokens),
                 "token_out": _sum(out_tokens),
                 "duration": f"{int(sum(durations))}s" if durations else "-",
-                "modules": ", ".join(sorted(result_modules)),
+                "modules": ", ".join(sorted(result_modules)) or "-",
                 "agent": ", ".join(sorted(agents)) or "-",
                 "model": ", ".join(sorted(models)) or "-",
                 "updated": updated,
@@ -494,26 +492,20 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-st.markdown('<div class="section-title">Configuration</div>', unsafe_allow_html=True)
+st.markdown('<div class="section-title">Studio</div>', unsafe_allow_html=True)
 
-# Grid layout for general configuration
-col1, col2, col3 = st.columns(3, gap="medium")
-with col1:
-    benchmark_name = st.text_input("Benchmark Name", value=Path(default_benchmark_csv_path()).stem)
+cfg_cols = st.columns(4, gap="medium")
+with cfg_cols[0]:
+    benchmark_name = st.text_input(
+        "Benchmark",
+        value=Path(default_benchmark_csv_path()).stem,
+    )
     benchmark_path = _benchmark_path_from_name(benchmark_name)
     row_count = _count_rows(benchmark_path)
-with col2:
+with cfg_cols[1]:
     max_steps_str = st.text_input("Steps", value=str(DEFAULT_MAX_STEPS))
     max_steps = int(max_steps_str) if max_steps_str.isdigit() else DEFAULT_MAX_STEPS
-with col3:
-    max_attempts_str = st.text_input("Attempts", value="3")
-    max_attempts = int(max_attempts_str) if max_attempts_str.isdigit() else 3
-
-# Grid layout for execution parameters
-col5, col6, col7 = st.columns(3, gap="medium")
-with col5:
-    agent_type = st.selectbox("Agent", ["react", "plan-execute", "reflexion", "mock"])
-with col6:
+with cfg_cols[2]:
     backend_options = ["netmind", "openai", "deepseek", "ollama"]
     llm_backend = st.selectbox(
         "Backend",
@@ -522,96 +514,99 @@ with col6:
         if DEFAULT_LLM_BACKEND in backend_options
         else 0,
     )
-with col7:
+with cfg_cols[3]:
     model = st.text_input("Model", value=DEFAULT_MODEL)
 
-# Active Modules row layout
-st.markdown("<div style='font-size: 0.8rem; font-weight: bold; color: var(--muted); margin-top: 0.5rem; margin-bottom: 0.25rem;'>Active Modules</div>", unsafe_allow_html=True)
-col_m1, col_m2, col_m3 = st.columns(3, gap="medium")
-with col_m1:
+agent_cols = st.columns(2, gap="medium")
+with agent_cols[0]:
+    agent_type = st.selectbox(
+        "Agent baseline",
+        ["react", "plan-execute", "reflexion", "sia-h", "mock"],
+    )
+
+sia_h_selected = agent_type == "sia-h"
+if sia_h_selected:
+    with agent_cols[1]:
+        max_generations = st.number_input("Generations", min_value=1, max_value=20, value=3)
+    max_attempts = 1
+else:
+    with agent_cols[1]:
+        max_attempts_str = st.text_input("Attempts", value="3")
+        max_attempts = int(max_attempts_str) if max_attempts_str.isdigit() else 3
+    max_generations = 3
+
+st.markdown(
+    "<div style='font-size: 0.8rem; font-weight: bold; color: var(--muted); "
+    "margin-top: 0.5rem; margin-bottom: 0.25rem;'>Modules</div>",
+    unsafe_allow_html=True,
+)
+
+col_t1, col_t2, col_t3 = st.columns([1, 1.5, 1.5], gap="medium")
+with col_t1:
+    st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
     tool_selected = st.checkbox("Tool Evolution", value=False)
-with col_m2:
+with col_t2:
+    tool_library_id = st.text_input("Tool library ID", value="tools-gptoss120-test", disabled=not tool_selected)
+with col_t3:
+    pass
+
+col_mem1, col_mem2, col_mem3, col_mem4 = st.columns([1, 1.5, 0.75, 0.75], gap="medium")
+with col_mem1:
+    st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
     memory_selected = st.checkbox("Memory Evolution", value=False)
-with col_m3:
-    harness_evolution_selected = st.checkbox("Harness Evolution (SIA-H)", value=False)
+with col_mem2:
+    memory_bank = st.text_input("Memory bank", value="memory-gptoss120-test", disabled=not memory_selected)
+with col_mem3:
+    memory_k = st.number_input("Memory top-k", min_value=1, max_value=20, value=5, disabled=not memory_selected)
+with col_mem4:
+    memory_tokens = st.number_input("Memory tokens", min_value=100, max_value=8000, value=1500, step=100, disabled=not memory_selected)
+
+col_s1, col_s2, col_s3 = st.columns([1, 1.5, 1.5], gap="medium")
+with col_s1:
+    st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
+    box_bg = "#0ea5e9" if sia_h_selected else "rgba(15, 23, 42, 0.04)"
+    box_border = "1px solid #0ea5e9" if sia_h_selected else "1px solid var(--line)"
+    checkmark_svg = (
+        '<svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="4" '
+        'stroke-linecap="round" stroke-linejoin="round" style="width: 10px; height: 10px;">'
+        '<polyline points="20 6 9 17 4 12"></polyline></svg>'
+    ) if sia_h_selected else ""
+    st.markdown(
+        f"""
+        <div style='display: flex; align-items: center; gap: 10px; height: 40px;'>
+          <div style='width: 16px; height: 16px; border: {box_border}; border-radius: 4px; background: {box_bg}; display: flex; align-items: center; justify-content: center;'>
+            {checkmark_svg}
+          </div>
+          <span style='font-size: 0.875rem; font-weight: 700; color: var(--muted);'>SIA-H Agents</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+with col_s2:
+    feedback_backend = st.text_input("Feedback backend", value=llm_backend, disabled=not sia_h_selected)
+with col_s3:
+    feedback_model = st.text_input("Feedback model", value=model, disabled=not sia_h_selected)
 
 modules = []
 if tool_selected:
     modules.append("tool_evolution")
 if memory_selected:
     modules.append("memory_evolution")
-if harness_evolution_selected:
-    modules.append("harness_evolution")
 
-# Advanced configurations
-if tool_selected or memory_selected or harness_evolution_selected:
-    with st.expander("Advanced Module Settings", expanded=True):
-        active_modules_count = sum(
-            [tool_selected, memory_selected, harness_evolution_selected]
-        )
-        m_cols = st.columns(active_modules_count, gap="medium")
-        col_idx = 0
-        
-        if tool_selected:
-            with m_cols[col_idx]:
-                st.markdown("**Tool Evolution**")
-                tool_library_id = st.text_input("Tool library", value="tools-gptoss120-test")
-                tool_mode = st.selectbox("Tool mode", ["dual", "mastery", "distill"])
-            col_idx += 1
-        else:
-            tool_library_id = "tools-gptoss120-test"
-            tool_mode = "dual"
-            
-        if memory_selected:
-            with m_cols[col_idx]:
-                st.markdown("**Memory Evolution**")
-                memory_bank = st.text_input("Memory bank", value="memory-gptoss120-test")
-                memory_k = st.number_input("Memory top-k", min_value=1, max_value=20, value=5)
-                memory_tokens = st.number_input("Memory tokens", min_value=100, max_value=8000, value=1500, step=100)
-                ensure_memory_services = st.checkbox("Start postgres/qdrant", value=True)
-            col_idx += 1
-        else:
-            memory_bank = "memory-gptoss120-test"
-            memory_k = 5
-            memory_tokens = 1500
-            ensure_memory_services = False
-            
-        if harness_evolution_selected:
-            with m_cols[col_idx]:
-                st.markdown("**Harness Evolution (SIA-H)**")
-                max_generations = st.number_input("Generations", min_value=1, max_value=20, value=3)
-                feedback_mode = st.selectbox("Feedback mode", ["auto", "deterministic", "llm"])
-                feedback_backend = st.text_input("Feedback backend", value=llm_backend)
-                feedback_model = st.text_input("Feedback model", value=model)
-            col_idx += 1
-        else:
-            max_generations = 3
-            feedback_mode = "auto"
-            feedback_backend = llm_backend
-            feedback_model = model
-else:
-    tool_library_id = "tools-gptoss120-test"
-    tool_mode = "dual"
-    memory_bank = "memory-gptoss120-test"
-    memory_k = 5
-    memory_tokens = 1500
-    ensure_memory_services = False
-    max_generations = 3
-    feedback_mode = "auto"
-    feedback_backend = llm_backend
-    feedback_model = model
-
-# Evaluation Settings expander
-with st.expander("Evaluation Settings", expanded=False):
-    col_e1, col_e2, col_e3, col_e4 = st.columns(4, gap="medium")
-    with col_e1:
-        run_judge = st.checkbox("Run LLM judge", value=False)
-    with col_e2:
-        judge_backend = st.text_input("Judge backend", value=llm_backend)
-    with col_e3:
-        judge_model = st.text_input("Judge model", value=model)
-    with col_e4:
-        oracle_routing = st.checkbox("Oracle routing", value=False)
+# Evaluation Settings
+st.markdown(
+    "<div style='font-size: 0.8rem; font-weight: bold; color: var(--muted); "
+    "margin-top: 1rem; margin-bottom: 0.25rem;'>Evaluation Settings</div>",
+    unsafe_allow_html=True,
+)
+col_e1, col_e2, col_e3 = st.columns([1, 1.5, 1.5], gap="medium")
+with col_e1:
+    st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
+    run_judge = st.checkbox("Run LLM judge", value=False)
+with col_e2:
+    judge_backend = st.text_input("Judge backend", value=llm_backend)
+with col_e3:
+    judge_model = st.text_input("Judge model", value=model)
 
 config = {
     "benchmark_file": str(benchmark_path),
@@ -623,19 +618,15 @@ config = {
     "max_attempts": int(max_attempts),
     "parallel": 1,
     "tool_library_id": tool_library_id,
-    "tool_mode": tool_mode,
     "memory_bank": memory_bank,
     "memory_k": int(memory_k),
     "memory_tokens": int(memory_tokens),
-    "ensure_memory_services": bool(ensure_memory_services),
     "max_generations": int(max_generations),
-    "feedback_mode": feedback_mode,
     "feedback_backend": feedback_backend,
     "feedback_model": feedback_model,
     "run_judge": bool(run_judge),
     "judge_backend": judge_backend,
     "judge_model": judge_model,
-    "oracle_routing": bool(oracle_routing),
 }
 plan = build_command_plan(config)
 

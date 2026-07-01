@@ -49,9 +49,7 @@ Aligned with `nika agent run`:
 - **`-n` / `--max-steps`**: per-worker recursion limit for LangGraph agents; also caps executed plan items for `plan-execute`.
 - **`-r` / `--max-attempts`**: maximum Reflexion attempts for `reflexion` (default: `3`).
 - **`-e` / `--reasoning-effort`**: Codex `model_reasoning_effort` (`cli` only): `none`, `minimal`, `low`, `medium`, `high`, `xhigh`.
-- **`--oracle-routing`**: allow hidden problem labels to select MCP servers; intended only for an oracle baseline.
-- **`--tools <library-id>`**: enable Tool Evolution for a LangGraph workflow. Persisted composites use a stricter composable-tool policy than the live diagnostic surface.
-- **`--tool-mode`**: Tool Evolution ablation mode: `mastery`, `distill`, or `dual`.
+- **`--tools <library-id>`**: enable DRAFT Tool Evolution for a LangGraph workflow. It refines documentation for fixed primitive tools and stores JSON state under `runtime/tool_evolution/<library-id>/`.
 
 `nika eval judge` uses **`-b`** and **`-m`** for the judge only (no agent in that command).
 
@@ -123,10 +121,8 @@ Example: `nika exec pc1 ping -c 3 10.0.0.2 --timeout 30`
   | `-e` / `--reasoning-effort` | `cli` | Codex reasoning effort level |
   | `--session-id` | all | target session |
   | `--tools` | LangGraph workflows | enable Tool Evolution with a persistent library id |
-  | `--tool-mode` | Tool Evolution | `mastery`, `distill`, or `dual` |
   | `--memory` | LangGraph workflows | enable evolving procedural memory with a bank id |
   | `--memory-read` | LangGraph workflows | read a frozen procedural-memory bank |
-  | `--oracle-routing` | LLM agents | hidden-label MCP routing baseline |
 
   Examples:
 
@@ -135,7 +131,7 @@ Example: `nika exec pc1 ping -c 3 10.0.0.2 --timeout 30`
   nika agent run -a plan-execute -b netmind -m openai/gpt-oss-120b -n 20
   nika agent run -a reflexion -b netmind -m openai/gpt-oss-120b -n 20 -r 3
   nika agent run -a react -b netmind -m openai/gpt-oss-120b \
-    --tools experiment-a --tool-mode dual
+    --tools experiment-a
   nika agent run -a cli -m gpt-5.4-mini -e medium
   nika agent run -a mock -n 5
   ```
@@ -184,7 +180,7 @@ Omit the `SCENARIO` positional argument. Rows are read from a CSV file.
 nika benchmark run
 nika benchmark run --file benchmark/benchmark_test.csv
 nika benchmark run --file benchmark/benchmark_test.csv \
-  -a react --tools experiment-a --tool-mode dual
+  -a react --tools experiment-a
 ```
 
 **Default CSV path**: `benchmark/benchmark_test.csv` under the repository root.
@@ -207,22 +203,25 @@ Evolution and evolving memory update after each row in that fixed order.
 
 Agent and judge options use the same flags as below (including `-a cli` and `-e` for Codex runs; `-n` applies to all agents except `cli`).
 
-### Harness evolution mode
+### SIA-H target-agent baseline
 
 `nika evolve run` wraps benchmark batches in a SIA-H style outer loop. Each
 generation runs an executable `target_agent.py` in a subprocess, scores the
 benchmark batch, writes `context.md` and `agent_execution/`, then creates the
-next generation's `target_agent.py`.
+next generation's `target_agent.py`. The Meta-Agent creates the initial target
+agent from the task/reference scaffold; it does not start from `react`,
+`plan-execute`, or `reflexion`. The Feedback-Agent reads generation results and
+writes later target agents.
 
 ```shell
 nika evolve run --file benchmark/benchmark_test.csv --max-gen 3 \
   -b netmind -m openai/gpt-oss-120b -n 100
 ```
 
-Every CSV row contributes to the next source update. `--feedback-mode auto` tries the
-structured feedback LLM and falls back to the
-deterministic carry-forward path; use `deterministic` for smoke tests or `llm`
-to require meta-agent output.
+Every CSV row contributes to the next source update. SIA-H always uses
+structured Meta-Agent and Feedback-Agent source generation; failed source
+generation stops the evolution run instead of carrying forward the current
+target.
 
 ### Streamlit experiment studio
 
@@ -231,9 +230,9 @@ nika studio
 nika studio --host 0.0.0.0 --port 8502 --no-browser
 ```
 
-The studio toggles Tool Evolution, memory evolution, and Harness Evolution as
-modules in one run, then shows live log and progress events from the same CLI
-workflows.
+The studio selects a baseline agent, including the special SIA-H baseline, and
+composes optional Tool Evolution and memory modules in one run. It then shows
+live log and progress events from the same CLI workflows.
 
 ### Single-case mode
 

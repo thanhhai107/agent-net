@@ -1,116 +1,29 @@
-"""Models for atomic procedural memory.
-
-The module is intentionally organized around three ideas:
-- MemInsight-style context attributes for retrieval.
-- LightMem-style post-episode validation/consolidation.
-- A-Mem-style atomic notes and graph links.
-"""
+"""Skill-Pro inspired procedural skill schemas."""
 
 from __future__ import annotations
 
-from enum import StrEnum
-from typing import Any
+import hashlib
+import json
+from datetime import datetime, timezone
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
-
-
-class MemoryStatus(StrEnum):
-    STAGED = "staged"
-    VALIDATED = "validated"
-    SUPERSEDED = "superseded"
-    REJECTED = "rejected"
+from pydantic import BaseModel, Field
 
 
-class MemoryLinkType(StrEnum):
-    SUPPORTS = "supports"
-    REFINES = "refines"
-    CONTRADICTS = "contradicts"
-    SAME_PATTERN = "same_pattern"
+def utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 class MemoryAttributes(BaseModel):
-    """MemInsight-style searchable, non-oracle attributes."""
-
-    scenarios: list[str] = Field(default_factory=list)
-    topology_classes: list[str] = Field(default_factory=list)
     protocols: list[str] = Field(default_factory=list)
     services: list[str] = Field(default_factory=list)
-    task_stages: list[str] = Field(default_factory=list)
     symptoms: list[str] = Field(default_factory=list)
+    task_stages: list[str] = Field(default_factory=list)
     tools: list[str] = Field(default_factory=list)
-
-    def normalized(self) -> "MemoryAttributes":
-        values: dict[str, list[str]] = {}
-        for field_name in type(self).model_fields:
-            raw_values = getattr(self, field_name)
-            values[field_name] = sorted(
-                {
-                    str(value).strip().lower()
-                    for value in raw_values
-                    if str(value).strip()
-                }
-            )
-        return MemoryAttributes(**values)
-
-    def flat_values(self) -> set[str]:
-        normalized = self.normalized()
-        return {
-            value
-            for field_name in type(normalized).model_fields
-            for value in getattr(normalized, field_name)
-        }
-
-
-class MemoryCandidate(BaseModel):
-    """One A-Mem-style atomic procedural note proposed by the extractor."""
-
-    content: str = Field(min_length=12, max_length=1200)
-    applicability: list[str] = Field(default_factory=list, max_length=8)
-    evidence_required: list[str] = Field(default_factory=list, max_length=8)
-    avoid: list[str] = Field(default_factory=list, max_length=8)
-    attributes: MemoryAttributes = Field(default_factory=MemoryAttributes)
-
-    @model_validator(mode="after")
-    def ensure_procedural_value(self) -> "MemoryCandidate":
-        if not (self.applicability or self.evidence_required or self.avoid):
-            raise ValueError(
-                "a procedural memory requires applicability, evidence, or an avoid rule"
-            )
-        self.attributes = self.attributes.normalized()
-        return self
-
-
-class MemoryExtraction(BaseModel):
-    memories: list[MemoryCandidate] = Field(default_factory=list, max_length=6)
-
-
-class EvaluationEvidence(BaseModel):
-    """Only numeric benchmark feedback exposed to the validation policy."""
-
-    detection_score: float
-    localization_f1: float
-    rca_f1: float
-
-    @property
-    def fully_successful(self) -> bool:
-        return (
-            self.detection_score >= 1.0
-            and self.localization_f1 >= 1.0
-            and self.rca_f1 >= 1.0
-        )
-
-    @property
-    def aggregate_score(self) -> float:
-        scores = [
-            max(0.0, min(1.0, self.detection_score)),
-            max(0.0, min(1.0, self.localization_f1)),
-            max(0.0, min(1.0, self.rca_f1)),
-        ]
-        return sum(scores) / len(scores)
 
 
 class MemoryQuery(BaseModel):
-    text: str = Field(min_length=1)
+    text: str
     scenario: str = ""
     topology_class: str = ""
     protocols: list[str] = Field(default_factory=list)
@@ -118,75 +31,101 @@ class MemoryQuery(BaseModel):
     symptoms: list[str] = Field(default_factory=list)
     task_stage: str = "diagnosis"
     tools: list[str] = Field(default_factory=list)
-    top_k: int = Field(default=5, ge=1, le=20)
-    candidate_limit: int = Field(default=20, ge=1, le=100)
-    token_budget: int = Field(default=1500, ge=100, le=12000)
-
-    def attributes(self) -> MemoryAttributes:
-        return MemoryAttributes(
-            scenarios=[self.scenario] if self.scenario else [],
-            topology_classes=[self.topology_class] if self.topology_class else [],
-            protocols=self.protocols,
-            services=self.services,
-            task_stages=[self.task_stage] if self.task_stage else [],
-            symptoms=self.symptoms,
-            tools=self.tools,
-        ).normalized()
+    top_k: int = 5
+    token_budget: int = 1500
 
 
-class StoredMemory(MemoryCandidate):
-    memory_id: str
-    bank_id: str
-    status: MemoryStatus
-    confidence: float = Field(ge=0.0, le=1.0)
+class SkillStep(BaseModel):
+    order: int
+    action: str
+    tool_name: str = ""
+    arguments_hint: dict[str, Any] = Field(default_factory=dict)
+    rationale: str = ""
+
+
+class SemanticGradient(BaseModel):
     source_session_id: str
-    version: int = Field(ge=1)
-    validation_count: int = Field(ge=0)
-    failure_count: int = Field(ge=0)
-    created_at: str
-    superseded_at: str | None = None
-    superseded_by: str | None = None
-
-    def embedding_text(self) -> str:
-        attrs = self.attributes.normalized()
-        sections = [
-            f"Atomic procedural note: {self.content}",
-        ]
-        if self.applicability:
-            sections.append("Applies when: " + "; ".join(self.applicability))
-        if self.evidence_required:
-            sections.append("Evidence required: " + "; ".join(self.evidence_required))
-        if self.avoid:
-            sections.append("Avoid: " + "; ".join(self.avoid))
-        for label, values in (
-            ("Protocols", attrs.protocols),
-            ("Services", attrs.services),
-            ("Task stages", attrs.task_stages),
-            ("Symptoms", attrs.symptoms),
-            ("Tools", attrs.tools),
-        ):
-            if values:
-                sections.append(f"{label}: " + ", ".join(values))
-        return "\n".join(sections)
+    critique: str
+    proposed_update: str
+    gradient_source: Literal["llm", "deterministic"] = "deterministic"
+    created_at: str = Field(default_factory=utc_now)
 
 
-class RetrievedMemory(BaseModel):
-    memory: StoredMemory
-    score: float
-    lexical_score: float = 0.0
-    semantic_score: float = 0.0
-    attribute_score: float = 0.0
-    graph_score: float = 0.0
-
-
-class MemoryRelationDecision(BaseModel):
-    relation: MemoryLinkType | None = None
-    reason: str = Field(default="", max_length=300)
-
-
-class MemorySnapshot(BaseModel):
-    bank_id: str
+class EvaluationEvidence(BaseModel):
     session_id: str
-    created_at: str
-    memories: list[dict[str, Any]]
-    links: list[dict[str, Any]]
+    task_description: str = ""
+    scenario: str = ""
+    topology_class: str = ""
+    root_cause: list[str] = Field(default_factory=list)
+    faulty_devices: list[str] = Field(default_factory=list)
+    metrics: dict[str, Any] = Field(default_factory=dict)
+    steps: int = 0
+    tool_calls: int = 0
+    success: bool = False
+
+
+class ProceduralSkill(BaseModel):
+    skill_id: str
+    title: str
+    activation_condition: str
+    execution_steps: list[SkillStep] = Field(min_length=1)
+    termination_condition: str
+    source_sessions: list[str] = Field(default_factory=list)
+    protocols: list[str] = Field(default_factory=list)
+    services: list[str] = Field(default_factory=list)
+    symptoms: list[str] = Field(default_factory=list)
+    tools: list[str] = Field(default_factory=list)
+    status: Literal["candidate", "validated", "retired"] = "candidate"
+    reuse_count: int = 0
+    success_count: int = 0
+    failure_count: int = 0
+    score: float = 0.0
+    semantic_gradients: list[SemanticGradient] = Field(default_factory=list)
+    created_at: str = Field(default_factory=utc_now)
+    updated_at: str = Field(default_factory=utc_now)
+
+    @property
+    def memory_id(self) -> str:
+        return self.skill_id
+
+    def content_hash(self) -> str:
+        payload = self.model_dump(
+            exclude={
+                "created_at",
+                "updated_at",
+                "reuse_count",
+                "success_count",
+                "failure_count",
+                "score",
+                "source_sessions",
+            }
+        )
+        encoded = json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str)
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+class SkillRetrieval(BaseModel):
+    memory: ProceduralSkill
+    score: float
+    reasons: list[str] = Field(default_factory=list)
+
+    @property
+    def skill(self) -> ProceduralSkill:
+        return self.memory
+
+
+class PPOGateDecision(BaseModel):
+    accepted: bool
+    reason: str
+    candidate_score: float
+    baseline_score: float
+    replaced_skill_id: str | None = None
+
+
+class SkillMemoryState(BaseModel):
+    bank_id: str
+    skills: dict[str, ProceduralSkill] = Field(default_factory=dict)
+    episodes: list[EvaluationEvidence] = Field(default_factory=list)
+    ppo_decisions: list[PPOGateDecision] = Field(default_factory=list)
+    created_at: str = Field(default_factory=utc_now)
+    updated_at: str = Field(default_factory=utc_now)

@@ -42,39 +42,17 @@ class EvalResult:
     steps: int = None
     tool_calls: int = None
     tool_errors: int = None
-    primitive_calls: int = None
-    composite_calls: int = None
-    generated_tool_calls: int = None
-    evolved_tools_created: int = None
-    mastery_updates: int = None
     tool_evolution_enabled: bool | None = None
     tool_library_id: str = None
-    tool_evolution_mode: str = None
     benchmark_index: int = None
-    tool_selection_recall: float = None
-    argument_validity: float = None
-    error_recovery_count: int = None
-    tool_reuse_count: int = None
-    tool_promotion_count: int = None
-    tool_regression_count: int = None
-    library_candidates: int = None
-    library_promoted: int = None
-    library_generated_tools: int = None
-    library_generated_candidates: int = None
-    library_generated_promoted: int = None
-    library_mastered_primitives: int = None
-    tool_card_revisions: int = None
-    capability_gaps: int = None
-    verified_composites: int = None
-    verified_generated_tools: int = None
-    unverified_ephemeral_tools: int = None
-    cross_model_reused_tools: int = None
-    generated_tool_reuse_count: int = None
-    retrieved_tool_available_count: int = None
-    retrieved_tool_started_count: int = None
-    retrieved_tool_started_unique_count: int = None
-    retrieved_tool_called_count: int = None
-    retrieved_tool_called_unique_count: int = None
+    draft_trials: int = None
+    draft_trials_added: int = None
+    draft_document_revisions: int = None
+    draft_comprehension_gaps: int = None
+    draft_frozen_documents: int = None
+    draft_documented_tools: int = None
+    draft_unique_trial_tools: int = None
+    draft_llm_revisions: int = None
     incident_success: bool = None
     efficiency_evolution_rate: float = None
     evolutionary_gain: float = None
@@ -184,10 +162,6 @@ def build_eval_result_from_session_dir(session_dir: Path) -> EvalResult:
         "steps": metrics_blob.get("steps"),
         "tool_calls": metrics_blob.get("tool_calls"),
         "tool_errors": metrics_blob.get("tool_errors"),
-        "primitive_calls": metrics_blob.get("primitive_calls"),
-        "composite_calls": metrics_blob.get("composite_calls"),
-        "evolved_tools_created": metrics_blob.get("evolved_tools_created"),
-        "mastery_updates": metrics_blob.get("mastery_updates"),
     }
     if not any(v is not None for v in trace_metrics.values()):
         trace_path = session_dir / MESSAGES_FILENAME
@@ -218,47 +192,17 @@ def build_eval_result_from_session_dir(session_dir: Path) -> EvalResult:
         steps=trace_metrics.get("steps"),
         tool_calls=trace_metrics.get("tool_calls"),
         tool_errors=trace_metrics.get("tool_errors"),
-        primitive_calls=trace_metrics.get("primitive_calls"),
-        composite_calls=trace_metrics.get("composite_calls"),
-        generated_tool_calls=trace_metrics.get("generated_tool_calls"),
-        evolved_tools_created=trace_metrics.get("evolved_tools_created"),
-        mastery_updates=trace_metrics.get("mastery_updates"),
         tool_evolution_enabled=bool(run_meta.get("tool_evolution_enabled", False)),
         tool_library_id=metrics_blob.get("tool_library_id")
         or run_meta.get("tool_library_id"),
-        tool_evolution_mode=metrics_blob.get("tool_evolution_mode")
-        or run_meta.get("tool_evolution_mode"),
         benchmark_index=run_meta.get("benchmark_index"),
-        tool_selection_recall=metrics_blob.get("tool_selection_recall"),
-        argument_validity=metrics_blob.get("argument_validity"),
-        error_recovery_count=metrics_blob.get("error_recovery_count"),
-        tool_reuse_count=metrics_blob.get("tool_reuse_count"),
-        tool_promotion_count=metrics_blob.get("tool_promotion_count"),
-        tool_regression_count=metrics_blob.get("tool_regression_count"),
-        library_candidates=metrics_blob.get("library_candidates"),
-        library_promoted=metrics_blob.get("library_promoted"),
-        library_generated_tools=metrics_blob.get("library_generated_tools"),
-        library_generated_candidates=metrics_blob.get("library_generated_candidates"),
-        library_generated_promoted=metrics_blob.get("library_generated_promoted"),
-        library_mastered_primitives=metrics_blob.get("library_mastered_primitives"),
-        tool_card_revisions=metrics_blob.get("tool_card_revisions"),
-        capability_gaps=metrics_blob.get("capability_gaps"),
-        verified_composites=metrics_blob.get("verified_composites"),
-        verified_generated_tools=metrics_blob.get("verified_generated_tools"),
-        unverified_ephemeral_tools=metrics_blob.get("unverified_ephemeral_tools"),
-        cross_model_reused_tools=metrics_blob.get("cross_model_reused_tools"),
-        generated_tool_reuse_count=metrics_blob.get("generated_tool_reuse_count"),
-        retrieved_tool_available_count=metrics_blob.get(
-            "retrieved_tool_available_count"
-        ),
-        retrieved_tool_started_count=metrics_blob.get("retrieved_tool_started_count"),
-        retrieved_tool_started_unique_count=metrics_blob.get(
-            "retrieved_tool_started_unique_count"
-        ),
-        retrieved_tool_called_count=metrics_blob.get("retrieved_tool_called_count"),
-        retrieved_tool_called_unique_count=metrics_blob.get(
-            "retrieved_tool_called_unique_count"
-        ),
+        draft_trials=metrics_blob.get("draft_trials"),
+        draft_trials_added=metrics_blob.get("draft_trials_added"),
+        draft_document_revisions=metrics_blob.get("draft_document_revisions"),
+        draft_comprehension_gaps=metrics_blob.get("draft_comprehension_gaps"),
+        draft_frozen_documents=metrics_blob.get("draft_frozen_documents"),
+        draft_documented_tools=metrics_blob.get("draft_documented_tools"),
+        draft_unique_trial_tools=metrics_blob.get("draft_unique_trial_tools"),
         incident_success=all(
             metrics_blob.get(key) == 1.0
             for key in (

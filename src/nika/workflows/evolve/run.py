@@ -22,7 +22,6 @@ from nika.utils.kathara_cleanup import ensure_kathara_clean
 from nika.workflows.benchmark.run import default_benchmark_csv_path, run_benchmark_from_csv
 
 HARNESS_EVOLUTION_DIR = RUNTIME_DIR / "harness_evolution"
-FEEDBACK_MODES = frozenset({"auto", "deterministic", "llm"})
 _RESULT_FIELDS = (
     "detection_score",
     "localization_accuracy",
@@ -40,7 +39,7 @@ _SESSION_ID_PATTERN = re.compile(r"\b\d{8}-\d{6}-[0-9a-f]{6}\b")
 
 
 class TargetAgentArtifact(BaseModel):
-    """Structured source artifact produced by the meta-agent."""
+    """Structured target-agent source from a SIA-H source-update agent."""
 
     improvement_md: str = Field(min_length=1)
     target_agent_py: str = Field(min_length=200)
@@ -51,11 +50,9 @@ class EvolutionCaseResult:
     session_id: str
     session_dir: str
     scenario: str
-    problem: str
     benchmark_index: int | None
     submitted: bool
     metrics: dict[str, Any]
-    submission: dict[str, Any] | None
 
     @property
     def detection_hit(self) -> bool:
@@ -82,7 +79,7 @@ class EvolutionGenerationSummary:
     localization_hits: int
     rca_hits: int
     next_target_agent_path: str | None = None
-    feedback_source: str | None = None
+    feedback_agent_source: str | None = None
 
 
 def _metric_hit(value: Any) -> bool:
@@ -126,8 +123,6 @@ def load_generation_results(benchmark_root: str | Path) -> list[EvolutionCaseRes
         session_dir = run_path.parent
         run_meta = _load_json(run_path) or {}
         metrics = _load_json(session_dir / "eval_metrics.json") or {}
-        submission = _load_json(session_dir / "submission.json")
-        problem_names = run_meta.get("problem_names") or []
         benchmark_index = run_meta.get("benchmark_index")
         try:
             benchmark_index = int(benchmark_index)
@@ -138,11 +133,9 @@ def load_generation_results(benchmark_root: str | Path) -> list[EvolutionCaseRes
                 session_id=str(run_meta.get("session_id") or session_dir.name),
                 session_dir=str(session_dir),
                 scenario=str(run_meta.get("scenario_name") or ""),
-                problem=str(problem_names[0] if problem_names else ""),
                 benchmark_index=benchmark_index,
-                submitted=submission is not None,
+                submitted=(session_dir / "submission.json").exists(),
                 metrics=metrics,
-                submission=submission,
             )
         )
     rows.sort(
@@ -168,9 +161,9 @@ def _score_line(rows: list[EvolutionCaseResult]) -> str:
 
 def _metric_table(rows: list[EvolutionCaseResult]) -> str:
     lines = [
-        "| Index | Session | Scenario | Problem | Submitted | Detection | "
+        "| Index | Session | Scenario | Submitted | Detection | "
         "Localization | RCA | Steps | Tool calls |",
-        "|---:|---|---|---|---:|---:|---:|---:|---:|---:|",
+        "|---:|---|---|---:|---:|---:|---:|---:|---:|",
     ]
     for row in rows:
         metrics = row.metrics
@@ -181,7 +174,6 @@ def _metric_table(rows: list[EvolutionCaseResult]) -> str:
                     str(row.benchmark_index if row.benchmark_index is not None else "-"),
                     row.session_id,
                     row.scenario or "-",
-                    row.problem or "-",
                     "1" if row.submitted else "0",
                     str(metrics.get("detection_score", "-")),
                     str(metrics.get("localization_accuracy", "-")),
@@ -257,17 +249,21 @@ def _safe_text(
     return text[:limit]
 
 
-def _submission_terms(submission: dict[str, Any] | None) -> tuple[str, ...]:
-    if not submission:
-        return ()
-    terms: list[str] = []
-    for key in ("root_cause_name", "faulty_devices"):
-        value = submission.get(key)
-        if isinstance(value, str):
-            terms.append(value)
-        elif isinstance(value, list):
-            terms.extend(str(item) for item in value if item)
-    return tuple(terms)
+def _strip_runtime_extension_context(text: str) -> str:
+    """Avoid baking optional module runtime context into SIA-H source updates."""
+    patterns = (
+        r"# Retrieved procedural memory.*?(?=# DRAFT tool documentation note|# Public topology summary|$)",
+        r"# DRAFT tool documentation note.*?(?=# Retrieved procedural memory|# Public topology summary|$)",
+    )
+    cleaned = text
+    for pattern in patterns:
+        cleaned = re.sub(
+            pattern,
+            "<runtime-extension-context omitted>",
+            cleaned,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+    return cleaned
 
 
 def _execution_digest(
@@ -285,13 +281,14 @@ def _execution_digest(
     for item in messages[-16:]:
         if not isinstance(item, dict):
             continue
+        content = item.get("content") or item.get("message") or item
         compact_messages.append(
             {
                 "event": item.get("event") or item.get("type"),
                 "agent": item.get("agent"),
                 "name": item.get("name"),
                 "content": _safe_text(
-                    item.get("content") or item.get("message") or item,
+                    _strip_runtime_extension_context(str(content)),
                     limit=800,
                     forbidden_terms=forbidden_terms,
                 ),
@@ -362,15 +359,7 @@ def build_feedback_context(
 
     lines.extend(["", "## Execution Samples", ""])
     for row in rows[:6]:
-        forbidden_terms = tuple(
-            term
-            for term in (
-                row.session_id,
-                row.problem,
-                *_submission_terms(row.submission),
-            )
-            if term
-        )
+        forbidden_terms = (row.session_id,)
         digest = _execution_digest(
             Path(row.session_dir) / "agent_execution.json",
             forbidden_terms=forbidden_terms,
@@ -427,7 +416,7 @@ def _copy_initial_target(path: Path, initial_target_agent: str | Path | None) ->
 
 
 def _build_initial_target_prompt(*, benchmark_file: str | Path, reference_source: str) -> str:
-    return f"""You are the SIA-H meta-agent for NIKA.
+    return f"""You are the SIA-H Meta-Agent for NIKA.
 
 Write a complete, standalone Python file named target_agent.py. It will be run by
 the NIKA harness for each benchmark case.
@@ -435,7 +424,11 @@ the NIKA harness for each benchmark case.
 Runtime contract:
 - Parse --session-id, --dataset-dir, --working-dir, --backend, --model, --max-steps.
 - Read only public files from --dataset-dir, especially case_context.json.
-- Use MCP tools through the current session id to diagnose and submit.
+- Use only the MCP tools and MCP servers listed in the public case context.
+- Do not invent new benchmark primitive tools, private tool APIs, or MCP servers.
+- You may write local helper functions that orchestrate available tools, but the
+  benchmark tool surface is fixed. Tool Evolution can expose DRAFT-refined tool
+  documentation, not new primitive tools.
 - Write useful execution artifacts under --working-dir.
 - Do not import benchmark CSV readers, failure injection, ground truth, or private labels.
 - Do not train or modify model weights.
@@ -460,7 +453,7 @@ def _build_feedback_prompt(
     feedback_context: str,
     current_source: str,
 ) -> str:
-    return f"""You are the SIA-H feedback/meta agent for NIKA.
+    return f"""You are the SIA-H Feedback-Agent for NIKA.
 
 The target agent is an executable Python program, not a prompt overlay. Improve
 the source code for the next generation based on public execution artifacts and
@@ -471,13 +464,21 @@ Maximum generations: {max_generations}
 
 Rules:
 - Preserve the CLI contract.
-- Read only --dataset-dir public files and use MCP tools for live diagnosis.
+- Read only --dataset-dir public files and use only the MCP tools listed there.
 - Keep submission through list_avail_problems() and submit().
+- Do not invent new benchmark primitive tools, private tool APIs, or MCP servers.
+- Improvements should be controller/scaffold changes over the existing tool
+  surface: prompts, planning, wrappers, retry behavior, evidence handling,
+  parsing, budget management, and robust submission.
+- Do not copy retrieved procedural-memory snippets, DRAFT tool-doc listings, or
+  per-case runtime context into target_agent.py. Those remain runtime inputs
+  supplied by optional NIKA modules.
 - Do not reference benchmark CSV files, ground_truth.json, failure injection,
   private problem labels, or hard-coded case/session ids.
 - Do not train or modify model weights.
-- Prefer general improvements: planning, evidence ledger, retry behavior, tool
-  selection, budget management, robust parsing, and crash recovery.
+- Prefer general improvements over available tools: planning, evidence ledger,
+  retry behavior, tool selection, budget management, robust parsing, and crash
+  recovery.
 
 Feedback context:
 ```markdown
@@ -495,7 +496,7 @@ Return structured fields:
 """
 
 
-def _invoke_target_meta_agent(
+def _invoke_target_source_agent(
     *,
     prompt: str,
     feedback_llm_backend: str,
@@ -514,58 +515,31 @@ def build_initial_target_agent(
     *,
     output_path: str | Path,
     benchmark_file: str | Path,
-    feedback_mode: str,
     feedback_llm_backend: str,
     feedback_model: str,
 ) -> tuple[str, str]:
     """Create generation-1 target_agent.py."""
-    if feedback_mode not in FEEDBACK_MODES:
-        raise ValueError(
-            "feedback_mode must be one of: " + ", ".join(sorted(FEEDBACK_MODES))
-        )
-
     target_path = Path(output_path)
     reference_source = _reference_target_agent_source()
-    if feedback_mode in {"auto", "llm"}:
-        prompt = _build_initial_target_prompt(
-            benchmark_file=benchmark_file,
-            reference_source=reference_source,
-        )
-        (target_path.parent / "initial_meta_prompt.md").write_text(
-            prompt,
-            encoding="utf-8",
-        )
-        try:
-            artifact = _invoke_target_meta_agent(
-                prompt=prompt,
-                feedback_llm_backend=feedback_llm_backend,
-                feedback_model=feedback_model,
-            )
-            _write_target_agent(target_path, artifact.target_agent_py)
-            (target_path.parent / "improvement.md").write_text(
-                artifact.improvement_md,
-                encoding="utf-8",
-            )
-            return artifact.improvement_md, "llm"
-        except Exception as exc:
-            if feedback_mode == "llm":
-                raise
-            note = (
-                "# Initial Target Agent\n\n"
-                f"- Meta-agent failed with `{type(exc).__name__}`; "
-                "using the reference executable target.\n"
-            )
-            _write_target_agent(target_path, reference_source)
-            (target_path.parent / "improvement.md").write_text(note, encoding="utf-8")
-            return note, "deterministic-fallback"
-
-    note = (
-        "# Initial Target Agent\n\n"
-        "- Deterministic mode uses the checked-in reference executable target.\n"
+    prompt = _build_initial_target_prompt(
+        benchmark_file=benchmark_file,
+        reference_source=reference_source,
     )
-    _write_target_agent(target_path, reference_source)
-    (target_path.parent / "improvement.md").write_text(note, encoding="utf-8")
-    return note, "deterministic"
+    (target_path.parent / "meta_agent_prompt.md").write_text(
+        prompt,
+        encoding="utf-8",
+    )
+    artifact = _invoke_target_source_agent(
+        prompt=prompt,
+        feedback_llm_backend=feedback_llm_backend,
+        feedback_model=feedback_model,
+    )
+    _write_target_agent(target_path, artifact.target_agent_py)
+    (target_path.parent / "improvement.md").write_text(
+        artifact.improvement_md,
+        encoding="utf-8",
+    )
+    return artifact.improvement_md, "meta-agent"
 
 
 def build_next_target_update(
@@ -573,17 +547,11 @@ def build_next_target_update(
     generation: int,
     max_generations: int,
     rows: list[EvolutionCaseResult],
-    feedback_mode: str,
     current_target_path: str | Path,
     next_target_path: str | Path,
     feedback_llm_backend: str,
     feedback_model: str,
 ) -> tuple[str, str]:
-    if feedback_mode not in FEEDBACK_MODES:
-        raise ValueError(
-            "feedback_mode must be one of: " + ", ".join(sorted(FEEDBACK_MODES))
-        )
-
     current_path = Path(current_target_path)
     next_path = Path(next_target_path)
     current_source = current_path.read_text(encoding="utf-8")
@@ -603,46 +571,22 @@ def build_next_target_update(
         feedback_context=feedback_context,
         current_source=current_source,
     )
-    (next_path.parent / "feedback_prompt.md").write_text(prompt, encoding="utf-8")
-
-    if feedback_mode in {"auto", "llm"}:
-        try:
-            artifact = _invoke_target_meta_agent(
-                prompt=prompt,
-                feedback_llm_backend=feedback_llm_backend,
-                feedback_model=feedback_model,
-            )
-            _write_target_agent(next_path, artifact.target_agent_py)
-            (next_path.parent / "improvement.md").write_text(
-                artifact.improvement_md,
-                encoding="utf-8",
-            )
-            return artifact.improvement_md, "llm"
-        except Exception as exc:
-            if feedback_mode == "llm":
-                raise
-            improvement = (
-                f"# Improvement Plan: Generation {generation + 1}\n\n"
-                f"- Meta-agent failed with `{type(exc).__name__}`; "
-                "carrying forward the current target agent.\n"
-                "- Continue scoring this executable while preserving all artifacts "
-                "for later manual or LLM feedback.\n"
-            )
-            _write_target_agent(next_path, current_source)
-            (next_path.parent / "improvement.md").write_text(
-                improvement,
-                encoding="utf-8",
-            )
-            return improvement, "deterministic-fallback"
-
-    improvement = (
-        f"# Improvement Plan: Generation {generation + 1}\n\n"
-        "- Deterministic feedback mode carries forward the current executable "
-        "target agent without LLM source rewriting.\n"
+    (next_path.parent / "feedback_agent_prompt.md").write_text(
+        prompt,
+        encoding="utf-8",
     )
-    _write_target_agent(next_path, current_source)
-    (next_path.parent / "improvement.md").write_text(improvement, encoding="utf-8")
-    return improvement, "deterministic"
+
+    artifact = _invoke_target_source_agent(
+        prompt=prompt,
+        feedback_llm_backend=feedback_llm_backend,
+        feedback_model=feedback_model,
+    )
+    _write_target_agent(next_path, artifact.target_agent_py)
+    (next_path.parent / "improvement.md").write_text(
+        artifact.improvement_md,
+        encoding="utf-8",
+    )
+    return artifact.improvement_md, "feedback-agent"
 
 
 def collect_generation_artifacts(
@@ -715,13 +659,11 @@ def run_harness_evolution(
     judge_model: str | None = None,
     tool_evolution_enabled: bool = False,
     tool_library_id: str | None = None,
-    tool_evolution_mode: str = "dual",
     memory_mode: str = "off",
     memory_bank: str = "default",
     memory_top_k: int = 5,
     memory_token_budget: int = 1500,
     initial_target_agent: str | Path | None = None,
-    feedback_mode: str = "auto",
     feedback_llm_backend: str = DEFAULT_LLM_BACKEND,
     feedback_model: str = DEFAULT_MODEL,
     runtime_root: str | Path = HARNESS_EVOLUTION_DIR,
@@ -729,11 +671,6 @@ def run_harness_evolution(
 ) -> list[EvolutionGenerationSummary]:
     if max_generations < 1:
         raise ValueError("max_generations must be >= 1")
-    if feedback_mode not in FEEDBACK_MODES:
-        raise ValueError(
-            "feedback_mode must be one of: " + ", ".join(sorted(FEEDBACK_MODES))
-        )
-
     ensure_kathara_clean(context="harness evolution run")
 
     run_id = run_id or datetime.now().strftime("%Y%m%d-%H%M%S") + f"-{uuid4().hex[:6]}"
@@ -755,7 +692,6 @@ def run_harness_evolution(
         _, initial_source = build_initial_target_agent(
             output_path=target_agent_path,
             benchmark_file=benchmark_file,
-            feedback_mode=feedback_mode,
             feedback_llm_backend=feedback_llm_backend,
             feedback_model=feedback_model,
         )
@@ -778,13 +714,11 @@ def run_harness_evolution(
             "llm_backend": llm_backend,
             "model": model,
             "max_steps": max_steps,
-            "feedback_mode": feedback_mode,
             "feedback_llm_backend": feedback_llm_backend,
             "feedback_model": feedback_model,
             "initial_target_agent_source": initial_source,
             "tool_evolution_enabled": tool_evolution_enabled,
             "tool_library_id": resolved_tool_library if tool_evolution_enabled else None,
-            "tool_evolution_mode": tool_evolution_mode if tool_evolution_enabled else None,
             "memory_mode": memory_mode,
             "memory_bank": memory_bank if memory_mode != "off" else None,
             "memory_top_k": memory_top_k if memory_mode != "off" else None,
@@ -817,11 +751,9 @@ def run_harness_evolution(
             run_judge=run_judge,
             judge_llm_backend=judge_llm_backend,
             judge_model=judge_model,
-            oracle_routing=False,
             tool_evolution=ToolEvolutionConfig(
                 enabled=tool_evolution_enabled,
                 library_id=resolved_tool_library,
-                mode=tool_evolution_mode,
             ),
             memory=MemoryConfig(
                 mode=memory_mode,
@@ -871,18 +803,17 @@ def run_harness_evolution(
             next_dir = runtime_dir / f"gen_{generation + 1}"
             next_dir.mkdir(parents=True, exist_ok=True)
             next_target = next_dir / "target_agent.py"
-            _, feedback_source = build_next_target_update(
+            _, feedback_agent_source = build_next_target_update(
                 generation=generation,
                 max_generations=max_generations,
                 rows=rows,
-                feedback_mode=feedback_mode,
                 current_target_path=target_agent_path,
                 next_target_path=next_target,
                 feedback_llm_backend=feedback_llm_backend,
                 feedback_model=feedback_model,
             )
             summary.next_target_agent_path = str(next_target)
-            summary.feedback_source = feedback_source
+            summary.feedback_agent_source = feedback_agent_source
 
         _write_json(
             gen_dir / "metrics_summary.json",

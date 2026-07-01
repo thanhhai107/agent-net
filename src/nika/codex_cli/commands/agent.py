@@ -14,7 +14,6 @@ from agent.llm.model_factory import (
     DEFAULT_MODEL,
     NETMIND_SUPPORTED_MODELS,
 )
-from agent.tool_evolution.models import ToolEvolutionMode
 
 SUPPORTED_AGENT_TYPES = (
     "react",
@@ -40,9 +39,6 @@ def agent_list() -> None:
     typer.echo("netmind_models:")
     for model in NETMIND_SUPPORTED_MODELS:
         typer.echo(f"  {model}")
-    typer.echo("tool_evolution_modes:")
-    for mode in ToolEvolutionMode:
-        typer.echo(f"  {mode.value}")
     typer.echo("reasoning_effort (cli only):")
     for level in REASONING_EFFORT_LEVELS:
         typer.echo(f"  {level}")
@@ -87,20 +83,10 @@ def agent_run(
     session_id: str | None = typer.Option(
         None, "--session-id", help="Target session id (lab_hash)."
     ),
-    oracle_routing: bool = typer.Option(
-        False,
-        "--oracle-routing",
-        help="Use hidden problem labels to select MCP servers (oracle baseline only).",
-    ),
     tools: str | None = typer.Option(
         None,
         "--tools",
-        help="Enable Tool Evolution with this library id.",
-    ),
-    tool_mode: str = typer.Option(
-        ToolEvolutionMode.DUAL.value,
-        "--tool-mode",
-        help="Tool Evolution mode: mastery, distill, dual.",
+        help="Enable DRAFT Tool Evolution with this documentation library id.",
     ),
     memory: str | None = typer.Option(
         None,
@@ -133,13 +119,6 @@ def agent_run(
         raise typer.BadParameter(
             f"reasoning_effort must be one of {', '.join(REASONING_EFFORT_LEVELS)}"
         )
-    try:
-        ToolEvolutionMode(tool_mode)
-    except ValueError as exc:
-        raise typer.BadParameter(
-            "tool_mode must be one of "
-            + ", ".join(item.value for item in ToolEvolutionMode)
-        ) from exc
     if memory is not None and memory_read is not None:
         raise typer.BadParameter("Use either --memory or --memory-read, not both.")
     memory_mode = "evolve" if memory is not None else "read" if memory_read else "off"
@@ -154,11 +133,9 @@ def agent_run(
                 max_steps=max_steps,
                 max_attempts=max_attempts,
                 reasoning_effort=reasoning_effort,
-                oracle_routing=oracle_routing,
                 tool_evolution=ToolEvolutionConfig(
                     enabled=tools is not None,
                     library_id=tools or "default",
-                    mode=tool_mode,
                 ),
                 memory=MemoryConfig(
                     mode=memory_mode,

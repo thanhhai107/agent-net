@@ -29,6 +29,9 @@ You are a network troubleshooting expert.
 Use the available MCP tools to diagnose the current network incident.
 Focus on anomaly detection, exact faulty-device localization, and root-cause
 identification. Do not propose mitigation.
+The benchmark tool surface is fixed by case_context.json. Do not invent new
+primitive tools, private APIs, or MCP servers; write local helper logic only to
+orchestrate the configured MCP tools.
 
 Investigation requirements:
 - Gather concrete evidence with MCP tools before concluding.
@@ -45,7 +48,8 @@ You are an expert network engineer.
 Use the task MCP tools to submit the final structured solution.
 First call list_avail_problems() and choose root_cause_name only from that list.
 Then call submit(is_anomaly, faulty_devices, root_cause_name).
-Do not submit if there is no diagnosis report.
+Do not create new submission tools. Do not submit if there is no diagnosis
+report.
 """
 
 
@@ -123,7 +127,7 @@ def _diagnosis_config(session_id: str, context: dict[str, Any]) -> dict[str, Any
     )
     tool_library_id = str(context.get("tool_library_id") or "").strip()
     if tool_library_id:
-        config.update(mcp.load_toolbox_config(tool_library_id))
+        config.update(mcp.load_tool_docs_config(tool_library_id))
     return config
 
 
@@ -140,6 +144,7 @@ def _build_task_prompt(context: dict[str, Any]) -> str:
                 "scenario_topo_size": context.get("scenario_topo_size"),
                 "topology": context.get("topology", []),
                 "diagnosis_mcp_servers": context.get("diagnosis_mcp_servers", []),
+                "tool_contract": context.get("tool_contract", {}),
             },
             indent=2,
             ensure_ascii=False,
@@ -151,7 +156,7 @@ def _build_task_prompt(context: dict[str, Any]) -> str:
         parts.extend(["", "# Retrieved procedural memory", memory_context])
     tool_note = str(context.get("tool_evolution_note") or "").strip()
     if tool_note:
-        parts.extend(["", "# Evolved toolbox note", tool_note])
+        parts.extend(["", "# DRAFT tool documentation note", tool_note])
     return "\n".join(parts)
 
 

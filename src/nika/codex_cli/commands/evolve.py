@@ -6,9 +6,8 @@ import typer
 
 from agent.defaults import DEFAULT_MAX_STEPS
 from agent.llm.model_factory import DEFAULT_LLM_BACKEND, DEFAULT_MODEL
-from agent.tool_evolution.models import ToolEvolutionMode
 from nika.workflows.benchmark.run import default_benchmark_csv_path
-from nika.workflows.evolve.run import FEEDBACK_MODES, run_harness_evolution
+from nika.workflows.evolve.run import run_harness_evolution
 
 evolve_app = typer.Typer(
     help="Run a SIA-H executable target-agent evolution experiment."
@@ -52,12 +51,7 @@ def evolve_run(
     tools: str | None = typer.Option(
         None,
         "--tools",
-        help="Also enable Tool Evolution with this library id.",
-    ),
-    tool_mode: str = typer.Option(
-        ToolEvolutionMode.DUAL.value,
-        "--tool-mode",
-        help="Tool Evolution mode: mastery, distill, dual.",
+        help="Also enable DRAFT Tool Evolution with this documentation library id.",
     ),
     memory: str | None = typer.Option(
         None,
@@ -81,20 +75,15 @@ def evolve_run(
         "--initial-target-agent",
         help="Optional target_agent.py copied into generation 1.",
     ),
-    feedback_mode: str = typer.Option(
-        "auto",
-        "--feedback-mode",
-        help="Target-agent source planner: auto, deterministic, or llm.",
-    ),
     feedback_backend: str | None = typer.Option(
         None,
         "--feedback-backend",
-        help="LLM provider for the feedback agent. Defaults to --backend.",
+        help="LLM provider for Meta-Agent and Feedback-Agent source updates. Defaults to --backend.",
     ),
     feedback_model: str | None = typer.Option(
         None,
         "--feedback-model",
-        help="Model id for the feedback agent. Defaults to --model.",
+        help="Model id for Meta-Agent and Feedback-Agent source updates. Defaults to --model.",
     ),
     run_judge: bool = typer.Option(
         False,
@@ -129,17 +118,6 @@ def evolve_run(
         raise typer.BadParameter(
             "Pass --judge to enable LLM judge; omit --judge-backend/--judge-model otherwise."
         )
-    try:
-        ToolEvolutionMode(tool_mode)
-    except ValueError as exc:
-        raise typer.BadParameter(
-            "tool_mode must be one of "
-            + ", ".join(item.value for item in ToolEvolutionMode)
-        ) from exc
-    if feedback_mode not in FEEDBACK_MODES:
-        raise typer.BadParameter(
-            "feedback_mode must be one of " + ", ".join(sorted(FEEDBACK_MODES))
-        )
     kwargs = {}
     if runtime_root is not None:
         kwargs["runtime_root"] = runtime_root
@@ -158,13 +136,11 @@ def evolve_run(
         judge_model=judge_model or DEFAULT_MODEL,
         tool_evolution_enabled=tools is not None,
         tool_library_id=tools,
-        tool_evolution_mode=tool_mode,
         memory_mode="evolve" if memory is not None else "off",
         memory_bank=memory or "default",
         memory_top_k=memory_k,
         memory_token_budget=memory_tokens,
         initial_target_agent=initial_target_agent,
-        feedback_mode=feedback_mode,
         feedback_llm_backend=feedback_backend or llm_backend,
         feedback_model=feedback_model or model,
         **kwargs,

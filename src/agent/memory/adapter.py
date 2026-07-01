@@ -1,23 +1,19 @@
-"""Composable adapter that augments an existing troubleshooting workflow."""
+"""Composable wrapper that injects Skill-Pro procedural context."""
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
 
 from agent.memory.attributes import infer_memory_attributes
 from agent.memory.models import MemoryQuery
 from agent.memory.service import ProceduralMemoryModule
-from agent.protocols import TroubleshootingAgent
 from agent.utils.loggers import MessageLogger
 
 
 class MemoryAugmentedAgent:
-    """Add persistent memory to a workflow without changing its reasoning graph."""
-
     def __init__(
         self,
-        agent: TroubleshootingAgent,
+        agent: Any,
         memory: ProceduralMemoryModule,
         *,
         memory_mode: str,
@@ -31,56 +27,55 @@ class MemoryAugmentedAgent:
         self.memory_mode = memory_mode
         self.memory_top_k = memory_top_k
         self.memory_token_budget = memory_token_budget
-        self.session_id = agent.session_id
 
-        session = getattr(agent, "session", None)
-        if session is None:
-            raise ValueError("memory-enabled workflows must expose their session")
-        self.session = session
-        self.session_dir = str(session.session_dir)
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.agent, name)
 
-    async def run(self, task_description: str) -> dict[str, Any]:
-        tools = list(getattr(self.agent, "diagnosis_tool_names", []))
-        query_attributes = infer_memory_attributes(
+    async def run(self, task_description: str) -> Any:
+        session = getattr(self.agent, "session", None)
+        session_id = str(getattr(session, "session_id", "") or getattr(self.agent, "session_id", ""))
+        tools = list(getattr(self.agent, "diagnosis_tool_names", []) or [])
+        attrs = infer_memory_attributes(
             task_description,
-            scenario=str(self.session.scenario_name),
-            topology_class=str(self.session.scenario_topo_size or ""),
+            scenario=str(getattr(session, "scenario_name", "") or ""),
+            topology_class=str(getattr(session, "scenario_topo_size", "") or ""),
             task_stage="diagnosis",
             tools=tools,
         )
-        query = MemoryQuery(
-            text=task_description,
-            scenario=str(self.session.scenario_name),
-            topology_class=str(self.session.scenario_topo_size or ""),
-            protocols=query_attributes.protocols,
-            services=query_attributes.services,
-            symptoms=query_attributes.symptoms,
-            task_stage="diagnosis",
-            tools=tools,
-            top_k=self.memory_top_k,
-            token_budget=self.memory_token_budget,
-        )
-        retrieved = await asyncio.to_thread(
-            self.memory.retrieve,
-            query=query,
-            session_id=self.session_id,
-        )
-        MessageLogger(
-            agent="memory_agent",
-            session_dir=self.session_dir,
-            extra_fields={"phase": "retrieval"},
-        ).log(
-            "memory_retrieval",
-            {
-                "bank_id": self.memory.bank_id,
-                "memory_mode": self.memory_mode,
-                "workflow": type(self.agent).__name__,
-                "memory_ids": [item.memory.memory_id for item in retrieved],
-                "scores": [round(item.score, 6) for item in retrieved],
-            },
+        retrieved = self.memory.retrieve(
+            query=MemoryQuery(
+                text=task_description,
+                scenario=str(getattr(session, "scenario_name", "") or ""),
+                topology_class=str(getattr(session, "scenario_topo_size", "") or ""),
+                protocols=attrs.protocols,
+                services=attrs.services,
+                symptoms=attrs.symptoms,
+                task_stage="diagnosis",
+                tools=tools,
+                top_k=self.memory_top_k,
+                token_budget=self.memory_token_budget,
+            ),
+            session_id=session_id,
         )
         context = self.memory.format_context(retrieved)
-        augmented_task = (
-            f"{task_description}\n\n{context}" if context else task_description
+        session_dir = getattr(self.agent, "session_dir", "")
+        if session_dir:
+            MessageLogger(
+                agent="memory_agent",
+                session_dir=session_dir,
+                extra_fields={"phase": "retrieval"},
+            ).log(
+                "skill_retrieval",
+                {
+                    "bank_id": self.memory.bank_id,
+                    "memory_mode": self.memory_mode,
+                    "skill_ids": [item.skill.skill_id for item in retrieved],
+                    "scores": [round(item.score, 6) for item in retrieved],
+                },
+            )
+        augmented = (
+            f"{context}\n\nOriginal diagnosis task:\n{task_description}"
+            if context
+            else task_description
         )
-        return await self.agent.run(augmented_task)
+        return await self.agent.run(augmented)

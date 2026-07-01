@@ -26,7 +26,13 @@ META_FILENAME = "meta.json"
 MODULE_LABELS = {
     "tool_evolution": "Tool Evolution",
     "memory_evolution": "Memory Evolution",
-    "harness_evolution": "Harness Evolution (SIA-H)",
+}
+AGENT_LABELS = {
+    "react": "ReAct",
+    "plan-execute": "Plan-Execute",
+    "reflexion": "Reflexion",
+    "mock": "Mock",
+    "sia-h": "SIA-H",
 }
 
 
@@ -94,9 +100,15 @@ def _judge_args(config: dict[str, Any]) -> list[str]:
     return [
         "--judge",
         "--judge-backend",
-        _str(config.get("judge_backend"), _str(config.get("llm_backend"), DEFAULT_LLM_BACKEND)),
+        _str(
+            config.get("judge_backend"),
+            _str(config.get("llm_backend"), DEFAULT_LLM_BACKEND),
+        ),
         "--judge-model",
-        _str(config.get("judge_model"), _str(config.get("model"), DEFAULT_MODEL)),
+        _str(
+            config.get("judge_model"),
+            _str(config.get("model"), DEFAULT_MODEL),
+        ),
     ]
 
 
@@ -109,8 +121,6 @@ def _benchmark_command(config: dict[str, Any]) -> list[str]:
         *_common_agent_args(config),
         *_judge_args(config),
     )
-    if config.get("oracle_routing"):
-        command.append("--oracle-routing")
     return command
 
 
@@ -119,12 +129,20 @@ def selected_modules(config: dict[str, Any]) -> set[str]:
     return {str(item) for item in modules if item}
 
 
+def agent_type(config: dict[str, Any]) -> str:
+    return str(config.get("agent_type") or "react").lower()
+
+
+def is_sia_h_agent(config: dict[str, Any]) -> bool:
+    return agent_type(config) == "sia-h"
+
+
 def experiment_label(config: dict[str, Any]) -> str:
     modules = selected_modules(config)
-    if not modules:
-        return "Baseline"
-    ordered = ["harness_evolution", "tool_evolution", "memory_evolution"]
-    return " + ".join(MODULE_LABELS[item] for item in ordered if item in modules)
+    labels = [AGENT_LABELS.get(agent_type(config), agent_type(config))]
+    ordered = ["tool_evolution", "memory_evolution"]
+    labels.extend(MODULE_LABELS[item] for item in ordered if item in modules)
+    return " + ".join(labels)
 
 
 def build_experiment_command(config: dict[str, Any]) -> list[str]:
@@ -132,9 +150,8 @@ def build_experiment_command(config: dict[str, Any]) -> list[str]:
     modules = selected_modules(config)
     tool_enabled = "tool_evolution" in modules
     memory_enabled = "memory_evolution" in modules
-    harness_evolution_enabled = "harness_evolution" in modules
 
-    if harness_evolution_enabled:
+    if is_sia_h_agent(config):
         command = _python_module_command(
             "evolve",
             "run",
@@ -143,12 +160,16 @@ def build_experiment_command(config: dict[str, Any]) -> list[str]:
             "--max-gen",
             str(_int(config.get("max_generations"), 3)),
             *_harness_model_args(config),
-            "--feedback-mode",
-            _str(config.get("feedback_mode"), "auto"),
             "--feedback-backend",
-            _str(config.get("feedback_backend"), _str(config.get("llm_backend"), DEFAULT_LLM_BACKEND)),
+            _str(
+                config.get("feedback_backend"),
+                _str(config.get("llm_backend"), DEFAULT_LLM_BACKEND),
+            ),
             "--feedback-model",
-            _str(config.get("feedback_model"), _str(config.get("model"), DEFAULT_MODEL)),
+            _str(
+                config.get("feedback_model"),
+                _str(config.get("model"), DEFAULT_MODEL),
+            ),
             *_judge_args(config),
         )
     else:
@@ -159,8 +180,6 @@ def build_experiment_command(config: dict[str, Any]) -> list[str]:
             [
                 "--tools",
                 _str(config.get("tool_library_id"), "tools-streamlit"),
-                "--tool-mode",
-                _str(config.get("tool_mode"), "dual"),
             ]
         )
 
@@ -180,24 +199,12 @@ def build_experiment_command(config: dict[str, Any]) -> list[str]:
 
 
 def build_command_plan(config: dict[str, Any]) -> list[CommandPlan]:
-    modules = selected_modules(config)
     plan: list[CommandPlan] = []
-    if config.get("ensure_memory_services") and "memory_evolution" in modules:
-        plan.append(
-            CommandPlan(
-                name="Memory services",
-                command=["docker", "compose", "up", "-d", "postgres", "qdrant"],
-            )
-        )
     plan.append(
         CommandPlan(
             name=experiment_label(config),
             command=build_experiment_command(config),
-            variant=(
-                "harness_evolution"
-                if "harness_evolution" in modules
-                else "benchmark"
-            ),
+            variant="sia_h" if is_sia_h_agent(config) else "benchmark",
         )
     )
     return plan

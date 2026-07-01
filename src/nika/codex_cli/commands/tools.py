@@ -1,4 +1,4 @@
-"""Inspect and manage persistent diagnostic tool-evolution libraries."""
+"""Inspect and manage DRAFT-refined primitive tool documentation libraries."""
 
 from __future__ import annotations
 
@@ -11,34 +11,21 @@ from agent.tool_evolution.store import ToolEvolutionStore
 from nika.config import TOOL_EVOLUTION_DIR
 
 
-tools_app = typer.Typer(
-    help="Inspect persistent mastered, composite, and generated diagnostic tools."
-)
+tools_app = typer.Typer(help="Inspect DRAFT tool-documentation libraries.")
 
 
 @tools_app.command("libraries")
 def list_libraries() -> None:
-    """List available tool-evolution libraries."""
+    """List available DRAFT documentation libraries."""
     if not TOOL_EVOLUTION_DIR.exists():
         return
     for path in sorted(TOOL_EVOLUTION_DIR.iterdir()):
         if path.is_dir() and (path / "state.json").exists():
-            state = ToolEvolutionStore(path.name).load()
-            promoted = sum(item.status == "promoted" for item in state.composites.values())
-            candidates = sum(item.status == "candidate" for item in state.composites.values())
-            generated_promoted = sum(
-                item.status == "promoted" for item in state.generated_tools.values()
-            )
-            generated_candidates = sum(
-                item.status == "candidate" for item in state.generated_tools.values()
-            )
-            revisions = sum(len(item.revisions) for item in state.mastery.values())
+            stats = ToolEvolutionStore(path.name).stats()
             typer.echo(
-                f"{path.name}\tmastery={len(state.mastery)}\t"
-                f"revisions={revisions}\tgaps={len(state.capability_gaps)}\t"
-                f"candidates={candidates}\tpromoted={promoted}\t"
-                f"generated_candidates={generated_candidates}\t"
-                f"generated_promoted={generated_promoted}"
+                f"{path.name}\tdocs={stats['documents']}\t"
+                f"trials={stats['trials']}\tgaps={stats['gaps']}\t"
+                f"revisions={stats['revisions']}\tfrozen={stats['frozen_documents']}"
             )
 
 
@@ -46,7 +33,7 @@ def list_libraries() -> None:
 def show_library(
     library_id: str = typer.Argument(..., help="Tool library id."),
 ) -> None:
-    """Print one library as JSON."""
+    """Print one DRAFT library as JSON."""
     state = ToolEvolutionStore(library_id).load()
     typer.echo(state.model_dump_json(indent=2))
 

@@ -6,6 +6,7 @@ import html
 import json
 import os
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 import streamlit as st
 import importlib
@@ -278,6 +279,147 @@ def _diagnosis_card(title: str, payload: dict[str, Any], accent: str) -> None:
     )
 
 
+def _read_artifact_json(path: os.PathLike[str] | str) -> dict[str, Any]:
+    try:
+        value = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _read_artifact_text(
+    path: os.PathLike[str] | str,
+    *,
+    max_lines: int = 500,
+) -> str:
+    try:
+        lines = Path(path).read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return ""
+    if len(lines) > max_lines:
+        return "\n".join(
+            [f"... truncated {len(lines) - max_lines} earlier lines ...", *lines[-max_lines:]]
+        )
+    return "\n".join(lines)
+
+
+def _module_labels(meta: dict[str, Any]) -> list[str]:
+    labels: list[str] = []
+    if meta.get("tool_evolution_enabled"):
+        labels.append("Tool Evolution")
+    if meta.get("memory_mode") and meta.get("memory_mode") != "off":
+        labels.append("Memory Evolution")
+    return labels or ["-"]
+
+
+def _agent_label(meta: dict[str, Any]) -> str:
+    agent = str(meta.get("agent_type") or "").lower()
+    if agent == "harness":
+        return "SIA-H"
+    return str(meta.get("agent_type") or "-")
+
+
+def _has_harness_artifacts(bundle: Any) -> bool:
+    if str(bundle.meta.get("agent_type") or "").lower() == "harness":
+        return True
+    return any(
+        (bundle.session_dir / rel).exists()
+        for rel in (
+            "public_case/case_context.json",
+            "agent_execution.json",
+            "harness_error.json",
+            "target_agent_stdout.log",
+        )
+    )
+
+
+def _render_harness_artifacts(bundle: Any) -> None:
+    meta = bundle.meta
+    session_dir = bundle.session_dir
+    case_context = _read_artifact_json(session_dir / "public_case" / "case_context.json")
+    execution = _read_artifact_json(session_dir / "agent_execution.json")
+    harness_error = _read_artifact_json(session_dir / "harness_error.json")
+    stdout_text = _read_artifact_text(session_dir / "target_agent_stdout.log")
+
+    card_cols = st.columns(3, gap="medium")
+    with card_cols[0]:
+        _card(
+            "Harness Target",
+            [
+                ("Target Agent", meta.get("harness_target_agent_path")),
+                ("Return Code", meta.get("harness_returncode")),
+                ("Public Dataset", session_dir / "public_case"),
+            ],
+        )
+    with card_cols[1]:
+        _card(
+            "Learning Modules",
+            [
+                ("Modules", _module_labels(meta)),
+                ("Tool Library", meta.get("tool_library_id")),
+                ("Memory Bank", meta.get("memory_bank")),
+            ],
+        )
+    with card_cols[2]:
+        _card(
+            "Case",
+            [
+                ("Benchmark Index", case_context.get("benchmark_index")),
+                ("Scenario", case_context.get("scenario_name")),
+                ("Topology Tier", case_context.get("scenario_topo_size")),
+            ],
+        )
+
+    artifact_tabs = st.tabs(["Public Case", "Execution", "Logs"])
+    with artifact_tabs[0]:
+        if case_context:
+            public_view = {
+                key: value
+                for key, value in case_context.items()
+                if key not in {"memory_context"}
+            }
+            st.json(public_view, expanded=False)
+            memory_context = str(case_context.get("memory_context") or "").strip()
+            if memory_context:
+                st.markdown("### Retrieved Memory")
+                st.text_area(
+                    "Retrieved Memory",
+                    value=memory_context,
+                    height=220,
+                    label_visibility="collapsed",
+                )
+        else:
+            st.info("No public case artifact found.")
+
+    with artifact_tabs[1]:
+        if execution:
+            st.markdown("### Diagnosis Report")
+            st.text_area(
+                "Diagnosis Report",
+                value=str(execution.get("diagnosis_report") or ""),
+                height=180,
+                label_visibility="collapsed",
+            )
+            st.markdown("### Submission Result")
+            st.code(str(execution.get("submission_result") or ""))
+            if execution.get("error"):
+                st.markdown("### Target Error")
+                st.code(str(execution.get("error")))
+        else:
+            st.info("No agent execution artifact found.")
+        if harness_error:
+            st.markdown("### Harness Error")
+            st.json(harness_error, expanded=False)
+
+    with artifact_tabs[2]:
+        st.text_area(
+            "Target Agent Stdout",
+            value=stdout_text or "No target_agent_stdout.log found.",
+            height=420,
+            label_visibility="collapsed",
+        )
+
+
 def _render_empty() -> None:
     st.markdown(
         """
@@ -435,9 +577,13 @@ def _render_dashboard() -> None:
     for column, (label, value, help_text) in zip(metric_cols, headline_metrics):
         column.metric(label, value, help=help_text)
 
-    overview_tab, topology_tab, replay_tab = st.tabs(
-        ["Overview", "Topology", "Replay"]
-    )
+    tab_names = ["Overview", "Topology", "Replay"]
+    if _has_harness_artifacts(bundle):
+        tab_names.append("Harness")
+    tabs = dict(zip(tab_names, st.tabs(tab_names)))
+    overview_tab = tabs["Overview"]
+    topology_tab = tabs["Topology"]
+    replay_tab = tabs["Replay"]
 
     with overview_tab:
         st.markdown('<div class="section-label">Topology Configuration</div>', unsafe_allow_html=True)
@@ -479,9 +625,11 @@ def _render_dashboard() -> None:
         _card(
             "Agent Configuration",
             [
-                ("Agent Implementation", meta.get("agent_type")),
+                ("Agent Baseline", _agent_label(meta)),
+                ("Learning Modules", _module_labels(meta)),
                 ("LLM Backend Provider", meta.get("llm_backend")),
                 ("LLM Model Name", meta.get("model")),
+                ("Harness Target", meta.get("harness_target_agent_path")),
                 ("Execution Started", _fmt_time(meta.get("start_time"))),
                 ("Execution Completed", _fmt_time(meta.get("end_time"))),
             ],
@@ -735,6 +883,10 @@ def _render_dashboard() -> None:
                     st.info("This trace step contains lifecycle metadata only.")
                 with st.expander("Raw event"):
                     st.json(step.raw, expanded=False)
+
+    if "Harness" in tabs:
+        with tabs["Harness"]:
+            _render_harness_artifacts(bundle)
 
 
 _render_dashboard()

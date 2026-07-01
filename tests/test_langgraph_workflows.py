@@ -156,7 +156,6 @@ class WorkflowRegistrationTest(unittest.TestCase):
                     tool_evolution=ToolEvolutionConfig(
                         enabled=True,
                         library_id="experiment-a",
-                        mode="mastery",
                     ),
                     memory=MemoryConfig(
                         mode="read",
@@ -172,10 +171,8 @@ class WorkflowRegistrationTest(unittest.TestCase):
             llm_backend="openai",
             model="model",
             max_steps=7,
-            oracle_routing=False,
             tool_evolution_enabled=False,
             tool_library_id="default",
-            tool_evolution_mode="dual",
         )
         reflexion_agent.assert_called_once_with(
             session_id="session",
@@ -183,20 +180,16 @@ class WorkflowRegistrationTest(unittest.TestCase):
             model="model",
             max_steps=9,
             max_attempts=4,
-            oracle_routing=False,
             tool_evolution_enabled=False,
             tool_library_id="default",
-            tool_evolution_mode="dual",
         )
         react_agent.assert_called_once_with(
             session_id="session",
             llm_backend="openai",
             model="model",
             max_steps=11,
-            oracle_routing=False,
             tool_evolution_enabled=True,
             tool_library_id="experiment-a",
-            tool_evolution_mode="mastery",
             use_problem_tool_hints=False,
         )
         memory_module.assert_called_once_with(
@@ -295,7 +288,6 @@ class WorkflowRegistrationTest(unittest.TestCase):
             tool_evolution=ToolEvolutionConfig(
                 enabled=True,
                 library_id="tools-a",
-                mode="mastery",
             ),
             memory=MemoryConfig(mode="read", bank="memory-a"),
         )
@@ -303,7 +295,6 @@ class WorkflowRegistrationTest(unittest.TestCase):
         kwargs = workflow_agent_kwargs(config)
 
         self.assertEqual(kwargs["tool_library_id"], "tools-a")
-        self.assertEqual(kwargs["tool_evolution_mode"], "mastery")
         self.assertNotIn("policy_overlay_path", kwargs)
         self.assertFalse(kwargs["use_problem_tool_hints"])
 

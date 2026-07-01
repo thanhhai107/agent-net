@@ -96,10 +96,8 @@ class ReflexionAgent:
         model: str = DEFAULT_MODEL,
         max_steps: int = DEFAULT_MAX_STEPS,
         max_attempts: int = 3,
-        oracle_routing: bool = False,
         tool_evolution_enabled: bool = False,
         tool_library_id: str = "default",
-        tool_evolution_mode: str = "dual",
         use_problem_tool_hints: bool = True,
     ) -> None:
         if max_steps < 1:
@@ -122,14 +120,9 @@ class ReflexionAgent:
             llm_backend=llm_backend,
             model=model,
             scenario_name=self.session.scenario_name,
-            problem_names=(
-                self.session.problem_names if use_problem_tool_hints else []
-            ),
-            oracle_routing=oracle_routing,
             load_all_tools=not use_problem_tool_hints,
             tool_evolution_enabled=tool_evolution_enabled,
             tool_library_id=tool_library_id,
-            tool_evolution_mode=tool_evolution_mode,
         )
         asyncio.run(diagnosis.load_tools())
         self.tool_evolution_runtime = diagnosis.tool_evolution_runtime

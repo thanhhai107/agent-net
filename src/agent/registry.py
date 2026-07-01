@@ -37,14 +37,13 @@ def create_agent(config: AgentRunConfig) -> Any:
         case "sdk":
             raise ValueError(
                 "Agent type 'sdk' is not implemented yet. "
-                "See src/agent/README.md for the Claude/Codex SDK path."
+                "See docs/README.md for the current agent boundary."
             )
         case "cli":
             agent = CliAgent(
                 session_id=config.session_id,
                 model=config.model,
                 reasoning_effort=config.reasoning_effort,
-                oracle_routing=config.oracle_routing,
                 stream_output=config.stream_output,
             )
         case _:

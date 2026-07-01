@@ -18,11 +18,6 @@ class AgentTraceParser:
         self.steps = 0
         self.tool_calls = 0
         self.tool_errors = 0
-        self.primitive_calls = 0
-        self.composite_calls = 0
-        self.generated_tool_calls = 0
-        self.evolved_tools_created = 0
-        self.mastery_updates = 0
         self.time_taken = 0
 
     def _resolve_agent_filter(self) -> str | None:
@@ -65,19 +60,6 @@ class AgentTraceParser:
             usage = (entry.get("codex_event") or {}).get("usage") or {}
             self.in_tokens += usage.get("input_tokens", 0)
             self.out_tokens += usage.get("output_tokens", 0)
-        elif event == "tool_evolution_primitive_start":
-            self.primitive_calls += 1
-        elif event == "tool_evolution_composite_start":
-            self.composite_calls += 1
-        elif event == "tool_evolution_generated_start":
-            self.generated_tool_calls += 1
-        elif event == "tool_evolution_candidate_created":
-            self.evolved_tools_created += 1
-        elif event in {"tool_evolution_candidate_verified", "tool_evolution_generated_verified"}:
-            if entry.get("created"):
-                self.evolved_tools_created += 1
-        elif event == "tool_evolution_mastery_recorded":
-            self.mastery_updates += 1
 
     def parse_trace(self) -> dict:
         agent_filter = self._resolve_agent_filter()
@@ -110,10 +92,5 @@ class AgentTraceParser:
             "steps": self.steps,
             "tool_calls": self.tool_calls,
             "tool_errors": self.tool_errors,
-            "primitive_calls": self.primitive_calls,
-            "composite_calls": self.composite_calls,
-            "generated_tool_calls": self.generated_tool_calls,
-            "evolved_tools_created": self.evolved_tools_created,
-            "mastery_updates": self.mastery_updates,
             "time_taken": self.time_taken,
         }

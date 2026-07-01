@@ -1,4 +1,4 @@
-"""Inspect, export, and reset procedural-memory experiment banks."""
+"""Inspect, export, and reset Skill-Pro procedural-skill banks."""
 
 from __future__ import annotations
 
@@ -13,14 +13,13 @@ from agent.composition import MemoryConfig
 from agent.defaults import DEFAULT_MAX_STEPS
 from agent.llm.model_factory import DEFAULT_LLM_BACKEND, DEFAULT_MODEL
 from agent.memory.service import ProceduralMemoryModule
-from agent.memory.vector_index import QdrantMemoryIndex
 from nika.config import MEMORY_DIR
 from nika.workflows.benchmark.run import (
     default_benchmark_csv_path,
     run_benchmark_from_csv,
 )
 
-memory_app = typer.Typer(help="Manage procedural-memory experiment banks.")
+memory_app = typer.Typer(help="Manage Skill-Pro procedural-skill banks.")
 
 
 def _module(bank: str) -> ProceduralMemoryModule:
@@ -28,8 +27,7 @@ def _module(bank: str) -> ProceduralMemoryModule:
 
 
 def _safe_error(exc: Exception) -> str:
-    text = str(exc)
-    return re.sub(r"(postgres(?:ql)?://[^:\s]+:)[^@\s/]+@", r"\1<redacted>@", text)
+    return str(exc)
 
 
 def _limited_csv_path(source: Path, *, limit: int | None, bank: str) -> Path:
@@ -107,16 +105,16 @@ def memory_run(
         "--k",
         min=1,
         max=20,
-        help="Maximum memories injected into one diagnosis.",
+        help="Maximum procedural skills injected into one diagnosis.",
     ),
     tokens: int = typer.Option(
         1500,
         "--tokens",
         min=100,
-        help="Estimated token budget for retrieved memories.",
+        help="Estimated token budget for retrieved skills.",
     ),
 ) -> None:
-    """Run a memory-only benchmark stream with concise defaults."""
+    """Run a Skill-Pro memory-only benchmark stream with concise defaults."""
     mode = "read" if read else "evolve"
     if not file.exists():
         raise typer.BadParameter(f"CSV does not exist: {file}")
@@ -145,7 +143,6 @@ def memory_run(
             token_budget=tokens,
         ),
         run_judge=False,
-        oracle_routing=False,
     )
 
 
@@ -153,7 +150,7 @@ def memory_run(
 def memory_inspect(
     bank: str = typer.Option("default", "--bank", help="Memory-bank id."),
 ) -> None:
-    """Print memory, episode, and retrieval counts for one bank."""
+    """Print skill, episode, and PPO decision counts for one bank."""
     typer.echo(
         json.dumps(
             _module(bank).store.bank_stats(bank),
@@ -167,14 +164,13 @@ def memory_inspect(
 def memory_health(
     bank: str = typer.Option("default", "--bank", help="Memory-bank id."),
 ) -> None:
-    """Check PostgreSQL store connectivity and optional Qdrant readiness."""
+    """Check local JSON skill store readiness."""
     report = {
         "bank_id": bank,
         "store": {
-            "backend": "PostgreSQLMemoryStore",
+            "backend": "SkillMemoryStore",
             "ready": False,
         },
-        "qdrant": QdrantMemoryIndex().readiness(),
     }
     try:
         module = _module(bank)
@@ -183,7 +179,6 @@ def memory_health(
             "ready": True,
             "stats": module.store.bank_stats(bank),
         }
-        report["qdrant"] = module.vector_index.readiness()
     except Exception as exc:
         report["store"]["reason"] = _safe_error(exc)
     typer.echo(json.dumps(report, ensure_ascii=False, indent=2))
@@ -199,7 +194,7 @@ def memory_snapshot(
         help="Output JSONL path.",
     ),
 ) -> None:
-    """Export a reproducible JSONL snapshot of one bank."""
+    """Export a reproducible JSONL snapshot of one skill bank."""
     target = output or (Path(MEMORY_DIR) / f"{bank}.snapshot.jsonl")
     path = _module(bank).snapshot(session_id="manual", output_path=target)
     typer.echo(f"Wrote memory snapshot: {path}")
@@ -210,7 +205,7 @@ def memory_clear(
     bank: str = typer.Option("default", "--bank", help="Memory-bank id."),
     yes: bool = typer.Option(False, "-y", "--yes", help="Skip confirmation."),
 ) -> None:
-    """Delete one experiment bank from the memory store and optional Qdrant index."""
+    """Delete one experiment bank from the local JSON skill store."""
     if not yes and not typer.confirm(f"Clear memory bank '{bank}'?", default=False):
         raise typer.Abort()
     _module(bank).clear()

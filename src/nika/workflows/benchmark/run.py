@@ -8,7 +8,6 @@ import re
 import subprocess
 import sys
 import time
-import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -79,7 +78,6 @@ def _benchmark_row_cli_args(
     run_judge: bool = False,
     judge_llm_backend: str | None = None,
     judge_model: str | None = None,
-    oracle_routing: bool = False,
     tool_evolution: ToolEvolutionConfig | None = None,
     harness: HarnessConfig | None = None,
     harness_allow_failure: bool = False,
@@ -122,14 +120,10 @@ def _benchmark_row_cli_args(
             "--memory-tokens",
             str(memory.token_budget),
         ]
-    if oracle_routing:
-        args.append("--oracle-routing")
     if tool_evolution.enabled:
         args += [
             "--tools",
             tool_evolution.library_id,
-            "--tool-mode",
-            tool_evolution.mode,
         ]
     topo = row.get("topo_size") or ""
     if topo and topo != "-":
@@ -167,7 +161,6 @@ def _run_benchmark_row_subprocess(
     run_judge: bool,
     judge_llm_backend: str | None,
     judge_model: str | None,
-    oracle_routing: bool,
     tool_evolution: ToolEvolutionConfig,
     harness: HarnessConfig,
     harness_allow_failure: bool,
@@ -186,7 +179,6 @@ def _run_benchmark_row_subprocess(
         run_judge=run_judge,
         judge_llm_backend=judge_llm_backend,
         judge_model=judge_model,
-        oracle_routing=oracle_routing,
         tool_evolution=tool_evolution,
         harness=harness,
         harness_allow_failure=harness_allow_failure,
@@ -241,7 +233,6 @@ def run_single_benchmark(
     run_judge: bool = False,
     judge_llm_backend: str | None = None,
     judge_model: str | None = None,
-    oracle_routing: bool = False,
     tool_evolution: ToolEvolutionConfig | None = None,
     harness: HarnessConfig | None = None,
     harness_allow_failure: bool = False,
@@ -273,7 +264,6 @@ def run_single_benchmark(
                 model=model,
                 max_steps=max_steps,
                 max_attempts=max_attempts,
-                oracle_routing=oracle_routing,
                 tool_evolution=tool_evolution,
                 memory=memory,
             )
@@ -317,11 +307,9 @@ def run_single_benchmark(
                 session.update_session("memory_bank", memory.bank)
                 session.update_session("memory_top_k", memory.top_k)
                 session.update_session("memory_token_budget", memory.token_budget)
-            session.update_session("oracle_routing", oracle_routing)
             session.update_session("tool_evolution_enabled", tool_evolution.enabled)
             if tool_evolution.enabled:
                 session.update_session("tool_library_id", tool_evolution.library_id)
-                session.update_session("tool_evolution_mode", tool_evolution.mode)
             session.start_session()
             bind_session_dir(session.session_dir)
             log_event(
@@ -369,7 +357,6 @@ def run_single_benchmark(
                     max_steps=max_steps,
                     max_attempts=max_attempts,
                     stream_output=False,
-                    oracle_routing=oracle_routing,
                     tool_evolution=tool_evolution,
                     memory=memory,
                 ),
@@ -407,7 +394,6 @@ def run_benchmark_from_csv(
     run_judge: bool = False,
     judge_llm_backend: str | None = None,
     judge_model: str | None = None,
-    oracle_routing: bool = False,
     tool_evolution: ToolEvolutionConfig | None = None,
     harness: HarnessConfig | None = None,
     harness_allow_failure: bool = False,
@@ -438,7 +424,6 @@ def run_benchmark_from_csv(
                 model=model,
                 max_steps=max_steps,
                 max_attempts=max_attempts,
-                oracle_routing=oracle_routing,
                 tool_evolution=tool_config,
                 memory=memory_config,
             )
@@ -471,17 +456,8 @@ def run_benchmark_from_csv(
         else _new_benchmark_results_root(benchmark_name)
     )
     benchmark_root.mkdir(parents=True, exist_ok=True)
-    if tool_config.enabled and tool_config.library_id == "default":
-        tool_config = ToolEvolutionConfig(
-            enabled=True,
-            library_id=f"{Path(benchmark_file).stem}-{uuid.uuid4().hex[:8]}",
-            mode=tool_config.mode,
-        )
     if tool_config.enabled:
-        print(
-            f"tool_evolution_library id={tool_config.library_id} "
-            f"mode={tool_config.mode}"
-        )
+        print(f"tool_evolution_library id={tool_config.library_id}")
 
     total = len(rows)
     prepared_rows: list[dict] = []
@@ -520,7 +496,6 @@ def run_benchmark_from_csv(
                     run_judge=run_judge,
                     judge_llm_backend=judge_llm_backend,
                     judge_model=judge_model,
-                    oracle_routing=oracle_routing,
                     tool_evolution=tool_config,
                     harness=harness_config,
                     harness_allow_failure=harness_allow_failure,
@@ -545,7 +520,6 @@ def run_benchmark_from_csv(
                     run_judge=run_judge,
                     judge_llm_backend=judge_llm_backend,
                     judge_model=judge_model,
-                    oracle_routing=oracle_routing,
                     tool_evolution=tool_config,
                     harness=harness_config,
                     harness_allow_failure=harness_allow_failure,

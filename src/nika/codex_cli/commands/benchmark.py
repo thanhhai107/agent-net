@@ -11,7 +11,6 @@ from agent.composition import (
 )
 from agent.defaults import DEFAULT_MAX_STEPS
 from agent.llm.model_factory import DEFAULT_LLM_BACKEND, DEFAULT_MODEL
-from agent.tool_evolution.models import ToolEvolutionMode
 from nika.net_env.net_env_pool import scenario_requires_topo_tier
 from nika.workflows.benchmark.run import (
     _new_benchmark_results_root,
@@ -115,20 +114,10 @@ def benchmark_run(
         "--judge-model",
         help="Model id for the judge (defaults to the global LLM model when --judge is set).",
     ),
-    oracle_routing: bool = typer.Option(
-        False,
-        "--oracle-routing",
-        help="Use hidden problem labels for MCP server selection (oracle baseline).",
-    ),
     tools: str | None = typer.Option(
         None,
         "--tools",
-        help="Enable Tool Evolution with this library id.",
-    ),
-    tool_mode: str = typer.Option(
-        ToolEvolutionMode.DUAL.value,
-        "--tool-mode",
-        help="Tool Evolution mode: mastery, distill, dual.",
+        help="Enable DRAFT Tool Evolution with this documentation library id.",
     ),
     result_root: Path | None = typer.Option(
         None,
@@ -168,13 +157,6 @@ def benchmark_run(
         )
     judge_backend = judge_backend or DEFAULT_LLM_BACKEND
     judge_model = judge_model or DEFAULT_MODEL
-    try:
-        ToolEvolutionMode(tool_mode)
-    except ValueError as exc:
-        raise typer.BadParameter(
-            "tool_mode must be one of "
-            + ", ".join(item.value for item in ToolEvolutionMode)
-        ) from exc
     if memory is not None and memory_read is not None:
         raise typer.BadParameter("Use either --memory or --memory-read, not both.")
     memory_mode = "evolve" if memory is not None else "read" if memory_read else "off"
@@ -190,7 +172,6 @@ def benchmark_run(
     tool_config = ToolEvolutionConfig(
         enabled=tool_evolution_enabled,
         library_id=tool_library_id,
-        mode=tool_mode,
     )
     harness_config = HarnessConfig(
         target_agent_path=str(harness) if harness else None
@@ -229,7 +210,6 @@ def benchmark_run(
             run_judge=run_judge,
             judge_llm_backend=judge_backend,
             judge_model=judge_model,
-            oracle_routing=oracle_routing,
             tool_evolution=tool_config,
             harness=harness_config,
             harness_allow_failure=harness_allow_failure,
@@ -255,7 +235,6 @@ def benchmark_run(
         run_judge=run_judge,
         judge_llm_backend=judge_backend,
         judge_model=judge_model,
-        oracle_routing=oracle_routing,
         tool_evolution=tool_config,
         harness=harness_config,
         harness_allow_failure=harness_allow_failure,

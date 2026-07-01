@@ -36,11 +36,9 @@ def start_agent(agent_config: AgentRunConfig, *, session_id: str | None = None) 
         session.update_session("memory_token_budget", agent_config.memory.token_budget)
     if agent_config.reasoning_effort is not None:
         session.update_session("reasoning_effort", agent_config.reasoning_effort)
-    session.update_session("oracle_routing", agent_config.oracle_routing)
     session.update_session("tool_evolution_enabled", agent_config.tool_evolution.enabled)
     if agent_config.tool_evolution.enabled:
         session.update_session("tool_library_id", agent_config.tool_evolution.library_id)
-        session.update_session("tool_evolution_mode", agent_config.tool_evolution.mode)
     session.start_session()
 
     bind_session_dir(session.session_dir)

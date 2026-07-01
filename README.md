@@ -27,7 +27,7 @@ This repository is a unified platform that can offer:
 - Session-based workflow with multi-session support (`nika session`, `--session-id`)
 - Parameterized fault injection (`nika failure describe`, `--set key=value`)
 - MCP-based tool support and persistent Tool-Evolving experiments
-- SIA-H style executable Harness Evolution experiments (`nika evolve run`)
+- SIA-H executable target-agent baseline runs (`nika evolve run`)
 - Pre-built network scenarios and fault injection mechanisms
 - Reproducible evaluation framework with batch summary (`nika eval summary`)
 - Support for various network topologies and configurations
@@ -89,22 +89,6 @@ NETMIND_BASE_URL=https://stream-netmind.viettel.vn/gateway/v1
 NETMIND_TIMEOUT_SECONDS=90
 NETMIND_MAX_RETRIES=0
 
-MEMORY_DATABASE_URL=postgresql://nika:nika@localhost:5432/nika_memory
-
-QDRANT_URL=http://localhost:6333
-QDRANT_API_KEY=
-QDRANT_COLLECTION=nika_memory
-
-# Embedding model for Qdrant semantic retrieval.
-# Leave EMBEDDING_MODEL empty to disable Qdrant semantic search and use
-# PostgreSQL lexical/full-text retrieval only.
-# NetMind exposes this through an OpenAI-compatible embeddings API.
-EMBEDDING_PROVIDER=openai
-EMBEDDING_MODEL=result-embed-dr
-EMBEDDING_DIMENSION=1024
-EMBEDDING_API_KEY=${NETMIND_API_KEY}
-EMBEDDING_BASE_URL=${NETMIND_BASE_URL}
-
 LANGSMITH_TRACING=false
 LANGSMITH_ENDPOINT=https://api.smith.langchain.com
 LANGSMITH_API_KEY=
@@ -116,10 +100,10 @@ LANGFUSE_BASE_URL=https://cloud.langfuse.com
 ```
 
 At least one LLM configuration is required for LangChain agents:
-`OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, or `OLLAMA_API_URL`. PostgreSQL is the
-canonical runtime store for procedural memory; Qdrant and embedding settings are
-required only by features that use vector storage. Langfuse is the default
-tracing path; LangSmith is optional and used only when
+`OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, or `OLLAMA_API_URL`. Skill-Pro memory and
+DRAFT tool documentation state are stored as JSON under `runtime/`; they do not
+require external database services, vector indexes, embeddings, or model weight
+updates. Langfuse is the default tracing path; LangSmith is optional and used only when
 `LANGSMITH_TRACING=true`.
 
 ## Step by step guide
@@ -167,10 +151,10 @@ Each `nika env run` creates a **session** (printed as `session_id=…`). Session
 
    ```shell
    nika agent list
-   nika agent run -a react -b netmind -m openai/gpt-oss-120b -n 20   # LangGraph + LangChain ReAct
-   nika agent run -a cli -m gpt-5.4-mini                    # Codex CLI subprocess worker
-   nika agent run -a react -b netmind -m openai/gpt-oss-120b \
-     --tools bgp-study --tool-mode dual
+	   nika agent run -a react -b netmind -m openai/gpt-oss-120b -n 20   # LangGraph + LangChain ReAct
+	   nika agent run -a cli -m gpt-5.4-mini                    # Codex CLI subprocess worker
+	   nika agent run -a react -b netmind -m openai/gpt-oss-120b \
+	     --tools bgp-study
    nika agent run -a cli -m gpt-5.4-mini -e medium        # optional Codex reasoning effort
    nika agent run -a mock -n 5                             # no LLM; useful for pipeline testing
    ```
@@ -207,8 +191,8 @@ so it works for both running and completed sessions.
 
 ### Run experiments from Streamlit
 
-Launch the experiment runner UI to enable learning modules and watch live
-progress without hand-writing long commands:
+Launch the experiment runner UI to choose a baseline agent, compose optional
+learning modules, and watch live progress without hand-writing long commands:
 
 ```shell
 nika studio
@@ -248,7 +232,9 @@ uv run --with pytest pytest tests/test_session.py -v
 
 ## Troubleshooting Agents
 
-Agent implementations live under [`src/agent/`](src/agent/). For architecture, directory layout, and extension notes, see **[src/agent/README.md](src/agent/README.md)**.
+Agent implementations live under [`src/agent/`](src/agent/). For the current
+learning-module boundary and usage, see
+[`docs/README.md`](docs/README.md).
 
 NIKA ships three LangGraph troubleshooting workflows, a Codex CLI workflow,
 and a deterministic mock. Tool Evolution is an optional module applied to a
@@ -273,7 +259,7 @@ nika agent run -a react -b deepseek -m deepseek-chat -n 20
 nika agent run -a plan-execute -b netmind -m openai/gpt-oss-120b -n 20
 nika agent run -a reflexion -b netmind -m openai/gpt-oss-120b -n 20 -r 3
 nika agent run -a react -b netmind -m openai/gpt-oss-120b \
-  --tools experiment-a --tool-mode dual
+  --tools experiment-a
 nika agent run -a react -b netmind -m openai/gpt-oss-120b \
   --memory bgp-study
 ```
@@ -293,70 +279,52 @@ that memory as strategy guidance. The loop stops on evaluator success or after
 
 ### Tool Evolution module (`--tools`)
 
-The module can augment `react`, `plan-execute`, or `reflexion` and combines
-DRAFT-, TTE-, and Alita-G-inspired mechanisms:
+The module augments `react`, `plan-execute`, or `reflexion` with DRAFT-style
+documentation refinement for the fixed primitive MCP tool surface. It does not
+create new executable tools or MCP servers.
 
-- **DRAFT-like documentation refinement** versions agent-facing usage semantics for immutable
-  MCP primitives. Post-incident curation groups diverse invocations, contrasts
-  successful and failed executions, rewrites preconditions, argument guidance,
-  output interpretation, and failure semantics, and records convergence when
-  repeated evidence produces no semantic change.
-- **TTE-like test-time evolution** requires the agent to identify a sanitized
-  capability gap before constructing an ephemeral tool. It can synthesize either
-  a declarative composite workflow or a runnable Python helper. Generated Python
-  must pass AST checks, declared-parameter validation, sandbox execution, and
-  semantic output checks before it can enter the persistent library.
-- **Alita-like capability abstraction** removes failed and duplicate calls from
-  successful traces, shares parameters for repeated concrete values, and
-  creates reusable capability entries. Unlike Alita-style auto MCP creation,
-  NIKA does not persist new MCP servers. The MCP adapter exposes persisted
-  composites and promoted generated Python helpers from the same library.
-
-NIKA has two persisted evolved-tool forms: composite MCP workflows for live
-diagnostic evidence collection, and generated Python helpers for pure
-computation over declared inputs. Composite workflows use the same diagnosis
-primitive surface exposed by upstream NIKA, including open-ended operational
-tools, while still requiring parameterized reusable arguments and structural
-validation before persistence.
+- **Experience gathering** reads diagnosis `messages.jsonl` and stores tool
+  trials: tool name, arguments, success/error status, output summary, and error
+  summary.
+- **Learning from experience** turns failed trials into comprehension gaps such
+  as invalid argument schema, wrong environment reference, or missing
+  precondition.
+- **Documentation rewriting** asks a structured LLM DRAFT curator to update
+  each primitive tool document with clearer descriptions, preconditions,
+  parameter constraints, positive/negative examples, usage notes, and known
+  failure modes. If the curator is unavailable, the deterministic trial-derived
+  rewrite still keeps evaluation running.
+- **Tool-adaptive termination** freezes a document when repeated updates stop
+  changing the document or fail to improve useful evidence.
 
 ```shell
 nika benchmark run --file benchmark/benchmark_test.csv \
   -a react -b netmind -m openai/gpt-oss-120b \
-  --tools bgp-study --tool-mode dual
+  --tools bgp-study
 
 nika tools libraries
 nika tools show bgp-study
 nika tools reset bgp-study
 ```
 
-Generated tools start as ephemeral artifacts and become probationary candidates
-only after structural, runtime, and semantic verification. With validation
-enabled, a candidate is promoted only after successful use in at least two
-distinct scenario/topology contexts whose incidents are also solved correctly.
-Online benchmark rows update the selected library in CSV order.
+The persistent library is `runtime/tool_evolution/<library_id>/state.json`.
+Tool-evolving sessions write `tool_evolution.json` with trial counts,
+documentation revisions, LLM rewrite counts, gaps, and frozen-document counts.
 
-The library tracks retrieval count, verification reports, utility, and
-regression. Capacity defaults to 250 tools and can be changed with
-`NIKA_TOOL_LIBRARY_CAPACITY`; overflow is pruned by status and observed utility.
+### SIA-H target-agent baseline (`nika evolve run`)
 
-Available modes are `mastery`, `distill`, and `dual`. Add `--oracle-routing` only for the
-explicit oracle baseline; normal runs select diagnosis servers from public
-scenario metadata without consulting the injected problem label.
-
-Tool-Evolving sessions additionally write `tool_evolution.json` and expose
-selection recall, argument validity, recovery, reuse, promotion, Tool Card
-revisions, capability gaps, verified composites, verified generated Python
-tools, library health, cross-model reuse, and sequential efficiency metrics.
-
-### Harness Evolution outer loop (`nika evolve run`)
-
-Harness Evolution follows the SIA-H shape: each generation runs a complete
+SIA-H follows the target-agent evolution shape: each generation runs a complete
 benchmark batch with an executable `target_agent.py`, writes scored
 `context.md` plus `agent_execution/` artifacts, then creates the next
-generation's `target_agent.py`. NIKA stays the harness: it starts the network,
-injects the fault, builds a public per-case dataset, runs the target agent in a
-subprocess, and evaluates the resulting submission. It does not train or modify
-model weights.
+generation's `target_agent.py`. The Meta-Agent creates the initial target agent;
+the Feedback-Agent reads generation results and writes later target agents.
+NIKA stays the harness: it starts the network, injects the fault, builds a
+public per-case dataset, runs the target agent in a subprocess, and evaluates
+the resulting submission. It does not train or modify model weights.
+SIA-H learns controller/scaffold code over the MCP tools already exposed by the
+benchmark. It may improve prompts, planning, retries, parsing, and tool-use
+policy, but it does not create new benchmark primitive tools; new promoted
+tools are handled by the optional Tool Evolution module.
 
 ```shell
 nika evolve run --file benchmark/benchmark_test.csv \
@@ -367,46 +335,40 @@ nika evolve run --file benchmark/benchmark_test.csv \
 Artifacts are stored under `runtime/harness_evolution/<run_id>/`;
 per-generation benchmark sessions are stored under
 `results/<benchmark>-<run_id>/gen_<n>/`. Every CSV row contributes to the next
-target-agent update in order. See
-[`docs/learning_modules.md`](docs/learning_modules.md).
-Use `--feedback-mode deterministic` for a no-extra-LLM smoke path, or
-`--feedback-mode llm` to require the structured meta-agent source update.
+target-agent update in order. SIA-H always requires structured Meta-Agent and
+Feedback-Agent source output; it does not silently carry forward a deterministic
+target agent when source generation fails. See [`docs/README.md`](docs/README.md).
 
-See [`docs/README.md`](docs/README.md) for the current documentation map.
+See [`docs/README.md`](docs/README.md) for the current
+learning-module and SIA-H boundary.
 
-### Composable procedural memory
+### Composable Skill-Pro memory
 
 Memory is an optional module composed with `react`, `plan-execute`, or
-`reflexion`; it is not a separate workflow. The wrapper retrieves validated
-procedural lessons before calling the selected workflow. After `nika eval
-metrics` produces detection, localization, and RCA scores, the shared
-post-evaluation hook can evolve the same memory bank.
+`reflexion`; it is not a separate workflow. The wrapper retrieves reusable
+Skill-MDP procedures before diagnosis. After `nika eval metrics` produces
+detection, localization, and RCA scores, the post-evaluation hook proposes a new
+or revised skill and passes it through a non-parametric PPO gate.
 
-For the full benchmark-safe design, implementation notes, paper lineage, and
-roadmap, see [`docs/memory/README.md`](docs/memory/README.md).
+For the full benchmark-safe design, see
+[`docs/README.md`](docs/README.md).
 
-- PostgreSQL is the canonical atomic-note store. The default configuration uses
-  the self-hosted Docker service at
-  `postgresql://nika:nika@localhost:5432/nika_memory`.
-- Qdrant is the optional rebuildable semantic index. The agent falls back to
-  lexical full-text search when Qdrant or embeddings are unavailable.
-- The extractor sees the diagnosis trajectory but never ground-truth text.
-- The module follows three pillars: MemInsight-style context attributes,
-  LightMem-style offline consolidation, and A-Mem-style atomic notes plus links.
-- Failed or partial episodes may stage only cautious, checkable notes. Fully
-  successful episodes validate atomic procedural notes; repeated validation
-  increases confidence instead of creating a separate instruction type.
-- Each evaluated episode writes `memory_update.json` and
-  `memory_snapshot.jsonl` under its result directory.
+- Each skill has an activation condition, execution steps, and termination
+  condition.
+- Semantic gradients are structured LLM critiques of the episode, with a
+  deterministic critique used only when the critic is unavailable.
+- The PPO gate compares the candidate skill against the best existing/default
+  policy using accuracy, step count, and tool-call cost.
+- Score-based maintenance retires low-value or duplicate skills.
+- Persistent state lives in `runtime/memory/<bank>/skills.json`.
+- Each evolving episode writes `memory_update.json`, including whether the
+  accepted/rejected candidate used an LLM or deterministic semantic gradient.
 
 Online evolution must be sequential:
 
 ```shell
-docker compose up -d postgres qdrant
 nika memory health --bank experiment-01
-
 nika memory run --bank experiment-01 --limit 4
-
 nika memory run --bank experiment-01 --read --limit 4 -a plan-execute
 
 nika memory inspect --bank experiment-01
@@ -414,10 +376,10 @@ nika memory snapshot --bank experiment-01
 nika memory clear --bank experiment-01 -y
 ```
 
-Retrieval defaults to 20 candidates and injects at most 5 memories within an
-estimated 1,500-token budget. For `nika memory run`, override with `--k` and
-`--tokens`; for `nika agent run` and `nika benchmark run`, use `--memory-k`
-and `--memory-tokens`.
+Retrieval injects at most 5 skills within an estimated 1,500-token budget by
+default. For `nika memory run`, override with `--k` and `--tokens`; for
+`nika agent run` and `nika benchmark run`, use `--memory-k` and
+`--memory-tokens`.
 
 ### Codex CLI agent (`-a cli`)
 
@@ -575,9 +537,9 @@ This framework provides MCP servers under `src/nika/service/mcp_server`. These i
 - **Task management MCP server** (`task_mcp_server.py`): agent submissions, including
   - `list_avail_problems` to list injectable root-cause ids.
   - `submit` to write the agent's final detection/localization/RCA answer.
-- **Evolved diagnostic toolbox MCP server** (`tool_evolution_mcp_server.py`):
-  - `list_evolved_tools` to inspect promoted composites and generated Python helpers; probationary candidates are opt-in for inspection.
-  - `execute_evolved_tool` to run promoted composites over the composable diagnostic primitive allowlist or generated Python helpers in the configured sandbox runner.
+- **DRAFT tool-documentation MCP server** (`tool_evolution_mcp_server.py`):
+  - `list_refined_tool_docs` to inspect refined documentation for fixed primitive diagnostic tools.
+  - `get_refined_tool_doc` to inspect one primitive tool document.
   - Selects the library through `NIKA_TOOL_LIBRARY_ID` and the live lab through `NIKA_SESSION_ID`.
 
 💡 More tools are coming soon...

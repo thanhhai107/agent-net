@@ -83,7 +83,7 @@ def build_public_case_dataset(
     dataset_dir = Path(output_dir)
     dataset_dir.mkdir(parents=True, exist_ok=True)
     scenario_name = str(getattr(session, "scenario_name", "") or "")
-    diagnosis_servers = select_diagnosis_servers(scenario_name, [], oracle=False)
+    diagnosis_servers = select_diagnosis_servers(scenario_name)
     memory_context = _retrieve_memory_context(
         session=session,
         memory=memory,
@@ -100,6 +100,14 @@ def build_public_case_dataset(
         "topology": getattr(session, "topology", []) or [],
         "task_description": str(getattr(session, "task_description", "") or ""),
         "diagnosis_mcp_servers": diagnosis_servers,
+        "tool_contract": {
+            "surface": "fixed_mcp_tools",
+            "allowed_mcp_servers": diagnosis_servers
+            + (["nika_tool_docs"] if tool_evolution.enabled else []),
+            "may_define_local_helpers": True,
+            "may_create_new_primitive_tools": False,
+            "may_create_new_mcp_servers": False,
+        },
         "submission_contract": {
             "must_call": ["list_avail_problems", "submit"],
             "submission_file": "submission.json",
@@ -110,8 +118,9 @@ def build_public_case_dataset(
             tool_evolution.library_id if tool_evolution.enabled else None
         ),
         "tool_evolution_note": (
-            "The nika_diagnostic_toolbox MCP server is available for promoted "
-            "evolved tools. Use it only as evidence and verify important findings."
+            "The nika_tool_docs MCP server exposes DRAFT-refined "
+            "documentation for fixed primitive tools. It does not create new "
+            "benchmark primitive tools."
             if tool_evolution.enabled
             else ""
         ),
@@ -128,6 +137,7 @@ def build_public_case_dataset(
                 context["task_description"],
                 "",
                 "Use only the MCP tools configured for this session. "
+                "Do not create new primitive tools or MCP servers. "
                 "Submit via the task MCP server.",
             ]
         ),

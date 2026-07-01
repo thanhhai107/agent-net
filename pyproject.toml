@@ -27,8 +27,6 @@ dependencies = [
     "typer>=0.25.1",
     "func_timeout",
     "streamlit>=1.40",
-    "qdrant-client>=1.14,<2",
-    "psycopg[binary]>=3.2,<4",
 ]
 
 [project.scripts]

@@ -10,26 +10,20 @@ _TELEMETRY_KEYWORDS = frozenset({"telemetry", "influx", "int"})
 
 def select_diagnosis_servers(
     scenario_name: str,
-    problem_names: list[str] | None = None,
-    *,
-    oracle: bool = False,
 ) -> list[str]:
-    """Return the minimal set of Kathara MCP server names needed for *scenario*.
+    """Return the minimal public Kathara MCP server set needed for *scenario*.
 
     ``kathara_base_mcp_server`` is always included.  The three specialised
-    servers are added when keyword signals appear in the scenario or problem
-    names (tokens are split on ``_`` and ``-``).  This mirrors upstream NIKA.
+    servers are added only when keyword signals appear in the public scenario
+    name (tokens are split on ``_`` and ``-``). Hidden injected problem labels
+    are deliberately ignored so evaluation remains fair.
 
     Parameters
     ----------
     scenario_name:
         E.g. ``"dc_clos_bgp"`` or ``"p4_counter"``.
-    problem_names:
-        E.g. ``["bgp_session_down"]``.
     """
-    _ = oracle
-    problem_text = " ".join(problem_names or [])
-    combined = (scenario_name + " " + problem_text).lower()
+    combined = scenario_name.lower()
     tokens = set(combined.replace("_", " ").replace("-", " ").split())
 
     servers = ["kathara_base_mcp_server"]
@@ -102,12 +96,12 @@ class MCPServerConfig:
         full = self.load_config(if_submit=False)
         return {k: v for k, v in full.items() if k in server_names}
 
-    def load_toolbox_config(self, library_id: str) -> dict:
-        """Return the FastMCP adapter for one evolved diagnostic tool library."""
+    def load_tool_docs_config(self, library_id: str) -> dict:
+        """Return the FastMCP adapter for one DRAFT documentation library."""
         if not library_id:
-            raise ValueError("library_id is required for the diagnostic toolbox.")
+            raise ValueError("library_id is required for DRAFT tool docs.")
         return {
-            "nika_diagnostic_toolbox": {
+            "nika_tool_docs": {
                 "command": sys.executable,
                 "args": [
                     f"{self.mcp_server_dir}/tool_evolution_mcp_server.py"
