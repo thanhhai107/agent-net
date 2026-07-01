@@ -8,7 +8,7 @@ from pathlib import Path
 
 import yaml
 
-from nika.net_env.net_env_pool import list_all_net_envs, scenario_requires_topo_size
+from nika.net_env.net_env_pool import list_all_net_envs, scenario_requires_topo_tier
 from nika.orchestrator.problems.prob_pool import list_avail_problem_instances
 from nika.workflows.benchmark.inject_defaults import resolve_inject_params, validate_benchmark_case
 
@@ -123,7 +123,7 @@ def iter_selected_cases() -> list[dict]:
                 f"Selected scenario {scenario} not tag-compatible with {prob_name} "
                 f"(problem={problem_instance.TAGS}, scenario={net_env_cls.TAGS})"
             )
-        topo_size = "s" if scenario_requires_topo_size(scenario) else ""
+        topo_size = "s" if scenario_requires_topo_tier(scenario) else ""
         rows.append(_make_row(scenario, prob_name, topo_size))
     return rows
 

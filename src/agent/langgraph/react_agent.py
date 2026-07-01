@@ -9,7 +9,6 @@ from langgraph.graph import END, START, StateGraph
 from pydantic import Field, ValidationError
 from typing_extensions import TypedDict
 
-from agent.defaults import DEFAULT_MAX_STEPS
 from agent.langgraph.langfuse_tracing import callback_config, create_langfuse_callbacks
 from agent.langgraph.phases.diagnosis import DiagnosisPhase
 from agent.langgraph.phases.submission import SubmissionPhase
@@ -44,9 +43,9 @@ class BasicReActAgent:
     def __init__(
         self,
         session_id: str,
+        max_steps: int,
         llm_backend: str = DEFAULT_LLM_BACKEND,
         model: str = DEFAULT_MODEL,
-        max_steps: int = DEFAULT_MAX_STEPS,
         tool_evolution_enabled: bool = False,
         tool_library_id: str = "default",
         use_problem_tool_hints: bool = True,

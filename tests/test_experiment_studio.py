@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import sys
 
-from agent.defaults import DEFAULT_MAX_STEPS
 from agent.llm.model_factory import DEFAULT_LLM_BACKEND, DEFAULT_MODEL
+from nika.utils.agent_config import resolve_max_steps
 from nika.visualization.experiment_runner import (
     build_experiment_command,
     build_command_plan,
@@ -13,10 +13,10 @@ from nika.visualization.experiment_runner import (
 
 def _config(**overrides: object) -> dict[str, object]:
     config: dict[str, object] = {
-        "benchmark_file": "benchmark/benchmark_test.csv",
+        "benchmark_file": "benchmark/benchmark_test.yaml",
         "modules": [],
         "agent_type": "react",
-        "llm_backend": "netmind",
+        "llm_backend": "custom",
         "model": "openai/gpt-oss-120b",
         "max_steps": 100,
         "max_attempts": 3,
@@ -25,7 +25,7 @@ def _config(**overrides: object) -> dict[str, object]:
         "memory_k": 5,
         "memory_tokens": 1500,
         "max_generations": 3,
-        "feedback_backend": "netmind",
+        "feedback_backend": "custom",
         "feedback_model": "openai/gpt-oss-120b",
     }
     config.update(overrides)
@@ -37,7 +37,7 @@ def test_baseline_command_uses_default_sequential_execution() -> None:
 
     assert command[:3] == [sys.executable, "-m", "nika.codex_cli.main"]
     assert command[3:6] == ["benchmark", "run", "--file"]
-    assert "benchmark/benchmark_test.csv" in command
+    assert "benchmark/benchmark_test.yaml" in command
     assert command[command.index("-n") + 1] == "100"
     assert "-j" not in command
     assert "--parallel" not in command
@@ -52,7 +52,7 @@ def test_standard_agent_label_uses_selected_baseline_name() -> None:
     assert plan[0].name == "Reflexion + Memory Evolution"
 
 
-def test_command_fallbacks_match_shared_agent_defaults() -> None:
+def test_command_fallbacks_match_env_agent_config() -> None:
     config = _config()
     for key in ("llm_backend", "model", "max_steps"):
         config.pop(key)
@@ -61,7 +61,7 @@ def test_command_fallbacks_match_shared_agent_defaults() -> None:
 
     assert command[command.index("-b") + 1] == DEFAULT_LLM_BACKEND
     assert command[command.index("-m", command.index("-b")) + 1] == DEFAULT_MODEL
-    assert command[command.index("-n") + 1] == str(DEFAULT_MAX_STEPS)
+    assert command[command.index("-n") + 1] == str(resolve_max_steps(None))
 
 
 def test_tool_and_memory_modules_share_one_sequential_command() -> None:

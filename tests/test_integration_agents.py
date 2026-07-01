@@ -419,6 +419,7 @@ class ClaudeDisplayTest(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls) -> None:
+        os.environ.setdefault("ANTHROPIC_MODEL", "claude-test-model")
         cls.sample_model = default_claude_model()
 
     def test_system_init_event_with_string_servers(self) -> None:
@@ -1006,7 +1007,7 @@ class ReactAgentPipelineTest(_CommonPipelineSteps, OrderedPipelineTestCase):
             app,
             [
                 "agent", "run", "--agent", "react",
-                "--provider", REACT_PROVIDER,
+                "--backend", REACT_PROVIDER,
                 "--model", REACT_MODEL,
                 "--max-steps", "20",
                 "--session-id", self.session_id,

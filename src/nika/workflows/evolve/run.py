@@ -14,12 +14,12 @@ from uuid import uuid4
 from pydantic import BaseModel, Field
 
 from agent.composition import HarnessConfig, MemoryConfig, ToolEvolutionConfig
-from agent.defaults import DEFAULT_MAX_STEPS
 from agent.harness.runner import validate_target_agent_source
 from agent.llm.model_factory import DEFAULT_LLM_BACKEND, DEFAULT_MODEL, load_model
 from nika.config import RESULTS_DIR, RUNTIME_DIR
+from nika.utils.agent_config import resolve_max_steps
 from nika.utils.kathara_cleanup import ensure_kathara_clean
-from nika.workflows.benchmark.run import default_benchmark_csv_path, run_benchmark_from_csv
+from nika.workflows.benchmark.run import default_benchmark_yaml_path, run_benchmark_from_yaml
 
 HARNESS_EVOLUTION_DIR = RUNTIME_DIR / "harness_evolution"
 _RESULT_FIELDS = (
@@ -200,7 +200,7 @@ def build_generation_context(
         f"# Harness Evolution Context: {run_id} / Generation {generation}",
         "",
         f"**Started**: {datetime.now().isoformat(timespec='seconds')}",
-        f"**Benchmark CSV**: {benchmark_file}",
+        f"**Benchmark YAML**: {benchmark_file}",
         f"**Benchmark Root**: {benchmark_root}",
         f"**Target Agent**: {target_agent_path}",
         "**Feedback Scope**: all benchmark rows",
@@ -430,10 +430,10 @@ Runtime contract:
   benchmark tool surface is fixed. Tool Evolution can expose DRAFT-refined tool
   documentation, not new primitive tools.
 - Write useful execution artifacts under --working-dir.
-- Do not import benchmark CSV readers, failure injection, ground truth, or private labels.
+- Do not import benchmark YAML readers, failure injection, ground truth, or private labels.
 - Do not train or modify model weights.
 
-Benchmark CSV for this evolution run: {benchmark_file}
+Benchmark YAML for this evolution run: {benchmark_file}
 
 Reference implementation to improve from:
 ```python
@@ -473,7 +473,7 @@ Rules:
 - Do not copy retrieved procedural-memory snippets, DRAFT tool-doc listings, or
   per-case runtime context into target_agent.py. Those remain runtime inputs
   supplied by optional NIKA modules.
-- Do not reference benchmark CSV files, ground_truth.json, failure injection,
+- Do not reference benchmark YAML files, ground_truth.json, failure injection,
   private problem labels, or hard-coded case/session ids.
 - Do not train or modify model weights.
 - Prefer general improvements over available tools: planning, evidence ledger,
@@ -648,12 +648,12 @@ def collect_generation_artifacts(
 
 def run_harness_evolution(
     *,
-    benchmark_file: str | Path = default_benchmark_csv_path(),
+    benchmark_file: str | Path = default_benchmark_yaml_path(),
     max_generations: int = 3,
     run_id: str | None = None,
-    llm_backend: str = "netmind",
-    model: str = "openai/gpt-oss-120b",
-    max_steps: int = DEFAULT_MAX_STEPS,
+    llm_backend: str = DEFAULT_LLM_BACKEND,
+    model: str = DEFAULT_MODEL,
+    max_steps: int | None = None,
     run_judge: bool = False,
     judge_llm_backend: str | None = None,
     judge_model: str | None = None,
@@ -671,6 +671,7 @@ def run_harness_evolution(
 ) -> list[EvolutionGenerationSummary]:
     if max_generations < 1:
         raise ValueError("max_generations must be >= 1")
+    resolved_max_steps = resolve_max_steps(max_steps)
     ensure_kathara_clean(context="harness evolution run")
 
     run_id = run_id or datetime.now().strftime("%Y%m%d-%H%M%S") + f"-{uuid4().hex[:6]}"
@@ -713,7 +714,7 @@ def run_harness_evolution(
             "agent_type": "harness",
             "llm_backend": llm_backend,
             "model": model,
-            "max_steps": max_steps,
+            "max_steps": resolved_max_steps,
             "feedback_llm_backend": feedback_llm_backend,
             "feedback_model": feedback_model,
             "initial_target_agent_source": initial_source,
@@ -741,12 +742,12 @@ def run_harness_evolution(
             f"target_agent={target_agent_path} result_root={gen_results_dir}",
             flush=True,
         )
-        run_benchmark_from_csv(
+        run_benchmark_from_yaml(
             benchmark_file=str(benchmark_file),
             agent_type="harness",
             llm_backend=llm_backend,
             model=model,
-            max_steps=max_steps,
+            max_steps=resolved_max_steps,
             max_attempts=1,
             run_judge=run_judge,
             judge_llm_backend=judge_llm_backend,

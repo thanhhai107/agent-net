@@ -26,7 +26,7 @@ def eval_judge(
         DEFAULT_LLM_BACKEND,
         "-b",
         "--backend",
-        help="LLM provider for the judge (openai, ollama, deepseek, netmind).",
+        help="LLM provider for the judge (openai, ollama, deepseek, custom).",
     ),
     judge_model: str = typer.Option(DEFAULT_MODEL, "-m", "--model", help="Judge model id."),
     session_id: str | None = typer.Option(None, "--session-id", help="Target session id (lab_hash)."),

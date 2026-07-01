@@ -44,7 +44,7 @@ Every agent runs **diagnosis** (Kathara MCP, `if_submit=False`) then **submissio
 | Flag | Env | Required | Notes |
 |------|-----|----------|-------|
 | `-a` / `--agent` | `NIKA_AGENT_TYPE` | Yes | `react`, `mock`, `codex_cli`, `claude_cli` |
-| `-p` / `--provider` | `NIKA_LLM_PROVIDER` | react only | `openai`, `ollama`, `deepseek` |
+| `-b` / `--backend` | `NIKA_LLM_PROVIDER` | react only | `openai`, `ollama`, `deepseek`, `custom` |
 | `-n` / `--max-steps` | `NIKA_MAX_STEPS` | Yes | Limits ReAct steps in `react` / `mock` only |
 | `-m` / `--model` | `NIKA_MODEL` | No | Overrides agent-specific model env when set |
 | `--session-id` | — | No | Target session (default: current running session) |
@@ -72,21 +72,23 @@ LangGraph orchestration + LangChain ReAct workers per phase.
 | `openai` | `OPENAI_API_KEY` |
 | `deepseek` | `DEEPSEEK_API_KEY` |
 | `ollama` | `OLLAMA_API_URL` (default `http://localhost:11434`) |
+| `custom` | `CUSTOM_API_BASE`, `CUSTOM_API_KEY` |
 
 | Env | Default in `.env.example` |
 |-----|-------------------------|
-| `NIKA_REACT_MODEL` | `gpt-5-mini` |
+| `NIKA_REACT_MODEL` | `openai/gpt-oss-120b` |
 
 ```bash
 # .env
 NIKA_AGENT_TYPE=react
-NIKA_LLM_PROVIDER=openai
+NIKA_LLM_PROVIDER=custom
 NIKA_MAX_STEPS=20
-NIKA_REACT_MODEL=gpt-5-mini
-OPENAI_API_KEY=sk-...
+NIKA_REACT_MODEL=openai/gpt-oss-120b
+CUSTOM_API_BASE=https://stream-netmind.viettel.vn/gateway/v1
+CUSTOM_API_KEY=...
 
 nika agent run                              # all from .env
-nika agent run -a react -p deepseek -m deepseek-chat -n 20
+nika agent run -a react -b deepseek -m deepseek-chat -n 20
 ```
 
 ### Local deployment (Ollama)
@@ -103,7 +105,7 @@ NIKA_MAX_STEPS=20
 NIKA_REACT_MODEL=qwen2.5:7b
 OLLAMA_API_URL=http://localhost:11434
 
-nika agent run -a react -p ollama -m qwen2.5:7b -n 20
+nika agent run -a react -b ollama -m qwen2.5:7b -n 20
 ```
 
 No API key. `load_model()` validates the model at init — run `ollama pull` first. For a remote host, set `OLLAMA_API_URL` to the server base URL.

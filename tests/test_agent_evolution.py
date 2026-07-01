@@ -149,7 +149,7 @@ class AgentEvolutionTest(unittest.TestCase):
             with (
                 patch("nika.workflows.evolve.run.ensure_kathara_clean"),
                 patch(
-                    "nika.workflows.evolve.run.run_benchmark_from_csv",
+                    "nika.workflows.evolve.run.run_benchmark_from_yaml",
                     side_effect=fake_benchmark,
                 ),
                 patch(
@@ -161,7 +161,7 @@ class AgentEvolutionTest(unittest.TestCase):
                 ),
             ):
                 summaries = run_harness_evolution(
-                    benchmark_file=tmp_path / "bench.csv",
+                    benchmark_file=tmp_path / "bench.yaml",
                     max_generations=2,
                     run_id="unit",
                     llm_backend="openai",
@@ -197,7 +197,7 @@ class AgentEvolutionTest(unittest.TestCase):
         args = _benchmark_row_cli_args(
             {"scenario": "simple_bgp", "problem": "link_down"},
             agent_type="harness",
-            llm_backend="netmind",
+            llm_backend="custom",
             model="openai/gpt-oss-120b",
             max_steps=100,
             max_attempts=3,
@@ -214,8 +214,8 @@ class AgentEvolutionTest(unittest.TestCase):
             patch.object(benchmark_run_module, "ensure_kathara_clean"),
             self.assertRaisesRegex(ValueError, "requires the internal --harness"),
         ):
-            benchmark_run_module.run_benchmark_from_csv(
-                benchmark_file="/tmp/does-not-matter.csv",
+            benchmark_run_module.run_benchmark_from_yaml(
+                benchmark_file="/tmp/does-not-matter.yaml",
                 agent_type="harness",
                 llm_backend="openai",
                 model="model",
@@ -231,7 +231,7 @@ class AgentEvolutionTest(unittest.TestCase):
 
     def test_meta_and_feedback_prompts_keep_benchmark_tools_fixed(self) -> None:
         initial_prompt = _build_initial_target_prompt(
-            benchmark_file="benchmark/benchmark_test.csv",
+            benchmark_file="benchmark/benchmark_test.yaml",
             reference_source=_reference_target_agent_source(),
         )
         feedback_prompt = _build_feedback_prompt(
@@ -387,7 +387,7 @@ class AgentEvolutionTest(unittest.TestCase):
         context = build_generation_context(
             run_id="unit",
             generation=1,
-            benchmark_file="benchmark/benchmark_test.csv",
+            benchmark_file="benchmark/benchmark_test.yaml",
             benchmark_root="results/unit",
             target_agent_path="runtime/unit/gen_1/target_agent.py",
             rows=rows,

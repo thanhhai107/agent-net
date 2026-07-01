@@ -81,6 +81,9 @@ class AgentCallbackLogger(BaseCallbackHandler):
             extra_fields=extra_fields,
         )
 
+    def _log(self, event_type: str, payload: dict[str, Any]) -> None:
+        self._logger.log(event_type, payload)
+
     def on_chat_model_start(
         self,
         serialized: dict[str, Any],

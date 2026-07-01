@@ -67,3 +67,8 @@ def scenario_requires_topo_size(scenario_name: str) -> bool:
         raise ValueError(f"Network environment '{scenario_name}' not found in the pool.")
     topo_size = getattr(_NET_ENVS[scenario_name], "TOPO_SIZE", None)
     return isinstance(topo_size, list)
+
+
+def scenario_requires_topo_tier(scenario_name: str) -> bool:
+    """Compatibility alias for workflows that expose this as topology tier."""
+    return scenario_requires_topo_size(scenario_name)

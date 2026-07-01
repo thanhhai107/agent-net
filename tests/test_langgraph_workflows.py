@@ -33,12 +33,12 @@ from agent.langgraph.workflow_models import (
     StepResult,
 )
 from agent.llm.model_factory import (
+    CUSTOM_DEFAULT_API_BASE,
+    CUSTOM_MAX_RETRIES,
+    CUSTOM_RECOMMENDED_MODELS,
+    CUSTOM_TIMEOUT_SECONDS,
     DEFAULT_LLM_BACKEND,
     DEFAULT_MODEL,
-    NETMIND_BASE_URL,
-    NETMIND_MAX_RETRIES,
-    NETMIND_SUPPORTED_MODELS,
-    NETMIND_TIMEOUT_SECONDS,
     GLM47ChatOpenAI,
     _extract_glm_tool_calls,
     _normalize_glm_tool_calls,
@@ -127,6 +127,8 @@ class WorkflowRegistrationTest(unittest.TestCase):
                 "reflexion",
                 "mock",
                 "cli",
+                "codex_cli",
+                "claude_cli",
             ),
         )
 
@@ -205,10 +207,11 @@ class WorkflowRegistrationTest(unittest.TestCase):
             memory_token_budget=900,
         )
 
-    def test_cli_lists_netmind_backend(self) -> None:
-        self.assertIn("netmind", SUPPORTED_LLM_BACKENDS)
+    def test_cli_lists_custom_backend(self) -> None:
+        self.assertIn("custom", SUPPORTED_LLM_BACKENDS)
+        self.assertNotIn("netmind", SUPPORTED_LLM_BACKENDS)
         self.assertEqual(
-            NETMIND_SUPPORTED_MODELS,
+            CUSTOM_RECOMMENDED_MODELS,
             (
                 "MiniMax/MiniMax-M2.7",
                 "Qwen/Qwen3.5-122B-A10B-FP8",
@@ -300,77 +303,69 @@ class WorkflowRegistrationTest(unittest.TestCase):
 
 
 class ModelFactoryTest(unittest.TestCase):
-    def test_default_model_is_netmind_gpt_oss_120b(self) -> None:
-        self.assertEqual(DEFAULT_LLM_BACKEND, "netmind")
+    def test_default_model_is_custom_gpt_oss_120b(self) -> None:
+        self.assertEqual(DEFAULT_LLM_BACKEND, "custom")
         self.assertEqual(DEFAULT_MODEL, "openai/gpt-oss-120b")
 
     @patch.dict("os.environ", {}, clear=True)
-    def test_netmind_requires_api_key(self) -> None:
-        with self.assertRaisesRegex(ValueError, "NETMIND_API_KEY"):
-            load_model("netmind", "NetMind/NetMind-X1")
-
-    @patch.dict(
-        "os.environ",
-        {"NETMIND_API_KEY": "test-key"},
-        clear=True,
-    )
     @patch("agent.llm.model_factory.ChatOpenAI")
-    def test_load_model_defaults_to_netmind_gpt_oss_120b(self, chat_openai) -> None:
+    def test_load_model_defaults_to_custom_gpt_oss_120b(self, chat_openai) -> None:
         load_model()
 
         self.assertEqual(chat_openai.call_args.kwargs["model"], DEFAULT_MODEL)
+        self.assertEqual(chat_openai.call_args.kwargs["api_key"], "dummy")
+        self.assertEqual(chat_openai.call_args.kwargs["base_url"], CUSTOM_DEFAULT_API_BASE)
+
+    @patch.dict("os.environ", {"CUSTOM_API_KEY": "test-key"}, clear=True)
+    @patch("agent.llm.model_factory.ChatOpenAI")
+    def test_custom_uses_default_base_url(self, chat_openai) -> None:
+        load_model()
+
         self.assertEqual(chat_openai.call_args.kwargs["api_key"], "test-key")
-        self.assertEqual(chat_openai.call_args.kwargs["base_url"], NETMIND_BASE_URL)
+        self.assertEqual(chat_openai.call_args.kwargs["base_url"], CUSTOM_DEFAULT_API_BASE)
+        self.assertEqual(
+            chat_openai.call_args.kwargs["timeout"],
+            CUSTOM_TIMEOUT_SECONDS,
+        )
+        self.assertEqual(
+            chat_openai.call_args.kwargs["max_retries"],
+            CUSTOM_MAX_RETRIES,
+        )
 
     @patch.dict(
         "os.environ",
         {
-            "NETMIND_API_KEY": "test-key",
-            "NETMIND_BASE_URL": "https://netmind.example/v1",
+            "CUSTOM_API_KEY": "test-key",
+            "CUSTOM_API_BASE": "https://custom.example/v1",
         },
         clear=True,
     )
     @patch("agent.llm.model_factory.ChatOpenAI")
-    def test_netmind_uses_openai_compatible_endpoint(self, chat_openai) -> None:
-        load_model("netmind", "openai/gpt-oss-20b")
+    def test_custom_uses_openai_compatible_endpoint(self, chat_openai) -> None:
+        load_model("custom", "openai/gpt-oss-20b")
 
         chat_openai.assert_called_once_with(
             model="openai/gpt-oss-20b",
             api_key="test-key",
-            base_url="https://netmind.example/v1",
+            base_url="https://custom.example/v1",
             temperature=0,
-            timeout=NETMIND_TIMEOUT_SECONDS,
-            max_retries=NETMIND_MAX_RETRIES,
+            timeout=CUSTOM_TIMEOUT_SECONDS,
+            max_retries=CUSTOM_MAX_RETRIES,
         )
 
     @patch.dict(
         "os.environ",
-        {"NETMIND_API_KEY": "test-key"},
+        {"CUSTOM_API_KEY": "test-key"},
         clear=True,
     )
-    @patch("agent.llm.model_factory.ChatOpenAI")
-    def test_netmind_uses_default_base_url(self, chat_openai) -> None:
-        load_model("netmind", "Qwen/Qwen3.5-122B-A10B-FP8")
-
-        self.assertEqual(chat_openai.call_args.kwargs["base_url"], NETMIND_BASE_URL)
-        self.assertEqual(
-            chat_openai.call_args.kwargs["timeout"],
-            NETMIND_TIMEOUT_SECONDS,
-        )
-        self.assertEqual(
-            chat_openai.call_args.kwargs["max_retries"],
-            NETMIND_MAX_RETRIES,
-        )
-
-    @patch.dict(
-        "os.environ",
-        {"NETMIND_API_KEY": "test-key"},
-        clear=True,
-    )
-    def test_netmind_glm_47_uses_tool_call_adapter(self) -> None:
-        model = load_model("netmind", "zai-org/GLM-4.7")
+    def test_custom_glm_47_uses_tool_call_adapter(self) -> None:
+        model = load_model("custom", "zai-org/GLM-4.7")
 
         self.assertIsInstance(model, GLM47ChatOpenAI)
+
+    def test_netmind_backend_is_no_longer_supported(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Unsupported llm backend: netmind"):
+            load_model("netmind", "openai/gpt-oss-20b")
 
     def test_glm_tool_call_xml_is_normalized(self) -> None:
         extracted = _extract_glm_tool_calls(
@@ -460,15 +455,15 @@ class ModelFactoryTest(unittest.TestCase):
     @patch.dict(
         "os.environ",
         {
-            "NETMIND_API_KEY": "test-key",
-            "NETMIND_TIMEOUT_SECONDS": "12.5",
-            "NETMIND_MAX_RETRIES": "2",
+            "CUSTOM_API_KEY": "test-key",
+            "CUSTOM_TIMEOUT_SECONDS": "12.5",
+            "CUSTOM_MAX_RETRIES": "2",
         },
         clear=True,
     )
     @patch("agent.llm.model_factory.ChatOpenAI")
-    def test_netmind_allows_timeout_and_retry_overrides(self, chat_openai) -> None:
-        load_model("netmind", "MiniMax/MiniMax-M2.7")
+    def test_custom_allows_timeout_and_retry_overrides(self, chat_openai) -> None:
+        load_model("custom", "MiniMax/MiniMax-M2.7")
 
         self.assertEqual(chat_openai.call_args.kwargs["timeout"], 12.5)
         self.assertEqual(chat_openai.call_args.kwargs["max_retries"], 2)
@@ -476,23 +471,28 @@ class ModelFactoryTest(unittest.TestCase):
     @patch.dict(
         "os.environ",
         {
-            "NETMIND_API_KEY": "test-key",
-            "NETMIND_TIMEOUT_SECONDS": "never",
+            "CUSTOM_API_KEY": "test-key",
+            "CUSTOM_TIMEOUT_SECONDS": "never",
         },
         clear=True,
     )
-    def test_netmind_rejects_invalid_timeout(self) -> None:
-        with self.assertRaisesRegex(ValueError, "NETMIND_TIMEOUT_SECONDS"):
-            load_model("netmind", "openai/gpt-oss-20b")
+    def test_custom_rejects_invalid_timeout(self) -> None:
+        with self.assertRaisesRegex(ValueError, "CUSTOM_TIMEOUT_SECONDS"):
+            load_model("custom", "openai/gpt-oss-20b")
 
     @patch.dict(
         "os.environ",
-        {"NETMIND_API_KEY": "test-key"},
+        {"CUSTOM_API_KEY": "test-key"},
         clear=True,
     )
-    def test_netmind_rejects_model_outside_whitelist(self) -> None:
-        with self.assertRaisesRegex(ValueError, "Unsupported NetMind model"):
-            load_model("netmind", "Qwen/Qwen3-4B-Instruct-2507")
+    @patch("agent.llm.model_factory.ChatOpenAI")
+    def test_custom_allows_arbitrary_model_ids(self, chat_openai) -> None:
+        load_model("custom", "Qwen/Qwen3-4B-Instruct-2507")
+
+        self.assertEqual(
+            chat_openai.call_args.kwargs["model"],
+            "Qwen/Qwen3-4B-Instruct-2507",
+        )
 
 
 class WorkflowLoggingTest(unittest.TestCase):

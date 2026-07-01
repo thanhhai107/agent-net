@@ -76,7 +76,7 @@ newgrp docker
 
 ## Configure environment variables
 
-Copy `.env.sample` to `.env`, then configure the variables required by the
+Copy `.env.example` to `.env`, then configure the variables required by the
 features you use:
 
 ```shell
@@ -84,10 +84,10 @@ DEEPSEEK_API_KEY=
 OPENAI_API_KEY=
 OLLAMA_API_URL=http://localhost:11434
 
-NETMIND_API_KEY=
-NETMIND_BASE_URL=https://stream-netmind.viettel.vn/gateway/v1
-NETMIND_TIMEOUT_SECONDS=90
-NETMIND_MAX_RETRIES=0
+CUSTOM_API_BASE=https://stream-netmind.viettel.vn/gateway/v1
+CUSTOM_API_KEY=
+CUSTOM_TIMEOUT_SECONDS=90
+CUSTOM_MAX_RETRIES=0
 
 LANGSMITH_TRACING=false
 LANGSMITH_ENDPOINT=https://api.smith.langchain.com
@@ -96,15 +96,15 @@ LANGSMITH_PROJECT=
 
 LANGFUSE_SECRET_KEY=
 LANGFUSE_PUBLIC_KEY=
-LANGFUSE_BASE_URL=https://cloud.langfuse.com
+LANGFUSE_HOST=https://cloud.langfuse.com
 ```
 
 At least one LLM configuration is required for LangChain agents:
-`OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, or `OLLAMA_API_URL`. Skill-Pro memory and
-DRAFT tool documentation state are stored as JSON under `runtime/`; they do not
-require external database services, vector indexes, embeddings, or model weight
-updates. Langfuse is the default tracing path; LangSmith is optional and used only when
-`LANGSMITH_TRACING=true`.
+`CUSTOM_API_BASE` plus `CUSTOM_API_KEY`, `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`,
+or `OLLAMA_API_URL`. Skill-Pro memory and DRAFT tool documentation state are
+stored as JSON under `runtime/`; they do not require external database services,
+vector indexes, embeddings, or model weight updates. Langfuse is the default
+tracing path; LangSmith is optional and used only when `LANGSMITH_TRACING=true`.
 
 ## Step by step guide
 You can follow the steps below to run a complete troubleshooting task with NIKA. Use the `nika` CLI.
@@ -151,9 +151,9 @@ Each `nika env run` creates a **session** (printed as `session_id=…`). Session
 
    ```shell
    nika agent list
-	   nika agent run -a react -b netmind -m openai/gpt-oss-120b -n 20   # LangGraph + LangChain ReAct
+	   nika agent run -a react -b custom -m openai/gpt-oss-120b -n 20   # LangGraph + LangChain ReAct
 	   nika agent run -a cli -m gpt-5.4-mini                    # Codex CLI subprocess worker
-	   nika agent run -a react -b netmind -m openai/gpt-oss-120b \
+	   nika agent run -a react -b custom -m openai/gpt-oss-120b \
 	     --tools bgp-study
    nika agent run -a cli -m gpt-5.4-mini -e medium        # optional Codex reasoning effort
    nika agent run -a mock -n 5                             # no LLM; useful for pipeline testing
@@ -254,17 +254,17 @@ All agents write structured traces to `results/{session_id}/messages.jsonl` and 
 
 ```shell
 nika agent list
-nika agent run -a react -b netmind -m openai/gpt-oss-120b -n 20
+nika agent run -a react -b custom -m openai/gpt-oss-120b -n 20
 nika agent run -a react -b deepseek -m deepseek-chat -n 20
-nika agent run -a plan-execute -b netmind -m openai/gpt-oss-120b -n 20
-nika agent run -a reflexion -b netmind -m openai/gpt-oss-120b -n 20 -r 3
-nika agent run -a react -b netmind -m openai/gpt-oss-120b \
+nika agent run -a plan-execute -b custom -m openai/gpt-oss-120b -n 20
+nika agent run -a reflexion -b custom -m openai/gpt-oss-120b -n 20 -r 3
+nika agent run -a react -b custom -m openai/gpt-oss-120b \
   --tools experiment-a
-nika agent run -a react -b netmind -m openai/gpt-oss-120b \
+nika agent run -a react -b custom -m openai/gpt-oss-120b \
   --memory bgp-study
 ```
 
-- **`-b` / `--backend`**: `openai`, `ollama`, `deepseek`, or `netmind`
+- **`-b` / `--backend`**: `openai`, `ollama`, `deepseek`, or `custom`
 - **`-m` / `--model`**: model id for the chosen backend
 - **`-n` / `--max-steps`**: recursion limit for each tool-enabled worker; for `plan-execute`, also the maximum number of executed plan items
 - **`-r` / `--max-attempts`**: maximum number of Reflexion attempts (default `3`; used only by `reflexion`)
@@ -299,7 +299,7 @@ create new executable tools or MCP servers.
 
 ```shell
 nika benchmark run --file benchmark/benchmark_test.yaml \
-  -a react -b netmind -m openai/gpt-oss-120b \
+  -a react -b custom -m openai/gpt-oss-120b \
   --tools bgp-study
 
 nika tools libraries
@@ -329,7 +329,7 @@ tools are handled by the optional Tool Evolution module.
 ```shell
 nika evolve run --file benchmark/benchmark_test.yaml \
   --max-gen 3 \
-  -b netmind -m openai/gpt-oss-120b -n 100
+  -b custom -m openai/gpt-oss-120b -n 100
 ```
 
 Artifacts are stored under `runtime/harness_evolution/<run_id>/`;
@@ -423,7 +423,7 @@ nika exec pc2 ping -c 3 195.11.14.2
 
 # 4. Run a troubleshooting agent on the session task
 # Option A — LangGraph + LangChain ReAct
-nika agent run -a react -b netmind -m openai/gpt-oss-120b -n 20
+nika agent run -a react -b custom -m openai/gpt-oss-120b -n 20
 
 # Option B — Codex CLI (streams step-by-step output to the terminal)
 nika agent run -a cli -m gpt-5.4-mini

@@ -2,21 +2,22 @@
 
 from __future__ import annotations
 
-import csv
 import json
 import re
 from pathlib import Path
 
 import typer
+import yaml
 
 from agent.composition import MemoryConfig
-from agent.defaults import DEFAULT_MAX_STEPS
 from agent.llm.model_factory import DEFAULT_LLM_BACKEND, DEFAULT_MODEL
+from nika.utils.agent_config import resolve_max_steps
 from agent.memory.service import ProceduralMemoryModule
 from nika.config import MEMORY_DIR
+from nika.workflows.benchmark.load_config import load_benchmark_yaml
 from nika.workflows.benchmark.run import (
-    default_benchmark_csv_path,
-    run_benchmark_from_csv,
+    default_benchmark_yaml_path,
+    run_benchmark_from_yaml,
 )
 
 memory_app = typer.Typer(help="Manage Skill-Pro procedural-skill banks.")
@@ -30,36 +31,32 @@ def _safe_error(exc: Exception) -> str:
     return str(exc)
 
 
-def _limited_csv_path(source: Path, *, limit: int | None, bank: str) -> Path:
+def _limited_yaml_path(source: Path, *, limit: int | None, bank: str) -> Path:
     if limit is None:
         return source
     if limit < 1:
         raise typer.BadParameter("--limit must be >= 1")
-    with source.open(newline="", encoding="utf-8") as handle:
-        reader = csv.DictReader(handle)
-        if reader.fieldnames is None:
-            raise typer.BadParameter(f"{source} has no CSV header")
-        rows = list(reader)[:limit]
+    rows = load_benchmark_yaml(source)[:limit]
     if not rows:
-        raise typer.BadParameter(f"{source} has no benchmark rows")
+        raise typer.BadParameter(f"{source} has no benchmark cases")
     safe_bank = re.sub(r"[^A-Za-z0-9_.-]+", "_", bank).strip("._") or "default"
     target_dir = Path(MEMORY_DIR) / "runs"
     target_dir.mkdir(parents=True, exist_ok=True)
-    target = target_dir / f"{safe_bank}.first-{len(rows)}.csv"
-    with target.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=reader.fieldnames)
-        writer.writeheader()
-        writer.writerows(rows)
+    target = target_dir / f"{safe_bank}.first-{len(rows)}.yaml"
+    target.write_text(
+        yaml.dump({"cases": rows}, sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+    )
     return target
 
 
 @memory_app.command("run")
 def memory_run(
     file: Path = typer.Option(
-        Path(default_benchmark_csv_path()),
+        Path(default_benchmark_yaml_path()),
         "-f",
         "--file",
-        help="Shared memory/tool-evolution benchmark CSV. Defaults to benchmark/benchmark_test.csv.",
+        help="Shared memory/tool-evolution benchmark YAML. Defaults to benchmark/benchmark_test.yaml.",
     ),
     limit: int | None = typer.Option(
         None,
@@ -86,11 +83,11 @@ def memory_run(
         help="LLM provider.",
     ),
     model: str = typer.Option(DEFAULT_MODEL, "-m", "--model", help="Model id."),
-    max_steps: int = typer.Option(
-        DEFAULT_MAX_STEPS,
+    max_steps: int | None = typer.Option(
+        None,
         "-n",
         "--max-steps",
-        help="Per-worker step limit.",
+        help="Per-worker step limit. Defaults to NIKA_MAX_STEPS.",
     ),
     max_attempts: int = typer.Option(
         3,
@@ -117,24 +114,25 @@ def memory_run(
     """Run a Skill-Pro memory-only benchmark stream with concise defaults."""
     mode = "read" if read else "evolve"
     if not file.exists():
-        raise typer.BadParameter(f"CSV does not exist: {file}")
+        raise typer.BadParameter(f"YAML does not exist: {file}")
 
     if reset_bank:
         _module(bank).clear()
         typer.echo(f"Cleared memory bank: {bank}")
+    resolved_max_steps = resolve_max_steps(max_steps)
 
-    selected_csv = _limited_csv_path(file, limit=limit, bank=bank)
+    selected_yaml = _limited_yaml_path(file, limit=limit, bank=bank)
     typer.echo(
         "Running memory-only benchmark: "
-        f"csv={selected_csv} bank={bank} mode={mode} "
+        f"yaml={selected_yaml} bank={bank} mode={mode} "
         f"agent={agent_type} backend={llm_backend} model={model}"
     )
-    run_benchmark_from_csv(
-        benchmark_file=str(selected_csv),
+    run_benchmark_from_yaml(
+        benchmark_file=str(selected_yaml),
         agent_type=agent_type,
         llm_backend=llm_backend,
         model=model,
-        max_steps=max_steps,
+        max_steps=resolved_max_steps,
         max_attempts=max_attempts,
         memory=MemoryConfig(
             mode=mode,

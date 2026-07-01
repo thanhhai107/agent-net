@@ -26,17 +26,24 @@ learning logic belongs to the evaluated agent side.
 
 ## Online Timeline
 
-Benchmark CSV files are one online timeline:
+Benchmark YAML files are one online timeline:
 
-```csv
-problem,scenario,topo_size
+```yaml
+cases:
+  - scenario: dc_clos_bgp
+    topo_size: s
+    problem: link_down
+    inject:
+      host_name: pc_0_0
+      intf_name: eth0
 ```
 
-The runner writes an internal `benchmark_index` into `run.json` based on row
-order. It no longer reads `stream_id`, `split`, or `sequence_index` from CSV.
-Every row can influence later rows through enabled learning modules.
+The runner writes an internal `benchmark_index` into `run.json` based on case
+order. Each case carries deterministic `inject` parameters, so benchmark target
+selection does not rely on runtime randomness. Every case can influence later
+cases through enabled learning modules.
 
-Benchmark CSV runs are intentionally sequential:
+Benchmark YAML runs are intentionally sequential:
 
 - evolving memory updates the Skill-Pro skill bank after each evaluated episode;
 - Tool Evolution updates DRAFT documentation for fixed primitive tools after each evaluated episode;
@@ -49,9 +56,9 @@ Memory wraps an existing agent. It retrieves reusable Skill-MDP procedures
 before diagnosis and writes candidate skills after evaluation.
 
 ```bash
-nika benchmark run --file benchmark/benchmark_test.csv \
+nika benchmark run --file benchmark/benchmark_test.yaml \
   -a react \
-  -b netmind \
+  -b custom \
   -m openai/gpt-oss-120b \
   -n 100 \
   --memory memory-gptoss120
@@ -69,6 +76,9 @@ Each skill has:
 Offline learning stores structured LLM semantic-gradient critiques and uses a
 non-parametric PPO gate to accept a candidate only when it beats the best
 existing/default policy on accuracy, step cost, and tool-call cost.
+Ground-truth labels can be used as offline evaluation evidence, but retrieved
+Skill-Pro context is procedural only: hidden root-cause names and faulty-device
+labels are redacted from the critic prompt and not written into skill guidance.
 Score-based maintenance retires duplicate or low-value skills.
 `memory_update.json` records whether each accepted/rejected candidate used an
 LLM or deterministic semantic gradient, and memory-bank stats count both total
@@ -81,9 +91,9 @@ that improves model-facing documentation for fixed primitive MCP tools using
 DRAFT. It does not create new executable tools or MCP servers.
 
 ```bash
-nika benchmark run --file benchmark/benchmark_test.csv \
+nika benchmark run --file benchmark/benchmark_test.yaml \
   -a react \
-  -b netmind \
+  -b custom \
   -m openai/gpt-oss-120b \
   -n 100 \
   --tools tools-gptoss120
@@ -129,9 +139,9 @@ Overlap controls:
   into `target_agent.py`.
 
 ```bash
-nika evolve run --file benchmark/benchmark_test.csv \
+nika evolve run --file benchmark/benchmark_test.yaml \
   --max-gen 3 \
-  -b netmind \
+  -b custom \
   -m openai/gpt-oss-120b \
   -n 100
 ```
@@ -150,7 +160,7 @@ runtime/harness_evolution/<run_id>/
 results/<benchmark>-<run_id>/gen_<n>/
 ```
 
-Every CSV row contributes to the next target-agent update. SIA-H always uses
+Every YAML case contributes to the next target-agent update. SIA-H always uses
 structured Meta-Agent and Feedback-Agent source generation; if source generation
 fails, the evolution run fails instead of carrying forward a deterministic target.
 
@@ -160,22 +170,22 @@ Run one module or baseline at a time before combined experiments:
 
 ```bash
 # baseline
-nika benchmark run --file benchmark/benchmark_test.csv \
-  -a react -b netmind -m openai/gpt-oss-120b -n 100
+nika benchmark run --file benchmark/benchmark_test.yaml \
+  -a react -b custom -m openai/gpt-oss-120b -n 100
 
 # memory only
-nika benchmark run --file benchmark/benchmark_test.csv \
-  -a react -b netmind -m openai/gpt-oss-120b -n 100 \
+nika benchmark run --file benchmark/benchmark_test.yaml \
+  -a react -b custom -m openai/gpt-oss-120b -n 100 \
   --memory memory-gptoss120
 
 # tool evolution only
-nika benchmark run --file benchmark/benchmark_test.csv \
-  -a react -b netmind -m openai/gpt-oss-120b -n 100 \
+nika benchmark run --file benchmark/benchmark_test.yaml \
+  -a react -b custom -m openai/gpt-oss-120b -n 100 \
   --tools tools-gptoss120
 
 # SIA-H baseline only
-nika evolve run --file benchmark/benchmark_test.csv \
-  -b netmind -m openai/gpt-oss-120b -n 100 \
+nika evolve run --file benchmark/benchmark_test.yaml \
+  -b custom -m openai/gpt-oss-120b -n 100 \
   --max-gen 3
 ```
 

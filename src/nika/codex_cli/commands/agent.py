@@ -8,12 +8,12 @@ from agent.composition import (
     MemoryConfig,
     ToolEvolutionConfig,
 )
-from agent.defaults import DEFAULT_MAX_STEPS
 from agent.llm.model_factory import (
+    CUSTOM_RECOMMENDED_MODELS,
     DEFAULT_LLM_BACKEND,
     DEFAULT_MODEL,
-    NETMIND_SUPPORTED_MODELS,
 )
+from nika.utils.agent_config import resolve_max_steps
 
 SUPPORTED_AGENT_TYPES = (
     "react",
@@ -24,7 +24,7 @@ SUPPORTED_AGENT_TYPES = (
     "codex_cli",
     "claude_cli",
 )
-SUPPORTED_LLM_BACKENDS = ("openai", "ollama", "deepseek", "netmind", "custom")
+SUPPORTED_LLM_BACKENDS = ("openai", "ollama", "deepseek", "custom")
 
 agent_app = typer.Typer(help="Troubleshooting agents.")
 
@@ -38,8 +38,8 @@ def agent_list() -> None:
     typer.echo("llm_backends:")
     for backend in SUPPORTED_LLM_BACKENDS:
         typer.echo(f"  {backend}")
-    typer.echo("netmind_models:")
-    for model in NETMIND_SUPPORTED_MODELS:
+    typer.echo("custom_recommended_models:")
+    for model in CUSTOM_RECOMMENDED_MODELS:
         typer.echo(f"  {model}")
     typer.echo("reasoning_effort (cli/codex_cli only):")
     for level in REASONING_EFFORT_LEVELS:
@@ -55,18 +55,18 @@ def agent_run(
         DEFAULT_LLM_BACKEND,
         "-b",
         "--backend",
-        help="LLM provider (openai, ollama, deepseek, netmind, custom).",
+        help="LLM provider (openai, ollama, deepseek, custom).",
     ),
     model: str | None = typer.Option(
         None, "-m", "--model", help="Model id for the chosen backend or CLI agent."
     ),
-    max_steps: int = typer.Option(
-        DEFAULT_MAX_STEPS,
+    max_steps: int | None = typer.Option(
+        None,
         "-n",
         "--max-steps",
         help=(
             "Per-worker step limit for LangGraph agents; also the maximum "
-            "executed plan items for plan-execute. Ignored for cli/codex_cli/claude_cli."
+            "executed plan items for plan-execute. Defaults to NIKA_MAX_STEPS."
         ),
     ),
     max_attempts: int = typer.Option(
@@ -128,6 +128,7 @@ def agent_run(
         raise typer.BadParameter("Use either --memory or --memory-read, not both.")
     memory_mode = "evolve" if memory is not None else "read" if memory_read else "off"
     memory_bank = memory or memory_read or "default"
+    resolved_max_steps = resolve_max_steps(max_steps)
 
     try:
         start_agent(
@@ -135,7 +136,7 @@ def agent_run(
                 agent_type=agent_type,
                 llm_backend=llm_backend,
                 model=model or DEFAULT_MODEL,
-                max_steps=max_steps,
+                max_steps=resolved_max_steps,
                 max_attempts=max_attempts,
                 reasoning_effort=reasoning_effort,
                 tool_evolution=ToolEvolutionConfig(

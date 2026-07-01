@@ -102,14 +102,14 @@ class AgentBenchmarkConfig:
 AGENT_CONFIGS: dict[str, AgentBenchmarkConfig] = {
     "mock": AgentBenchmarkConfig(
         agent_type="mock",
-        extra_args=("-a", "mock", "-p", "mock", "-m", "mock-v1", "-n", "5"),
+        extra_args=("-a", "mock", "-b", "openai", "-m", "mock-v1", "-n", "5"),
         diagnosis_phase=DIAGNOSIS,
         submission_phase=SUBMISSION,
         expect_perfect_scores=True,
     ),
     "react": AgentBenchmarkConfig(
         agent_type="react",
-        extra_args=("-a", "react", "-p", "deepseek", "-m", "deepseek-chat", "-n", "20"),
+        extra_args=("-a", "react", "-b", "deepseek", "-m", "deepseek-chat", "-n", "20"),
         diagnosis_phase=DIAGNOSIS,
         submission_phase=SUBMISSION,
         expect_perfect_scores=False,
@@ -125,7 +125,7 @@ AGENT_CONFIGS: dict[str, AgentBenchmarkConfig] = {
     ),
     "claude_cli": AgentBenchmarkConfig(
         agent_type="claude_cli",
-        extra_args=("-a", "claude_cli", "-p", "anthropic"),
+        extra_args=("-a", "claude_cli"),
         diagnosis_phase=DIAGNOSIS,
         submission_phase=SUBMISSION,
         expect_perfect_scores=False,

@@ -8,7 +8,11 @@ from __future__ import annotations
 
 import os
 
+from dotenv import load_dotenv
+
 from agent.claude_cli.config import resolve_claude_model
+
+load_dotenv()
 
 # Shared CLI options (nika agent run / nika benchmark run)
 ENV_AGENT_TYPE = "NIKA_AGENT_TYPE"
@@ -59,7 +63,7 @@ def resolve_agent_type(value: str | None = None) -> str:
 def resolve_llm_provider(value: str | None = None, *, agent_type: str) -> str | None:
     if agent_type.lower() != "react":
         return value
-    return _require_str(value=value, env_key=ENV_LLM_PROVIDER, cli_flag="-p/--provider")
+    return _require_str(value=value, env_key=ENV_LLM_PROVIDER, cli_flag="-b/--backend")
 
 
 def resolve_max_steps(value: int | None = None) -> int:
@@ -91,7 +95,7 @@ def resolve_agent_model(agent_type: str, model: str | None = None) -> str:
 
 
 def resolve_judge_provider(value: str | None = None) -> str:
-    return _require_str(value=value, env_key=ENV_JUDGE_PROVIDER, cli_flag="-p/--provider (judge)")
+    return _require_str(value=value, env_key=ENV_JUDGE_PROVIDER, cli_flag="-b/--backend (judge)")
 
 
 def resolve_judge_model(value: str | None = None) -> str:

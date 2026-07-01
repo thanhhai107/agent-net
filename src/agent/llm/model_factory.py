@@ -14,12 +14,12 @@ from langchain_openai import ChatOpenAI
 
 load_dotenv()
 
-NETMIND_BASE_URL = "https://stream-netmind.viettel.vn/gateway/v1"
-NETMIND_TIMEOUT_SECONDS = 90.0
-NETMIND_MAX_RETRIES = 0
-DEFAULT_LLM_BACKEND = "netmind"
+CUSTOM_DEFAULT_API_BASE = "https://stream-netmind.viettel.vn/gateway/v1"
+CUSTOM_TIMEOUT_SECONDS = 90.0
+CUSTOM_MAX_RETRIES = 0
+DEFAULT_LLM_BACKEND = "custom"
 DEFAULT_MODEL = "openai/gpt-oss-120b"
-NETMIND_SUPPORTED_MODELS = (
+CUSTOM_RECOMMENDED_MODELS = (
     "MiniMax/MiniMax-M2.7",
     "Qwen/Qwen3.5-122B-A10B-FP8",
     "openai/gpt-oss-120b",
@@ -199,7 +199,7 @@ def _normalize_glm_tool_calls(result: ChatResult) -> ChatResult:
 
 
 class GLM47ChatOpenAI(ChatOpenAI):
-    """NetMind GLM-4.7 adapter for text-formatted tool calls.
+    """OpenAI-compatible GLM-4.7 adapter for text-formatted tool calls.
 
     Some OpenAI-compatible GLM deployments emit tool calls as
     ``<tool_call>{...}</tool_call>`` in assistant content instead of using the
@@ -240,38 +240,19 @@ def load_model(
         )
 
     if llm_backend == "custom":
-        return ChatOpenAI(
-            model=model,
-            base_url=os.getenv("CUSTOM_API_BASE"),
-            api_key=os.getenv("CUSTOM_API_KEY", "dummy"),
-            temperature=0,
-        )
-
-    if llm_backend == "netmind":
-        api_key = os.getenv("NETMIND_API_KEY")
-        if not api_key:
-            raise ValueError(
-                "NETMIND_API_KEY is required when llm_backend is 'netmind'"
-            )
-        if model not in NETMIND_SUPPORTED_MODELS:
-            supported = ", ".join(NETMIND_SUPPORTED_MODELS)
-            raise ValueError(
-                f"Unsupported NetMind model: {model!r}. "
-                f"Supported models: {supported}"
-            )
         chat_model = GLM47ChatOpenAI if model == "zai-org/GLM-4.7" else ChatOpenAI
         return chat_model(
             model=model,
-            api_key=api_key,
-            base_url=os.getenv("NETMIND_BASE_URL", NETMIND_BASE_URL),
+            base_url=os.getenv("CUSTOM_API_BASE") or CUSTOM_DEFAULT_API_BASE,
+            api_key=os.getenv("CUSTOM_API_KEY") or "dummy",
             temperature=0,
             timeout=_env_float(
-                "NETMIND_TIMEOUT_SECONDS",
-                NETMIND_TIMEOUT_SECONDS,
+                "CUSTOM_TIMEOUT_SECONDS",
+                CUSTOM_TIMEOUT_SECONDS,
             ),
             max_retries=_env_non_negative_int(
-                "NETMIND_MAX_RETRIES",
-                NETMIND_MAX_RETRIES,
+                "CUSTOM_MAX_RETRIES",
+                CUSTOM_MAX_RETRIES,
             ),
         )
 

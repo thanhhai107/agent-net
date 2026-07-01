@@ -13,9 +13,8 @@ from langgraph.errors import GraphRecursionError
 from langgraph.graph import END, START, StateGraph
 from typing_extensions import TypedDict
 
-from agent.defaults import DEFAULT_MAX_STEPS
-from agent.langgraph.domain_agents.diagnosis_agent import DiagnosisAgent
-from agent.langgraph.domain_agents.submission_agent import SubmissionAgent
+from agent.langgraph.phases.diagnosis import DiagnosisPhase as DiagnosisAgent
+from agent.langgraph.phases.submission import SubmissionPhase as SubmissionAgent
 from agent.langgraph.langfuse_tracing import callback_config, create_langfuse_callbacks
 from agent.langgraph.workflow_models import (
     InvestigationPlan,
@@ -79,9 +78,9 @@ class PlanExecuteAgent:
     def __init__(
         self,
         session_id: str,
+        max_steps: int,
         llm_backend: str = DEFAULT_LLM_BACKEND,
         model: str = DEFAULT_MODEL,
-        max_steps: int = DEFAULT_MAX_STEPS,
         tool_evolution_enabled: bool = False,
         tool_library_id: str = "default",
         use_problem_tool_hints: bool = True,

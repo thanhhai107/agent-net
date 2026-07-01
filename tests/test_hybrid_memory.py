@@ -54,10 +54,12 @@ class SkillProMemoryTest(unittest.TestCase):
                     top_k=3,
                 )
             )
+            context = module.format_context(retrieved)
 
         self.assertEqual(report["status"], "accepted")
         self.assertEqual(len(retrieved), 1)
-        self.assertIn("Activation", module.format_context(retrieved))
+        self.assertIn("Activation", context)
+        self.assertNotIn("bgp_missing_route_advertisement", context)
 
     def test_ppo_gate_rejects_weaker_duplicate(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -100,11 +102,14 @@ class SkillProMemoryTest(unittest.TestCase):
         self.assertEqual(second["status"], "rejected")
 
     def test_llm_semantic_gradient_updates_candidate_skill(self) -> None:
+        prompts: list[str] = []
+
         class FakeModel:
             def with_structured_output(self, _schema):
                 return self
 
-            def invoke(self, _prompt):
+            def invoke(self, prompt):
+                prompts.append(prompt)
                 return SemanticGradient(
                     source_session_id="s1",
                     critique="Preserve BGP route checks but require independent evidence.",
@@ -125,6 +130,7 @@ class SkillProMemoryTest(unittest.TestCase):
                         task_description="BGP missing route advertisement",
                         scenario="dc_clos_bgp",
                         root_cause=["bgp_missing_route_advertisement"],
+                        faulty_devices=["leaf_router_0_1"],
                         metrics={
                             "detection_score": 1.0,
                             "localization_accuracy": 1.0,
@@ -151,6 +157,8 @@ class SkillProMemoryTest(unittest.TestCase):
         self.assertEqual(skill.semantic_gradients[0].gradient_source, "llm")
         self.assertIn("route and neighbor evidence", skill.termination_condition)
         self.assertEqual(stats["llm_semantic_gradients"], 1)
+        self.assertNotIn("bgp_missing_route_advertisement", prompts[0])
+        self.assertNotIn("leaf_router_0_1", prompts[0])
 
     def test_offline_workflow_writes_skill_update_report(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

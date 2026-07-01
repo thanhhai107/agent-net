@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shlex
 import time
 from pathlib import Path
@@ -10,9 +11,9 @@ from typing import Any
 
 import streamlit as st
 
-from agent.defaults import DEFAULT_MAX_STEPS
 from agent.llm.model_factory import DEFAULT_LLM_BACKEND, DEFAULT_MODEL
 from nika.config import BENCHMARK_DIR, RESULTS_DIR
+from nika.utils.agent_config import resolve_max_steps
 from nika.visualization.experiment_runner import (
     build_command_plan,
     create_run,
@@ -23,7 +24,8 @@ from nika.visualization.experiment_runner import (
     run_status,
     stop_run,
 )
-from nika.workflows.benchmark.run import default_benchmark_csv_path
+from nika.workflows.benchmark.load_config import load_benchmark_yaml
+from nika.workflows.benchmark.run import default_benchmark_yaml_path
 
 
 st.set_page_config(
@@ -206,20 +208,20 @@ st.markdown(
 
 
 def _benchmark_path_from_name(value: str) -> Path:
-    raw = value.strip() or Path(default_benchmark_csv_path()).stem
+    raw = value.strip() or Path(default_benchmark_yaml_path()).stem
     path = Path(raw).expanduser()
     if path.is_absolute() or path.parent != Path("."):
-        return path if path.suffix == ".csv" else path.with_suffix(".csv")
-    name = raw[:-4] if raw.endswith(".csv") else raw
-    return BENCHMARK_DIR / f"{name}.csv"
+        return path if path.suffix in {".yaml", ".yml"} else path.with_suffix(".yaml")
+    name = re.sub(r"\.ya?ml$", "", raw)
+    return BENCHMARK_DIR / f"{name}.yaml"
 
 
 def _count_rows(path: Path) -> int | None:
     if not path.exists():
         return None
     try:
-        return max(0, sum(1 for _ in path.open(encoding="utf-8")) - 1)
-    except OSError:
+        return len(load_benchmark_yaml(path))
+    except (OSError, ValueError):
         return None
 
 
@@ -498,15 +500,16 @@ cfg_cols = st.columns(4, gap="medium")
 with cfg_cols[0]:
     benchmark_name = st.text_input(
         "Benchmark",
-        value=Path(default_benchmark_csv_path()).stem,
+        value=Path(default_benchmark_yaml_path()).stem,
     )
     benchmark_path = _benchmark_path_from_name(benchmark_name)
     row_count = _count_rows(benchmark_path)
 with cfg_cols[1]:
-    max_steps_str = st.text_input("Steps", value=str(DEFAULT_MAX_STEPS))
-    max_steps = int(max_steps_str) if max_steps_str.isdigit() else DEFAULT_MAX_STEPS
+    default_max_steps = resolve_max_steps(None)
+    max_steps_str = st.text_input("Steps", value=str(default_max_steps))
+    max_steps = int(max_steps_str) if max_steps_str.isdigit() else default_max_steps
 with cfg_cols[2]:
-    backend_options = ["netmind", "openai", "deepseek", "ollama"]
+    backend_options = ["custom", "openai", "deepseek", "ollama"]
     llm_backend = st.selectbox(
         "Backend",
         backend_options,
@@ -681,7 +684,7 @@ else:
         st.session_state["active_run_dir"] = str(run_dir)
         st.rerun()
 if row_count is None:
-    st.error("Benchmark CSV not found.")
+    st.error("Benchmark YAML not found.")
 
 runs = list_runs()
 selected = _selected_run_dir()

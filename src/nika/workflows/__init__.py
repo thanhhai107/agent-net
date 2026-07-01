@@ -11,6 +11,7 @@ from nika.workflows.session import close_session, inspect_session, list_sessions
 from nika.workflows.eval import (
     EvalCleanReport,
     eval_results,
+    publish_session_eval,
     run_eval_clean,
     run_eval_metrics,
     run_eval_summary,
@@ -28,6 +29,7 @@ __all__ = [
     "inspect_session",
     "inject_failure",
     "list_sessions",
+    "publish_session_eval",
     "run_benchmark_from_yaml",
     "run_eval_clean",
     "run_eval_metrics",

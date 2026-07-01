@@ -12,11 +12,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from agent.defaults import DEFAULT_MAX_STEPS
 from agent.llm.model_factory import DEFAULT_LLM_BACKEND, DEFAULT_MODEL
 from nika.config import RUNTIME_DIR, _REPO_ROOT
+from nika.utils.agent_config import resolve_max_steps
 from nika.utils.kathara_cleanup import ensure_kathara_clean
-from nika.workflows.benchmark.run import default_benchmark_csv_path
+from nika.workflows.benchmark.run import default_benchmark_yaml_path
 
 RUNS_DIR = RUNTIME_DIR / "streamlit_runs"
 LOG_FILENAME = "run.log"
@@ -77,7 +77,7 @@ def _common_agent_args(
         "-m",
         _str(config.get("model"), DEFAULT_MODEL),
         "-n",
-        str(_int(config.get("max_steps"), DEFAULT_MAX_STEPS)),
+        str(_int(config.get("max_steps"), resolve_max_steps(None))),
         "-r",
         str(_int(config.get("max_attempts"), 3)),
     ]
@@ -90,7 +90,7 @@ def _harness_model_args(config: dict[str, Any]) -> list[str]:
         "-m",
         _str(config.get("model"), DEFAULT_MODEL),
         "-n",
-        str(_int(config.get("max_steps"), DEFAULT_MAX_STEPS)),
+        str(_int(config.get("max_steps"), resolve_max_steps(None))),
     ]
 
 
@@ -117,7 +117,7 @@ def _benchmark_command(config: dict[str, Any]) -> list[str]:
         "benchmark",
         "run",
         "--file",
-        _str(config.get("benchmark_file"), default_benchmark_csv_path()),
+        _str(config.get("benchmark_file"), default_benchmark_yaml_path()),
         *_common_agent_args(config),
         *_judge_args(config),
     )
@@ -156,7 +156,7 @@ def build_experiment_command(config: dict[str, Any]) -> list[str]:
             "evolve",
             "run",
             "--file",
-            _str(config.get("benchmark_file"), default_benchmark_csv_path()),
+            _str(config.get("benchmark_file"), default_benchmark_yaml_path()),
             "--max-gen",
             str(_int(config.get("max_generations"), 3)),
             *_harness_model_args(config),

@@ -10,7 +10,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from agent.defaults import DEFAULT_MAX_STEPS
 from agent.memory.adapter import MemoryAugmentedAgent
 from agent.memory.service import ProceduralMemoryModule
 
@@ -49,8 +48,8 @@ class AgentRunConfig:
     agent_type: str
     llm_backend: str
     model: str
+    max_steps: int
     session_id: str = ""
-    max_steps: int = DEFAULT_MAX_STEPS
     max_attempts: int = 3
     reasoning_effort: str | None = None
     stream_output: bool = True

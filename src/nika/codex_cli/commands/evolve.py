@@ -4,9 +4,9 @@ from pathlib import Path
 
 import typer
 
-from agent.defaults import DEFAULT_MAX_STEPS
 from agent.llm.model_factory import DEFAULT_LLM_BACKEND, DEFAULT_MODEL
-from nika.workflows.benchmark.run import default_benchmark_csv_path
+from nika.utils.agent_config import resolve_max_steps
+from nika.workflows.benchmark.run import default_benchmark_yaml_path
 from nika.workflows.evolve.run import run_harness_evolution
 
 evolve_app = typer.Typer(
@@ -17,10 +17,10 @@ evolve_app = typer.Typer(
 @evolve_app.command("run")
 def evolve_run(
     file: Path = typer.Option(
-        Path(default_benchmark_csv_path()),
+        Path(default_benchmark_yaml_path()),
         "-f",
         "--file",
-        help="Benchmark CSV path. Defaults to benchmark/benchmark_test.csv.",
+        help="Benchmark YAML path. Defaults to benchmark/benchmark_test.yaml.",
     ),
     max_gen: int = typer.Option(
         3,
@@ -37,16 +37,16 @@ def evolve_run(
         DEFAULT_LLM_BACKEND,
         "-b",
         "--backend",
-        help="LLM provider (openai, ollama, deepseek, netmind).",
+        help="LLM provider (openai, ollama, deepseek, custom).",
     ),
     model: str = typer.Option(
         DEFAULT_MODEL, "-m", "--model", help="Model id for the agent."
     ),
-    max_steps: int = typer.Option(
-        DEFAULT_MAX_STEPS,
+    max_steps: int | None = typer.Option(
+        None,
         "-n",
         "--max-steps",
-        help="Target-agent recursion/tool budget per benchmark case.",
+        help="Target-agent recursion/tool budget per benchmark case. Defaults to NIKA_MAX_STEPS.",
     ),
     tools: str | None = typer.Option(
         None,
@@ -118,6 +118,7 @@ def evolve_run(
         raise typer.BadParameter(
             "Pass --judge to enable LLM judge; omit --judge-backend/--judge-model otherwise."
         )
+    resolved_max_steps = resolve_max_steps(max_steps)
     kwargs = {}
     if runtime_root is not None:
         kwargs["runtime_root"] = runtime_root
@@ -130,7 +131,7 @@ def evolve_run(
         run_id=run_id,
         llm_backend=llm_backend,
         model=model,
-        max_steps=max_steps,
+        max_steps=resolved_max_steps,
         run_judge=run_judge,
         judge_llm_backend=judge_backend or DEFAULT_LLM_BACKEND,
         judge_model=judge_model or DEFAULT_MODEL,

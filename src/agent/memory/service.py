@@ -56,6 +56,18 @@ def _skill_steps_summary(tool_steps: list[SkillStep]) -> list[dict[str, Any]]:
     ]
 
 
+def _skill_topic(
+    evidence: EvaluationEvidence,
+    attrs_protocols: list[str],
+    attrs_services: list[str],
+    attrs_symptoms: list[str],
+) -> str:
+    pieces = attrs_protocols[:2] + attrs_services[:2] + attrs_symptoms[:2]
+    if pieces:
+        return ", ".join(pieces)
+    return evidence.scenario or evidence.topology_class or "network diagnosis"
+
+
 class ProceduralMemoryModule:
     def __init__(
         self,
@@ -154,12 +166,18 @@ class ProceduralMemoryModule:
             topology_class=evidence.topology_class,
             tools=[step.tool_name for step in tool_steps if step.tool_name],
         )
-        root = ", ".join(evidence.root_cause) or "network diagnosis"
+        topic = _skill_topic(
+            evidence,
+            attrs.protocols,
+            attrs.services,
+            attrs.symptoms,
+        )
         skill_id = _stable_id(
             evidence.scenario,
-            evidence.root_cause,
             attrs.protocols,
+            attrs.services,
             attrs.symptoms,
+            attrs.tools,
             prefix="skill",
         )
         critique = self.semantic_gradient(evidence=evidence, tool_steps=tool_steps)
@@ -171,7 +189,7 @@ class ProceduralMemoryModule:
             termination += f" Semantic update: {critique.proposed_update[:240]}"
         return ProceduralSkill(
             skill_id=skill_id,
-            title=f"Diagnose {root}",
+            title=f"Procedure for {topic}",
             activation_condition=(
                 f"Use when task resembles {evidence.scenario or 'the current scenario'} "
                 f"with symptoms: {', '.join(attrs.symptoms) or evidence.task_description[:120]}."
@@ -239,13 +257,17 @@ class ProceduralMemoryModule:
     ) -> SemanticGradient | None:
         if not self.llm_backend or not self.model:
             return None
+        public_evidence = evidence.model_dump(
+            exclude={"root_cause", "faulty_devices"},
+            mode="json",
+        )
         prompt = (
             "You are the Skill-Pro semantic-gradient critic for NIKA network "
             "diagnosis. Produce a concise critique and proposed procedural "
-            "skill update. Do not reveal hidden answers as facts to future "
-            "diagnosis; use evaluator labels only to decide whether the "
-            "procedure should be reinforced or corrected.\n\n"
-            f"Evaluation evidence:\n{evidence.model_dump_json(indent=2)}\n\n"
+            "skill update from public task context, execution steps, and "
+            "numeric evaluation metrics. Do not name hidden root causes or "
+            "faulty devices.\n\n"
+            f"Evaluation evidence:\n{json.dumps(public_evidence, indent=2, ensure_ascii=False)}\n\n"
             f"Observed execution steps:\n{json.dumps(_skill_steps_summary(tool_steps), indent=2, ensure_ascii=False)}\n\n"
             "Return a SemanticGradient with the same source_session_id."
         )

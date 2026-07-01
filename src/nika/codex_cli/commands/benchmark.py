@@ -9,9 +9,9 @@ from agent.composition import (
     MemoryConfig,
     ToolEvolutionConfig,
 )
-from agent.defaults import DEFAULT_MAX_STEPS
 from agent.llm.model_factory import DEFAULT_LLM_BACKEND, DEFAULT_MODEL
 from nika.net_env.net_env_pool import scenario_requires_topo_tier
+from nika.utils.agent_config import resolve_max_steps
 from nika.workflows.benchmark.inject_defaults import resolve_inject_params
 from nika.workflows.benchmark.run import (
     _new_benchmark_results_root,
@@ -74,18 +74,18 @@ def benchmark_run(
         DEFAULT_LLM_BACKEND,
         "-b",
         "--backend",
-        help="LLM provider (openai, ollama, deepseek, netmind).",
+        help="LLM provider (openai, ollama, deepseek, custom).",
     ),
     model: str = typer.Option(
         DEFAULT_MODEL, "-m", "--model", help="Model id for the agent."
     ),
-    max_steps: int = typer.Option(
-        DEFAULT_MAX_STEPS,
+    max_steps: int | None = typer.Option(
+        None,
         "-n",
         "--max-steps",
         help=(
             "Per-worker step limit for LangGraph agents; also the maximum "
-            "executed plan items for plan-execute. Ignored for cli."
+            "executed plan items for plan-execute. Defaults to NIKA_MAX_STEPS."
         ),
     ),
     max_attempts: int = typer.Option(
@@ -180,6 +180,7 @@ def benchmark_run(
         raise typer.BadParameter("Use either --memory or --memory-read, not both.")
     memory_mode = "evolve" if memory is not None else "read" if memory_read else "off"
     memory_bank = memory or memory_read or "default"
+    resolved_max_steps = resolve_max_steps(max_steps)
     tool_evolution_enabled = tools is not None
     tool_library_id = tools or "default"
     memory_config = MemoryConfig(
@@ -225,7 +226,7 @@ def benchmark_run(
             agent_type=agent_type,
             llm_backend=llm_backend,
             model=model,
-            max_steps=max_steps,
+            max_steps=resolved_max_steps,
             max_attempts=max_attempts,
             memory=memory_config,
             run_judge=run_judge,
@@ -253,7 +254,7 @@ def benchmark_run(
         agent_type=agent_type,
         llm_backend=llm_backend,
         model=model,
-        max_steps=max_steps,
+        max_steps=resolved_max_steps,
         max_attempts=max_attempts,
         memory=memory_config,
         run_judge=run_judge,

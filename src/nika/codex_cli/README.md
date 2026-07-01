@@ -16,7 +16,7 @@ Runtime paths (`runtime/`, `results/`, `benchmark/`) resolve from the repository
 | `nika exec` | Run a shell command inside a lab host container |
 | `nika agent` | Run a troubleshooting agent on one selected session task |
 | `nika eval` | Metrics, LLM judge, publish, and offline summary CSV for closed sessions |
-| `nika benchmark` | Full pipeline for benchmark CSV rows or a single `(scenario, problem)` case |
+| `nika benchmark` | Full pipeline for benchmark YAML cases or a single `(scenario, problem)` case |
 | `nika traffic` | Synthetic traffic (`od`, `web`) against the running lab |
 
 Use `nika <group> --help` and `nika <group> <command> --help` for generated option text.
@@ -44,7 +44,7 @@ This flag is reused on **`nika benchmark run`** and **`nika traffic run`** when 
 Aligned with `nika agent run`:
 
 - **`-a` / `--agent`**: `react`, `plan-execute`, or `reflexion` (LangGraph + LangChain), `cli` (LangGraph + Codex CLI subprocess), or `mock`.
-- **`-b` / `--backend`**: LLM provider for `react`, `plan-execute`, `reflexion`, and `mock` (`openai`, `ollama`, `deepseek`, `netmind`). Ignored for `cli` (Codex uses OpenAI models).
+- **`-b` / `--backend`**: LLM provider for `react`, `plan-execute`, `reflexion`, and `mock` (`openai`, `ollama`, `deepseek`, `custom`). Ignored for `cli` (Codex uses OpenAI models).
 - **`-m` / `--model`**: model id.
 - **`-n` / `--max-steps`**: per-worker recursion limit for LangGraph agents; also caps executed plan items for `plan-execute`.
 - **`-r` / `--max-attempts`**: maximum Reflexion attempts for `reflexion` (default: `3`).
@@ -114,7 +114,7 @@ Example: `nika exec pc1 ping -c 3 10.0.0.2 --timeout 30`
   | Flag | Applies to | Meaning |
   |------|------------|---------|
   | `-a` / `--agent` | all | `react`, `plan-execute`, `reflexion`, `cli`, or `mock` |
-  | `-b` / `--backend` | `react`, `mock` | `openai`, `ollama`, `deepseek`, or `netmind` |
+  | `-b` / `--backend` | `react`, `mock` | `openai`, `ollama`, `deepseek`, or `custom` |
   | `-m` / `--model` | all | model id |
   | `-n` / `--max-steps` | LangGraph, `mock` | Worker step cap; plan-item cap for `plan-execute` |
   | `-r` / `--max-attempts` | `reflexion` | Maximum attempt → evaluate → reflect cycles |
@@ -127,10 +127,10 @@ Example: `nika exec pc1 ping -c 3 10.0.0.2 --timeout 30`
   Examples:
 
   ```shell
-  nika agent run -a react -b netmind -m openai/gpt-oss-120b -n 20
-  nika agent run -a plan-execute -b netmind -m openai/gpt-oss-120b -n 20
-  nika agent run -a reflexion -b netmind -m openai/gpt-oss-120b -n 20 -r 3
-  nika agent run -a react -b netmind -m openai/gpt-oss-120b \
+  nika agent run -a react -b custom -m openai/gpt-oss-120b -n 20
+  nika agent run -a plan-execute -b custom -m openai/gpt-oss-120b -n 20
+  nika agent run -a reflexion -b custom -m openai/gpt-oss-120b -n 20 -r 3
+  nika agent run -a react -b custom -m openai/gpt-oss-120b \
     --tools experiment-a
   nika agent run -a cli -m gpt-5.4-mini -e medium
   nika agent run -a mock -n 5
@@ -170,36 +170,40 @@ Each finished session directory should contain at least `run.json`, `ground_trut
 
 ## `nika benchmark`
 
-Implements the end-to-end benchmark pipeline: start env → inject → agent → close session → eval (metrics, optional judge, publish). Run `nika eval summary` afterward to aggregate CSV rows across finished sessions.
+Implements the end-to-end benchmark pipeline: start env → inject → agent → close session → eval (metrics, optional judge, publish). Run `nika eval summary` afterward to aggregate finished sessions.
 
 ### Batch mode (default)
 
-Omit the `SCENARIO` positional argument. Rows are read from a CSV file.
+Omit the `SCENARIO` positional argument. Cases are read from a YAML file.
 
 ```shell
 nika benchmark run
-nika benchmark run --file benchmark/benchmark_test.csv
-nika benchmark run --file benchmark/benchmark_test.csv \
+nika benchmark run --file benchmark/benchmark_test.yaml
+nika benchmark run --file benchmark/benchmark_test.yaml \
   -a react --tools experiment-a
 ```
 
-**Default CSV path**: `benchmark/benchmark_test.csv` under the repository root.
+**Default YAML path**: `benchmark/benchmark_test.yaml` under the repository root.
 
 Each benchmark command creates a result root named
 `results/<benchmark-name>-<timestamp>/`. Per-case artifacts are written under
 that parent as `<session_id>/run.json`, `<session_id>/messages.jsonl`, and the
 usual eval files.
 
-CSV rows are treated as one online timeline and always run sequentially. Tool
-Evolution and evolving memory update after each row in that fixed order.
+YAML cases are treated as one online timeline and always run sequentially. Tool
+Evolution and evolving memory update after each case in that fixed order.
 
-**CSV columns** (header row):
+**YAML shape**:
 
-| Column | Meaning |
-|--------|---------|
-| `problem` | Problem id (same as `nika failure inject`) |
-| `scenario` | Scenario id (same as `nika env run`) |
-| `topo_size` | Tier `s`, `m`, or `l`; **empty** for scenarios without tiers (same values as `nika env run -t`) |
+```yaml
+cases:
+  - scenario: dc_clos_bgp
+    topo_size: s
+    problem: link_down
+    inject:
+      host_name: pc_0_0
+      intf_name: eth0
+```
 
 Agent and judge options use the same flags as below (including `-a cli` and `-e` for Codex runs; `-n` applies to all agents except `cli`).
 
@@ -214,11 +218,11 @@ agent from the task/reference scaffold; it does not start from `react`,
 writes later target agents.
 
 ```shell
-nika evolve run --file benchmark/benchmark_test.csv --max-gen 3 \
-  -b netmind -m openai/gpt-oss-120b -n 100
+nika evolve run --file benchmark/benchmark_test.yaml --max-gen 3 \
+  -b custom -m openai/gpt-oss-120b -n 100
 ```
 
-Every CSV row contributes to the next source update. SIA-H always uses
+Every YAML case contributes to the next source update. SIA-H always uses
 structured Meta-Agent and Feedback-Agent source generation; failed source
 generation stops the evolution run instead of carrying forward the current
 target.
@@ -240,7 +244,7 @@ Pass **`SCENARIO`** as the first positional argument (like `nika env run NAME`),
 
 ```shell
 nika benchmark run dc_clos_bgp --problem bgp_asn_misconfig -t s \
-  -a react -b netmind -m openai/gpt-oss-120b -n 20 \
+  -a react -b custom -m openai/gpt-oss-120b -n 20 \
   --judge
 ```
 
@@ -297,4 +301,4 @@ Options:
 
 - Runtime sessions: `runtime/sessions/*.json` (cleared when a session is finished)
 - Eval summary CSV default: `results/0_summary/evaluation_summary.csv`
-- Benchmark data: `benchmark/*.csv` under the repo root
+- Benchmark data: `benchmark/*.yaml` under the repo root

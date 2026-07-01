@@ -89,17 +89,18 @@ class ProceduralSkill(BaseModel):
         return self.skill_id
 
     def content_hash(self) -> str:
-        payload = self.model_dump(
-            exclude={
-                "created_at",
-                "updated_at",
-                "reuse_count",
-                "success_count",
-                "failure_count",
-                "score",
-                "source_sessions",
-            }
-        )
+        payload = {
+            "title": self.title,
+            "activation_condition": self.activation_condition,
+            "execution_steps": [
+                step.model_dump(mode="json") for step in self.execution_steps
+            ],
+            "termination_condition": self.termination_condition,
+            "protocols": self.protocols,
+            "services": self.services,
+            "symptoms": self.symptoms,
+            "tools": self.tools,
+        }
         encoded = json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str)
         return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
