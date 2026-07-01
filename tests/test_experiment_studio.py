@@ -91,7 +91,6 @@ def test_parse_progress_events_reads_benchmark_and_ui_events() -> None:
             [
                 'ui_step_start {"index": 1, "name": "Baseline"}',
                 "benchmark_progress index=1/30 completed=1 failed=0 session_id=s1",
-                "kathara_cleanup_done context=studio_run",
                 'ui_run_stopped {"reason": "user_stop"}',
                 'ui_run_done {"exit_code": 0}',
             ]
@@ -101,11 +100,9 @@ def test_parse_progress_events_reads_benchmark_and_ui_events() -> None:
     assert [row["event"] for row in rows] == [
         "ui_step_start",
         "benchmark_progress",
-        "kathara_cleanup_done",
         "ui_run_stopped",
         "ui_run_done",
     ]
     assert rows[1]["completed"] == "1"
-    assert rows[2]["context"] == "studio_run"
-    assert rows[3]["reason"] == "user_stop"
-    assert rows[4]["exit_code"] == "0"
+    assert rows[2]["reason"] == "user_stop"
+    assert rows[3]["exit_code"] == "0"

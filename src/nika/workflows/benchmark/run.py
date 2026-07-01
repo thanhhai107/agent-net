@@ -233,6 +233,7 @@ def run_single_benchmark(
     Returns:
         The session id for the completed run.
     """
+    ensure_kathara_clean(context="benchmark case")
     print(
         f"Running benchmark for Problem: {problem}, Scenario: {scenario}, Topo Size: {topo_size}"
     )
@@ -337,8 +338,6 @@ def run_benchmark_from_yaml(
     ``scenario``, ``problem``, optional ``topo_size``, and deterministic
     ``inject`` parameters.
     """
-    ensure_kathara_clean(context="benchmark run")
-
     memory_config = memory or MemoryConfig()
     tool_config = tool_evolution or ToolEvolutionConfig()
     validate_agent_extensions(

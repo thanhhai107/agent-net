@@ -2,9 +2,8 @@
 
 from datetime import datetime
 
-from Kathara.manager.Kathara import Kathara
-
 from nika.net_env.net_env_pool import get_net_env_instance
+from nika.utils.kathara_cleanup import ensure_kathara_clean
 from nika.utils.logger import bind_session_dir, log_event
 from nika.utils.session import Session
 from nika.utils.session_resolve import resolve_running_session_id
@@ -12,8 +11,8 @@ from nika.utils.session_store import SessionStore
 
 
 def wipe_kathara_labs() -> None:
-    """Remove all Kathara devices and collision domains for the current user."""
-    Kathara.get_instance().wipe()
+    """Remove all Kathara resources and fail if cleanup cannot be proven."""
+    ensure_kathara_clean(context="session wipe")
 
 
 def _stop_session_record(session_meta: dict, *, undeploy: bool = True) -> None:

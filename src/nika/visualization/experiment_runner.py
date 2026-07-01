@@ -415,8 +415,6 @@ def parse_progress_events(log_text: str) -> list[dict[str, str]]:
         "benchmark_done ",
         "benchmark_failed ",
         "benchmark_summary ",
-        "kathara_cleanup_start ",
-        "kathara_cleanup_done ",
     )
     rows: list[dict[str, str]] = []
     for line in log_text.splitlines():
@@ -439,10 +437,6 @@ def parse_progress_events(log_text: str) -> list[dict[str, str]]:
 
 
 def run_spec_file(spec_path: str | Path) -> int:
-    print("kathara_cleanup_start context=studio_run", flush=True)
-    ensure_kathara_clean(context="studio run")
-    print("kathara_cleanup_done context=studio_run", flush=True)
-
     spec = _read_json(Path(spec_path))
     commands = spec.get("commands") or []
     exit_code = 0
