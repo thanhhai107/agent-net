@@ -118,7 +118,7 @@ def memory_run(
 
     if reset_bank:
         _module(bank).clear()
-        typer.echo(f"Cleared memory bank: {bank}")
+        typer.echo(f"Reset memory bank and rebuilt Skill-Pro seed pool: {bank}")
     resolved_max_steps = resolve_max_steps(max_steps)
 
     selected_yaml = _limited_yaml_path(file, limit=limit, bank=bank)
@@ -207,4 +207,4 @@ def memory_clear(
     if not yes and not typer.confirm(f"Clear memory bank '{bank}'?", default=False):
         raise typer.Abort()
     _module(bank).clear()
-    typer.echo(f"Cleared memory bank: {bank}")
+    typer.echo(f"Reset memory bank and rebuilt Skill-Pro seed pool: {bank}")

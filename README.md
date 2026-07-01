@@ -315,23 +315,34 @@ See [`docs/README.md`](docs/README.md) for the current learning-module boundary.
 ### Composable Skill-Pro memory
 
 Memory is an optional module composed with `react`, `plan-execute`, or
-`reflexion`; it is not a separate workflow. The wrapper retrieves reusable
-Skill-MDP procedures before diagnosis. After `nika eval metrics` produces
-detection, localization, and RCA scores, the post-evaluation hook proposes a new
-or revised skill and passes it through a non-parametric PPO gate.
+`reflexion`; it is not a separate workflow. The wrapper runs a Skill-MDP
+selector over the skill pool, activates the best reusable procedure before
+diagnosis, and injects active/candidate procedures as procedural policy rather
+than ground truth. After `nika eval metrics` produces detection, localization,
+and RCA scores, the post-evaluation hook records an experience, updates the
+golden experience pool, proposes best-of-N new/refined skills, and passes them
+through a non-parametric PPO gate.
 
 For the full benchmark-safe design, see
 [`docs/README.md`](docs/README.md).
 
 - Each skill has an activation condition, execution steps, and termination
   condition.
+- New banks are bootstrapped with the six Skill-Pro seed procedures
+  (StructuredCoT, ReActDecision, HypothesisElimination, SelfConsistencyCheck,
+  ExploreExploitArbitration, and StrategicPlanning), so `clear` resets learned
+  state and rebuilds the seed pool.
+- The skill pool tracks frequency, average gain, maturity, parent/version
+  lineage, and reuse count.
 - Semantic gradients are structured LLM critiques of the episode, with a
   deterministic critique used only when the critic is unavailable.
+- ExperiencePool and GoldenExperiencePool records are persisted in the same
+  bank for PPO verification and future skill evolution.
 - Hidden evaluator labels may be present in offline evidence for scoring, but
   they are redacted from the LLM critic prompt and are not injected back into
   retrieved skill context.
-- The PPO gate compares the candidate skill against the best existing/default
-  policy using accuracy, step count, and tool-call cost.
+- The PPO gate compares the candidate skill against the active/best baseline
+  with clipped surrogate reward advantage from stored trajectories.
 - Score-based maintenance retires low-value or duplicate skills.
 - Persistent state lives in `runtime/memory/<bank>/skills.json`.
 - Each evolving episode writes `memory_update.json`, including whether the

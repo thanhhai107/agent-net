@@ -13,6 +13,7 @@ from agent.memory.models import (
     EvaluationEvidence,
     PPOGateDecision,
     ProceduralSkill,
+    SkillExperience,
     SkillMemoryState,
     utc_now,
 )
@@ -61,6 +62,30 @@ class SkillMemoryStore:
             state.episodes.append(evidence)
             self.save(state)
 
+    def record_experience(
+        self,
+        experience: SkillExperience,
+        *,
+        max_experiences: int = 1000,
+        golden_size: int = 20,
+    ) -> None:
+        state = self.load()
+        if not any(item.experience_id == experience.experience_id for item in state.experiences):
+            state.experiences.append(experience)
+            state.experiences = state.experiences[-max_experiences:]
+        if experience.transitions:
+            gold = {
+                item.experience_id: item
+                for item in state.golden_experiences
+            }
+            gold[experience.experience_id] = experience
+            state.golden_experiences = sorted(
+                gold.values(),
+                key=lambda item: item.reward,
+                reverse=True,
+            )[:golden_size]
+        self.save(state)
+
     def record_decision(self, decision: PPOGateDecision) -> None:
         state = self.load()
         state.ppo_decisions.append(decision)
@@ -81,11 +106,17 @@ class SkillMemoryStore:
             "candidate_skills": sum(skill.status == "candidate" for skill in skills),
             "retired_skills": sum(skill.status == "retired" for skill in skills),
             "episodes": len(state.episodes),
+            "experiences": len(state.experiences),
+            "golden_experiences": len(state.golden_experiences),
             "ppo_decisions": len(state.ppo_decisions),
+            "iteration": state.iteration,
+            "evolution_events": len(state.evolution_log),
+            "maintenance_events": len(state.maintenance_log),
             "semantic_gradients": len(gradients),
             "llm_semantic_gradients": sum(
                 gradient.gradient_source == "llm" for gradient in gradients
             ),
+            "total_skill_frequency": sum(skill.frequency for skill in skills),
         }
 
     def snapshot_jsonl(self) -> list[str]:
@@ -100,4 +131,6 @@ class SkillMemoryStore:
         ]
         rows.extend({"kind": "skill", **skill.model_dump()} for skill in state.skills.values())
         rows.extend({"kind": "episode", **episode.model_dump()} for episode in state.episodes)
+        rows.extend({"kind": "experience", **experience.model_dump()} for experience in state.experiences)
+        rows.extend({"kind": "golden_experience", **experience.model_dump()} for experience in state.golden_experiences)
         return [json.dumps(row, ensure_ascii=False, default=str) for row in rows]

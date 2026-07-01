@@ -9,8 +9,11 @@ from agent.memory.models import (
     PPOGateDecision,
     ProceduralSkill,
     SemanticGradient,
+    SkillComponentGradient,
+    SkillExperience,
     SkillRetrieval,
     SkillStep,
+    SkillTransition,
 )
 from agent.memory.service import ProceduralMemoryModule
 from agent.memory.workflow import evolve_session_memory
@@ -24,8 +27,11 @@ __all__ = [
     "ProceduralMemoryModule",
     "ProceduralSkill",
     "SemanticGradient",
+    "SkillComponentGradient",
+    "SkillExperience",
     "SkillRetrieval",
     "SkillStep",
+    "SkillTransition",
     "evolve_session_memory",
     "infer_memory_attributes",
 ]

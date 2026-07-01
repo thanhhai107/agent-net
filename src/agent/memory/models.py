@@ -1,4 +1,4 @@
-"""Skill-Pro inspired procedural skill schemas."""
+"""Skill-Pro procedural skill schemas for NIKA diagnosis agents."""
 
 from __future__ import annotations
 
@@ -43,10 +43,18 @@ class SkillStep(BaseModel):
     rationale: str = ""
 
 
+class SkillComponentGradient(BaseModel):
+    initiation: str = ""
+    policy: list[str] = Field(default_factory=list)
+    termination: str = ""
+    is_related: bool = True
+
+
 class SemanticGradient(BaseModel):
     source_session_id: str
     critique: str
     proposed_update: str
+    component_update: SkillComponentGradient = Field(default_factory=SkillComponentGradient)
     gradient_source: Literal["llm", "deterministic"] = "deterministic"
     created_at: str = Field(default_factory=utc_now)
 
@@ -62,6 +70,31 @@ class EvaluationEvidence(BaseModel):
     steps: int = 0
     tool_calls: int = 0
     success: bool = False
+
+
+class SkillTransition(BaseModel):
+    state: str = ""
+    action: str = ""
+    skill_id: str = ""
+    tool_name: str = ""
+    arguments_hint: dict[str, Any] = Field(default_factory=dict)
+    done: bool = False
+
+
+class SkillExperience(BaseModel):
+    experience_id: str
+    session_id: str
+    reward: float
+    baseline: float = 0.0
+    advantage: float = 0.0
+    skill_ids: list[str] = Field(default_factory=list)
+    trajectory: str = ""
+    scenario: str = ""
+    transitions: list[SkillTransition] = Field(default_factory=list)
+    step_count: int = 0
+    total_added_tokens: int = 0
+    success: bool = False
+    created_at: str = Field(default_factory=utc_now)
 
 
 class ProceduralSkill(BaseModel):
@@ -80,6 +113,13 @@ class ProceduralSkill(BaseModel):
     success_count: int = 0
     failure_count: int = 0
     score: float = 0.0
+    frequency: int = 0
+    total_gain: float = 0.0
+    avg_gain: float = 0.0
+    maturity: int = 0
+    parent_id: str = ""
+    version: int = 0
+    last_evolved_iteration: int = 0
     semantic_gradients: list[SemanticGradient] = Field(default_factory=list)
     created_at: str = Field(default_factory=utc_now)
     updated_at: str = Field(default_factory=utc_now)
@@ -104,6 +144,42 @@ class ProceduralSkill(BaseModel):
         encoded = json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str)
         return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
+    def update_stats(
+        self,
+        *,
+        reward: float,
+        baseline: float,
+        total_skill_calls: int,
+        skill_call_count: int = 1,
+    ) -> None:
+        advantage = reward - baseline
+        per_call_gain = advantage / max(total_skill_calls, 1)
+        self.total_gain += skill_call_count * per_call_gain
+        self.frequency += skill_call_count
+        self.avg_gain = self.total_gain / max(self.frequency, 1)
+        if advantage > 0:
+            self.success_count += 1
+        else:
+            self.failure_count += 1
+        self.updated_at = utc_now()
+
+    def increment_maturity(self) -> None:
+        self.maturity += 1
+        self.updated_at = utc_now()
+
+    def maintenance_score(self, total_frequency: int) -> float:
+        freq_weight = self.frequency / max(total_frequency, 1)
+        return freq_weight * self.avg_gain
+
+    def format_for_llm(self) -> str:
+        steps = "\n".join(f"- {step.action}" for step in self.execution_steps)
+        return (
+            f"Skill Name: {self.skill_id}\n"
+            f"Initiation (When to use): {self.activation_condition}\n"
+            f"Strategy Steps:\n{steps}\n"
+            f"Termination (When to stop): {self.termination_condition}"
+        )
+
 
 class SkillRetrieval(BaseModel):
     memory: ProceduralSkill
@@ -121,12 +197,24 @@ class PPOGateDecision(BaseModel):
     candidate_score: float
     baseline_score: float
     replaced_skill_id: str | None = None
+    candidate_skill_id: str = ""
+    parent_skill_id: str = ""
+    j_score: float = 0.0
+    sample_count: int = 0
+    best_of_n: int = 1
+    candidate_type: Literal["NEW", "REFINE"] = "NEW"
 
 
 class SkillMemoryState(BaseModel):
     bank_id: str
     skills: dict[str, ProceduralSkill] = Field(default_factory=dict)
     episodes: list[EvaluationEvidence] = Field(default_factory=list)
+    experiences: list[SkillExperience] = Field(default_factory=list)
+    golden_experiences: list[SkillExperience] = Field(default_factory=list)
     ppo_decisions: list[PPOGateDecision] = Field(default_factory=list)
+    baselines: dict[str, float] = Field(default_factory=dict)
+    iteration: int = 0
+    evolution_log: list[dict[str, Any]] = Field(default_factory=list)
+    maintenance_log: list[dict[str, Any]] = Field(default_factory=list)
     created_at: str = Field(default_factory=utc_now)
     updated_at: str = Field(default_factory=utc_now)

@@ -49,8 +49,9 @@ Benchmark YAML runs are intentionally sequential:
 
 ## Skill-Pro Memory
 
-Memory wraps an existing agent. It retrieves reusable Skill-MDP procedures
-before diagnosis and writes candidate skills after evaluation.
+Memory wraps an existing agent. It uses a Skill-MDP selector to activate a
+reusable procedure before diagnosis and writes candidate skills after
+evaluation.
 
 ```bash
 nika benchmark run --file benchmark/benchmark_test.yaml \
@@ -70,13 +71,20 @@ Each skill has:
 - execution steps;
 - termination condition.
 
-Offline learning stores structured LLM semantic-gradient critiques and uses a
-non-parametric PPO gate to accept a candidate only when it beats the best
-existing/default policy on accuracy, step cost, and tool-call cost.
+New banks are bootstrapped with the six Skill-Pro seed procedures
+(StructuredCoT, ReActDecision, HypothesisElimination, SelfConsistencyCheck,
+ExploreExploitArbitration, and StrategicPlanning); clearing a bank removes
+learned state and rebuilds that seed pool.
+The local skill pool tracks frequency, average gain, maturity, parent/version
+lineage, and reuse count. Offline learning persists ExperiencePool and
+GoldenExperiencePool records, stores structured LLM semantic-gradient critiques,
+generates best-of-N new/refined candidates, and uses a non-parametric PPO gate
+to accept a candidate only when clipped surrogate reward advantage beats the
+active/best baseline.
 Ground-truth labels can be used as offline evaluation evidence, but retrieved
 Skill-Pro context is procedural only: hidden root-cause names and faulty-device
 labels are redacted from the critic prompt and not written into skill guidance.
-Score-based maintenance retires duplicate or low-value skills.
+Score-based maintenance retires duplicate, low-value, or over-capacity skills.
 `memory_update.json` records whether each accepted/rejected candidate used an
 LLM or deterministic semantic gradient, and memory-bank stats count both total
 and LLM-produced gradients.

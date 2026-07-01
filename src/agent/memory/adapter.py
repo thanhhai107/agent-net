@@ -42,21 +42,22 @@ class MemoryAugmentedAgent:
             task_stage="diagnosis",
             tools=tools,
         )
-        retrieved = self.memory.retrieve(
-            query=MemoryQuery(
-                text=task_description,
-                scenario=str(getattr(session, "scenario_name", "") or ""),
-                topology_class=str(getattr(session, "scenario_topo_size", "") or ""),
-                protocols=attrs.protocols,
-                services=attrs.services,
-                symptoms=attrs.symptoms,
-                task_stage="diagnosis",
-                tools=tools,
-                top_k=self.memory_top_k,
-                token_budget=self.memory_token_budget,
-            ),
-            session_id=session_id,
+        query = MemoryQuery(
+            text=task_description,
+            scenario=str(getattr(session, "scenario_name", "") or ""),
+            topology_class=str(getattr(session, "scenario_topo_size", "") or ""),
+            protocols=attrs.protocols,
+            services=attrs.services,
+            symptoms=attrs.symptoms,
+            task_stage="diagnosis",
+            tools=tools,
+            top_k=self.memory_top_k,
+            token_budget=self.memory_token_budget,
         )
+        active = self.memory.select_skill(query=query, session_id=session_id)
+        retrieved = self.memory.retrieve(query=query, session_id=session_id)
+        if active is not None and all(item.skill.skill_id != active.skill.skill_id for item in retrieved):
+            retrieved.insert(0, active)
         context = self.memory.format_context(retrieved)
         session_dir = getattr(self.agent, "session_dir", "")
         if session_dir:
@@ -69,6 +70,7 @@ class MemoryAugmentedAgent:
                 {
                     "bank_id": self.memory.bank_id,
                     "memory_mode": self.memory_mode,
+                    "active_skill_id": active.skill.skill_id if active else "",
                     "skill_ids": [item.skill.skill_id for item in retrieved],
                     "scores": [round(item.score, 6) for item in retrieved],
                 },

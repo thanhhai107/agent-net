@@ -9,7 +9,13 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from agent.memory.models import EvaluationEvidence, MemoryQuery, SemanticGradient, SkillStep
+from agent.memory.models import (
+    EvaluationEvidence,
+    MemoryQuery,
+    SemanticGradient,
+    SkillComponentGradient,
+    SkillStep,
+)
 from agent.memory.service import ProceduralMemoryModule
 from agent.memory.workflow import evolve_session_memory
 
@@ -57,9 +63,32 @@ class SkillProMemoryTest(unittest.TestCase):
             context = module.format_context(retrieved)
 
         self.assertEqual(report["status"], "accepted")
-        self.assertEqual(len(retrieved), 1)
+        self.assertIn(report["skill_id"], [item.skill.skill_id for item in retrieved])
         self.assertIn("Activation", context)
         self.assertNotIn("bgp_missing_route_advertisement", context)
+
+    def test_seed_skill_pool_is_available_in_fresh_bank(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            module = ProceduralMemoryModule(
+                bank_id="skill",
+                store_path=Path(tmp) / "skills.json",
+            )
+            retrieved = module.retrieve(
+                query=MemoryQuery(
+                    text="Plan a diagnosis with little evidence",
+                    scenario="simple_bgp",
+                    top_k=3,
+                )
+            )
+            state = module.store.load()
+            context = module.format_context(retrieved)
+
+        self.assertGreaterEqual(
+            len([skill_id for skill_id in state.skills if skill_id.startswith("seed_")]),
+            6,
+        )
+        self.assertTrue(any(item.skill.skill_id.startswith("seed_") for item in retrieved))
+        self.assertIn("Skill-MDP", context)
 
     def test_ppo_gate_rejects_weaker_duplicate(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -101,6 +130,135 @@ class SkillProMemoryTest(unittest.TestCase):
         self.assertEqual(first["status"], "accepted")
         self.assertEqual(second["status"], "rejected")
 
+    def test_skill_mdp_selects_active_skill_and_records_reuse(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            module = ProceduralMemoryModule(
+                bank_id="skill",
+                store_path=Path(tmp) / "skills.json",
+            )
+            module.learn_from_episode(
+                evidence=EvaluationEvidence(
+                    session_id="s1",
+                    task_description="DNS record resolves to the wrong backend",
+                    scenario="ospf_enterprise_dhcp",
+                    metrics={
+                        "detection_score": 1.0,
+                        "localization_accuracy": 1.0,
+                        "rca_accuracy": 1.0,
+                    },
+                    steps=5,
+                    tool_calls=3,
+                    success=True,
+                ),
+                tool_steps=[
+                    SkillStep(order=1, action="Query DNS from the client.", tool_name="dig")
+                ],
+            )
+            before_selection = module.store.load()
+            self.assertEqual(
+                sum(skill.reuse_count for skill in before_selection.skills.values()),
+                0,
+            )
+
+            active = module.select_skill(
+                query=MemoryQuery(
+                    text="DNS record gives the wrong address",
+                    scenario="ospf_enterprise_dhcp",
+                    protocols=["dns"],
+                    services=["name_resolution"],
+                    symptoms=[],
+                    tools=["dig"],
+                )
+            )
+            state = module.store.load()
+            active_id = active.skill.skill_id if active is not None else ""
+            skill = state.skills[active_id]
+
+        self.assertIsNotNone(active)
+        self.assertEqual(active.skill.skill_id, skill.skill_id)
+        self.assertEqual(skill.reuse_count, 1)
+
+    def test_experience_and_golden_pools_are_persisted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            module = ProceduralMemoryModule(
+                bank_id="skill",
+                store_path=Path(tmp) / "skills.json",
+            )
+            module.learn_from_episode(
+                evidence=EvaluationEvidence(
+                    session_id="s1",
+                    task_description="HTTP ACL appears to block traffic",
+                    scenario="ospf_enterprise_dhcp",
+                    metrics={
+                        "detection_score": 1.0,
+                        "localization_accuracy": 1.0,
+                        "rca_accuracy": 1.0,
+                    },
+                    steps=30,
+                    tool_calls=20,
+                    success=True,
+                ),
+                tool_steps=[
+                    SkillStep(order=1, action="Test HTTP reachability.", tool_name="curl")
+                ],
+            )
+            state = module.store.load()
+            stats = module.store.bank_stats()
+
+        self.assertEqual(len(state.experiences), 1)
+        self.assertEqual(len(state.golden_experiences), 1)
+        self.assertEqual(stats["experiences"], 1)
+        self.assertEqual(stats["golden_experiences"], 1)
+
+    def test_parent_skill_refines_to_versioned_candidate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            module = ProceduralMemoryModule(
+                bank_id="skill",
+                store_path=Path(tmp) / "skills.json",
+            )
+            steps = [
+                SkillStep(order=1, action="Check BGP summary.", tool_name="frr_show_bgp_summary")
+            ]
+            first = module.learn_from_episode(
+                evidence=EvaluationEvidence(
+                    session_id="s1",
+                    task_description="BGP route is missing",
+                    scenario="dc_clos_bgp",
+                    metrics={
+                        "detection_score": 1.0,
+                        "localization_accuracy": 1.0,
+                        "rca_accuracy": 1.0,
+                    },
+                    steps=30,
+                    tool_calls=20,
+                    success=True,
+                ),
+                tool_steps=steps,
+            )
+            second = module.learn_from_episode(
+                evidence=EvaluationEvidence(
+                    session_id="s2",
+                    task_description="BGP route is missing again",
+                    scenario="dc_clos_bgp",
+                    metrics={
+                        "detection_score": 1.0,
+                        "localization_accuracy": 1.0,
+                        "rca_accuracy": 1.0,
+                    },
+                    steps=3,
+                    tool_calls=2,
+                    success=True,
+                ),
+                tool_steps=steps,
+            )
+            state = module.store.load()
+            refined = state.skills[second["skill_id"]]
+
+        self.assertEqual(first["status"], "accepted")
+        self.assertEqual(second["status"], "accepted")
+        self.assertTrue(refined.parent_id)
+        self.assertGreaterEqual(refined.version, 1)
+
     def test_llm_semantic_gradient_updates_candidate_skill(self) -> None:
         prompts: list[str] = []
 
@@ -112,8 +270,17 @@ class SkillProMemoryTest(unittest.TestCase):
                 prompts.append(prompt)
                 return SemanticGradient(
                     source_session_id="s1",
-                    critique="Preserve BGP route checks but require independent evidence.",
-                    proposed_update="Terminate only after route and neighbor evidence agree.",
+                    critique="Preserve BGP route checks but do not rely on leaf_router_0_1 alone.",
+                    proposed_update=(
+                        "For bgp_missing_route_advertisement, terminate only after "
+                        "route and neighbor evidence agree."
+                    ),
+                    component_update=SkillComponentGradient(
+                        termination=(
+                            "Terminate only after route and neighbor evidence agree "
+                            "without naming leaf_router_0_1."
+                        )
+                    ),
                 )
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -149,13 +316,15 @@ class SkillProMemoryTest(unittest.TestCase):
                     ],
                 )
             state = module.store.load()
-            skill = next(iter(state.skills.values()))
+            skill = state.skills[report["skill_id"]]
             stats = module.store.bank_stats()
 
         self.assertEqual(report["status"], "accepted")
         self.assertEqual(report["semantic_gradient_source"], "llm")
         self.assertEqual(skill.semantic_gradients[0].gradient_source, "llm")
         self.assertIn("route and neighbor evidence", skill.termination_condition)
+        self.assertNotIn("bgp_missing_route_advertisement", skill.termination_condition)
+        self.assertNotIn("leaf_router_0_1", skill.termination_condition)
         self.assertEqual(stats["llm_semantic_gradients"], 1)
         self.assertNotIn("bgp_missing_route_advertisement", prompts[0])
         self.assertNotIn("leaf_router_0_1", prompts[0])
