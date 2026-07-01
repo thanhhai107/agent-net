@@ -35,15 +35,6 @@ class MemoryConfig:
 
 
 @dataclass(frozen=True)
-class HarnessConfig:
-    target_agent_path: str | None = None
-
-    @property
-    def enabled(self) -> bool:
-        return self.target_agent_path is not None
-
-
-@dataclass(frozen=True)
 class AgentRunConfig:
     agent_type: str
     llm_backend: str

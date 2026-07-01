@@ -27,7 +27,6 @@ This repository is a unified platform that can offer:
 - Session-based workflow with multi-session support (`nika session`, `--session-id`)
 - Parameterized fault injection (`nika failure describe`, `--set key=value`)
 - MCP-based tool support and persistent Tool-Evolving experiments
-- SIA-H executable target-agent baseline runs (`nika evolve run`)
 - Pre-built network scenarios and fault injection mechanisms
 - Reproducible evaluation framework with batch summary (`nika eval summary`)
 - Support for various network topologies and configurations
@@ -311,36 +310,7 @@ The persistent library is `runtime/tool_evolution/<library_id>/state.json`.
 Tool-evolving sessions write `tool_evolution.json` with trial counts,
 documentation revisions, LLM rewrite counts, gaps, and frozen-document counts.
 
-### SIA-H target-agent baseline (`nika evolve run`)
-
-SIA-H follows the target-agent evolution shape: each generation runs a complete
-benchmark batch with an executable `target_agent.py`, writes scored
-`context.md` plus `agent_execution/` artifacts, then creates the next
-generation's `target_agent.py`. The Meta-Agent creates the initial target agent;
-the Feedback-Agent reads generation results and writes later target agents.
-NIKA stays the harness: it starts the network, injects the fault, builds a
-public per-case dataset, runs the target agent in a subprocess, and evaluates
-the resulting submission. It does not train or modify model weights.
-SIA-H learns controller/scaffold code over the MCP tools already exposed by the
-benchmark. It may improve prompts, planning, retries, parsing, and tool-use
-policy, but it does not create new benchmark primitive tools; new promoted
-tools are handled by the optional Tool Evolution module.
-
-```shell
-nika evolve run --file benchmark/benchmark_test.yaml \
-  --max-gen 3 \
-  -b custom -m openai/gpt-oss-120b -n 100
-```
-
-Artifacts are stored under `runtime/harness_evolution/<run_id>/`;
-per-generation benchmark sessions are stored under
-`results/<benchmark>-<run_id>/gen_<n>/`. Every YAML case contributes to the next
-target-agent update in order. SIA-H always requires structured Meta-Agent and
-Feedback-Agent source output; it does not silently carry forward a deterministic
-target agent when source generation fails. See [`docs/README.md`](docs/README.md).
-
-See [`docs/README.md`](docs/README.md) for the current
-learning-module and SIA-H boundary.
+See [`docs/README.md`](docs/README.md) for the current learning-module boundary.
 
 ### Composable Skill-Pro memory
 

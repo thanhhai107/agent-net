@@ -298,7 +298,6 @@ class WorkflowRegistrationTest(unittest.TestCase):
         kwargs = workflow_agent_kwargs(config)
 
         self.assertEqual(kwargs["tool_library_id"], "tools-a")
-        self.assertNotIn("policy_overlay_path", kwargs)
         self.assertFalse(kwargs["use_problem_tool_hints"])
 
 

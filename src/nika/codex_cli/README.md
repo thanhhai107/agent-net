@@ -207,26 +207,6 @@ cases:
 
 Agent and judge options use the same flags as below (including `-a cli` and `-e` for Codex runs; `-n` applies to all agents except `cli`).
 
-### SIA-H target-agent baseline
-
-`nika evolve run` wraps benchmark batches in a SIA-H style outer loop. Each
-generation runs an executable `target_agent.py` in a subprocess, scores the
-benchmark batch, writes `context.md` and `agent_execution/`, then creates the
-next generation's `target_agent.py`. The Meta-Agent creates the initial target
-agent from the task/reference scaffold; it does not start from `react`,
-`plan-execute`, or `reflexion`. The Feedback-Agent reads generation results and
-writes later target agents.
-
-```shell
-nika evolve run --file benchmark/benchmark_test.yaml --max-gen 3 \
-  -b custom -m openai/gpt-oss-120b -n 100
-```
-
-Every YAML case contributes to the next source update. SIA-H always uses
-structured Meta-Agent and Feedback-Agent source generation; failed source
-generation stops the evolution run instead of carrying forward the current
-target.
-
 ### Streamlit experiment studio
 
 ```shell
@@ -234,9 +214,9 @@ nika studio
 nika studio --host 0.0.0.0 --port 8502 --no-browser
 ```
 
-The studio selects a baseline agent, including the special SIA-H baseline, and
-composes optional Tool Evolution and memory modules in one run. It then shows
-live log and progress events from the same CLI workflows.
+The studio selects a baseline agent and composes optional Tool Evolution and
+memory modules in one run. It then shows live log and progress events from the
+same CLI workflows.
 
 ### Single-case mode
 

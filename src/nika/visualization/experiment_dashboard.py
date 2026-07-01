@@ -295,16 +295,6 @@ def _top_result_root(run_path: Path) -> Path:
     return RESULTS_DIR / rel.parts[0]
 
 
-def _is_harness_evolution_result(root: Path, run_path: Path) -> bool:
-    if root.name.startswith("agent-evolution-"):
-        return True
-    try:
-        rel_parts = run_path.relative_to(root).parts
-    except ValueError:
-        return False
-    return any(part.startswith("gen_") and part[4:].isdigit() for part in rel_parts)
-
-
 def _result_rows(*, benchmark_name: str | None = None) -> list[dict[str, object]]:
     if not RESULTS_DIR.exists():
         return []
@@ -315,18 +305,7 @@ def _result_rows(*, benchmark_name: str | None = None) -> list[dict[str, object]
         root = _top_result_root(run_path)
         if benchmark_name and not root.name.startswith(benchmark_name):
             continue
-        
-        # Group by generation subfolder if it is part of Harness Evolution.
         group_key = root
-        try:
-            rel_parts = run_path.relative_to(root).parts
-            for part in rel_parts:
-                if part.startswith("gen_") and part[4:].isdigit():
-                    group_key = root / part
-                    break
-        except ValueError:
-            pass
-            
         grouped.setdefault(group_key, []).append(run_path)
 
     rows: list[dict[str, object]] = []
@@ -381,25 +360,18 @@ def _result_rows(*, benchmark_name: str | None = None) -> list[dict[str, object]
             if dur is not None:
                 durations.append(dur)
 
-            root = _top_result_root(run_path)
-            if _is_harness_evolution_result(root, run_path):
-                agents.add("SIA-H")
             if meta.get("tool_evolution_enabled"):
                 result_modules.add("Tool Evolution")
             if meta.get("memory_mode") and meta.get("memory_mode") != "off":
                 result_modules.add("Memory Evolution")
             if meta.get("agent_type"):
                 agent_name = str(meta["agent_type"])
-                agents.add("SIA-H" if agent_name == "harness" else agent_name)
+                agents.add(agent_name)
             if meta.get("model"):
                 models.add(str(meta["model"]))
             updated = str(meta.get("updated_at") or meta.get("created_at") or updated)
 
-        # Format display name: show parent with generation suffix if grouped under a subfolder
-        if gkey.parent == RESULTS_DIR:
-            display_name = gkey.name
-        else:
-            display_name = f"{gkey.parent.name} ({gkey.name})"
+        display_name = gkey.name
 
         rows.append(
             {
@@ -463,16 +435,6 @@ def _progress_fraction(events: list[dict[str, str]], command_count: int) -> tupl
             within_step = 1.0
             label = f"{prefix}: Completed" if prefix else "Completed"
             break
-        if event["event"] == "evolve_generation_done":
-            try:
-                generation, total = event.get("generation", "0/1").split("/", 1)
-                within_step = int(generation) / max(1, int(total))
-                suffix = f"Generation {generation}/{total} completed"
-            except ValueError:
-                suffix = "Generation completed"
-            label = f"{prefix}: {suffix}" if prefix else suffix
-            break
-
     if not label:
         label = prefix if prefix else "Running"
 
@@ -524,19 +486,12 @@ agent_cols = st.columns(2, gap="medium")
 with agent_cols[0]:
     agent_type = st.selectbox(
         "Agent baseline",
-        ["react", "plan-execute", "reflexion", "sia-h", "mock"],
+        ["react", "plan-execute", "reflexion", "mock"],
     )
 
-sia_h_selected = agent_type == "sia-h"
-if sia_h_selected:
-    with agent_cols[1]:
-        max_generations = st.number_input("Generations", min_value=1, max_value=20, value=3)
-    max_attempts = 1
-else:
-    with agent_cols[1]:
-        max_attempts_str = st.text_input("Attempts", value="3")
-        max_attempts = int(max_attempts_str) if max_attempts_str.isdigit() else 3
-    max_generations = 3
+with agent_cols[1]:
+    max_attempts_str = st.text_input("Attempts", value="3")
+    max_attempts = int(max_attempts_str) if max_attempts_str.isdigit() else 3
 
 st.markdown(
     "<div style='font-size: 0.8rem; font-weight: bold; color: var(--muted); "
@@ -563,32 +518,6 @@ with col_mem3:
     memory_k = st.number_input("Memory top-k", min_value=1, max_value=20, value=5, disabled=not memory_selected)
 with col_mem4:
     memory_tokens = st.number_input("Memory tokens", min_value=100, max_value=8000, value=1500, step=100, disabled=not memory_selected)
-
-col_s1, col_s2, col_s3 = st.columns([1, 1.5, 1.5], gap="medium")
-with col_s1:
-    st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
-    box_bg = "#0ea5e9" if sia_h_selected else "rgba(15, 23, 42, 0.04)"
-    box_border = "1px solid #0ea5e9" if sia_h_selected else "1px solid var(--line)"
-    checkmark_svg = (
-        '<svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="4" '
-        'stroke-linecap="round" stroke-linejoin="round" style="width: 10px; height: 10px;">'
-        '<polyline points="20 6 9 17 4 12"></polyline></svg>'
-    ) if sia_h_selected else ""
-    st.markdown(
-        f"""
-        <div style='display: flex; align-items: center; gap: 10px; height: 40px;'>
-          <div style='width: 16px; height: 16px; border: {box_border}; border-radius: 4px; background: {box_bg}; display: flex; align-items: center; justify-content: center;'>
-            {checkmark_svg}
-          </div>
-          <span style='font-size: 0.875rem; font-weight: 700; color: var(--muted);'>SIA-H Agents</span>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-with col_s2:
-    feedback_backend = st.text_input("Feedback backend", value=llm_backend, disabled=not sia_h_selected)
-with col_s3:
-    feedback_model = st.text_input("Feedback model", value=model, disabled=not sia_h_selected)
 
 modules = []
 if tool_selected:
@@ -624,9 +553,6 @@ config = {
     "memory_bank": memory_bank,
     "memory_k": int(memory_k),
     "memory_tokens": int(memory_tokens),
-    "max_generations": int(max_generations),
-    "feedback_backend": feedback_backend,
-    "feedback_model": feedback_model,
     "run_judge": bool(run_judge),
     "judge_backend": judge_backend,
     "judge_model": judge_model,
@@ -775,12 +701,6 @@ def format_event_message(ev: dict) -> str | None:
         scenario = ev.get("scenario") or "?"
         problem = ev.get("problem") or "?"
         return f"**[Scenario]** Failed: `{scenario} / {problem}`"
-    elif event == "evolve_generation_start":
-        gen = ev.get("generation") or "?"
-        return f"**Starting Evolution Generation {gen}**"
-    elif event == "evolve_generation_done":
-        gen = ev.get("generation") or "?"
-        return f"**Completed Evolution Generation {gen}**"
     return None
 
 st.markdown('<div class="section-title" style="margin-top: 1.5rem;">Tracking</div>', unsafe_allow_html=True)

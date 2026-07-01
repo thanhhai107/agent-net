@@ -5,7 +5,6 @@ from pathlib import Path
 import typer
 
 from agent.composition import (
-    HarnessConfig,
     MemoryConfig,
     ToolEvolutionConfig,
 )
@@ -156,18 +155,6 @@ def benchmark_run(
         hidden=True,
         help="Internal zero-based YAML case index for timeline reporting.",
     ),
-    harness: Path | None = typer.Option(
-        None,
-        "--harness",
-        hidden=True,
-        help="Internal SIA-H target_agent.py path.",
-    ),
-    harness_allow_failure: bool = typer.Option(
-        False,
-        "--harness-allow-failure",
-        hidden=True,
-        help="Internal flag for evolution runs that should score crashed targets.",
-    ),
 ) -> None:
     """Run one benchmark case from YAML, or a single case when SCENARIO and --problem are set."""
     if not run_judge and (judge_backend is not None or judge_model is not None):
@@ -192,9 +179,6 @@ def benchmark_run(
     tool_config = ToolEvolutionConfig(
         enabled=tool_evolution_enabled,
         library_id=tool_library_id,
-    )
-    harness_config = HarnessConfig(
-        target_agent_path=str(harness) if harness else None
     )
 
     if scenario is not None and file is not None:
@@ -233,8 +217,6 @@ def benchmark_run(
             judge_llm_backend=judge_backend,
             judge_model=judge_model,
             tool_evolution=tool_config,
-            harness=harness_config,
-            harness_allow_failure=harness_allow_failure,
             result_root=benchmark_root,
             fault_seed=fault_seed,
             benchmark_index=benchmark_index,
@@ -261,7 +243,5 @@ def benchmark_run(
         judge_llm_backend=judge_backend,
         judge_model=judge_model,
         tool_evolution=tool_config,
-        harness=harness_config,
-        harness_allow_failure=harness_allow_failure,
         result_root=result_root,
     )

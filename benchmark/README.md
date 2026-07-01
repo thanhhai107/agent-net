@@ -2,7 +2,8 @@
 
 Benchmark cases are defined in YAML files with explicit inject parameters:
 
-- `benchmark_selected.yaml` — **56** curated cases (one per failure, default `nika benchmark run` config)
+- `benchmark_test.yaml` — **30** evolution-focused curated cases (default `nika benchmark run` config)
+- `benchmark_selected.yaml` — **56** curated cases (one per failure)
 - `benchmark_full.yaml` — **685** cases (all scenario × failure × size combinations)
 
 Each case includes an `inject` map (device names, etc.) that is passed to `nika failure inject` as `--set` flags. Device names must match the target scenario topology (see lab definitions under `src/nika/net_env/`). IP and netmask values are derived from the live lab at inject time.
@@ -13,6 +14,7 @@ Each case includes an `inject` map (device names, etc.) that is passed to `nika 
 |--------|------:|
 | Failure types (root causes) | 56 |
 | Full benchmark cases | 685 |
+| Test benchmark cases | 30 |
 | Selected benchmark cases | 56 |
 | Scenarios in full matrix | 14 |
 
@@ -35,6 +37,19 @@ Each case includes an `inject` map (device names, etc.) that is passed to `nika 
 | `p4_counter` | 19 |
 | `p4_int` | 19 |
 
+### Test matrix by scenario
+
+| Scenario | Cases |
+|----------|------:|
+| `ospf_enterprise_dhcp` | 14 |
+| `dc_clos_bgp` | 9 |
+| `ospf_enterprise_static` | 2 |
+| `p4_bloom_filter` | 2 |
+| `sdn_clos` | 2 |
+| `dc_clos_service` | 1 |
+
+Kubernetes scenarios (`k8s_lab`, `llmd_lab`) appear in the full matrix only. The selected slice uses traditional Kathara labs and keeps related diagnostic clusters for short Agent Evolution runs.
+
 ### Selected matrix by scenario
 
 | Scenario | Cases |
@@ -52,10 +67,10 @@ Kubernetes scenarios (`k8s_lab`, `llmd_lab`) appear in the full matrix only; sel
 
 ## Regeneration
 
-Regenerate both YAML files:
+Regenerate benchmark YAML files:
 
 ```shell
 uv run python benchmark/generate_benchmark.py
 ```
 
-`nika benchmark run` reads YAML via `--config` (default: `benchmark/benchmark_selected.yaml`).
+`nika benchmark run` reads YAML via `--file` (default: `benchmark/benchmark_test.yaml`).

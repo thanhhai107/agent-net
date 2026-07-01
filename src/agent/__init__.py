@@ -4,7 +4,6 @@ from agent.claude_cli.agent import ClaudeAgent
 from agent.codex_cli.agent import CodexCliAgent
 from agent.composition import (
     AgentRunConfig,
-    HarnessConfig,
     MemoryConfig,
     ToolEvolutionConfig,
 )
@@ -19,7 +18,6 @@ __all__ = [
     "BasicReActAgent",
     "ClaudeAgent",
     "CodexCliAgent",
-    "HarnessConfig",
     "MemoryConfig",
     "MockAgent",
     "PlanExecuteAgent",

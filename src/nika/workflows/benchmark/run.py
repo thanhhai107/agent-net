@@ -12,17 +12,13 @@ from pathlib import Path
 
 from agent.composition import (
     AgentRunConfig,
-    HarnessConfig,
     MemoryConfig,
     ToolEvolutionConfig,
     validate_agent_extensions,
 )
-from agent.harness.dataset import build_public_case_dataset
-from agent.harness.runner import HarnessExecutionConfig, run_harness_target
 from nika.config import BENCHMARK_DIR, RESULTS_DIR
 from nika.net_env.net_env_pool import scenario_requires_topo_tier
 from nika.utils.kathara_cleanup import ensure_kathara_clean
-from nika.utils.logger import bind_session_dir, log_event
 from nika.workflows.agent.run import start_agent
 from nika.workflows.benchmark.inject_defaults import resolve_inject_params
 from nika.workflows.benchmark.load_config import load_benchmark_yaml
@@ -79,14 +75,11 @@ def _benchmark_row_cli_args(
     judge_llm_backend: str | None = None,
     judge_model: str | None = None,
     tool_evolution: ToolEvolutionConfig | None = None,
-    harness: HarnessConfig | None = None,
-    harness_allow_failure: bool = False,
     result_root: str | Path | None = None,
     fault_seed: str | None = None,
 ) -> list[str]:
     memory = memory or MemoryConfig()
     tool_evolution = tool_evolution or ToolEvolutionConfig()
-    harness = harness or HarnessConfig()
     args = [
         row["scenario"],
         "--problem",
@@ -139,10 +132,6 @@ def _benchmark_row_cli_args(
             "--judge-model",
             judge_model,
         ]
-    if harness.enabled:
-        args += ["--harness", str(harness.target_agent_path)]
-    if harness_allow_failure:
-        args.append("--harness-allow-failure")
     if result_root is not None:
         args += ["--result-root", str(result_root)]
     if fault_seed is not None:
@@ -165,8 +154,6 @@ def _run_benchmark_row_subprocess(
     judge_llm_backend: str | None,
     judge_model: str | None,
     tool_evolution: ToolEvolutionConfig,
-    harness: HarnessConfig,
-    harness_allow_failure: bool,
     result_root: str | Path | None = None,
     fault_seed: str | None = None,
 ) -> str | None:
@@ -183,8 +170,6 @@ def _run_benchmark_row_subprocess(
         judge_llm_backend=judge_llm_backend,
         judge_model=judge_model,
         tool_evolution=tool_evolution,
-        harness=harness,
-        harness_allow_failure=harness_allow_failure,
         result_root=result_root,
         fault_seed=fault_seed,
     )
@@ -237,8 +222,6 @@ def run_single_benchmark(
     judge_llm_backend: str | None = None,
     judge_model: str | None = None,
     tool_evolution: ToolEvolutionConfig | None = None,
-    harness: HarnessConfig | None = None,
-    harness_allow_failure: bool = False,
     result_root: str | Path | None = None,
     fault_seed: str | None = None,
     benchmark_index: int | None = None,
@@ -255,23 +238,17 @@ def run_single_benchmark(
     )
     memory = memory or MemoryConfig()
     tool_evolution = tool_evolution or ToolEvolutionConfig()
-    harness = harness or HarnessConfig()
-    if not harness.enabled and agent_type.lower() == "harness":
-        raise ValueError(
-            "agent_type 'harness' requires the internal --harness target_agent.py path."
+    validate_agent_extensions(
+        AgentRunConfig(
+            agent_type=agent_type,
+            llm_backend=llm_backend,
+            model=model,
+            max_steps=max_steps,
+            max_attempts=max_attempts,
+            tool_evolution=tool_evolution,
+            memory=memory,
         )
-    if not harness.enabled:
-        validate_agent_extensions(
-            AgentRunConfig(
-                agent_type=agent_type,
-                llm_backend=llm_backend,
-                model=model,
-                max_steps=max_steps,
-                max_attempts=max_attempts,
-                tool_evolution=tool_evolution,
-                memory=memory,
-            )
-        )
+    )
 
     tier = topo_size if topo_size else None
     if scenario_requires_topo_tier(scenario) and not tier:
@@ -305,72 +282,19 @@ def run_single_benchmark(
     )
 
     try:
-        if harness.enabled:
-            session.update_session("agent_type", "harness")
-            session.update_session("harness_target_agent_path", harness.target_agent_path)
-            session.update_session("llm_backend", llm_backend)
-            session.update_session("model", model)
-            session.update_session("max_steps", max_steps)
-            session.update_session("memory_mode", memory.mode)
-            if memory.enabled:
-                session.update_session("memory_bank", memory.bank)
-                session.update_session("memory_top_k", memory.top_k)
-                session.update_session("memory_token_budget", memory.token_budget)
-            session.update_session("tool_evolution_enabled", tool_evolution.enabled)
-            if tool_evolution.enabled:
-                session.update_session("tool_library_id", tool_evolution.library_id)
-            session.start_session()
-            bind_session_dir(session.session_dir)
-            log_event(
-                "harness_start",
-                f"Starting harness target agent in session {session_id}",
-                session_id=session_id,
-                target_agent_path=harness.target_agent_path,
+        start_agent(
+            AgentRunConfig(
+                agent_type=agent_type,
+                llm_backend=llm_backend,
                 model=model,
-            )
-            try:
-                dataset_dir = build_public_case_dataset(
-                    session=session,
-                    output_dir=session_dir / "public_case",
-                    memory=memory,
-                    tool_evolution=tool_evolution,
-                    llm_backend=llm_backend,
-                    model=model,
-                )
-                result = run_harness_target(
-                    HarnessExecutionConfig(
-                        target_agent_path=str(harness.target_agent_path),
-                        session_id=session_id,
-                        dataset_dir=dataset_dir,
-                        working_dir=session_dir,
-                        llm_backend=llm_backend,
-                        model=model,
-                        max_steps=max_steps,
-                        allow_failure=harness_allow_failure,
-                    )
-                )
-                session.update_session("harness_returncode", result.returncode)
-            finally:
-                session.end_session()
-                log_event(
-                    "harness_end",
-                    f"Harness target agent ended for session {session_id}",
-                    session_id=session_id,
-                )
-        else:
-            start_agent(
-                AgentRunConfig(
-                    agent_type=agent_type,
-                    llm_backend=llm_backend,
-                    model=model,
-                    max_steps=max_steps,
-                    max_attempts=max_attempts,
-                    stream_output=False,
-                    tool_evolution=tool_evolution,
-                    memory=memory,
-                ),
-                session_id=session_id,
-            )
+                max_steps=max_steps,
+                max_attempts=max_attempts,
+                stream_output=False,
+                tool_evolution=tool_evolution,
+                memory=memory,
+            ),
+            session_id=session_id,
+        )
         eval_results(
             session_id=session_id,
             run_judge=run_judge,
@@ -404,8 +328,6 @@ def run_benchmark_from_yaml(
     judge_llm_backend: str | None = None,
     judge_model: str | None = None,
     tool_evolution: ToolEvolutionConfig | None = None,
-    harness: HarnessConfig | None = None,
-    harness_allow_failure: bool = False,
     result_root: str | Path | None = None,
 ) -> None:
     """
@@ -419,26 +341,17 @@ def run_benchmark_from_yaml(
 
     memory_config = memory or MemoryConfig()
     tool_config = tool_evolution or ToolEvolutionConfig()
-    harness_config = harness or HarnessConfig()
-    if not harness_config.enabled and agent_type.lower() == "harness":
-        raise ValueError(
-            "agent_type 'harness' requires the internal --harness target_agent.py path."
+    validate_agent_extensions(
+        AgentRunConfig(
+            agent_type=agent_type,
+            llm_backend=llm_backend,
+            model=model,
+            max_steps=max_steps,
+            max_attempts=max_attempts,
+            tool_evolution=tool_config,
+            memory=memory_config,
         )
-    if not harness_config.enabled:
-        validate_agent_extensions(
-            AgentRunConfig(
-                agent_type=agent_type,
-                llm_backend=llm_backend,
-                model=model,
-                max_steps=max_steps,
-                max_attempts=max_attempts,
-                tool_evolution=tool_config,
-                memory=memory_config,
-            )
-        )
-    if Path(benchmark_file).suffix.lower() == ".csv":
-        raise ValueError("benchmark CSV files are no longer supported; use YAML.")
-
+    )
     rows = load_benchmark_yaml(benchmark_file)
 
     if not rows:
@@ -492,8 +405,6 @@ def run_benchmark_from_yaml(
                     judge_llm_backend=judge_llm_backend,
                     judge_model=judge_model,
                     tool_evolution=tool_config,
-                    harness=harness_config,
-                    harness_allow_failure=harness_allow_failure,
                     result_root=benchmark_root,
                     fault_seed=row.get("fault_seed"),
                 )
@@ -516,8 +427,6 @@ def run_benchmark_from_yaml(
                     judge_llm_backend=judge_llm_backend,
                     judge_model=judge_model,
                     tool_evolution=tool_config,
-                    harness=harness_config,
-                    harness_allow_failure=harness_allow_failure,
                     result_root=benchmark_root,
                     fault_seed=row.get("fault_seed"),
                     inject_params=row.get("inject"),

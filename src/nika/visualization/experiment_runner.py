@@ -32,7 +32,6 @@ AGENT_LABELS = {
     "plan-execute": "Plan-Execute",
     "reflexion": "Reflexion",
     "mock": "Mock",
-    "sia-h": "SIA-H",
 }
 
 
@@ -83,17 +82,6 @@ def _common_agent_args(
     ]
 
 
-def _harness_model_args(config: dict[str, Any]) -> list[str]:
-    return [
-        "-b",
-        _str(config.get("llm_backend"), DEFAULT_LLM_BACKEND),
-        "-m",
-        _str(config.get("model"), DEFAULT_MODEL),
-        "-n",
-        str(_int(config.get("max_steps"), resolve_max_steps(None))),
-    ]
-
-
 def _judge_args(config: dict[str, Any]) -> list[str]:
     if not config.get("run_judge"):
         return []
@@ -133,10 +121,6 @@ def agent_type(config: dict[str, Any]) -> str:
     return str(config.get("agent_type") or "react").lower()
 
 
-def is_sia_h_agent(config: dict[str, Any]) -> bool:
-    return agent_type(config) == "sia-h"
-
-
 def experiment_label(config: dict[str, Any]) -> str:
     modules = selected_modules(config)
     labels = [AGENT_LABELS.get(agent_type(config), agent_type(config))]
@@ -151,29 +135,7 @@ def build_experiment_command(config: dict[str, Any]) -> list[str]:
     tool_enabled = "tool_evolution" in modules
     memory_enabled = "memory_evolution" in modules
 
-    if is_sia_h_agent(config):
-        command = _python_module_command(
-            "evolve",
-            "run",
-            "--file",
-            _str(config.get("benchmark_file"), default_benchmark_yaml_path()),
-            "--max-gen",
-            str(_int(config.get("max_generations"), 3)),
-            *_harness_model_args(config),
-            "--feedback-backend",
-            _str(
-                config.get("feedback_backend"),
-                _str(config.get("llm_backend"), DEFAULT_LLM_BACKEND),
-            ),
-            "--feedback-model",
-            _str(
-                config.get("feedback_model"),
-                _str(config.get("model"), DEFAULT_MODEL),
-            ),
-            *_judge_args(config),
-        )
-    else:
-        command = _benchmark_command(config)
+    command = _benchmark_command(config)
 
     if tool_enabled:
         command.extend(
@@ -204,7 +166,7 @@ def build_command_plan(config: dict[str, Any]) -> list[CommandPlan]:
         CommandPlan(
             name=experiment_label(config),
             command=build_experiment_command(config),
-            variant="sia_h" if is_sia_h_agent(config) else "benchmark",
+            variant="benchmark",
         )
     )
     return plan
@@ -455,9 +417,6 @@ def parse_progress_events(log_text: str) -> list[dict[str, str]]:
         "benchmark_summary ",
         "kathara_cleanup_start ",
         "kathara_cleanup_done ",
-        "evolve_generation_start ",
-        "evolve_generation_done ",
-        "evolve_summary ",
     )
     rows: list[dict[str, str]] = []
     for line in log_text.splitlines():

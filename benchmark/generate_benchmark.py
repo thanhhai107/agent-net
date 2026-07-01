@@ -1,4 +1,4 @@
-"""Generate benchmark_full.yaml and benchmark_selected.yaml from prob_pool and net_env_pool."""
+"""Generate benchmark YAML files from prob_pool and net_env_pool."""
 
 from __future__ import annotations
 
@@ -14,7 +14,45 @@ from nika.workflows.benchmark.inject_defaults import resolve_inject_params, vali
 
 cur_path = os.path.dirname(os.path.abspath(__file__))
 
-# One best-matching traditional Kathara scenario per failure (k8s/llmd appear in full only).
+SELECTED_EVOLVING_CASES: list[tuple[str, str, str]] = [
+    # Services and address management.
+    ("ospf_enterprise_dhcp", "dns_record_error", "s"),
+    ("ospf_enterprise_dhcp", "dns_service_down", "s"),
+    ("ospf_enterprise_dhcp", "dns_port_blocked", "s"),
+    ("ospf_enterprise_dhcp", "dhcp_missing_subnet", "s"),
+    ("ospf_enterprise_dhcp", "dhcp_spoofed_gateway", "s"),
+    # Host and link failures.
+    ("ospf_enterprise_static", "host_missing_ip", "s"),
+    ("ospf_enterprise_static", "host_incorrect_ip", "s"),
+    ("ospf_enterprise_dhcp", "host_incorrect_gateway", "s"),
+    ("ospf_enterprise_dhcp", "host_incorrect_dns", "s"),
+    ("dc_clos_bgp", "host_ip_conflict", "s"),
+    ("dc_clos_bgp", "link_down", "s"),
+    ("dc_clos_bgp", "link_flap", "s"),
+    ("dc_clos_bgp", "link_bandwidth_throttling", "s"),
+    ("dc_clos_bgp", "link_high_packet_corruption", "s"),
+    # Routing failures.
+    ("dc_clos_bgp", "bgp_asn_misconfig", "s"),
+    ("dc_clos_bgp", "bgp_missing_route_advertisement", "s"),
+    ("dc_clos_bgp", "bgp_blackhole_route_leak", "s"),
+    ("dc_clos_bgp", "host_static_blackhole", "s"),
+    ("ospf_enterprise_dhcp", "ospf_neighbor_missing", "s"),
+    ("ospf_enterprise_dhcp", "frr_service_down", "s"),
+    # Security and attack-like faults.
+    ("ospf_enterprise_dhcp", "arp_cache_poisoning", "s"),
+    ("ospf_enterprise_dhcp", "http_acl_block", "s"),
+    ("ospf_enterprise_dhcp", "web_dos_attack", "s"),
+    ("dc_clos_service", "bgp_hijacking", "s"),
+    # Resource contention.
+    ("ospf_enterprise_dhcp", "incast_traffic_network_limitation", "s"),
+    ("ospf_enterprise_dhcp", "receiver_resource_contention", "s"),
+    # SDN/P4 control-plane and data-plane cases.
+    ("sdn_clos", "flow_rule_loop", "s"),
+    ("sdn_clos", "sdn_controller_crash", "s"),
+    ("p4_bloom_filter", "p4_table_entry_missing", ""),
+    ("p4_bloom_filter", "p4_table_entry_misconfig", ""),
+]
+
 SELECTED_SCENARIO_FOR_PROBLEM: dict[str, str] = {
     "arp_acl_block": "ospf_enterprise_dhcp",
     "arp_cache_poisoning": "ospf_enterprise_dhcp",
@@ -128,6 +166,37 @@ def iter_selected_cases() -> list[dict]:
     return rows
 
 
+def iter_test_cases() -> list[dict]:
+    net_envs = list_all_net_envs()
+    problem_instances = list_avail_problem_instances()
+    rows: list[dict] = []
+
+    seen: set[tuple[str, str, str]] = set()
+    for scenario, prob_name, topo_size in SELECTED_EVOLVING_CASES:
+        key = (scenario, prob_name, topo_size)
+        if key in seen:
+            raise ValueError(f"Duplicate test benchmark case: {key!r}")
+        seen.add(key)
+        if prob_name not in problem_instances:
+            raise ValueError(f"Unknown test problem {prob_name!r}")
+        if scenario not in net_envs:
+            raise ValueError(f"Unknown test scenario {scenario!r}")
+        net_env_cls = net_envs[scenario]
+        problem_instance = problem_instances[prob_name]["detection"]
+        if not set(problem_instance.TAGS).issubset(set(net_env_cls.TAGS)):
+            raise ValueError(
+                f"Test scenario {scenario} not tag-compatible with {prob_name} "
+                f"(problem={problem_instance.TAGS}, scenario={net_env_cls.TAGS})"
+            )
+        requires_tier = scenario_requires_topo_tier(scenario)
+        if requires_tier and topo_size not in {"s", "m", "l"}:
+            raise ValueError(f"Test scenario {scenario} requires topo_size s/m/l")
+        if not requires_tier and topo_size:
+            raise ValueError(f"Test scenario {scenario} does not accept topo_size")
+        rows.append(_make_row(scenario, prob_name, topo_size))
+    return rows
+
+
 def _print_stats(label: str, rows: list[dict]) -> None:
     by_scenario = Counter(r["scenario"] for r in rows)
     by_problem = Counter(r["problem"] for r in rows)
@@ -136,15 +205,21 @@ def _print_stats(label: str, rows: list[dict]) -> None:
         print(f"  {scenario}: {count}")
 
 
-def generate_benchmark() -> tuple[list[dict], list[dict]]:
+def generate_benchmark() -> tuple[list[dict], list[dict], list[dict]]:
     full_rows = iter_full_cases()
     selected_rows = iter_selected_cases()
+    test_rows = iter_test_cases()
 
     _print_stats("benchmark_full.yaml", full_rows)
     _print_stats("benchmark_selected.yaml", selected_rows)
+    _print_stats("benchmark_test.yaml", test_rows)
 
     benchmark_dir = Path(cur_path)
-    for name, rows in (("benchmark_full.yaml", full_rows), ("benchmark_selected.yaml", selected_rows)):
+    for name, rows in (
+        ("benchmark_full.yaml", full_rows),
+        ("benchmark_selected.yaml", selected_rows),
+        ("benchmark_test.yaml", test_rows),
+    ):
         out_path = benchmark_dir / name
         out_path.write_text(
             yaml.dump({"cases": rows}, sort_keys=False, allow_unicode=True),
@@ -152,7 +227,7 @@ def generate_benchmark() -> tuple[list[dict], list[dict]]:
         )
         print(f"Wrote {len(rows)} cases to {out_path}")
 
-    return full_rows, selected_rows
+    return full_rows, selected_rows, test_rows
 
 
 if __name__ == "__main__":

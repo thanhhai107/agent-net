@@ -17,7 +17,7 @@ Thực nghiệm được thực hiện trên hệ thống máy cá nhân chạy 
 \section{Bộ kịch bản sự cố và cơ chế chia dữ liệu}
 \label{sec:benchmark_scenarios}
 
-Thực nghiệm sử dụng tập con chọn lọc gồm 30 incident khác nhau trích xuất từ kịch bản mạng của NIKA (định nghĩa trong \texttt{benchmark/tool\_evolution\_30.csv}). Các kịch bản này được chia thành 5 nhóm chính (Evolution Streams) để đánh giá khả năng chẩn đoán trên nhiều khía cạnh của mạng truyền thông:
+Thực nghiệm sử dụng tập con chọn lọc gồm 30 incident khác nhau trích xuất từ kịch bản mạng của NIKA (định nghĩa trong \texttt{benchmark/benchmark\_test.yaml}). Các kịch bản này được chia thành 5 nhóm chính (Evolution Streams) để đánh giá khả năng chẩn đoán trên nhiều khía cạnh của mạng truyền thông:
 \begin{enumerate}
     \item **dns\_dhcp\_service:** Gồm các sự cố về dịch vụ cơ bản như lỗi bản ghi DNS (\texttt{dns\_record\_error}), dịch vụ DNS bị dừng (\texttt{dns\_service\_down}), dịch vụ DHCP bị dừng (\texttt{dhcp\_service\_down}), và thiếu cấu hình mạng con trong DHCP (\texttt{dhcp\_missing\_subnet}).
     \item **host\_ip\_config:** Gồm các lỗi cấu hình IP trên host như sai IP (\texttt{host\_incorrect\_ip}), mất IP (\texttt{host\_missing\_ip}), sai mặt nạ mạng (\texttt{host\_incorrect\_netmask}), sai gateway mặc định (\texttt{host\_incorrect\_gateway}), trùng IP (\texttt{host\_ip\_conflict}), và xung đột địa chỉ MAC (\texttt{mac\_address\_conflict}).

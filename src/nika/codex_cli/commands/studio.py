@@ -19,7 +19,7 @@ def studio_command(
         help="Do not open a browser automatically.",
     ),
 ) -> None:
-    """Open the experiment runner UI for benchmark and evolution runs."""
+    """Open the experiment runner UI for benchmark runs."""
     dashboard_path = pkg_path("visualization", "experiment_dashboard.py")
     command = [
         sys.executable,
