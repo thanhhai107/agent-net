@@ -24,7 +24,7 @@ SUPPORTED_AGENT_TYPES = (
     "codex_cli",
     "claude_cli",
 )
-SUPPORTED_LLM_BACKENDS = ("openai", "ollama", "deepseek", "netmind")
+SUPPORTED_LLM_BACKENDS = ("openai", "ollama", "deepseek", "netmind", "custom")
 
 agent_app = typer.Typer(help="Troubleshooting agents.")
 
@@ -55,7 +55,7 @@ def agent_run(
         DEFAULT_LLM_BACKEND,
         "-b",
         "--backend",
-        help="LLM provider (openai, ollama, deepseek, netmind).",
+        help="LLM provider (openai, ollama, deepseek, netmind, custom).",
     ),
     model: str | None = typer.Option(
         None, "-m", "--model", help="Model id for the chosen backend or CLI agent."

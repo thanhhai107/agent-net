@@ -239,6 +239,14 @@ def load_model(
             temperature=0,
         )
 
+    if llm_backend == "custom":
+        return ChatOpenAI(
+            model=model,
+            base_url=os.getenv("CUSTOM_API_BASE"),
+            api_key=os.getenv("CUSTOM_API_KEY", "dummy"),
+            temperature=0,
+        )
+
     if llm_backend == "netmind":
         api_key = os.getenv("NETMIND_API_KEY")
         if not api_key:
