@@ -12,7 +12,7 @@ from nika.utils.agent_config import (
 )
 
 SUPPORTED_AGENT_TYPES = ("byo.langgraph", "byo.mcp_agent", "local_cli.codex_cli", "local_cli.claude_cli")
-SUPPORTED_LLM_PROVIDERS = ("openai", "ollama", "deepseek")
+SUPPORTED_LLM_PROVIDERS = ("openai", "ollama", "deepseek", "custom")
 
 agent_app = typer.Typer(help="Troubleshooting agents.")
 
@@ -74,9 +74,7 @@ def agent_run(
     from nika.workflows.agent.run import start_agent
 
     if reasoning_effort is not None and reasoning_effort not in REASONING_EFFORT_LEVELS:
-        raise typer.BadParameter(
-            f"reasoning_effort must be one of {', '.join(REASONING_EFFORT_LEVELS)}"
-        )
+        raise typer.BadParameter(f"reasoning_effort must be one of {', '.join(REASONING_EFFORT_LEVELS)}")
 
     try:
         start_agent(
