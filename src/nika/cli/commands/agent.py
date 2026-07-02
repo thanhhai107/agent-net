@@ -2,7 +2,7 @@
 
 import typer
 
-from agent.codex_cli.codex_worker import REASONING_EFFORT_LEVELS
+from agent.local_cli.codex_cli.codex_worker import REASONING_EFFORT_LEVELS
 from nika.utils.agent_config import (
     ENV_AGENT_TYPE,
     ENV_CODEX_REASONING_EFFORT,
@@ -11,7 +11,7 @@ from nika.utils.agent_config import (
     ENV_MODEL,
 )
 
-SUPPORTED_AGENT_TYPES = ("react", "mock", "codex_cli", "claude_cli")
+SUPPORTED_AGENT_TYPES = ("byo.langgraph", "byo.mcp_agent", "local_cli.codex_cli", "local_cli.claude_cli")
 SUPPORTED_LLM_PROVIDERS = ("openai", "ollama", "deepseek")
 
 agent_app = typer.Typer(help="Troubleshooting agents.")
@@ -23,10 +23,10 @@ def agent_list() -> None:
     typer.echo("agent_types:")
     for agent_type in SUPPORTED_AGENT_TYPES:
         typer.echo(f"  {agent_type}")
-    typer.echo("llm_providers (react only):")
+    typer.echo("llm_providers (byo.langgraph only):")
     for provider in SUPPORTED_LLM_PROVIDERS:
         typer.echo(f"  {provider}")
-    typer.echo("reasoning_effort (codex_cli agent only):")
+    typer.echo("reasoning_effort (local_cli.codex_cli only):")
     for level in REASONING_EFFORT_LEVELS:
         typer.echo(f"  {level}")
 
@@ -45,7 +45,7 @@ def agent_run(
         "-p",
         "--provider",
         envvar=ENV_LLM_PROVIDER,
-        help="LLM provider for react only: openai, ollama, deepseek.",
+        help="LLM provider for byo.langgraph only: openai, ollama, deepseek.",
     ),
     model: str | None = typer.Option(
         None,
@@ -59,16 +59,16 @@ def agent_run(
         "-n",
         "--max-steps",
         envvar=ENV_MAX_STEPS,
-        help="Max ReAct steps (required unless NIKA_MAX_STEPS is in .env; react/mock only).",
+        help="Max steps per phase (required unless NIKA_MAX_STEPS is in .env; byo.langgraph and byo.mcp_agent).",
     ),
     reasoning_effort: str | None = typer.Option(
         None,
         "-e",
         "--reasoning-effort",
         envvar=ENV_CODEX_REASONING_EFFORT,
-        help="Codex model_reasoning_effort (cli agent only): none, minimal, low, medium, high, xhigh.",
+        help="Codex model_reasoning_effort (local_cli.codex_cli only): none, minimal, low, medium, high, xhigh.",
     ),
-    session_id: str | None = typer.Option(None, "--session-id", help="Target session id."),
+    session_id: str | None = typer.Option(None, "--session_id", help="Target session id."),
 ) -> None:
     """Run the agent on the current session task."""
     from nika.workflows.agent.run import start_agent

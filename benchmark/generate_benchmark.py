@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from collections import Counter
 from pathlib import Path
 
@@ -10,9 +11,10 @@ import yaml
 
 from nika.net_env.net_env_pool import list_all_net_envs, scenario_requires_topo_size
 from nika.orchestrator.problems.prob_pool import list_avail_problem_instances
-from nika.workflows.benchmark.inject_defaults import resolve_inject_params, validate_benchmark_case
 
 cur_path = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, cur_path)
+from inject_resolve import resolve_inject_params, validate_benchmark_case
 
 # One best-matching traditional Kathara scenario per failure (k8s/llmd appear in full only).
 SELECTED_SCENARIO_FOR_PROBLEM: dict[str, str] = {

@@ -2,9 +2,10 @@
 
 from typing import Any
 
-from agent.codex_cli.agent import CodexCliAgent
-from agent.claude_cli.agent import ClaudeAgent
-from agent.langgraph.react_agent import BasicReActAgent
+from agent.local_cli.codex_cli.agent import CodexCliAgent
+from agent.local_cli.claude_cli.agent import ClaudeAgent
+from agent.byo.langgraph.react_agent import BasicReActAgent
+from agent.byo.mcp_agent.agent import McpAgent
 from agent.mock.mock_agent import MockAgent
 
 
@@ -20,10 +21,10 @@ def create_agent(
 ) -> Any:
     """Instantiate an agent for ``agent_type``."""
     match agent_type.lower():
-        case "react":
+        case "byo.langgraph":
             if not llm_provider:
                 raise ValueError(
-                    "react agent requires an LLM provider: set NIKA_LLM_PROVIDER in .env or pass -p/--provider."
+                    "byo.langgraph agent requires an LLM provider: set NIKA_LLM_PROVIDER in .env or pass -p/--provider."
                 )
             return BasicReActAgent(
                 session_id=session_id,
@@ -42,17 +43,24 @@ def create_agent(
                 "Agent type 'sdk' is not implemented yet. "
                 "See src/agent/README.md for the codex_sdk / claude_sdk path."
             )
-        case "codex_cli":
+        case "local_cli.codex_cli":
             return CodexCliAgent(
                 session_id=session_id,
                 model=model,
                 reasoning_effort=reasoning_effort,
                 stream_output=stream_output,
             )
-        case "claude_cli":
+        case "local_cli.claude_cli":
             return ClaudeAgent(
                 session_id=session_id,
                 model=model,
+                stream_output=stream_output,
+            )
+        case "byo.mcp_agent":
+            return McpAgent(
+                session_id=session_id,
+                model=model,
+                max_steps=max_steps,
                 stream_output=stream_output,
             )
         case _:

@@ -23,11 +23,11 @@ Use `nika <group> --help` and `nika <group> <command> --help` for generated opti
 
 ## Global conventions
 
-### Sessions and `--session-id`
+### Sessions and `--session_id`
 
 - **`nika env run`** prints `session_id=…` and writes `runtime/sessions/{session_id}.json`.
-- Most commands that operate on a lab accept **`--session-id`** to target a specific session.
-- When **`--session-id` is omitted** and exactly **one** session is running, that session is selected automatically. With zero or multiple running sessions, the CLI raises an error asking you to pass `--session-id` or reduce concurrency.
+- Most commands that operate on a lab accept **`--session_id`** to target a specific session.
+- When **`--session_id` is omitted** and exactly **one** session is running, that session is selected automatically. With zero or multiple running sessions, the CLI raises an error asking you to pass `--session_id` or reduce concurrency.
 - **`nika session close`** undeploys the Kathará lab and clears runtime session state (confirmation prompt skippable with `-y` / `--yes`).
 
 ### Topology size (`-s` / `--size`)
@@ -43,11 +43,11 @@ This flag is reused on **`nika benchmark run`** and **`nika traffic run`** when 
 
 Aligned with `nika agent run`:
 
-- **`-a` / `--agent`**: `react` (LangGraph + LangChain ReAct), `codex_cli` (LangGraph + Codex CLI subprocess), `claude_cli` (LangGraph + Claude Code CLI subprocess), or `mock` (pipeline testing without an LLM).
-- **`-p` / `--provider`**: LLM provider for `react` only (`openai`, `ollama`, `deepseek`).
+- **`-a` / `--agent`**: `byo.langgraph`, `byo.mcp_agent`, `local_cli.codex_cli`, or `local_cli.claude_cli`.
+- **`-p` / `--provider`**: LLM provider for `byo.langgraph` only (`openai`, `ollama`, `deepseek`).
 - **`-m` / `--model`**: model id.
-- **`-n` / `--max-steps`**: max ReAct recursion steps per phase (`react` and `mock` only).
-- **`-e` / `--reasoning-effort`**: Codex `model_reasoning_effort` (`codex_cli` only): `none`, `minimal`, `low`, `medium`, `high`, `xhigh`.
+- **`-n` / `--max-steps`**: max steps per phase (`byo.langgraph`, `byo.mcp_agent`).
+- **`-e` / `--reasoning-effort`**: Codex `model_reasoning_effort` (`local_cli.codex_cli` only): `none`, `minimal`, `low`, `medium`, `high`, `xhigh`.
 
 `nika eval judge` uses **`-p`** and **`-m`** for the judge only (no agent in that command).
 
@@ -66,9 +66,9 @@ Both judge options are required when **`--judge`** is set.
 ## `nika session`
 
 - **`nika session ps [-a]`**: list sessions. Default: running only; **`-a` / `--all`** includes finished sessions. Columns: session id, env id, status, failure count, agent summary.
-- **`nika session inspect [SESSION_ID] [-c]`**: print the session document as JSON plus a table of `failure_injections`. Pass **`-c` / `--containers`** to also list running lab containers (docker-ps style). Auto-selects when only one session is running.
-- **`nika session containers [SESSION_ID]`**: list Kathara containers in the session lab (CONTAINER ID, NAME, IMAGE, STATUS, NAMES). Auto-selects when only one session is running.
-- **`nika session close [SESSION_ID] [-y]`**: undeploy the lab, mark failure records ended, and remove the runtime session file. When SESSION_ID is omitted and only one session is running it is selected automatically; **`-y`** skips the confirmation prompt.
+- **`nika session inspect [--session_id ID] [-c]`**: print the session document as JSON plus a table of `failure_injections`. Pass **`-c` / `--containers`** to also list running lab containers (docker-ps style). Auto-selects when only one session is running.
+- **`nika session containers [--session_id ID]`**: list Kathara containers in the session lab (CONTAINER ID, NAME, IMAGE, STATUS, NAMES). Auto-selects when only one session is running.
+- **`nika session close [--session_id ID] [-y]`**: undeploy the lab, mark failure records ended, and remove the runtime session file. When `--session_id` is omitted and only one session is running it is selected automatically; **`-y`** skips the confirmation prompt.
 - **`nika session wipe [-y]`**: close every running session and run ``kathara wipe`` to remove leftover containers and networks.
 
 ---
@@ -85,8 +85,8 @@ Both judge options are required when **`--judge`** is set.
 
 - **`nika failure list`**: injectable problem ids.
 - **`nika failure describe PROBLEM`**: print the typed parameter schema (JSON Schema) and an example `nika failure inject … --set …` line.
-- **`nika failure inject PROBLEM [PROBLEM …] [--session-id ID] [--set key=value …]`**: inject for a selected running session and write ground truth. Repeat **`--set`** to override injection parameters (see `describe` for valid keys).
-- **`nika failure ps [--session-id ID]`**: list persisted failure injection records for one session.
+- **`nika failure inject PROBLEM [PROBLEM …] [--session_id ID] [--set key=value …]`**: inject for a selected running session and write ground truth. Repeat **`--set`** to override injection parameters (see `describe` for valid keys).
+- **`nika failure ps [--session_id ID]`**: list persisted failure injection records for one session.
 
 ---
 
@@ -95,7 +95,7 @@ Both judge options are required when **`--judge`** is set.
 Run a shell command inside a host container for the selected session-bound lab:
 
 ```shell
-nika exec HOST COMMAND… [--session-id ID] [--timeout SECONDS]
+nika exec HOST COMMAND… [--session_id ID] [--timeout SECONDS]
 ```
 
 - **`HOST`**: container / pc name in the lab (e.g. `pc1`).
@@ -108,24 +108,23 @@ Example: `nika exec pc1 ping -c 3 10.0.0.2 --timeout 30`
 
 ## `nika agent`
 
-- **`nika agent list`**: supported agent types (`react`, `codex_cli`, `claude_cli`, `mock`), LLM providers, and Codex reasoning-effort levels.
+- **`nika agent list`**: supported agent types (`byo.langgraph`, `byo.mcp_agent`, `local_cli.codex_cli`, `local_cli.claude_cli`), LLM providers, and Codex reasoning-effort levels.
 - **`nika agent run`**: run the agent on one selected session.
 
   | Flag | Applies to | Meaning |
   |------|------------|---------|
-  | `-a` / `--agent` | all | `react`, `codex_cli`, `claude_cli`, or `mock` |
-  | `-p` / `--provider` | `react` | `openai`, `ollama`, or `deepseek` |
+  | `-a` / `--agent` | all | `byo.langgraph`, `byo.mcp_agent`, `local_cli.codex_cli`, or `local_cli.claude_cli` |
+  | `-p` / `--provider` | `byo.langgraph` | `openai`, `ollama`, or `deepseek` |
   | `-m` / `--model` | all | model id |
-  | `-n` / `--max-steps` | `react`, `mock` | ReAct step cap per phase |
-  | `-e` / `--reasoning-effort` | `codex_cli` | Codex reasoning effort level |
-  | `--session-id` | all | target session |
+  | `-n` / `--max-steps` | `byo.langgraph`, `byo.mcp_agent` | step cap per phase |
+  | `-e` / `--reasoning-effort` | `local_cli.codex_cli` | Codex reasoning effort level |
+  | `--session_id` | all | target session |
 
   Examples:
 
   ```shell
-  nika agent run -a react -p openai -m gpt-5-mini -n 20
-  nika agent run -a codex_cli -m gpt-5.4-mini -e medium
-  nika agent run -a mock -n 5
+  nika agent run -a byo.langgraph -p openai -m gpt-5-mini -n 20
+  nika agent run -a local_cli.codex_cli -m gpt-5.4-mini -e medium
   ```
 
 ---
@@ -134,8 +133,8 @@ Example: `nika exec pc1 ping -c 3 10.0.0.2 --timeout 30`
 
 Eval commands operate on **closed** sessions only. Close the lab with **`nika session close`** before running eval; artifacts are read from and written to `results/{session_id}/`.
 
-- **`nika eval metrics [--session-id ID]`**: rule-based metrics → `eval_metrics.json` (records eval completion in `events.jsonl`).
-- **`nika eval judge -p PROVIDER -m MODEL [--session-id ID]`**: LLM judge → `llm_judge.json`.
+- **`nika eval metrics [--session_id ID]`**: rule-based metrics → `eval_metrics.json` (records eval completion in `events.jsonl`).
+- **`nika eval judge -p PROVIDER -m MODEL [--session_id ID]`**: LLM judge → `llm_judge.json`.
 - **`nika eval summary [filters] [-o PATH]`**: scan finished sessions under `results/` and write one CSV.
 - **`nika eval clean [-y] [--force]`**: delete historical artifacts under `results/`, runtime session JSON files, and the SQLite index at `runtime/sessions.db`. Refuses when running sessions exist unless **`--force`** is passed.
 
@@ -149,7 +148,7 @@ All filters are optional and repeatable. Omit filters to include every finished 
 | `-p` / `--problem` | Root-cause / problem id (e.g. `link_down`) |
 | `-e` / `--env` | Scenario / net env (e.g. `simple_bgp`) |
 | `-c` / `--category` | Root-cause category (e.g. `link_failure`) |
-| `--session-id` | Specific session id |
+| `--session_id` | Specific session id |
 | `-a` / `--agent` | Agent type |
 | `--model` | Agent model id |
 
@@ -184,7 +183,7 @@ nika benchmark run --batch-size 4
 | `topo_size` | Size `s`, `m`, or `l`; **null/empty** for scenarios without sizes |
 | `inject` | Map of `--set key=value` pairs passed to `nika failure inject` |
 
-Agent and judge options use the same flags as below (including `-a codex_cli` and `-e` for Codex runs; `-n` applies only to `react` and `mock`).
+Agent and judge options use the same flags as below (including `-a local_cli.codex_cli` and `-e` for Codex runs; `-n` applies to `byo.langgraph` and `byo.mcp_agent`).
 
 ### Single-case mode
 
@@ -192,7 +191,7 @@ Pass **`SCENARIO`** as the first positional argument (like `nika env run NAME`),
 
 ```shell
 nika benchmark run dc_clos_bgp --problem bgp_asn_misconfig -s s \
-  -a react -p openai -m gpt-5-mini -n 20 \
+  -a byo.langgraph -p openai -m gpt-5-mini -n 20 \
   --judge --judge-provider openai --judge-model gpt-5-mini
 ```
 

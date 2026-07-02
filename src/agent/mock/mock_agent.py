@@ -4,9 +4,7 @@ The agent mirrors the two-phase architecture of BasicReActAgent:
   1. diagnosis phase  – calls Kathara MCP tools and emits a deterministic report
   2. submission phase – calls list_avail_problems + submit via task MCP server
 
-It can be selected via ``nika agent run -a mock`` and is intended for integration
-tests and CI pipelines that must exercise the full session pipeline without
-standing up a real LLM endpoint.
+Test-only. See ``tests/README.md``.
 """
 
 import json
@@ -120,8 +118,7 @@ class MockAgent:
                 "messages": {
                     "role": "user",
                     "content": (
-                        f"Based on diagnosis: {diagnosis_report}. "
-                        "Please call list_avail_problems and then submit."
+                        f"Based on diagnosis: {diagnosis_report}. Please call list_avail_problems and then submit."
                     ),
                 },
                 "model": {"name": self.model},

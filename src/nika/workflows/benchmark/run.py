@@ -7,10 +7,13 @@ import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+from pydantic import ValidationError
+
 from nika.config import BENCHMARK_DIR, RESULTS_DIR
 from nika.net_env.net_env_pool import scenario_requires_topo_size
+from nika.orchestrator.problems.prob_pool import get_problem_instance
+from nika.orchestrator.problems.problem_base import TaskLevel
 from nika.workflows.agent.run import start_agent
-from nika.workflows.benchmark.inject_defaults import resolve_inject_params
 from nika.workflows.benchmark.load_config import load_benchmark_yaml
 from nika.workflows.env.start import start_net_env
 from nika.workflows.eval.session import eval_results
@@ -23,13 +26,50 @@ def default_benchmark_yaml_path() -> str:
     return str(BENCHMARK_DIR / "benchmark_selected.yaml")
 
 
+def validate_inject_params(
+    problem: str,
+    scenario: str,
+    topo_size: str,
+    params: dict[str, str],
+) -> None:
+    """Raise ValueError if inject params do not satisfy the problem schema."""
+    if not params:
+        raise ValueError(
+            f"Missing inject parameters for {problem!r}. "
+            f"Use --config with a YAML case or pass complete --set key=value flags. "
+            f"Run `nika failure describe {problem}` for required fields."
+        )
+
+    kwargs: dict = {}
+    if topo_size:
+        kwargs["topo_size"] = topo_size
+    problem_inst = get_problem_instance(
+        problem_names=[problem],
+        task_level=TaskLevel.DETECTION,
+        scenario_name=scenario,
+        **kwargs,
+    )
+    params_class = getattr(type(problem_inst), "Params", None)
+    if params_class is None:
+        if params:
+            raise ValueError(f"Problem {problem!r} does not accept inject parameters.")
+        return
+    try:
+        params_class(**params)
+    except ValidationError as exc:
+        raise ValueError(
+            f"Invalid or incomplete inject parameters for {problem!r}: {exc}. "
+            f"Run `nika failure describe {problem}` for required fields."
+        ) from exc
+
+
 def _benchmark_row_cli_args(
     row: dict,
     *,
     agent_type: str,
     llm_provider: str | None,
     model: str | None,
-    max_steps: int,
+    max_steps: int | None,
     run_judge: bool,
     judge_llm_provider: str | None,
     judge_model: str | None,
@@ -45,10 +85,8 @@ def _benchmark_row_cli_args(
         args += ["-p", llm_provider]
     if model:
         args += ["-m", model]
-    args += [
-        "-n",
-        str(max_steps),
-    ]
+    if max_steps is not None:
+        args += ["-n", str(max_steps)]
     topo = row.get("topo_size") or ""
     if topo:
         args += ["-s", topo]
@@ -66,7 +104,7 @@ def _run_benchmark_row_subprocess(
     agent_type: str,
     llm_provider: str | None,
     model: str | None,
-    max_steps: int,
+    max_steps: int | None,
     run_judge: bool,
     judge_llm_provider: str | None,
     judge_model: str | None,
@@ -107,7 +145,7 @@ def _run_benchmark_batch_parallel(
     agent_type: str,
     llm_provider: str | None,
     model: str | None,
-    max_steps: int,
+    max_steps: int | None,
     run_judge: bool,
     judge_llm_provider: str | None,
     judge_model: str | None,
@@ -132,21 +170,21 @@ def _run_benchmark_batch_parallel(
             future.result()
 
 
-def run_single_benchmark(
+def run_single_case(
     problem: str,
     scenario: str,
     topo_size: str,
     agent_type: str,
     llm_provider: str | None,
     model: str | None,
-    max_steps: int,
+    max_steps: int | None,
     *,
-    inject_params: dict[str, str] | None = None,
+    inject_params: dict[str, str],
     run_judge: bool = False,
     judge_llm_provider: str | None = None,
     judge_model: str | None = None,
 ) -> str:
-    """Run a single benchmark case.
+    """Run one benchmark case (env → inject → agent → eval).
 
     Returns:
         The session id for the completed run.
@@ -159,7 +197,8 @@ def run_single_benchmark(
     if not scenario_requires_topo_size(scenario):
         size = None
 
-    params = dict(inject_params or resolve_inject_params(problem, scenario, topo_size or ""))
+    validate_inject_params(problem, scenario, topo_size or "", inject_params)
+    params = dict(inject_params)
 
     session_id = start_net_env(scenario, size, redeploy=True)
     session_dir = Path(RESULTS_DIR) / session_id
@@ -194,7 +233,7 @@ def run_benchmark_from_yaml(
     agent_type: str,
     llm_provider: str | None,
     model: str | None,
-    max_steps: int,
+    max_steps: int | None,
     *,
     batch_size: int = 1,
     run_judge: bool = False,
@@ -232,11 +271,11 @@ def run_benchmark_from_yaml(
 
     if batch_size == 1:
         for row in rows:
-            run_single_benchmark(
+            run_single_case(
                 problem=row["problem"],
                 scenario=row["scenario"],
                 topo_size=row.get("topo_size") or "",
-                inject_params=row.get("inject"),
+                inject_params=row["inject"],
                 **_shared_kwargs,
             )
         return

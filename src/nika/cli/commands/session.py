@@ -117,7 +117,11 @@ def session_ps(
 
 @session_app.command("inspect")
 def session_inspect(
-    session_id: str | None = typer.Argument(None, help="Session ID. Auto-selects when only one is running."),
+    session_id: str | None = typer.Option(
+        None,
+        "--session_id",
+        help="Target session id. Auto-selects when only one is running.",
+    ),
     containers: bool = typer.Option(
         False,
         "--containers",
@@ -174,7 +178,11 @@ def session_inspect(
 
 @session_app.command("containers")
 def session_containers(
-    session_id: str | None = typer.Argument(None, help="Session ID. Auto-selects when only one is running."),
+    session_id: str | None = typer.Option(
+        None,
+        "--session_id",
+        help="Target session id. Auto-selects when only one is running.",
+    ),
 ) -> None:
     """List Kathara containers running in the session lab (docker-ps style).
 
@@ -205,13 +213,17 @@ def session_containers(
 
 @session_app.command("close")
 def session_close(
-    session_id: str | None = typer.Argument(None, help="Session ID. Auto-selects when only one is running."),
+    session_id: str | None = typer.Option(
+        None,
+        "--session_id",
+        help="Target session id. Auto-selects when only one is running.",
+    ),
     yes: bool = typer.Option(False, "-y", "--yes", help="Skip the confirmation prompt."),
 ) -> None:
     """Close one session: stop containers and clean up runtime state.
 
-    Pass a SESSION_ID to close a specific session. When SESSION_ID is
-    omitted and only one session is running it is selected automatically.
+    Pass ``--session_id`` to close a specific session. When omitted and
+    only one session is running it is selected automatically.
 
     The Kathará lab is undeployed, all failure records are marked ended,
     and the runtime session file is removed. Use ``nika session wipe`` to

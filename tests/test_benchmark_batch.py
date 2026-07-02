@@ -37,7 +37,9 @@ from typing import NamedTuple
 import yaml
 
 from agent.utils.phases import DIAGNOSIS, SUBMISSION
+from nika.config import BENCHMARK_DIR
 from nika.utils.session_store import SESSIONS_DIR, SessionStore
+from nika.workflows.benchmark.load_config import load_benchmark_yaml
 from tests.integration_base import CliIntegrationTestCase
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -49,22 +51,40 @@ _BENCHMARK_DONE_RE = re.compile(
 class ScenarioCase(NamedTuple):
     scenario: str
     problem: str
-    set_params: dict
     size: str | None = None
 
 
 SCENARIO_CASES: list[ScenarioCase] = [
-    ScenarioCase("simple_bgp", "link_down", {}),
-    ScenarioCase("simple_bgp", "link_flap", {}),
-    ScenarioCase("simple_bgp", "link_detach", {}),
-    ScenarioCase("ospf_enterprise_dhcp", "dhcp_service_down", {}, size="s"),
-    ScenarioCase("rip_small_internet_vpn", "host_vpn_membership_missing", {}, size="s"),
-    ScenarioCase("dc_clos_bgp", "bgp_asn_misconfig", {}, size="s"),
-    ScenarioCase("ospf_enterprise_dhcp", "dns_record_error", {}, size="s"),
-    ScenarioCase("dc_clos_bgp", "host_crash", {}, size="s"),
-    ScenarioCase("dc_clos_bgp", "link_fragmentation_disabled", {}, size="s"),
-    ScenarioCase("dc_clos_bgp", "bgp_blackhole_route_leak", {}, size="s"),
+    ScenarioCase("simple_bgp", "link_down"),
+    ScenarioCase("simple_bgp", "link_flap"),
+    ScenarioCase("simple_bgp", "link_detach"),
+    ScenarioCase("ospf_enterprise_dhcp", "dhcp_service_down", size="s"),
+    ScenarioCase("rip_small_internet_vpn", "host_vpn_membership_missing", size="s"),
+    ScenarioCase("dc_clos_bgp", "bgp_asn_misconfig", size="s"),
+    ScenarioCase("ospf_enterprise_dhcp", "dns_record_error", size="s"),
+    ScenarioCase("dc_clos_bgp", "host_crash", size="s"),
+    ScenarioCase("dc_clos_bgp", "link_fragmentation_disabled", size="s"),
+    ScenarioCase("dc_clos_bgp", "bgp_blackhole_route_leak", size="s"),
 ]
+
+
+def _inject_for_case(scenario: str, problem: str, topo_size: str | None) -> dict[str, str]:
+    normalized_topo = topo_size or ""
+    for yaml_name in ("benchmark_full.yaml", "benchmark_selected.yaml"):
+        path = BENCHMARK_DIR / yaml_name
+        if not path.is_file():
+            continue
+        for row in load_benchmark_yaml(path):
+            if (
+                row["scenario"] == scenario
+                and row["problem"] == problem
+                and (row.get("topo_size") or "") == normalized_topo
+            ):
+                return dict(row["inject"])
+    raise ValueError(
+        f"No benchmark inject entry for scenario={scenario!r}, problem={problem!r}, "
+        f"topo_size={topo_size!r}"
+    )
 
 
 class ParallelBenchmarkIntegrationTest(CliIntegrationTestCase):
@@ -89,7 +109,7 @@ class ParallelBenchmarkIntegrationTest(CliIntegrationTestCase):
                     "scenario": case.scenario,
                     "problem": case.problem,
                     "topo_size": case.size,
-                    "inject": case.set_params,
+                    "inject": _inject_for_case(case.scenario, case.problem, case.size),
                 }
                 cases.append(row)
             yaml.dump({"cases": cases}, handle, sort_keys=False, allow_unicode=True)
@@ -111,6 +131,8 @@ class ParallelBenchmarkIntegrationTest(CliIntegrationTestCase):
                     "mock",
                     "--model",
                     "mock-v1",
+                    "-n",
+                    "5",
                 ],
                 cwd=_REPO_ROOT,
                 capture_output=True,

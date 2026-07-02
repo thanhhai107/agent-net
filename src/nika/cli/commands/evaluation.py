@@ -9,7 +9,7 @@ eval_app = typer.Typer(help="Evaluate a completed agent session.")
 
 @eval_app.command("metrics")
 def eval_metrics(
-    session_id: str | None = typer.Option(None, "--session-id", help="Target session id."),
+    session_id: str | None = typer.Option(None, "--session_id", help="Target session id."),
 ) -> None:
     """Compute rule-based scores and trace stats on a closed session; write eval_metrics.json."""
     from nika.workflows.eval.session import run_eval_metrics
@@ -36,7 +36,7 @@ def eval_judge(
         envvar=ENV_JUDGE_MODEL,
         help="Judge model id.",
     ),
-    session_id: str | None = typer.Option(None, "--session-id", help="Target session id."),
+    session_id: str | None = typer.Option(None, "--session_id", help="Target session id."),
 ) -> None:
     """Run LLM-as-judge on a closed session; write llm_judge.json."""
     from nika.utils.agent_config import resolve_judge_model, resolve_judge_provider
@@ -79,7 +79,7 @@ def eval_summary(
     ),
     session_id: list[str] | None = typer.Option(
         None,
-        "--session-id",
+        "--session_id",
         help="Include only these session ids (repeatable).",
     ),
     agent: list[str] | None = typer.Option(

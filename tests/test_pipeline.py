@@ -91,7 +91,7 @@ class PipelineIntegrationTest(OrderedPipelineTestCase):
             self.assertTrue(row["container_name"])
             self.assertIn("kathara", row["image"].lower())
 
-        containers_output = self._invoke_ok(["session", "containers", self.session_id])
+        containers_output = self._invoke_ok(["session", "containers", "--session_id", self.session_id])
         self.assertIn(f"session_id={self.session_id}", containers_output)
         self.assertIn(f"lab={lab_name}", containers_output)
         self.assertIn("CONTAINER ID", containers_output)
@@ -100,7 +100,7 @@ class PipelineIntegrationTest(OrderedPipelineTestCase):
         self.assertIn("running", containers_output)
 
         inspect_containers_output = self._invoke_ok(
-            ["session", "inspect", self.session_id, "--containers"],
+            ["session", "inspect", "--session_id", self.session_id, "--containers"],
         )
         self.assertIn(f"containers  ({len(SIMPLE_BGP_MACHINES)} running)", inspect_containers_output)
         for name in SIMPLE_BGP_MACHINES:
@@ -113,7 +113,7 @@ class PipelineIntegrationTest(OrderedPipelineTestCase):
         self.assertIn(PROBLEM, describe_output)
 
         exec_output = self._invoke_ok(
-            ["exec", "pc1", "hostname", "--session-id", self.session_id],
+            ["exec", "pc1", "hostname", "--session_id", self.session_id],
         )
         self.assertTrue(exec_output.strip())
 
@@ -126,7 +126,7 @@ class PipelineIntegrationTest(OrderedPipelineTestCase):
                 "failure",
                 "inject",
                 PROBLEM,
-                "--session-id",
+                "--session_id",
                 self.session_id,
                 "--set",
                 "host_name=pc1",
@@ -135,7 +135,7 @@ class PipelineIntegrationTest(OrderedPipelineTestCase):
             ]
         )
 
-        ps_output = self._invoke_ok(["failure", "ps", "--session-id", self.session_id])
+        ps_output = self._invoke_ok(["failure", "ps", "--session_id", self.session_id])
         self.assertIn(f"problem={PROBLEM}", ps_output)
         self.assertIn("status=injected", ps_output)
 
@@ -316,7 +316,7 @@ class PipelineIntegrationTest(OrderedPipelineTestCase):
                 "mock",
                 "--model",
                 "mock-v1",
-                "--session-id",
+                "--session_id",
                 self.session_id,
             ]
         )
@@ -362,7 +362,7 @@ class PipelineIntegrationTest(OrderedPipelineTestCase):
         """Close the session before offline evaluation."""
         self.assertIsNotNone(self.session_id)
 
-        self._invoke_ok(["session", "close", self.session_id, "-y"])
+        self._invoke_ok(["session", "close", "--session_id", self.session_id, "-y"])
         type(self).env_destroyed = True
 
         run = self._load_json("run.json")
@@ -389,7 +389,7 @@ class PipelineIntegrationTest(OrderedPipelineTestCase):
         """Compute rule-based scores from ground truth and submission on the closed session."""
         self.assertIsNotNone(self.session_id)
 
-        self._invoke_ok(["eval", "metrics", "--session-id", self.session_id])
+        self._invoke_ok(["eval", "metrics", "--session_id", self.session_id])
 
         metrics_path = self.session_dir / "eval_metrics.json"
         self.assertTrue(metrics_path.exists())
@@ -427,7 +427,7 @@ class PipelineIntegrationTest(OrderedPipelineTestCase):
             [
                 "eval",
                 "summary",
-                "--session-id",
+                "--session_id",
                 self.session_id,
                 "--output",
                 str(summary_output),

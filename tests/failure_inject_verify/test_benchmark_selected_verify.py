@@ -39,7 +39,7 @@ class BenchmarkSelectedInjectVerifyTest(CliIntegrationTestCase):
                 os.environ[SESSION_ID_ENV] = session_id
                 try:
                     self._assert_session_ready(session_id, scenario)
-                    args = ["failure", "inject", problem, "--session-id", session_id]
+                    args = ["failure", "inject", problem, "--session_id", session_id]
                     for key, value in inject.items():
                         args += ["--set", f"{key}={value}"]
                     self._invoke_ok(args)
@@ -52,7 +52,7 @@ class BenchmarkSelectedInjectVerifyTest(CliIntegrationTestCase):
                         os.environ[SESSION_ID_ENV] = prev
 
     def _assert_failure_injected(self, session_id: str, problem: str) -> None:
-        ps_output = self._invoke_ok(["failure", "ps", "--session-id", session_id])
+        ps_output = self._invoke_ok(["failure", "ps", "--session_id", session_id])
         self.assertIn(f"problem={problem}", ps_output)
         self.assertIn("status=injected", ps_output)
 

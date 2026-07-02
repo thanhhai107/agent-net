@@ -13,11 +13,11 @@ from nika.utils.agent_config import (
     ENV_MAX_STEPS,
     ENV_MODEL,
 )
-from nika.workflows.benchmark.inject_defaults import resolve_inject_params
 from nika.workflows.benchmark.run import (
     default_benchmark_yaml_path,
     run_benchmark_from_yaml,
-    run_single_benchmark,
+    run_single_case,
+    validate_inject_params,
 )
 
 benchmark_app = typer.Typer(help="Run curated benchmark cases (env → fault → agent → eval).")
@@ -62,7 +62,7 @@ def benchmark_run(
     sets: list[str] | None = typer.Option(
         None,
         "--set",
-        help="Override inject parameters as key=value (single-case mode).",
+        help="Inject parameters as key=value (required in single-case mode).",
     ),
     agent_type: str | None = typer.Option(
         None,
@@ -76,7 +76,7 @@ def benchmark_run(
         "-p",
         "--provider",
         envvar=ENV_LLM_PROVIDER,
-        help="LLM provider for react only: openai, ollama, deepseek.",
+        help="LLM provider for byo.langgraph only: openai, ollama, deepseek.",
     ),
     model: str | None = typer.Option(
         None,
@@ -90,7 +90,7 @@ def benchmark_run(
         "-n",
         "--max-steps",
         envvar=ENV_MAX_STEPS,
-        help="Max ReAct steps (required unless NIKA_MAX_STEPS is in .env; react/mock only).",
+        help="Max steps per phase (required unless NIKA_MAX_STEPS is in .env; byo.langgraph and byo.mcp_agent).",
     ),
     batch_size: int = typer.Option(
         1,
@@ -143,10 +143,17 @@ def benchmark_run(
         if not scenario_requires_topo_size(scenario) and size is not None:
             raise typer.BadParameter(f"Scenario '{scenario}' does not use sizes; omit -s/--size.")
         topo = size or ""
-        inject_overrides = _parse_set_options(sets)
-        inject_params = resolve_inject_params(problem, scenario, topo)
-        inject_params.update(inject_overrides)
-        run_single_benchmark(
+        inject_params = _parse_set_options(sets)
+        if not inject_params:
+            raise typer.BadParameter(
+                "Single-case mode requires complete inject parameters via --set key=value. "
+                "Use batch mode with --config to run curated YAML cases."
+            )
+        try:
+            validate_inject_params(problem, scenario, topo, inject_params)
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+        run_single_case(
             problem=problem,
             scenario=scenario,
             topo_size=topo,

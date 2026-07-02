@@ -10,9 +10,9 @@ Expected layout::
       claude_sdk/       # Claude SDK agent (planned)
       codex_sdk/        # Codex SDK agent (planned)
 
-CLI-based agents live in sibling packages:
-- ``agent.claude_cli`` — Claude Code CLI subprocess workers
-- ``agent.codex_cli`` — Codex CLI subprocess workers
+CLI-based agents live under ``agent.local_cli``:
+- ``agent.local_cli.claude_cli`` — Claude Code CLI subprocess workers
+- ``agent.local_cli.codex_cli`` — Codex CLI subprocess workers
 
 Both phases (diagnosis → submission) should still write to
 ``{session_dir}/messages.jsonl`` via ``AgentCallbackLogger`` or an SDK-specific

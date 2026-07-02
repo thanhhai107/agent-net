@@ -97,7 +97,7 @@ class SessionStore:
             )
         if len(rows) > 1:
             raise ValueError(
-                "Multiple running sessions found. Please pass --session-id to select one."
+                "Multiple running sessions found. Please pass --session_id to select one."
             )
         return rows[0]
 

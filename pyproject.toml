@@ -27,6 +27,7 @@ dependencies = [
     "typer>=0.25.1",
     "func_timeout",
     "pyyaml",
+    "mcp-agent[openai]>=0.2.6",
 ]
 
 [project.scripts]

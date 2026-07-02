@@ -61,12 +61,12 @@ class CliIntegrationTestCase(unittest.TestCase):
         return match.group(1)
 
     def _close_session(self, session_id: str) -> None:
-        self.runner.invoke(app, ["session", "close", session_id, "-y"])
+        self.runner.invoke(app, ["session", "close", "--session_id", session_id, "-y"])
         self._remove_session_results(session_id)
 
     @classmethod
     def _close_session_class(cls, session_id: str) -> None:
-        cls.runner.invoke(app, ["session", "close", session_id, "-y"])
+        cls.runner.invoke(app, ["session", "close", "--session_id", session_id, "-y"])
         cls._remove_session_results(session_id)
 
     @staticmethod
@@ -114,24 +114,49 @@ class CliIntegrationTestCase(unittest.TestCase):
             return args[args.index("-s") + 1]
         return ""
 
-    def _inject_via_cli(self, problem: str, params: dict[str, str] | None = None) -> None:
-        from nika.workflows.benchmark.inject_defaults import resolve_inject_params
+    @staticmethod
+    def _benchmark_inject_from_yaml(
+        scenario: str,
+        problem: str,
+        topo_size: str = "",
+    ) -> dict[str, str]:
+        from nika.config import BENCHMARK_DIR
+        from nika.workflows.benchmark.load_config import load_benchmark_yaml
 
+        normalized_topo = topo_size or ""
+        for yaml_name in ("benchmark_full.yaml", "benchmark_selected.yaml"):
+            path = BENCHMARK_DIR / yaml_name
+            if not path.is_file():
+                continue
+            for row in load_benchmark_yaml(path):
+                if (
+                    row["scenario"] == scenario
+                    and row["problem"] == problem
+                    and (row.get("topo_size") or "") == normalized_topo
+                ):
+                    return dict(row["inject"])
+        raise ValueError(
+            f"No benchmark inject entry for scenario={scenario!r}, problem={problem!r}, "
+            f"topo_size={topo_size!r}; pass explicit inject parameters."
+        )
+
+    def _inject_via_cli(self, problem: str, params: dict[str, str] | None = None) -> None:
         inject_params = dict(
             params
-            or resolve_inject_params(
-                problem,
+            if params is not None
+            else self._benchmark_inject_from_yaml(
                 self.SCENARIO,
+                problem,
                 self._topo_size_from_env_args(),
             )
         )
-        args = ["failure", "inject", problem, "--session-id", self.session_id]
+        args = ["failure", "inject", problem, "--session_id", self.session_id]
         for key, value in inject_params.items():
             args += ["--set", f"{key}={value}"]
         self._invoke_ok(args)
 
     def _assert_failure_injected(self, problem: str) -> None:
-        ps_output = self._invoke_ok(["failure", "ps", "--session-id", self.session_id])
+        ps_output = self._invoke_ok(["failure", "ps", "--session_id", self.session_id])
         self.assertIn(f"problem={problem}", ps_output)
         self.assertIn("status=injected", ps_output)
         failures = SessionStore().list_failure_injections(session_id=self.session_id)
@@ -193,7 +218,7 @@ class SharedSessionTestCase(CliIntegrationTestCase):
                 "failure",
                 "inject",
                 cls.INJECT_PROBLEM,
-                "--session-id",
+                "--session_id",
                 cls.session_id,
                 *cls.INJECT_ARGS,
             ]

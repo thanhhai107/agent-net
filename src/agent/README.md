@@ -8,16 +8,19 @@
 src/agent/
 ├── protocols.py          # Shared Protocol interface
 ├── registry.py           # Type registry and factory for `nika agent run`
-├── langgraph/            # LangGraph + LangChain ReAct
-│   ├── react_agent.py
-│   └── phases/
-├── mock/                 # Deterministic mock without an LLM
+├── byo/                  # Bring-your-own LLM / agent framework backends
+│   ├── langgraph/        # -a byo.langgraph (LangChain ReAct workers)
+│   │   ├── react_agent.py
+│   │   └── phases/
+│   └── mcp_agent/        # -a byo.mcp_agent
+├── local_cli/            # Local CLI subprocess workers
+│   ├── codex_cli/        # -a local_cli.codex_cli
+│   └── claude_cli/       # -a local_cli.claude_cli
+├── mock/                 # Test-only deterministic agent (see tests/README.md)
 │   └── mock_agent.py
 ├── sdk/                  # [planned] Claude / Codex SDK
 │   └── agent.py
-├── codex_cli/            # LangGraph + Codex CLI
-├── claude_cli/           # LangGraph + Claude Code CLI
-├── llm/                  # LangChain model factory (react path)
+├── llm/                  # LangChain model factory (langgraph path)
 └── utils/                # MCP config, phases, loggers
 ```
 
@@ -25,10 +28,10 @@ src/agent/
 
 | CLI name | Orchestration | LLM access | Status |
 |----------|---------------|------------|--------|
-| `react` | LangGraph `StateGraph` | LangChain ReAct + `load_model()` | Implemented |
-| `mock` | Hand-written two-phase flow | No LLM; fixed tool sequence | Implemented |
-| `codex_cli` | LangGraph `StateGraph` | `codex exec` subprocess | Implemented |
-| `claude_cli` | LangGraph `StateGraph` | `claude -p` subprocess | Implemented |
+| `byo.langgraph` | LangGraph `StateGraph` | LangChain ReAct + `load_model()` | Implemented |
+| `local_cli.codex_cli` | LangGraph `StateGraph` | `codex exec` subprocess | Implemented |
+| `local_cli.claude_cli` | LangGraph `StateGraph` | `claude -p` subprocess | Implemented |
+| `byo.mcp_agent` | LangGraph `StateGraph` | mcp-agent + OpenAI | Implemented |
 | `sdk` | TBD | Claude / Codex SDK | Planned |
 
 ## Shared Pipeline
@@ -43,27 +46,27 @@ Every agent runs **diagnosis** (Kathara MCP, `if_submit=False`) then **submissio
 
 | Flag | Env | Required | Notes |
 |------|-----|----------|-------|
-| `-a` / `--agent` | `NIKA_AGENT_TYPE` | Yes | `react`, `mock`, `codex_cli`, `claude_cli` |
-| `-p` / `--provider` | `NIKA_LLM_PROVIDER` | react only | `openai`, `ollama`, `deepseek` |
-| `-n` / `--max-steps` | `NIKA_MAX_STEPS` | Yes | Limits ReAct steps in `react` / `mock` only |
+| `-a` / `--agent` | `NIKA_AGENT_TYPE` | Yes | `byo.langgraph`, `byo.mcp_agent`, `local_cli.codex_cli`, `local_cli.claude_cli` |
+| `-p` / `--provider` | `NIKA_LLM_PROVIDER` | byo.langgraph only | `openai`, `ollama`, `deepseek` |
+| `-n` / `--max-steps` | `NIKA_MAX_STEPS` | Yes | Limits steps per phase in `byo.langgraph` and `byo.mcp_agent` |
 | `-m` / `--model` | `NIKA_MODEL` | No | Overrides agent-specific model env when set |
-| `--session-id` | — | No | Target session (default: current running session) |
+| `--session_id` | — | No | Target session (default: current running session) |
 
 Model resolution order: `-m` → `NIKA_MODEL` → agent-specific env (below).
 
-### Observability (react, codex_cli, claude_cli)
+### Observability (byo.langgraph, local_cli.codex_cli, local_cli.claude_cli)
 
 LangSmith: `LANGSMITH_TRACING`, `LANGSMITH_API_KEY`, `LANGSMITH_PROJECT` (default `NIKA`).
 
-Langfuse (react only): `LANGFUSE_SECRET_KEY`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_HOST`.
+Langfuse (byo.langgraph only): `LANGFUSE_SECRET_KEY`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_HOST`.
 
 ---
 
-## react
+## byo.langgraph
 
 LangGraph orchestration + LangChain ReAct workers per phase.
 
-**Entry**: `agent.langgraph.react_agent.BasicReActAgent`
+**Entry**: `agent.byo.langgraph.react_agent.BasicReActAgent`
 
 **Requires**: API key for the chosen provider.
 
@@ -75,69 +78,46 @@ LangGraph orchestration + LangChain ReAct workers per phase.
 
 | Env | Default in `.env.example` |
 |-----|-------------------------|
-| `NIKA_REACT_MODEL` | `gpt-5-mini` |
+| `NIKA_LANGGRAPH_MODEL` | `gpt-5-mini` |
 
 ```bash
 # .env
-NIKA_AGENT_TYPE=react
+NIKA_AGENT_TYPE=byo.langgraph
 NIKA_LLM_PROVIDER=openai
 NIKA_MAX_STEPS=20
-NIKA_REACT_MODEL=gpt-5-mini
+NIKA_LANGGRAPH_MODEL=gpt-5-mini
 OPENAI_API_KEY=sk-...
 
 nika agent run                              # all from .env
-nika agent run -a react -p deepseek -m deepseek-chat -n 20
+nika agent run -a byo.langgraph -p deepseek -m deepseek-chat -n 20
 ```
 
 ### Local deployment (Ollama)
 
-ReAct requires a tool-calling model — see [Ollama tool calling](https://github.com/ollama/ollama/blob/main/docs/capabilities/tool-calling.mdx). Install, pull, and server setup: [Ollama FAQ](https://docs.ollama.com/faq).
+Requires a tool-calling model — see [Ollama tool calling](https://github.com/ollama/ollama/blob/main/docs/capabilities/tool-calling.mdx). Install, pull, and server setup: [Ollama FAQ](https://docs.ollama.com/faq).
 
 Common small models: `qwen2.5:7b`, `llama3.2:3b`, `llama3.1:8b`.
 
 ```bash
 # .env
-NIKA_AGENT_TYPE=react
+NIKA_AGENT_TYPE=byo.langgraph
 NIKA_LLM_PROVIDER=ollama
 NIKA_MAX_STEPS=20
-NIKA_REACT_MODEL=qwen2.5:7b
+NIKA_LANGGRAPH_MODEL=qwen2.5:7b
 OLLAMA_API_URL=http://localhost:11434
 
-nika agent run -a react -p ollama -m qwen2.5:7b -n 20
+nika agent run -a byo.langgraph -p ollama -m qwen2.5:7b -n 20
 ```
 
 No API key. `load_model()` validates the model at init — run `ollama pull` first. For a remote host, set `OLLAMA_API_URL` to the server base URL.
 
 ---
 
-## mock
-
-Fixed MCP tool sequence; no LLM. For CI and integration tests.
-
-**Entry**: `agent.mock.mock_agent.MockAgent`
-
-`-n` is accepted but does not change behaviour.
-
-| Env | Default in `.env.example` |
-|-----|-------------------------|
-| `NIKA_MOCK_MODEL` | `mock-v1` |
-
-```bash
-# .env
-NIKA_AGENT_TYPE=mock
-NIKA_MAX_STEPS=5
-NIKA_MOCK_MODEL=mock-v1
-
-nika agent run -a mock -n 5
-```
-
----
-
-## codex_cli
+## local_cli.codex_cli
 
 LangGraph orchestration + `codex exec` subprocess per phase. Workspace: `results/{session_id}/codex_workspace/`. MCP config written to an isolated `CODEX_HOME` (does not touch `~/.codex/`).
 
-**Entry**: `agent.codex_cli.agent.CodexCliAgent`
+**Entry**: `agent.local_cli.codex_cli.agent.CodexCliAgent`
 
 **Requires**: [Codex CLI](https://github.com/openai/codex) on `PATH`. Auth via `codex login` or `OPENAI_API_KEY`.
 
@@ -150,21 +130,21 @@ LangGraph orchestration + `codex exec` subprocess per phase. Workspace: `results
 codex login   # once
 
 # .env
-NIKA_AGENT_TYPE=codex_cli
+NIKA_AGENT_TYPE=local_cli.codex_cli
 NIKA_MAX_STEPS=20
 NIKA_CODEX_MODEL=gpt-5.4-mini
 # NIKA_CODEX_REASONING_EFFORT=medium
 
-nika agent run -a codex_cli -m gpt-5.4-mini -e medium
+nika agent run -a local_cli.codex_cli -m gpt-5.4-mini -e medium
 ```
 
 ---
 
-## claude_cli
+## local_cli.claude_cli
 
 LangGraph orchestration + `claude -p` subprocess per phase. Workspace: `results/{session_id}/claude_workspace/`. MCP config: `{phase}_mcp_config.json`.
 
-**Entry**: `agent.claude_cli.agent.ClaudeAgent`
+**Entry**: `agent.local_cli.claude_cli.agent.ClaudeAgent`
 
 **Requires**: [Claude Code](https://docs.anthropic.com/en/docs/claude-code) on `PATH`.
 
@@ -192,12 +172,38 @@ ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic
 ANTHROPIC_AUTH_TOKEN=sk-...
 ANTHROPIC_MODEL=deepseek-v4-pro[1m]
 
-NIKA_AGENT_TYPE=claude_cli
+NIKA_AGENT_TYPE=local_cli.claude_cli
 NIKA_MAX_STEPS=20
 
-nika agent run -a claude_cli
-nika agent run -a claude_cli -m deepseek-v4-flash
+nika agent run -a local_cli.claude_cli
+nika agent run -a local_cli.claude_cli -m deepseek-v4-flash
 ```
+
+---
+
+## byo.mcp_agent
+
+LangGraph orchestration + [mcp-agent SDK](https://docs.mcp-agent.com/mcp-agent-sdk/overview) workers per phase. Each phase uses an mcp-agent `Agent` with `OpenAIAugmentedLLM` and the same Kathara / task MCP servers as the other agents.
+
+**Entry**: `agent.byo.mcp_agent.agent.McpAgent`
+
+**Requires**: `OPENAI_API_KEY`.
+
+| Env | Default in `.env.example` |
+|-----|-------------------------|
+| `NIKA_MCP_AGENT_MODEL` | `gpt-4.1-mini` (use `gpt-4o-mini` if unavailable) |
+
+```bash
+# .env
+NIKA_AGENT_TYPE=byo.mcp_agent
+NIKA_MAX_STEPS=20
+NIKA_MCP_AGENT_MODEL=gpt-4.1-mini
+OPENAI_API_KEY=sk-...
+
+nika agent run -a byo.mcp_agent -m gpt-4.1-mini -n 20
+```
+
+No LangSmith / Langfuse integration in this path (observability deferred).
 
 ---
 
@@ -216,7 +222,7 @@ nika agent run -a claude_cli -m deepseek-v4-flash
 ```bash
 nika env run simple_bgp
 nika failure inject link_down --set host_name=pc1 --set intf_name=eth0
-nika agent run -a codex_cli -m gpt-5.4-mini
+nika agent run -a local_cli.codex_cli -m gpt-5.4-mini
 nika session close -y
 nika eval metrics
 ```

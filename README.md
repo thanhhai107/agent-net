@@ -26,7 +26,7 @@ This repository is a unified platform that can offer:
 
 - Standardized network troubleshooting environment based on Kathará
 - Unified `nika` CLI for env deploy, fault injection, agent runs, and evaluation
-- Session-based workflow with multi-session support (`nika session`, `--session-id`)
+- Session-based workflow with multi-session support (`nika session`, `--session_id`)
 - Parameterized fault injection (`nika failure describe`, `--set key=value`)
 - MCP-based tool support
 - Pre-built network scenarios and fault injection mechanisms
@@ -87,74 +87,19 @@ CLI flags override `.env` when both are set.
 
 ### Agent and judge settings
 
+Shared flags (all agents): `-a` / `NIKA_AGENT_TYPE`, `-n` / `NIKA_MAX_STEPS`, `-m` / `NIKA_MODEL` (optional override). Per-agent env vars and examples are in **[Troubleshooting Agents](#troubleshooting-agents)**.
+
 | Setting | `.env` variable | CLI flag |
 |---------|-----------------|----------|
-| Agent type | `NIKA_AGENT_TYPE` | `-a` / `--agent` |
-| LLM provider (react) | `NIKA_LLM_PROVIDER` | `-p` / `--provider` |
-| Max ReAct steps (react/mock) | `NIKA_MAX_STEPS` | `-n` / `--max-steps` |
-| Model (any agent) | `NIKA_MODEL` | `-m` / `--model` |
-| ReAct model | `NIKA_REACT_MODEL` | `-m` (when `-a react`) |
-| Mock model | `NIKA_MOCK_MODEL` | `-m` (when `-a mock`) |
-| Codex model | `NIKA_CODEX_MODEL` | `-m` (when `-a codex_cli`) |
-| Codex reasoning effort | `NIKA_CODEX_REASONING_EFFORT` | `-e` / `--reasoning-effort` |
-| Claude model | `ANTHROPIC_MODEL` (etc.) | `-m` (when `-a claude_cli`) |
 | Judge provider | `NIKA_JUDGE_PROVIDER` | `-p` on `nika eval judge` |
 | Judge model | `NIKA_JUDGE_MODEL` | `-m` on `nika eval judge` |
 
-Example runs (equivalent to filling `.env.example`):
-
-```shell
-nika agent run -a react -p deepseek -m deepseek-chat -n 20
-nika agent run -a codex_cli -m gpt-5.4-mini -e medium
-nika agent run -a claude_cli -m deepseek-v4-flash
-```
-
-Or with `.env` configured, omit flags that are already set:
-
-```shell
-nika agent run          # uses NIKA_* from .env
-nika agent run -m gpt-5.4-mini   # overrides model only
-```
-
-Other variables (API keys, observability):
-
-```shell
-# if use Langsmith for observability
-# check langsmith documentation for more details
-LANGSMITH_TRACING="true"
-LANGSMITH_ENDPOINT=<>
-LANGSMITH_API_KEY=<>
-LANGSMITH_PROJECT=<>
-
-# if use langfuse for observability
-# check langfuse documentation for more details
-LANGFUSE_SECRET_KEY=<>
-LANGFUSE_PUBLIC_KEY=<>
-LANGFUSE_HOST="https://cloud.langfuse.com"
-
-# api key for you LLM, e.g. DeepSeek here
-DEEPSEEK_API_KEY=<>
-OPENAI_API_KEY=<>
-
-# Claude Code agent (-a claude_cli): pick one auth mode
-# Native Anthropic:
-# ANTHROPIC_API_KEY=sk-ant-...
-# Anthropic-compatible proxy (e.g. DeepSeek):
-# ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic
-# ANTHROPIC_AUTH_TOKEN=sk-...
-# Model defaults when -m is omitted:
-# ANTHROPIC_MODEL=deepseek-v4-pro[1m]
-# CLAUDE_CODE_SUBAGENT_MODEL=deepseek-v4-flash
-# Or authenticate once: claude auth login
-
-# if use ollama for llm 
-OLLAMA_API_URL=<>
-```
+API keys and observability: see [`.env.example`](.env.example).
 
 ## Step by step guide
 You can follow the steps below to run a complete troubleshooting task with NIKA. Use the `nika` CLI.
 
-Each `nika env run` creates a **session** (printed as `session_id=…`). Session state lives under `runtime/sessions/` and tracks the deployed lab, injected failures, and agent activity. When only one session is running, most commands auto-select it; pass `--session-id` when several sessions are active.
+Each `nika env run` creates a **session** (printed as `session_id=…`). Session state lives under `runtime/sessions/` and tracks the deployed lab, injected failures, and agent activity. When only one session is running, most commands auto-select it; pass `--session_id` when several sessions are active.
 
 1. **List scenarios and start the network environment**
 
@@ -170,10 +115,10 @@ Each `nika env run` creates a **session** (printed as `session_id=…`). Session
    ```shell
    nika session ps                            # running sessions (status, failures, agents)
    nika session ps -a                         # include finished sessions
-   nika session inspect [SESSION_ID]          # full session JSON + failure summary
+   nika session inspect [--session_id ID]       # full session JSON + failure summary
    nika session inspect -c                    # also list lab containers (docker-ps style)
-   nika session containers [SESSION_ID]       # list containers in the session lab
-   nika session close [SESSION_ID]            # undeploy lab and clear runtime state
+   nika session containers [--session_id ID]  # list containers in the session lab
+   nika session close [--session_id ID]       # undeploy lab and clear runtime state
    nika session wipe -y                       # close every running session and wipe Kathara
    ```
 
@@ -183,7 +128,7 @@ Each `nika env run` creates a **session** (printed as `session_id=…`). Session
    nika failure list
    nika failure describe <problem_id>         # required parameter schema
    nika failure inject <problem_id> --set host_name=pc1 --set intf_name=eth0
-   nika failure ps [--session-id ID]          # persisted injection records
+   nika failure ps [--session_id ID]          # persisted injection records
    ```
 
 4. **Run commands inside a lab host** (optional debugging)
@@ -197,19 +142,18 @@ Each `nika env run` creates a **session** (printed as `session_id=…`). Session
 
    ```shell
    nika agent list
-   nika agent run -a react -p openai -m gpt-5-mini -n 20   # LangGraph + LangChain ReAct
-   nika agent run -a codex_cli -m gpt-5.4-mini                    # Codex CLI subprocess worker
-   nika agent run -a claude_cli                                 # Claude Code CLI (model from .env)
-   nika agent run -a codex_cli -m gpt-5.4-mini -e medium        # optional Codex reasoning effort
-   nika agent run -a mock -n 5                             # no LLM; useful for pipeline testing
+   nika agent run -a byo.langgraph -p openai -m gpt-5-mini -n 20
+   nika agent run -a byo.mcp_agent -m gpt-4.1-mini -n 20
+   nika agent run -a local_cli.codex_cli -m gpt-5.4-mini
+   nika agent run -a local_cli.claude_cli
    ```
 
-   See **[Troubleshooting Agents](#troubleshooting-agents)** below for architecture notes and a full walkthrough example.
+   See **[Troubleshooting Agents](#troubleshooting-agents)** for per-agent configuration.
 
 6. **Close the session, then evaluate the run** (metrics, judge, and CSV summary are separate steps)
 
    ```shell
-   nika session close [SESSION_ID] -y           # undeploy lab and clear runtime state first
+   nika session close [--session_id ID] -y    # undeploy lab and clear runtime state first
    nika eval metrics
    nika eval judge -p openai -m gpt-5-mini
    nika eval summary                              # all finished sessions → default CSV
@@ -247,74 +191,101 @@ uv run --with pytest pytest tests/test_session.py -v
 
 ## Troubleshooting Agents
 
-Agent implementations live under [`src/agent/`](src/agent/). For architecture, directory layout, and extension notes, see **[src/agent/README.md](src/agent/README.md)**.
+Agent implementations live under [`src/agent/`](src/agent/). All agents share the same contract (`async run(task_description) -> dict`), the same two-phase pipeline (**diagnosis** → **submission**), and write `results/{session_id}/messages.jsonl` plus `submission.json`. Extension details: **[src/agent/README.md](src/agent/README.md)**.
 
-NIKA ships three LLM-backed agents for real troubleshooting runs, plus a deterministic mock for CI:
+### Layout
 
-| Agent | CLI flag | How it works | Prerequisites |
-| ----- | -------- | ------------ | ------------- |
-| **ReAct** | `-a react` | LangGraph orchestrates two LangChain ReAct workers (diagnosis → submission) | LLM API key in `.env` (`OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, or Ollama URL) |
-| **Codex CLI** | `-a codex_cli` | Same two-phase LangGraph flow, but each phase runs `codex exec` as a subprocess with Kathara MCP servers | [Codex CLI](https://developers.openai.com/codex) installed and authenticated (`codex login` or `OPENAI_API_KEY`) |
-| **Claude Code CLI** | `-a claude_cli` | Same two-phase LangGraph flow via `claude -p` subprocess with Kathara MCP servers | [Claude Code](https://docs.anthropic.com/en/docs/claude-code) installed; `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` + `ANTHROPIC_BASE_URL`, or `claude auth login` |
-| **Mock** | `-a mock` | Fixed tool-call script; no LLM | None |
-
-Both LLM agents (and the mock agent) write structured traces to `results/{session_id}/messages.jsonl` and produce `submission.json` via the task MCP server.
-
-### ReAct agent (`-a react`)
-
-```shell
-nika agent list
-nika agent run -a react -p openai -m gpt-5-mini -n 20
-nika agent run -a react -p deepseek -m deepseek-chat -n 20
+```
+src/agent/
+├── byo/                  # Bring-your-own LLM / agent framework
+│   ├── langgraph/        # -a byo.langgraph
+│   └── mcp_agent/        # -a byo.mcp_agent
+├── local_cli/            # Local CLI subprocess workers
+│   ├── codex_cli/        # -a local_cli.codex_cli
+│   └── claude_cli/       # -a local_cli.claude_cli
+└── sdk/                  # -a sdk (planned)
 ```
 
-- **`-p` / `--provider`**: `openai`, `ollama`, or `deepseek`
-- **`-m` / `--model`**: model id for the chosen provider
-- **`-n` / `--max-steps`**: max ReAct recursion steps per phase
-- Tracing: Langfuse + LangSmith (configure keys in `.env`)
+| CLI name | Package | Orchestration | LLM access |
+| -------- | ------- | ------------- | ---------- |
+| `byo.langgraph` | `byo/langgraph` | LangGraph `StateGraph` | LangChain ReAct + `load_model()` |
+| `byo.mcp_agent` | `byo/mcp_agent` | LangGraph `StateGraph` | [mcp-agent SDK](https://docs.mcp-agent.com/mcp-agent-sdk/overview) + OpenAI |
+| `local_cli.codex_cli` | `local_cli/codex_cli` | LangGraph `StateGraph` | `codex exec` subprocess |
+| `local_cli.claude_cli` | `local_cli/claude_cli` | LangGraph `StateGraph` | `claude -p` subprocess |
+| `sdk` | `sdk/` | — | Planned |
 
-### Codex CLI agent (`-a codex_cli`)
+### Shared configuration
 
-Requires [Codex CLI](https://developers.openai.com/codex); follow the [official installation guide](https://developers.openai.com/codex/quickstart) to install and authenticate.
+| Flag | Env | Notes |
+|------|-----|-------|
+| `-a` / `--agent` | `NIKA_AGENT_TYPE` | Required |
+| `-n` / `--max-steps` | `NIKA_MAX_STEPS` | Per-phase step limit (`byo.langgraph`, `byo.mcp_agent`) |
+| `-m` / `--model` | `NIKA_MODEL` | Overrides agent-specific model env when set |
+| `--session_id` | — | Target session (default: current running session) |
+
+Model resolution: `-m` → `NIKA_MODEL` → agent-specific env (below).
+
+### `byo.langgraph` (`byo/langgraph`)
+
+LangGraph + LangChain ReAct workers per phase. Requires `-p` / `NIKA_LLM_PROVIDER` (`openai`, `deepseek`, `ollama`).
+
+| Provider | Credential |
+|----------|------------|
+| `openai` | `OPENAI_API_KEY` |
+| `deepseek` | `DEEPSEEK_API_KEY` |
+| `ollama` | `OLLAMA_API_URL` (default `http://localhost:11434`) |
+
+| Env | Default |
+|-----|---------|
+| `NIKA_LANGGRAPH_MODEL` | `gpt-5-mini` |
 
 ```shell
-# authenticate once
+nika agent run -a byo.langgraph -p openai -m gpt-5-mini -n 20
+nika agent run -a byo.langgraph -p ollama -m qwen2.5:7b -n 20
+```
+
+Observability: LangSmith (`byo.langgraph`, `local_cli.codex_cli`, `local_cli.claude_cli`); Langfuse (`byo.langgraph` only). See `.env.example`.
+
+### `byo.mcp_agent` (`byo/mcp_agent`)
+
+LangGraph + [mcp-agent SDK](https://docs.mcp-agent.com/mcp-agent-sdk/overview) workers per phase. Each phase uses an mcp-agent `Agent` with `OpenAIAugmentedLLM` and the same Kathara / task MCP servers as other agents.
+
+| Env | Default |
+|-----|---------|
+| `NIKA_MCP_AGENT_MODEL` | `gpt-4.1-mini` |
+
+Requires `OPENAI_API_KEY`. No LangSmith / Langfuse integration.
+
+```shell
+nika agent run -a byo.mcp_agent -m gpt-4.1-mini -n 20
+```
+
+### `local_cli.codex_cli` (`local_cli/codex_cli`)
+
+Requires [Codex CLI](https://developers.openai.com/codex) on `PATH`; auth via `codex login` or `OPENAI_API_KEY`. Workspace: `results/{session_id}/codex_workspace/`.
+
+| Flag | Env | Notes |
+|------|-----|-------|
+| `-m` / `--model` | `NIKA_CODEX_MODEL` | Default `gpt-5.4-mini` |
+| `-e` / `--reasoning-effort` | `NIKA_CODEX_REASONING_EFFORT` | `none`, `minimal`, `low`, `medium`, `high`, `xhigh` |
+
+```shell
 codex login
-
-# run on the current session task
-nika agent run -a codex_cli -m gpt-5.4-mini
+nika agent run -a local_cli.codex_cli -m gpt-5.4-mini -e medium
 ```
 
-- Uses `codex exec --json` under the hood; reasoning steps stream to the terminal in real time (MCP tool calls, agent messages, turn progress) and are logged to `messages.jsonl`.
-- The `-p` provider flag is accepted for CLI parity but ignored — Codex always uses OpenAI models.
-- **`-e` / `--reasoning-effort`**: Codex `model_reasoning_effort` (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`).
-- Per-session Codex workspace: `results/{session_id}/codex_workspace/`
+### `local_cli.claude_cli` (`local_cli/claude_cli`)
 
-See **[src/nika/cli/README.md](src/nika/cli/README.md)** for full `nika agent` flags and conventions.
+Requires [Claude Code](https://docs.anthropic.com/en/docs/claude-code) on `PATH`. Workspace: `results/{session_id}/claude_workspace/`.
 
-### Claude Code CLI agent (`-a claude_cli`)
+Auth (pick one): `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN`, or `claude auth login`.
 
-Requires [Claude Code](https://docs.anthropic.com/en/docs/claude-code) on `PATH`. Configure credentials in `.env` or via `claude auth login` — see **[src/agent/README.md](src/agent/README.md#5-langgraph--claude-code-cli-path--a-claude_cli)** for details.
+Model when `-m` omitted (first non-empty): `ANTHROPIC_MODEL` → `CLAUDE_CODE_SUBAGENT_MODEL` → `ANTHROPIC_DEFAULT_SONNET_MODEL`.
 
 ```shell
-# DeepSeek via Anthropic-compatible API (.env)
-ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic
-ANTHROPIC_AUTH_TOKEN=sk-...
-ANTHROPIC_MODEL=deepseek-v4-pro[1m]
-
-# or native Anthropic
-# ANTHROPIC_API_KEY=sk-ant-...
-
-# or OAuth (no .env keys)
-# claude auth login
-
-nika agent run -a claude_cli                     # model from ANTHROPIC_MODEL
-nika agent run -a claude_cli -m deepseek-v4-flash
+nika agent run -a local_cli.claude_cli
+nika agent run -a local_cli.claude_cli -m deepseek-v4-flash
 ```
-
-- Uses `claude -p --output-format stream-json`; events stream to the terminal and are logged to `messages.jsonl`.
-- The `-p` provider flag is accepted for CLI parity but ignored.
-- Per-session workspace: `results/{session_id}/claude_workspace/`
 
 ### Example: `simple_bgp` with `link_down`
 
@@ -335,11 +306,9 @@ nika exec pc1 ip link show eth0
 nika exec pc2 ping -c 3 195.11.14.2
 
 # 4. Run a troubleshooting agent on the session task
-# Option A — LangGraph + LangChain ReAct
-nika agent run -a react -p openai -m gpt-5-mini -n 20
-
-# Option B — Codex CLI (streams step-by-step output to the terminal)
-nika agent run -a codex_cli -m gpt-5.4-mini
+nika agent run -a byo.langgraph -p openai -m gpt-5-mini -n 20
+# nika agent run -a byo.mcp_agent -m gpt-4.1-mini -n 20
+# nika agent run -a local_cli.codex_cli -m gpt-5.4-mini
 
 # 5. Inspect session state and artifacts
 nika session inspect
@@ -352,7 +321,7 @@ nika eval metrics
 nika eval judge -p openai -m gpt-5-mini
 ```
 
-When multiple sessions are running, pass `--session-id <id>` to `failure inject`, `agent run`, and other session-scoped commands.
+When multiple sessions are running, pass `--session_id <id>` to `failure inject`, `agent run`, and other session-scoped commands.
 
 ## Network Scenarios
 
@@ -372,9 +341,8 @@ Registered scenarios (see `nika env list`) live under `src/nika/net_env/`:
 | `p4_bloom_filter` | -- | P4 bloom-filter data-plane validation testbed. |
 | `p4_counter` | -- | P4 counter pipeline testbed. |
 | `p4_mpls` | -- | P4 MPLS data-plane testbed. |
-
-
-💡 More scenarios are WIP!
+| `k8s_lab` | -- | Fat-tree BGP fabric with k3s cluster, MetalLB, NGINX Ingress, and sample microservices. See [k8s_lab README](src/nika/net_env/kubernetes/k8s_lab/README.md). |
+| `llmd_lab` | -- | Star topology with k3s cluster running llm-d disaggregated Prefill/Decode inference (simulated, no GPU). See [llmd_lab README](src/nika/net_env/kubernetes/llmd_lab/README.md). |
 
 Each scenario is defined in a Kathará `lab.py` file, which specifies the network topology, devices, and initial configurations. Check [Kathará API Docs](https://github.com/KatharaFramework/Kathara/wiki/Kathara-API-Docs) for more details if you want to create your scenarios.
 
@@ -461,27 +429,12 @@ You can also plug in your own MCP servers following the configuration instructio
 
 ## Logging and Observability
 
-The built-in ReAct agent (`react`) traces runs with **Langfuse** (LangChain `CallbackHandler`) and **LangSmith** (`langsmith.tracing_context`). The Codex CLI agent (`cli`) streams `codex exec --json` events to the terminal and logs them to `messages.jsonl` in real time. Configure observability keys in `.env` as shown above. See [LangChain Callbacks](https://python.langchain.com/docs/concepts/callbacks/) for callback details.
+Each session directory under `results/{session_id}/` contains:
 
-Each session directory under `results/{session_id}/` also contains:
+- **`events.jsonl`**: pipeline events (env deploy, fault inject, agent start/end, eval).
+- **`messages.jsonl`**: agent conversation and tool traces.
 
-- **`events.jsonl`**: pipeline/system events from `nika.utils.logger` (env deploy, fault inject, agent start/end, eval).
-- **`messages.jsonl`**: agent conversation and tool traces from `src/agent/utils/loggers.py`.
-
-### Customized Logger
-
-Agent message logging is built on `MessageLogger` in `src/agent/utils/loggers.py`, which writes structured JSONL to `{session_dir}/messages.jsonl`. The LangGraph ReAct path wraps it with `AgentCallbackLogger` (a LangChain `BaseCallbackHandler`); the Codex CLI path calls `MessageLogger` directly from `CodexWorker`. To extend the ReAct path:
-
-```python
-from agent.utils.loggers import AgentCallbackLogger
-from agent.utils.phases import DIAGNOSIS
-
-callback = AgentCallbackLogger(agent=DIAGNOSIS, session_dir=session_dir)
-result = await agent.ainvoke(
-    {"messages": messages},
-    config={"callbacks": [callback]},
-)
-```
+LangSmith / Langfuse keys: `.env.example`. Custom loggers: `src/agent/utils/loggers.py` and **[src/agent/README.md](src/agent/README.md)**.
 
 <h1 id="📚cite">📚 Cite</h1>
 

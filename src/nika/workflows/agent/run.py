@@ -52,11 +52,11 @@ def start_agent(
         agent_type=agent_type,
         model=model,
     )
-    if agent_type == "codex_cli" and stream_output:
+    if agent_type == "local_cli.codex_cli" and stream_output:
         effort_line = f" | Reasoning effort: {reasoning_effort}" if reasoning_effort else ""
         print(
             f"Session {session.session_id}\n"
-            f"Agent: codex_cli | Model: {model}{effort_line}\n"
+            f"Agent: local_cli.codex_cli | Model: {model}{effort_line}\n"
             f"Results: {session.session_dir}\n",
             flush=True,
         )
@@ -78,5 +78,5 @@ def start_agent(
         session_id=session.session_id,
         agent_type=agent_type,
     )
-    if agent_type == "codex_cli" and stream_output:
+    if agent_type == "local_cli.codex_cli" and stream_output:
         print(f"\nDone. Results saved to {session.session_dir}\n", flush=True)

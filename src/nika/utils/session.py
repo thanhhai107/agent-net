@@ -73,7 +73,7 @@ class Session:
             )
         if len(candidates) > 1:
             raise ValueError(
-                "Multiple closed sessions found under results/. Please pass --session-id to select one."
+                "Multiple closed sessions found under results/. Please pass --session_id to select one."
             )
         return self._apply_closed_session_meta(candidates[0][1])
 

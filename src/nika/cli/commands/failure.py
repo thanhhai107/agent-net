@@ -38,7 +38,7 @@ def failure_inject(
         metavar="PROBLEM",
         help="One or more problem ids (see `nika failure list`).",
     ),
-    session_id: str | None = typer.Option(None, "--session-id", help="Target session id."),
+    session_id: str | None = typer.Option(None, "--session_id", help="Target session id."),
     sets: list[str] | None = typer.Option(
         None,
         "--set",
@@ -88,7 +88,7 @@ def failure_describe(
 
 @failure_app.command("ps")
 def failure_ps(
-    session_id: str | None = typer.Option(None, "--session-id", help="Target session id."),
+    session_id: str | None = typer.Option(None, "--session_id", help="Target session id."),
 ) -> None:
     """List persisted failure injection states for one session."""
     from nika.utils.session_store import SessionStore
