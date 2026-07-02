@@ -14,6 +14,7 @@ from nika.utils.agent_config import (
 SUPPORTED_AGENT_TYPES = (
     "byo.langgraph",
     "byo.mcp_agent",
+    "byo.autogen",
     "local_cli.codex_cli",
     "local_cli.claude_cli",
     "community.sade",
@@ -65,7 +66,7 @@ def agent_run(
         "-n",
         "--max-steps",
         envvar=ENV_MAX_STEPS,
-        help="Max steps per phase (required unless NIKA_MAX_STEPS is in .env; byo.langgraph, byo.mcp_agent, community.sade).",
+        help="Max steps per phase (required unless NIKA_MAX_STEPS is in .env; byo.langgraph, byo.mcp_agent, byo.autogen, community.sade).",
     ),
     reasoning_effort: str | None = typer.Option(
         None,

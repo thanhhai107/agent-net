@@ -25,6 +25,9 @@ ENV_MCP_AGENT_MODEL = "NIKA_MCP_AGENT_MODEL"
 # SADE community agent
 ENV_SADE_MODEL = "NIKA_SADE_MODEL"
 
+# AutoGen agent
+ENV_AUTOGEN_MODEL = "NIKA_AUTOGEN_MODEL"
+
 # Codex CLI agent
 ENV_CODEX_MODEL = "NIKA_CODEX_MODEL"
 ENV_CODEX_REASONING_EFFORT = "NIKA_CODEX_REASONING_EFFORT"
@@ -95,6 +98,8 @@ def resolve_agent_model(agent_type: str, model: str | None = None) -> str:
             return _require_str(value=None, env_key=ENV_MODEL, cli_flag="-m/--model")
         case "byo.mcp_agent":
             return _require_str(value=None, env_key=ENV_MCP_AGENT_MODEL, cli_flag="-m/--model")
+        case "byo.autogen":
+            return _require_str(value=None, env_key=ENV_AUTOGEN_MODEL, cli_flag="-m/--model")
         case "byo.langgraph":
             return _require_str(value=None, env_key=ENV_LANGGRAPH_MODEL, cli_flag="-m/--model")
         case _:

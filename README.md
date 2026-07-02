@@ -144,8 +144,10 @@ Each `nika env run` creates a **session** (printed as `session_id=…`). Session
    nika agent list
    nika agent run -a byo.langgraph -p openai -m gpt-5-mini -n 20
    nika agent run -a byo.mcp_agent -m gpt-4.1-mini -n 20
+   nika agent run -a byo.autogen -m gpt-4.1-mini -n 20
    nika agent run -a local_cli.codex_cli -m gpt-5.4-mini
    nika agent run -a local_cli.claude_cli
+   nika agent run -a community.sade -n 20
    ```
 
    See **[Troubleshooting Agents](#troubleshooting-agents)** for per-agent configuration.
@@ -199,19 +201,24 @@ Agent implementations live under [`src/agent/`](src/agent/). All agents share th
 src/agent/
 ├── byo/                  # Bring-your-own LLM / agent framework
 │   ├── langgraph/        # -a byo.langgraph
-│   └── mcp_agent/        # -a byo.mcp_agent
+│   ├── mcp_agent/        # -a byo.mcp_agent
+│   └── autogen/          # -a byo.autogen
 ├── local_cli/            # Local CLI subprocess workers
 │   ├── codex_cli/        # -a local_cli.codex_cli
 │   └── claude_cli/       # -a local_cli.claude_cli
+├── community/            # Community-contributed agents
+│   └── sade/             # -a community.sade
 └── sdk/                  # -a sdk (planned)
 ```
 
 | CLI name | Package | Orchestration | LLM access |
 | -------- | ------- | ------------- | ---------- |
 | `byo.langgraph` | `byo/langgraph` | LangGraph `StateGraph` | LangChain ReAct + `load_model()` |
-| `byo.mcp_agent` | `byo/mcp_agent` | LangGraph `StateGraph` | [mcp-agent SDK](https://docs.mcp-agent.com/mcp-agent-sdk/overview) + OpenAI |
+| `byo.mcp_agent` | `byo/mcp_agent` | mcp-agent `Workflow` | [mcp-agent SDK](https://docs.mcp-agent.com/mcp-agent-sdk/overview) + OpenAI |
+| `byo.autogen` | `byo/autogen` | AutoGen `GraphFlow` | [AutoGen AgentChat](https://microsoft.github.io/autogen/stable/) + OpenAI |
 | `local_cli.codex_cli` | `local_cli/codex_cli` | LangGraph `StateGraph` | `codex exec` subprocess |
 | `local_cli.claude_cli` | `local_cli/claude_cli` | LangGraph `StateGraph` | `claude -p` subprocess |
+| `community.sade` | `community/sade` | Single Claude Code session + skill library | `claude-agent-sdk` (optional extra `sade`) |
 | `sdk` | `sdk/` | — | Planned |
 
 ### Shared configuration
@@ -219,7 +226,7 @@ src/agent/
 | Flag | Env | Notes |
 |------|-----|-------|
 | `-a` / `--agent` | `NIKA_AGENT_TYPE` | Required |
-| `-n` / `--max-steps` | `NIKA_MAX_STEPS` | Per-phase step limit (`byo.langgraph`, `byo.mcp_agent`) |
+| `-n` / `--max-steps` | `NIKA_MAX_STEPS` | Per-phase step limit (`byo.langgraph`, `byo.mcp_agent`, `byo.autogen`, `community.sade`) |
 | `-m` / `--model` | `NIKA_MODEL` | Overrides agent-specific model env when set |
 | `--session_id` | — | Target session (default: current running session) |
 
@@ -248,7 +255,7 @@ Observability: LangSmith (`byo.langgraph`, `local_cli.codex_cli`, `local_cli.cla
 
 ### `byo.mcp_agent` (`byo/mcp_agent`)
 
-LangGraph + [mcp-agent SDK](https://docs.mcp-agent.com/mcp-agent-sdk/overview) workers per phase. Each phase uses an mcp-agent `Agent` with `OpenAIAugmentedLLM` and the same Kathara / task MCP servers as other agents.
+[mcp-agent SDK](https://docs.mcp-agent.com/mcp-agent-sdk/overview) workers per phase. Orchestration uses mcp-agent ``Workflow``.
 
 | Env | Default |
 |-----|---------|
@@ -258,6 +265,20 @@ Requires `OPENAI_API_KEY`. No LangSmith / Langfuse integration.
 
 ```shell
 nika agent run -a byo.mcp_agent -m gpt-4.1-mini -n 20
+```
+
+### `byo.autogen` (`byo/autogen`)
+
+[AutoGen AgentChat](https://microsoft.github.io/autogen/stable/) ``GraphFlow`` workers per phase. Each phase uses an `AssistantAgent` with MCP tools from the same Kathara / task MCP servers as other agents.
+
+| Env | Default |
+|-----|---------|
+| `NIKA_AUTOGEN_MODEL` | `gpt-4.1-mini` |
+
+Requires `OPENAI_API_KEY`. No LangSmith / Langfuse integration.
+
+```shell
+nika agent run -a byo.autogen -m gpt-4.1-mini -n 20
 ```
 
 ### `local_cli.codex_cli` (`local_cli/codex_cli`)
@@ -308,6 +329,7 @@ nika exec pc2 ping -c 3 195.11.14.2
 # 4. Run a troubleshooting agent on the session task
 nika agent run -a byo.langgraph -p openai -m gpt-5-mini -n 20
 # nika agent run -a byo.mcp_agent -m gpt-4.1-mini -n 20
+# nika agent run -a byo.autogen -m gpt-4.1-mini -n 20
 # nika agent run -a local_cli.codex_cli -m gpt-5.4-mini
 
 # 5. Inspect session state and artifacts

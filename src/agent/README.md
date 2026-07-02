@@ -12,7 +12,8 @@ src/agent/
 │   ├── langgraph/        # -a byo.langgraph (LangChain ReAct workers)
 │   │   ├── react_agent.py
 │   │   └── phases/
-│   └── mcp_agent/        # -a byo.mcp_agent
+│   ├── mcp_agent/        # -a byo.mcp_agent
+│   └── autogen/          # -a byo.autogen
 ├── local_cli/            # Local CLI subprocess workers
 │   ├── codex_cli/        # -a local_cli.codex_cli
 │   └── claude_cli/       # -a local_cli.claude_cli
@@ -33,7 +34,8 @@ src/agent/
 | `byo.langgraph` | LangGraph `StateGraph` | LangChain ReAct + `load_model()` | Implemented |
 | `local_cli.codex_cli` | LangGraph `StateGraph` | `codex exec` subprocess | Implemented |
 | `local_cli.claude_cli` | LangGraph `StateGraph` | `claude -p` subprocess | Implemented |
-| `byo.mcp_agent` | LangGraph `StateGraph` | mcp-agent + OpenAI | Implemented |
+| `byo.mcp_agent` | mcp-agent `Workflow` | mcp-agent + OpenAI | Implemented |
+| `byo.autogen` | AutoGen `GraphFlow` | AutoGen AgentChat + OpenAI | Implemented |
 | `community.sade` | Single Claude Code session + 15-skill library | `claude-agent-sdk` (optional extra `sade`) | Implemented |
 | `sdk` | TBD | Claude / Codex SDK | Planned |
 
@@ -57,9 +59,9 @@ Every agent runs **diagnosis** (Kathara MCP, `if_submit=False`) then **submissio
 
 | Flag | Env | Required | Notes |
 |------|-----|----------|-------|
-| `-a` / `--agent` | `NIKA_AGENT_TYPE` | Yes | `byo.langgraph`, `byo.mcp_agent`, `local_cli.codex_cli`, `local_cli.claude_cli`, `community.sade` |
+| `-a` / `--agent` | `NIKA_AGENT_TYPE` | Yes | `byo.langgraph`, `byo.mcp_agent`, `byo.autogen`, `local_cli.codex_cli`, `local_cli.claude_cli`, `community.sade` |
 | `-p` / `--provider` | `NIKA_LLM_PROVIDER` | byo.langgraph only | `openai`, `ollama`, `deepseek` |
-| `-n` / `--max-steps` | `NIKA_MAX_STEPS` | Yes | Limits steps per phase in `byo.langgraph`, `byo.mcp_agent`, and `community.sade` |
+| `-n` / `--max-steps` | `NIKA_MAX_STEPS` | Yes | Limits steps per phase in `byo.langgraph`, `byo.mcp_agent`, `byo.autogen`, and `community.sade` |
 | `-m` / `--model` | `NIKA_MODEL` | No | Overrides agent-specific model env when set |
 | `--session_id` | — | No | Target session (default: current running session) |
 
@@ -194,7 +196,7 @@ nika agent run -a local_cli.claude_cli -m deepseek-v4-flash
 
 ## byo.mcp_agent
 
-LangGraph orchestration + [mcp-agent SDK](https://docs.mcp-agent.com/mcp-agent-sdk/overview) workers per phase. Each phase uses an mcp-agent `Agent` with `OpenAIAugmentedLLM` and the same Kathara / task MCP servers as the other agents.
+mcp-agent ``Workflow`` orchestration + [mcp-agent SDK](https://docs.mcp-agent.com/mcp-agent-sdk/overview) workers per phase.
 
 **Entry**: `agent.byo.mcp_agent.agent.McpAgent`
 
@@ -212,6 +214,32 @@ NIKA_MCP_AGENT_MODEL=gpt-4.1-mini
 OPENAI_API_KEY=sk-...
 
 nika agent run -a byo.mcp_agent -m gpt-4.1-mini -n 20
+```
+
+No LangSmith / Langfuse integration in this path (observability deferred).
+
+---
+
+## byo.autogen
+
+AutoGen ``GraphFlow`` orchestration + [AutoGen AgentChat](https://microsoft.github.io/autogen/stable/) workers per phase.
+
+**Entry**: `agent.byo.autogen.agent.AutogenAgent`
+
+**Requires**: `OPENAI_API_KEY`.
+
+| Env | Default in `.env.example` |
+|-----|-------------------------|
+| `NIKA_AUTOGEN_MODEL` | `gpt-4.1-mini` (use `gpt-4o-mini` if unavailable) |
+
+```bash
+# .env
+NIKA_AGENT_TYPE=byo.autogen
+NIKA_MAX_STEPS=20
+NIKA_AUTOGEN_MODEL=gpt-4.1-mini
+OPENAI_API_KEY=sk-...
+
+nika agent run -a byo.autogen -m gpt-4.1-mini -n 20
 ```
 
 No LangSmith / Langfuse integration in this path (observability deferred).
