@@ -63,5 +63,13 @@ def create_agent(
                 max_steps=max_steps,
                 stream_output=stream_output,
             )
+        case "community.sade":
+            from agent.community.sade.agent import SadeAgent
+
+            return SadeAgent(
+                session_id=session_id,
+                model=model,
+                max_steps=max_steps,
+            )
         case _:
             raise ValueError(f"Unsupported agent type: {agent_type!r}")

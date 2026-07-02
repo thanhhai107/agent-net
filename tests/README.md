@@ -18,6 +18,7 @@ pipeline** on the same real scenario:
 | `test_claude_cli.py` | `local_cli.claude_cli` | local_cli.claude_cli CLI config | Docker + Claude CLI |
 | `test_langgraph.py` | `byo.langgraph` | byo.langgraph CLI config | Docker + `DEEPSEEK_API_KEY` |
 | `test_mcp_agent.py` | `byo.mcp_agent` | byo.mcp_agent CLI config | Docker + `OPENAI_API_KEY` |
+| `test_sade.py` | `community.sade` | community.sade config + MCP adapter | Docker + `claude-agent-sdk` + Anthropic-compatible creds |
 
 Shared pipeline helpers: [`tests/integration_pipeline.py`](integration_pipeline.py)
 

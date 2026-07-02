@@ -16,6 +16,8 @@ src/agent/
 ├── local_cli/            # Local CLI subprocess workers
 │   ├── codex_cli/        # -a local_cli.codex_cli
 │   └── claude_cli/       # -a local_cli.claude_cli
+├── community/            # Community-contributed agents
+│   └── sade/             # -a community.sade
 ├── mock/                 # Test-only deterministic agent (see tests/README.md)
 │   └── mock_agent.py
 ├── sdk/                  # [planned] Claude / Codex SDK
@@ -32,7 +34,16 @@ src/agent/
 | `local_cli.codex_cli` | LangGraph `StateGraph` | `codex exec` subprocess | Implemented |
 | `local_cli.claude_cli` | LangGraph `StateGraph` | `claude -p` subprocess | Implemented |
 | `byo.mcp_agent` | LangGraph `StateGraph` | mcp-agent + OpenAI | Implemented |
+| `community.sade` | Single Claude Code session + 15-skill library | `claude-agent-sdk` (optional extra `sade`) | Implemented |
 | `sdk` | TBD | Claude / Codex SDK | Planned |
+
+## Community Agents
+
+Community-contributed agents live under `src/agent/community/<name>/` and implement the
+same `protocols.TroubleshootingAgent` contract.
+
+See [`community/sade/README.md`](community/sade/README.md) for SADE setup, DeepSeek
+credentials, and the paper citation (arXiv:2605.04530).
 
 ## Shared Pipeline
 
@@ -46,9 +57,9 @@ Every agent runs **diagnosis** (Kathara MCP, `if_submit=False`) then **submissio
 
 | Flag | Env | Required | Notes |
 |------|-----|----------|-------|
-| `-a` / `--agent` | `NIKA_AGENT_TYPE` | Yes | `byo.langgraph`, `byo.mcp_agent`, `local_cli.codex_cli`, `local_cli.claude_cli` |
+| `-a` / `--agent` | `NIKA_AGENT_TYPE` | Yes | `byo.langgraph`, `byo.mcp_agent`, `local_cli.codex_cli`, `local_cli.claude_cli`, `community.sade` |
 | `-p` / `--provider` | `NIKA_LLM_PROVIDER` | byo.langgraph only | `openai`, `ollama`, `deepseek` |
-| `-n` / `--max-steps` | `NIKA_MAX_STEPS` | Yes | Limits steps per phase in `byo.langgraph` and `byo.mcp_agent` |
+| `-n` / `--max-steps` | `NIKA_MAX_STEPS` | Yes | Limits steps per phase in `byo.langgraph`, `byo.mcp_agent`, and `community.sade` |
 | `-m` / `--model` | `NIKA_MODEL` | No | Overrides agent-specific model env when set |
 | `--session_id` | — | No | Target session (default: current running session) |
 

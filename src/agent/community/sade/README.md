@@ -36,12 +36,16 @@ SADE drives Claude Code through the Anthropic Agent SDK, declared as an optional
 uv sync --extra sade          # or: pip install -e ".[sade]"
 ```
 
-Set `ANTHROPIC_API_KEY` in the repo-root `.env` (or the environment) before running.
+Set Anthropic-compatible credentials in the repo-root `.env` (same as
+`local_cli.claude_cli`; see [`.env.example`](../../.env.example)):
+
+- `ANTHROPIC_API_KEY`, or
+- `ANTHROPIC_AUTH_TOKEN` + optional `ANTHROPIC_BASE_URL` (e.g. DeepSeek)
 
 ## Run
 
 ```bash
-nika agent run -a sade -m claude-sonnet-4-6 -n 20
+nika agent run -a community.sade -n 20
 ```
 
 Produces the same session artifacts as the other agents (`messages.jsonl`,

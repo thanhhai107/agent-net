@@ -30,6 +30,10 @@ dependencies = [
     "mcp-agent[openai]>=0.2.6",
 ]
 
+[project.optional-dependencies]
+# SADE community agent (src/agent/community/sade) drives Claude Code via the SDK.
+sade = ["claude-agent-sdk"]
+
 [project.scripts]
 nika = "nika.cli.main:main"
 

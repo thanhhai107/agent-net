@@ -2,7 +2,7 @@
 
 Implements the ``agent.protocols.TroubleshootingAgent`` contract
 (``session_id`` + ``async def run(task_description) -> dict``) and is selected
-via ``nika agent run -a sade``.
+via ``nika agent run -a community.sade``.
 
 Unlike the LangGraph paths, SADE drives a single Claude Code session
 (``claude-agent-sdk``) with a phase-gated system prompt and a 15-skill library
@@ -16,7 +16,6 @@ Reference: SADE (arXiv:2605.04530), built on NIKA.
 
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -35,11 +34,13 @@ from claude_agent_sdk import (
 )
 from dotenv import load_dotenv
 
-from agent.utils.loggers import AgentCallbackLogger
+from agent.utils.loggers import MessageLogger
 from agent.utils.mcp_servers import MCPServerConfig
+from agent.utils.phases import DIAGNOSIS
 from nika.utils.logger import system_logger
 from nika.utils.session import Session
 
+from .config import prepare_sade_sdk_env
 from .prompts.sade_prompt import SADE_PROMPT
 
 load_dotenv()
@@ -49,10 +50,9 @@ load_dotenv()
 # so skills and helpers resolve with simple relative paths (`python h.py ...`).
 PACKAGE_DIR = Path(__file__).resolve().parent
 
-# The NIKA trace parser derives token/step counts from the diagnosis agent
-# (``agent_filter="diagnosis_agent"``); SADE does diagnosis + submission in one
-# Claude Code session, so it tags its events with this name.
-AGENT_TAG = "diagnosis_agent"
+# SADE runs diagnosis + submission in one Claude Code session; tag events with
+# the diagnosis phase id so the NIKA trace parser counts tool_calls/steps.
+AGENT_TAG = DIAGNOSIS
 
 # Fraction of the turn budget at which a single workflow reminder is injected.
 TURN_REMINDER_FRAC = 0.50
@@ -67,16 +67,6 @@ SADE_REMINDER = (
     "only if that sweep finds nothing. Check the submit() signature in CLAUDE.md "
     "before calling — wrong types end the session."
 )
-
-
-def _require_api_key() -> str:
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
-    if not api_key:
-        raise RuntimeError(
-            "ANTHROPIC_API_KEY is not set. Add it to the repo-root .env or "
-            "export it before running `nika agent run -a sade`."
-        )
-    return api_key
 
 
 def _resolve_python() -> str:
@@ -139,13 +129,11 @@ class SadeAgent:
     def __init__(
         self,
         session_id: str,
-        llm_backend: str = "claude",
         model: str = "claude-sonnet-4-6",
         max_steps: int = 20,
         **_: Any,
     ) -> None:
         self.session_id = session_id
-        self.llm_backend = llm_backend
         self.model = model
         self.max_steps = max_steps
         self.session = Session()
@@ -156,8 +144,8 @@ class SadeAgent:
         self.mcp_servers = _to_sdk_mcp_servers(merged)
 
     async def run(self, task_description: str) -> dict[str, Any]:
-        api_key = _require_api_key()
-        logger = AgentCallbackLogger(agent=AGENT_TAG, session_dir=self.session.session_dir)
+        sdk_env = prepare_sade_sdk_env(session_id=self.session_id)
+        logger = MessageLogger(agent=AGENT_TAG, session_dir=self.session.session_dir)
         system_logger.info(f"sade: starting session {self.session_id}")
 
         options = ClaudeAgentOptions(
@@ -169,20 +157,14 @@ class SadeAgent:
             permission_mode="bypassPermissions",
             # Exposes this package's `.claude/` skill library + CLAUDE.md.
             setting_sources=["project"],
-            env={
-                "ANTHROPIC_API_KEY": api_key,
-                "ANTHROPIC_AUTH_TOKEN": "",
-                # Lets `h.py` (spawned from the Bash tool, outside the MCP
-                # launch context) resolve the running lab for LAB_NAME.
-                "NIKA_SESSION_ID": self.session_id,
-            },
+            env=sdk_env,
         )
 
-        logger._log(
+        logger.log(
             "llm_start",
             {
                 "messages": {"role": "user", "content": task_description},
-                "model": {"name": self.model, "backend": self.llm_backend},
+                "model": {"name": self.model},
                 "mcp_servers": list(self.mcp_servers.keys()),
             },
         )
@@ -207,7 +189,7 @@ class SadeAgent:
             """
             nonlocal turn_text
             if turn_text:
-                logger._log("llm_end", {"text": "\n".join(turn_text), "usage_metadata": {}})
+                logger.log("llm_end", {"text": "\n".join(turn_text), "usage_metadata": {}})
                 turn_text = []
 
         async with ClaudeSDKClient(options=options) as client:
@@ -226,7 +208,7 @@ class SadeAgent:
                             # Emit the reasoning that led to this call, then the
                             # tool call (llm_end -> tool_start order, like NIKA).
                             _flush_turn()
-                            logger._log(
+                            logger.log(
                                 "tool_start",
                                 {"tool": {"name": block.name}, "input": str(block.input)},
                             )
@@ -238,9 +220,9 @@ class SadeAgent:
                     for block in content:
                         if isinstance(block, ToolResultBlock):
                             if block.is_error:
-                                logger._log("tool_error", {"output": str(block.content)})
+                                logger.log("tool_error", {"output": str(block.content)})
                             else:
-                                logger._log(
+                                logger.log(
                                     "tool_end",
                                     {"output": str(block.content), "output_type": "tool_result"},
                                 )
@@ -262,7 +244,7 @@ class SadeAgent:
                     out_tokens = md["output_tokens"]
                     # Final `llm_end`: the agent's result text + the authoritative
                     # cumulative token usage (the parser sums usage_metadata).
-                    logger._log("llm_end", {"text": result_text, "usage_metadata": md})
+                    logger.log("llm_end", {"text": result_text, "usage_metadata": md})
                     system_logger.info(
                         f"sade: session complete - stop_reason={message.stop_reason}, "
                         f"submitted={has_submitted}, api_turns={api_turn_count}, "
