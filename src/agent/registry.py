@@ -5,6 +5,7 @@ from typing import Any
 from agent.local_cli.codex_cli.agent import CodexCliAgent
 from agent.local_cli.claude_cli.agent import ClaudeAgent
 from agent.byo.langgraph.react_agent import BasicReActAgent
+from agent.byo.autogen.agent import AutogenAgent
 from agent.byo.mcp_agent.agent import McpAgent
 from agent.mock.mock_agent import MockAgent
 
@@ -62,6 +63,21 @@ def create_agent(
                 model=model,
                 max_steps=max_steps,
                 stream_output=stream_output,
+            )
+        case "byo.autogen":
+            return AutogenAgent(
+                session_id=session_id,
+                model=model,
+                max_steps=max_steps,
+                stream_output=stream_output,
+            )
+        case "community.sade":
+            from agent.community.sade.agent import SadeAgent
+
+            return SadeAgent(
+                session_id=session_id,
+                model=model,
+                max_steps=max_steps,
             )
         case _:
             raise ValueError(f"Unsupported agent type: {agent_type!r}")

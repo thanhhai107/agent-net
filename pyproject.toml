@@ -28,7 +28,13 @@ dependencies = [
     "func_timeout",
     "pyyaml",
     "mcp-agent[openai]>=0.2.6",
+    "autogen-agentchat>=0.7.5",
+    "autogen-ext[mcp,openai]>=0.7.5",
 ]
+
+[project.optional-dependencies]
+# SADE community agent (src/agent/community/sade) drives Claude Code via the SDK.
+sade = ["claude-agent-sdk"]
 
 [project.scripts]
 nika = "nika.cli.main:main"

@@ -43,6 +43,16 @@ def deepseek_api_key_available() -> bool:
     return bool(os.environ.get("DEEPSEEK_API_KEY"))
 
 
+def sade_available() -> bool:
+    try:
+        import claude_agent_sdk  # noqa: F401
+    except ImportError:
+        return False
+    from agent.community.sade.config import sade_credentials_available
+
+    return sade_credentials_available()
+
+
 def tool_text_list(result: object) -> list[str]:
     if isinstance(result, str):
         try:

@@ -90,7 +90,7 @@ def benchmark_run(
         "-n",
         "--max-steps",
         envvar=ENV_MAX_STEPS,
-        help="Max steps per phase (required unless NIKA_MAX_STEPS is in .env; byo.langgraph and byo.mcp_agent).",
+        help="Max steps per phase (required unless NIKA_MAX_STEPS is in .env; byo.langgraph, byo.mcp_agent, byo.autogen, community.sade).",
     ),
     batch_size: int = typer.Option(
         1,

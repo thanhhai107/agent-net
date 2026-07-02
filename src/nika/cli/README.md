@@ -43,10 +43,10 @@ This flag is reused on **`nika benchmark run`** and **`nika traffic run`** when 
 
 Aligned with `nika agent run`:
 
-- **`-a` / `--agent`**: `byo.langgraph`, `byo.mcp_agent`, `local_cli.codex_cli`, or `local_cli.claude_cli`.
+- **`-a` / `--agent`**: `byo.langgraph`, `byo.mcp_agent`, `byo.autogen`, `local_cli.codex_cli`, `local_cli.claude_cli`, or `community.sade`.
 - **`-p` / `--provider`**: LLM provider for `byo.langgraph` only (`openai`, `ollama`, `deepseek`).
 - **`-m` / `--model`**: model id.
-- **`-n` / `--max-steps`**: max steps per phase (`byo.langgraph`, `byo.mcp_agent`).
+- **`-n` / `--max-steps`**: max steps per phase (`byo.langgraph`, `byo.mcp_agent`, `byo.autogen`, `community.sade`).
 - **`-e` / `--reasoning-effort`**: Codex `model_reasoning_effort` (`local_cli.codex_cli` only): `none`, `minimal`, `low`, `medium`, `high`, `xhigh`.
 
 `nika eval judge` uses **`-p`** and **`-m`** for the judge only (no agent in that command).
@@ -108,15 +108,15 @@ Example: `nika exec pc1 ping -c 3 10.0.0.2 --timeout 30`
 
 ## `nika agent`
 
-- **`nika agent list`**: supported agent types (`byo.langgraph`, `byo.mcp_agent`, `local_cli.codex_cli`, `local_cli.claude_cli`), LLM providers, and Codex reasoning-effort levels.
+- **`nika agent list`**: supported agent types (`byo.langgraph`, `byo.mcp_agent`, `byo.autogen`, `local_cli.codex_cli`, `local_cli.claude_cli`, `community.sade`), LLM providers, and Codex reasoning-effort levels.
 - **`nika agent run`**: run the agent on one selected session.
 
   | Flag | Applies to | Meaning |
   |------|------------|---------|
-  | `-a` / `--agent` | all | `byo.langgraph`, `byo.mcp_agent`, `local_cli.codex_cli`, or `local_cli.claude_cli` |
+  | `-a` / `--agent` | all | `byo.langgraph`, `byo.mcp_agent`, `byo.autogen`, `local_cli.codex_cli`, `local_cli.claude_cli`, or `community.sade` |
   | `-p` / `--provider` | `byo.langgraph` | `openai`, `ollama`, or `deepseek` |
   | `-m` / `--model` | all | model id |
-  | `-n` / `--max-steps` | `byo.langgraph`, `byo.mcp_agent` | step cap per phase |
+  | `-n` / `--max-steps` | `byo.langgraph`, `byo.mcp_agent`, `byo.autogen`, `community.sade` | step cap per phase |
   | `-e` / `--reasoning-effort` | `local_cli.codex_cli` | Codex reasoning effort level |
   | `--session_id` | all | target session |
 
@@ -183,7 +183,7 @@ nika benchmark run --batch-size 4
 | `topo_size` | Size `s`, `m`, or `l`; **null/empty** for scenarios without sizes |
 | `inject` | Map of `--set key=value` pairs passed to `nika failure inject` |
 
-Agent and judge options use the same flags as below (including `-a local_cli.codex_cli` and `-e` for Codex runs; `-n` applies to `byo.langgraph` and `byo.mcp_agent`).
+Agent and judge options use the same flags as below (including `-a local_cli.codex_cli` and `-e` for Codex runs; `-n` applies to `byo.langgraph`, `byo.mcp_agent`, `byo.autogen`, and `community.sade`).
 
 ### Single-case mode
 
