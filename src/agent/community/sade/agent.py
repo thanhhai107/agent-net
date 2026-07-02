@@ -72,10 +72,9 @@ SADE_REMINDER = (
 def _resolve_python() -> str:
     """Interpreter used to spawn the stdio MCP servers.
 
-    NIKA's ``MCPServerConfig`` hardcodes ``python3`` (absent on native
-    Windows). The SDK spawns these servers on the host, so prefer the
-    interpreter currently running NIKA — it is guaranteed to exist and to
-    have the ``nika`` package importable.
+    NIKA's ``MCPServerConfig`` uses ``sys.executable`` for stdio MCP servers. The
+    SDK adapter still rewrites legacy ``python3`` / ``python`` commands when
+    present in an external config dict.
     """
     return sys.executable or "python3"
 

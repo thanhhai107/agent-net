@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -9,17 +10,27 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from nika.config import BENCHMARK_DIR, RESULTS_DIR
+from nika.config import BENCHMARK_DIR
+from nika.utils.session import Session
+from nika.utils.session_store import SessionStore
 from nika.net_env.net_env_pool import scenario_requires_topo_size
 from nika.orchestrator.problems.prob_pool import get_problem_instance
 from nika.orchestrator.problems.problem_base import TaskLevel
 from nika.workflows.agent.run import start_agent
 from nika.workflows.benchmark.load_config import load_benchmark_yaml
+from nika.workflows.benchmark.resume import (
+    benchmark_row_fingerprint,
+    benchmark_row_from_case,
+    scan_benchmark_cases,
+)
 from nika.workflows.env.start import start_net_env
 from nika.workflows.eval.session import eval_results
 from nika.workflows.failure.inject import inject_failure
 
 _BENCHMARK_DONE_PREFIX = "benchmark_done "
+_BENCHMARK_DONE_RE = re.compile(
+    r"benchmark_done session_id=(\S+) scenario=(\S+) problem=(\S+) session_dir=(\S+)"
+)
 
 
 def default_benchmark_yaml_path() -> str:
@@ -73,6 +84,7 @@ def _benchmark_row_cli_args(
     run_judge: bool,
     judge_llm_provider: str | None,
     judge_model: str | None,
+    result_dir: str | None = None,
 ) -> list[str]:
     args = [
         row["scenario"],
@@ -95,6 +107,8 @@ def _benchmark_row_cli_args(
         args += ["--set", f"{key}={value}"]
     if run_judge:
         args += ["--judge", "--judge-provider", judge_llm_provider, "--judge-model", judge_model]
+    if result_dir:
+        args += ["--result_dir", result_dir]
     return args
 
 
@@ -108,6 +122,7 @@ def _run_benchmark_row_subprocess(
     run_judge: bool,
     judge_llm_provider: str | None,
     judge_model: str | None,
+    result_dir: str | None = None,
 ) -> None:
     """Run one YAML row via a subprocess for thread-safe parallel batch execution."""
     cli_args = _benchmark_row_cli_args(
@@ -119,6 +134,7 @@ def _run_benchmark_row_subprocess(
         run_judge=run_judge,
         judge_llm_provider=judge_llm_provider,
         judge_model=judge_model,
+        result_dir=result_dir,
     )
     proc = subprocess.run(
         [sys.executable, "-m", "nika.cli.main", "benchmark", "run", *cli_args],
@@ -140,7 +156,7 @@ def _run_benchmark_row_subprocess(
 
 
 def _run_benchmark_batch_parallel(
-    rows: list[dict],
+    indexed_rows: list[tuple[int, dict]],
     *,
     agent_type: str,
     llm_provider: str | None,
@@ -149,22 +165,23 @@ def _run_benchmark_batch_parallel(
     run_judge: bool,
     judge_llm_provider: str | None,
     judge_model: str | None,
+    result_dir: str | None = None,
 ) -> None:
-    """Run all rows in *rows* simultaneously (one subprocess each), then return."""
-    with ThreadPoolExecutor(max_workers=len(rows)) as pool:
+    """Run indexed rows simultaneously (one subprocess each), then return."""
+    shared_kwargs = dict(
+        agent_type=agent_type,
+        llm_provider=llm_provider,
+        model=model,
+        max_steps=max_steps,
+        run_judge=run_judge,
+        judge_llm_provider=judge_llm_provider,
+        judge_model=judge_model,
+        result_dir=result_dir,
+    )
+    with ThreadPoolExecutor(max_workers=len(indexed_rows)) as pool:
         futures = [
-            pool.submit(
-                _run_benchmark_row_subprocess,
-                row,
-                agent_type=agent_type,
-                llm_provider=llm_provider,
-                model=model,
-                max_steps=max_steps,
-                run_judge=run_judge,
-                judge_llm_provider=judge_llm_provider,
-                judge_model=judge_model,
-            )
-            for row in rows
+            pool.submit(_run_benchmark_row_subprocess, row, **shared_kwargs)
+            for _index, row in indexed_rows
         ]
         for future in as_completed(futures):
             future.result()
@@ -183,11 +200,12 @@ def run_single_case(
     run_judge: bool = False,
     judge_llm_provider: str | None = None,
     judge_model: str | None = None,
-) -> str:
+    result_dir: str | None = None,
+) -> tuple[str, Path]:
     """Run one benchmark case (env → inject → agent → eval).
 
     Returns:
-        The session id for the completed run.
+        The session id and session directory for the completed run.
     """
     print(f"Running benchmark for Problem: {problem}, Scenario: {scenario}, Topo Size: {topo_size}")
 
@@ -200,10 +218,21 @@ def run_single_case(
     validate_inject_params(problem, scenario, topo_size or "", inject_params)
     params = dict(inject_params)
 
-    session_id = start_net_env(scenario, size, redeploy=True)
-    session_dir = Path(RESULTS_DIR) / session_id
+    session_id = start_net_env(scenario, size, redeploy=True, result_dir=result_dir)
+    session_dir = Path(SessionStore().get_session(session_id)["session_dir"])
 
     inject_failure(problem_names=[problem], session_id=session_id, param_overrides=params)
+
+    row = benchmark_row_from_case(
+        scenario=scenario,
+        problem=problem,
+        topo_size=topo_size,
+        inject_params=params,
+    )
+    Session().load_running_session(session_id=session_id).update_session(
+        "benchmark_fingerprint",
+        benchmark_row_fingerprint(row),
+    )
 
     start_agent(
         agent_type=agent_type,
@@ -225,7 +254,7 @@ def run_single_case(
         f"{_BENCHMARK_DONE_PREFIX}session_id={session_id} scenario={scenario} "
         f"problem={problem} session_dir={session_dir}"
     )
-    return session_id
+    return session_id, session_dir
 
 
 def run_benchmark_from_yaml(
@@ -239,16 +268,18 @@ def run_benchmark_from_yaml(
     run_judge: bool = False,
     judge_llm_provider: str | None = None,
     judge_model: str | None = None,
+    result_dir: str | None = None,
+    resume: bool = True,
 ) -> None:
     """
     Run benchmark cases defined in a YAML file.
 
     Each case must include scenario, problem, optional topo_size, and inject params.
 
-    When ``batch_size == 1`` (default) rows are executed sequentially.
-    When ``batch_size > 1`` rows are chunked into groups of that size; every row in a
-    chunk runs in parallel (one subprocess each) and the next chunk starts only after
-    all rows in the current chunk have finished.
+    All rows are scanned first against existing session dirs under ``--result_dir``:
+    completed cases are skipped and incomplete ones are cleaned. Remaining cases run
+    sequentially when ``batch_size == 1`` (default), or in parallel chunks when
+    ``batch_size > 1``. Re-run the same command to resume after an interruption.
     """
     if batch_size < 1:
         raise ValueError("batch_size must be >= 1")
@@ -267,10 +298,22 @@ def run_benchmark_from_yaml(
         run_judge=run_judge,
         judge_llm_provider=judge_llm_provider,
         judge_model=judge_model,
+        result_dir=result_dir,
     )
 
+    _results_root, pending = scan_benchmark_cases(
+        rows=rows,
+        result_dir=result_dir,
+        resume=resume,
+    )
+    if not pending:
+        return
+
     if batch_size == 1:
-        for row in rows:
+        for index in pending:
+            row = rows[index]
+            label = f"[{index + 1}/{len(rows)}] {row['scenario']}/{row['problem']}"
+            print(f"{label} running")
             run_single_case(
                 problem=row["problem"],
                 scenario=row["scenario"],
@@ -280,10 +323,13 @@ def run_benchmark_from_yaml(
             )
         return
 
-    for i in range(0, len(rows), batch_size):
-        chunk = rows[i : i + batch_size]
+    for chunk_start in range(0, len(pending), batch_size):
+        chunk_indices = pending[chunk_start : chunk_start + batch_size]
+        indexed_rows = [(index, rows[index]) for index in chunk_indices]
+        first = chunk_indices[0] + 1
+        last = chunk_indices[-1] + 1
         print(
-            f"[batch {i // batch_size + 1}] running {len(chunk)} session(s) in parallel "
-            f"(rows {i + 1}–{i + len(chunk)} of {len(rows)})"
+            f"[batch {chunk_start // batch_size + 1}] running {len(chunk_indices)} session(s) in parallel "
+            f"(rows {first}–{last} of {len(rows)})"
         )
-        _run_benchmark_batch_parallel(chunk, **_shared_kwargs)
+        _run_benchmark_batch_parallel(indexed_rows, **_shared_kwargs)

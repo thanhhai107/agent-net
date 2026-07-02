@@ -14,8 +14,8 @@ from pathlib import Path
 from typing import Any
 
 from nika.config import RESULTS_DIR, SESSIONS_DB
+from nika.utils.session_artifacts import RUN_FILENAME, iter_session_dirs
 
-RUN_FILENAME = "run.json"
 GROUND_TRUTH_FILENAME = "ground_truth.json"
 EVAL_METRICS_FILENAME = "eval_metrics.json"
 LLM_JUDGE_FILENAME = "llm_judge.json"
@@ -26,18 +26,6 @@ def _is_finished_session(run_meta: dict) -> bool:
         return True
     return run_meta.get("end_time") is not None
 
-
-def _iter_session_dirs(results_dir: str | Path) -> list[Path]:
-    root = Path(results_dir)
-    if not root.exists():
-        return []
-    session_dirs: list[Path] = []
-    for entry in sorted(root.iterdir()):
-        if not entry.is_dir() or entry.name == "0_summary":
-            continue
-        if (entry / RUN_FILENAME).exists():
-            session_dirs.append(entry)
-    return session_dirs
 
 _JSON_LIST_FIELDS = frozenset({"problem_names", "faulty_devices"})
 
@@ -344,7 +332,7 @@ class SessionIndex:
     def rebuild_from_results(self, results_dir: str | Path | None = None) -> int:
         """Rebuild index rows from ``results/*/run.json`` artifacts."""
         count = 0
-        for session_dir in _iter_session_dirs(results_dir or RESULTS_DIR):
+        for session_dir in iter_session_dirs(results_dir or RESULTS_DIR):
             run_path = session_dir / RUN_FILENAME
             if not run_path.exists():
                 continue

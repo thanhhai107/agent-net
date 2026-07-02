@@ -113,8 +113,8 @@ class MockAgentPipelineTest(CommonPipelineSteps, OrderedPipelineTestCase):
         self._invoke_ok(["env", "ps"])
         self._invoke_ok(["session", "ps"])
         self._invoke_ok(["session", "inspect", "--session_id", self.session_id])
-        self._invoke_ok(["failure", "ps"])
-        self._invoke_ok(["exec", "pc1", "hostname"])
+        self._invoke_ok(["failure", "ps", "--session_id", self.session_id])
+        self._invoke_ok(["exec", "--session_id", self.session_id, "pc1", "hostname"])
         desc = self._invoke_ok(["failure", "describe", PROBLEM])
         self.assertIn(PROBLEM, desc)
 

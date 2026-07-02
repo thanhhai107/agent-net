@@ -5,6 +5,7 @@ from pathlib import Path
 import typer
 
 from nika.net_env.net_env_pool import scenario_requires_topo_size
+from nika.config import ENV_RESULT_DIR
 from nika.utils.agent_config import (
     ENV_AGENT_TYPE,
     ENV_JUDGE_MODEL,
@@ -118,6 +119,20 @@ def benchmark_run(
         envvar=ENV_JUDGE_MODEL,
         help="Model id for the judge (required with --judge unless set in .env).",
     ),
+    result_dir: str | None = typer.Option(
+        None,
+        "--result_dir",
+        envvar=ENV_RESULT_DIR,
+        help="Results parent directory (default: results/). Session output goes to {result_dir}/{session_id}.",
+    ),
+    resume: bool = typer.Option(
+        True,
+        "--resume/--no-resume",
+        help=(
+            "YAML batch mode: scan all rows, skip completed cases, run the rest (default). "
+            "Use --no-resume to re-run every case."
+        ),
+    ),
 ) -> None:
     """Run one benchmark row from YAML, or a single case when SCENARIO and --problem are set."""
     if run_judge:
@@ -165,6 +180,7 @@ def benchmark_run(
             run_judge=run_judge,
             judge_llm_provider=judge_provider,
             judge_model=judge_model,
+            result_dir=result_dir,
         )
         return
 
@@ -182,4 +198,6 @@ def benchmark_run(
         run_judge=run_judge,
         judge_llm_provider=judge_provider,
         judge_model=judge_model,
+        result_dir=result_dir,
+        resume=resume,
     )

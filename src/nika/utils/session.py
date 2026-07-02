@@ -4,8 +4,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from nika.config import RESULTS_DIR
-from nika.evaluator.result_log import RUN_FILENAME, is_finished_session, iter_session_dirs
+from nika.config import RESULTS_DIR, resolve_results_root
+from nika.utils.session_artifacts import RUN_FILENAME, is_finished_session, iter_session_dirs
 from nika.utils.session_resolve import resolve_running_session_id
 from nika.utils.session_index import extract_gt_fields, extract_index_fields
 from nika.utils.session_store import SessionStore
@@ -23,13 +23,15 @@ class Session:
         lab_name: str,
         scenario_topo_size: str | None,
         scenario_params: dict | None = None,
+        result_dir: str | Path | None = None,
     ) -> None:
         self.session_id = session_id
         self.scenario_name = scenario_name
         self.lab_name = lab_name
         self.scenario_topo_size = scenario_topo_size
         self.scenario_params = scenario_params or {}
-        self.session_dir = os.path.join(str(RESULTS_DIR), session_id)
+        results_root = resolve_results_root(result_dir)
+        self.session_dir = os.path.join(str(results_root), session_id)
         os.makedirs(self.session_dir, exist_ok=True)
         self.store.create_session(
             {
@@ -89,7 +91,7 @@ class Session:
                 f"Session '{session_id}' is still running. Close it with `nika session close` before running eval."
             )
 
-        session_dir = Path(RESULTS_DIR) / session_id
+        session_dir = self._find_closed_session_dir(session_id)
         run_path = session_dir / RUN_FILENAME
         if not run_path.exists():
             raise FileNotFoundError(
@@ -103,6 +105,18 @@ class Session:
                 f"Session '{session_id}' is not closed. Run `nika session close` before running eval."
             )
         return self._apply_closed_session_meta(run_meta, session_dir=session_dir)
+
+    def _find_closed_session_dir(self, session_id: str) -> Path:
+        row = self.store.index.get_row(session_id)
+        if row and row.get("session_dir"):
+            return Path(row["session_dir"])
+        flat = Path(RESULTS_DIR) / session_id
+        if (flat / RUN_FILENAME).exists():
+            return flat
+        for session_dir in iter_session_dirs():
+            if session_dir.name == session_id:
+                return session_dir
+        return flat
 
     def _apply_closed_session_meta(self, run_meta: dict, *, session_dir: Path | None = None):
         for key, value in run_meta.items():

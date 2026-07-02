@@ -77,7 +77,7 @@ class PipelineIntegrationTest(OrderedPipelineTestCase):
         session_ps_output = self._invoke_ok(["session", "ps"])
         self.assertIn(self.session_id, session_ps_output)
 
-        inspect_output = self._invoke_ok(["session", "inspect"])
+        inspect_output = self._invoke_ok(["session", "inspect", "--session_id", self.session_id])
         self.assertIn(self.session_id, inspect_output)
 
         resolved_id, resolved_lab, container_rows = list_session_containers(self.session_id)
@@ -106,14 +106,14 @@ class PipelineIntegrationTest(OrderedPipelineTestCase):
         for name in SIMPLE_BGP_MACHINES:
             self.assertIn(name, inspect_containers_output)
 
-        self._invoke_ok(["failure", "ps"])
-        self._invoke_ok(["exec", "pc1", "hostname"])
+        self._invoke_ok(["failure", "ps", "--session_id", self.session_id])
+        self._invoke_ok(["exec", "--session_id", self.session_id, "pc1", "hostname"])
 
         describe_output = self._invoke_ok(["failure", "describe", PROBLEM])
         self.assertIn(PROBLEM, describe_output)
 
         exec_output = self._invoke_ok(
-            ["exec", "pc1", "hostname", "--session_id", self.session_id],
+            ["exec", "--session_id", self.session_id, "pc1", "hostname"],
         )
         self.assertTrue(exec_output.strip())
 

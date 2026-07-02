@@ -4,6 +4,11 @@ from typing import Optional
 
 import typer
 
+exec_app = typer.Typer(
+    help="Execute a shell command inside a host container in the running lab.",
+    invoke_without_command=False,
+)
+
 def _exec_in_host(*, host: str, command: str, session_id: str | None, timeout: float) -> str:
     from nika.workflows.exec.command import exec_command_in_host
 
@@ -15,6 +20,7 @@ def _exit_with_message(message: str) -> None:
     raise typer.Exit(code=2)
 
 
+@exec_app.command("exec", context_settings={"allow_interspersed_args": False})
 def exec_command(
     host: str = typer.Argument(..., metavar="HOST", help="Target host/container name in the selected lab."),
     command_parts: list[str] = typer.Argument(..., metavar="COMMAND", help="Shell command to execute inside HOST."),

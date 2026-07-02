@@ -4,24 +4,30 @@ import nika.config  # noqa: F401 — load .env before Typer reads envvar default
 
 import typer
 
-from nika.cli.commands.agent import agent_app
-from nika.cli.commands.benchmark import benchmark_app
-from nika.cli.commands.env import env_app
-from nika.cli.commands.evaluation import eval_app
-from nika.cli.commands.exec import exec_command
-from nika.cli.commands.failure import failure_app
-from nika.cli.commands.session import session_app
-from nika.cli.commands.traffic import traffic_app
+from nika.cli.lazy_group import LAZY_COMMANDS, LazyCommandSpec, LazyTyperGroup
 
-app = typer.Typer(help="NIKA network troubleshooting pipeline CLI.")
-app.add_typer(session_app, name="session")
-app.add_typer(env_app, name="env")
-app.add_typer(failure_app, name="failure")
-app.command("exec", context_settings={"allow_interspersed_args": False})(exec_command)
-app.add_typer(agent_app, name="agent")
-app.add_typer(eval_app, name="eval")
-app.add_typer(benchmark_app, name="benchmark")
-app.add_typer(traffic_app, name="traffic")
+LAZY_COMMANDS.update(
+    {
+        "session": LazyCommandSpec("nika.cli.commands.session", "session_app", "Session lifecycle."),
+        "env": LazyCommandSpec("nika.cli.commands.env", "env_app", "Deploy and manage network scenarios."),
+        "failure": LazyCommandSpec("nika.cli.commands.failure", "failure_app", "Inject and inspect faults."),
+        "exec": LazyCommandSpec("nika.cli.commands.exec", "exec_app", "Execute a shell command inside a host."),
+        "agent": LazyCommandSpec("nika.cli.commands.agent", "agent_app", "Troubleshooting agents."),
+        "eval": LazyCommandSpec("nika.cli.commands.evaluation", "eval_app", "Evaluate agent runs."),
+        "benchmark": LazyCommandSpec("nika.cli.commands.benchmark", "benchmark_app", "Batch benchmark runs."),
+        "traffic": LazyCommandSpec("nika.cli.commands.traffic", "traffic_app", "Generate traffic in the Kathará lab."),
+    }
+)
+
+app = typer.Typer(
+    cls=LazyTyperGroup,
+    help="NIKA network troubleshooting pipeline CLI.",
+)
+
+
+@app.callback()
+def _root() -> None:
+    """NIKA network troubleshooting pipeline CLI."""
 
 
 def main() -> None:

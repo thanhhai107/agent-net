@@ -1,4 +1,11 @@
+import sys
+
 from nika.config import MCP_SERVER_DIR
+
+
+def _resolve_python() -> str:
+    """Interpreter for stdio MCP subprocesses (must have ``mcp`` and ``nika`` installed)."""
+    return sys.executable or "python3"
 
 # Keyword sets that trigger inclusion of each optional Kathara MCP server.
 _FRR_KEYWORDS = frozenset({"bgp", "ospf", "rip", "frr", "routing"})
@@ -46,10 +53,11 @@ class MCPServerConfig:
         }
 
     def load_config(self, if_submit: bool = False) -> dict:
+        python = _resolve_python()
         if if_submit:
             config = {
                 "task_mcp_server": {
-                    "command": "python3",
+                    "command": python,
                     "args": [f"{self.mcp_server_dir}/task_mcp_server.py"],
                     "transport": "stdio",
                 },
@@ -57,22 +65,22 @@ class MCPServerConfig:
         else:
             config = {
                 "kathara_base_mcp_server": {
-                    "command": "python3",
+                    "command": python,
                     "args": [f"{self.mcp_server_dir}/kathara_base_mcp_server.py"],
                     "transport": "stdio",
                 },
                 "kathara_frr_mcp_server": {
-                    "command": "python3",
+                    "command": python,
                     "args": [f"{self.mcp_server_dir}/kathara_frr_mcp_server.py"],
                     "transport": "stdio",
                 },
                 "kathara_bmv2_mcp_server": {
-                    "command": "python3",
+                    "command": python,
                     "args": [f"{self.mcp_server_dir}/kathara_bmv2_mcp_server.py"],
                     "transport": "stdio",
                 },
                 "kathara_telemetry_mcp_server": {
-                    "command": "python3",
+                    "command": python,
                     "args": [f"{self.mcp_server_dir}/kathara_telemetry_mcp_server.py"],
                     "transport": "stdio",
                 },

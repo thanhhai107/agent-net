@@ -11,11 +11,11 @@ from nika.config import RESULTS_DIR
 from nika.evaluator.llm_judge import JudgeResponse
 from nika.evaluator.trace_parser import AgentTraceParser
 from nika.orchestrator.problems.prob_pool import get_problem_instance
+from nika.utils.session_artifacts import RUN_FILENAME, is_finished_session, iter_session_dirs
 
 load_dotenv()
 
 EVAL_METRICS_FILENAME = "eval_metrics.json"
-RUN_FILENAME = "run.json"
 GROUND_TRUTH_FILENAME = "ground_truth.json"
 SUBMISSION_FILENAME = "submission.json"
 LLM_JUDGE_FILENAME = "llm_judge.json"
@@ -73,25 +73,6 @@ def default_summary_csv_path() -> str:
 
 def missing_summary_artifacts(session_dir: Path) -> list[str]:
     return [name for name in SUMMARY_REQUIRED_ARTIFACTS if not (session_dir / name).exists()]
-
-
-def is_finished_session(run_meta: dict) -> bool:
-    if run_meta.get("status") == "finished":
-        return True
-    return run_meta.get("end_time") is not None
-
-
-def iter_session_dirs(results_dir: str | Path | None = None) -> list[Path]:
-    root = Path(results_dir or RESULTS_DIR)
-    if not root.exists():
-        return []
-    session_dirs: list[Path] = []
-    for entry in sorted(root.iterdir()):
-        if not entry.is_dir() or entry.name == "0_summary":
-            continue
-        if (entry / RUN_FILENAME).exists():
-            session_dirs.append(entry)
-    return session_dirs
 
 
 def resolve_root_cause_category(run_meta: dict) -> str | None:

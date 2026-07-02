@@ -91,6 +91,7 @@ Shared flags (all agents): `-a` / `NIKA_AGENT_TYPE`, `-n` / `NIKA_MAX_STEPS`, `-
 
 | Setting | `.env` variable | CLI flag |
 |---------|-----------------|----------|
+| Results parent dir | `NIKA_RESULT_DIR` | `--result_dir` on `nika env run`, `nika benchmark run` |
 | Judge provider | `NIKA_JUDGE_PROVIDER` | `-p` on `nika eval judge` |
 | Judge model | `NIKA_JUDGE_MODEL` | `-m` on `nika eval judge` |
 
@@ -171,6 +172,8 @@ Full CLI documentation (benchmark batch mode, traffic types, parameter tables, a
 ```shell
 nika benchmark run
 nika benchmark run dc_clos_bgp --problem bgp_asn_misconfig -s s
+nika benchmark run --result_dir results/list1              
+nika benchmark run --result_dir results/list1 --batch-size 4
 nika benchmark run --judge --judge-provider openai --judge-model gpt-5-mini
 nika traffic list
 nika traffic run od --all-to-host pc1 --mbps 20 --interval 300 --background
@@ -261,8 +264,6 @@ Observability: LangSmith (`byo.langgraph`, `local_cli.codex_cli`, `local_cli.cla
 |-----|---------|
 | `NIKA_MCP_AGENT_MODEL` | `gpt-4.1-mini` |
 
-Requires `OPENAI_API_KEY`. No LangSmith / Langfuse integration.
-
 ```shell
 nika agent run -a byo.mcp_agent -m gpt-4.1-mini -n 20
 ```
@@ -275,15 +276,13 @@ nika agent run -a byo.mcp_agent -m gpt-4.1-mini -n 20
 |-----|---------|
 | `NIKA_AUTOGEN_MODEL` | `gpt-4.1-mini` |
 
-Requires `OPENAI_API_KEY`. No LangSmith / Langfuse integration.
-
 ```shell
 nika agent run -a byo.autogen -m gpt-4.1-mini -n 20
 ```
 
 ### `local_cli.codex_cli` (`local_cli/codex_cli`)
 
-Requires [Codex CLI](https://developers.openai.com/codex) on `PATH`; auth via `codex login` or `OPENAI_API_KEY`. Workspace: `results/{session_id}/codex_workspace/`.
+Requires [Codex CLI](https://developers.openai.com/codex) on `PATH`; auth via `codex login` or `OPENAI_API_KEY`. Workspace: `{result_dir}/{session_id}/codex_workspace/`.
 
 | Flag | Env | Notes |
 |------|-----|-------|
@@ -297,7 +296,7 @@ nika agent run -a local_cli.codex_cli -m gpt-5.4-mini -e medium
 
 ### `local_cli.claude_cli` (`local_cli/claude_cli`)
 
-Requires [Claude Code](https://docs.anthropic.com/en/docs/claude-code) on `PATH`. Workspace: `results/{session_id}/claude_workspace/`.
+Requires [Claude Code](https://docs.anthropic.com/en/docs/claude-code) on `PATH`. Workspace: `{result_dir}/{session_id}/claude_workspace/`.
 
 Auth (pick one): `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN`, or `claude auth login`.
 
@@ -334,7 +333,7 @@ nika agent run -a byo.langgraph -p openai -m gpt-5-mini -n 20
 
 # 5. Inspect session state and artifacts
 nika session inspect
-ls results/<session_id>/
+ls {result_dir}/{session_id}/
 # run.json, ground_truth.json, events.jsonl, messages.jsonl, submission.json, codex_workspace/ (cli only)
 
 # 6. Close the lab, then evaluate
@@ -451,7 +450,7 @@ You can also plug in your own MCP servers following the configuration instructio
 
 ## Logging and Observability
 
-Each session directory under `results/{session_id}/` contains:
+Each session directory under `{result_dir}/{session_id}/` (default `{result_dir}` = `results/`) contains:
 
 - **`events.jsonl`**: pipeline events (env deploy, fault inject, agent start/end, eval).
 - **`messages.jsonl`**: agent conversation and tool traces.

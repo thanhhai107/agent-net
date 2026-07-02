@@ -226,7 +226,7 @@ AutoGen ``GraphFlow`` orchestration + [AutoGen AgentChat](https://microsoft.gith
 
 **Entry**: `agent.byo.autogen.agent.AutogenAgent`
 
-**Requires**: `OPENAI_API_KEY`.
+**Requires**: `OPENAI_API_KEY` for the default model. When `-m` / `NIKA_AUTOGEN_MODEL` starts with `deepseek`, uses `DEEPSEEK_API_KEY` instead.
 
 | Env | Default in `.env.example` |
 |-----|-------------------------|

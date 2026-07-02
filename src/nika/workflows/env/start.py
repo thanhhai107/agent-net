@@ -24,6 +24,7 @@ def start_net_env(
     *,
     redeploy: bool = True,
     instance_tag: str | None = None,
+    result_dir: str | None = None,
 ) -> str:
     """Deploy the lab for ``scenario`` and create a new runtime session."""
     size = _normalize_topo_size(topo_size)
@@ -55,6 +56,7 @@ def start_net_env(
         lab_name=net_env.lab.name,
         scenario_topo_size=size,
         scenario_params=scenario_params,
+        result_dir=result_dir,
     )
     bind_session_dir(session.session_dir)
     log_event(

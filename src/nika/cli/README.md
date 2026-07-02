@@ -39,6 +39,26 @@ Same semantics as `nika env run`:
 
 This flag is reused on **`nika benchmark run`** and **`nika traffic run`** when a size is required and not already implied by the session.
 
+### Results directory (`--result_dir`)
+
+Session artifacts are written under **`{result_dir}/{session_id}/`**. Use this to isolate experiments (different datasets, models, agents, or benchmark runs) under separate folders.
+
+| Source | Variable / flag | Default |
+|--------|-----------------|---------|
+| CLI | `--result_dir PATH` on `nika env run`, `nika benchmark run` | `results/` at repo root |
+| `.env` | `NIKA_RESULT_DIR` | same as default |
+
+CLI `--result_dir` overrides `NIKA_RESULT_DIR` when both are set. Relative paths resolve from the repository root (e.g. `results/list1` → `<repo>/results/list1/`).
+
+```shell
+nika env run simple_bgp --result_dir results/list1
+# → results/list1/20260702-053412-abc123/
+
+NIKA_RESULT_DIR=results/gpt4-bgp nika benchmark run --config benchmark/benchmark_selected.yaml
+```
+
+**Benchmark resume** (batch mode, `--resume` by default): before running, NIKA scans **only** the resolved `--result_dir` for existing session dirs. Rows whose `run.json` has `status == finished` and a matching `benchmark_fingerprint` are skipped; incomplete sessions are cleaned and re-run. Re-run the same command with the same `--config` and `--result_dir` to continue after a failure. Pass **`--no-resume`** to execute every YAML row regardless of existing artifacts.
+
 ### Agent options
 
 Aligned with `nika agent run`:
@@ -168,9 +188,15 @@ Omit the `SCENARIO` positional argument. Rows are read from a YAML file.
 nika benchmark run
 nika benchmark run --config benchmark/benchmark_selected.yaml
 nika benchmark run --batch-size 4
+nika benchmark run --result_dir results/list1
+nika benchmark run --result_dir results/list1 --batch-size 4   # resume skips completed rows in that dir only
 ```
 
 **Default config path**: `benchmark/benchmark_selected.yaml` under the repository root.
+
+**`--result_dir`**: parent directory for session outputs (see [Results directory](#results-directory---result_dir)). Resume and skip logic inspect **only** this directory—not other folders under `results/` and not the SQLite index.
+
+**`--resume` / `--no-resume`** (batch mode): when `--resume` (default), scan `--result_dir` first, skip finished cases, clean incomplete ones, then run the rest. Works with any `--batch-size`.
 
 **`--batch-size`**: number of YAML rows to run simultaneously per batch (default `1`). Rows are chunked into groups of this size; each group runs fully in parallel (one subprocess per row) and the next group starts only after all rows in the current group have finished. Applies to batch mode only.
 

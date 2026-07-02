@@ -3,6 +3,7 @@
 import typer
 
 from nika.cli.utils import env_id_from_lab, fmt_table, human_age
+from nika.config import ENV_RESULT_DIR
 
 env_app = typer.Typer(help="Kathara lab scenarios.")
 
@@ -31,11 +32,23 @@ def env_run(
         "--instance-tag",
         help="Optional tag for lab instance naming; required for human-friendly concurrent runs.",
     ),
+    result_dir: str | None = typer.Option(
+        None,
+        "--result_dir",
+        envvar=ENV_RESULT_DIR,
+        help="Results parent directory (default: results/). Session output goes to {result_dir}/{session_id}.",
+    ),
 ) -> None:
     """Deploy one scenario and start a new session."""
     from nika.workflows.env.start import start_net_env
 
-    session_id = start_net_env(name, size, redeploy=not no_redeploy, instance_tag=instance_tag)
+    session_id = start_net_env(
+        name,
+        size,
+        redeploy=not no_redeploy,
+        instance_tag=instance_tag,
+        result_dir=result_dir,
+    )
     typer.echo(f"session_id={session_id}")
 
 
