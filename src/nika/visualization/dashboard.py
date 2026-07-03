@@ -20,7 +20,6 @@ from nika.visualization.data import (
     load_session_bundle,
     parse_topology,
     replay_steps,
-    timeline_rows,
 )
 from nika.visualization.topology import render_topology_svg
 

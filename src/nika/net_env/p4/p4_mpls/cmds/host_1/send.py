@@ -1,11 +1,9 @@
 #!/usr/bin/env python
-import argparse
 import sys
 import random
-import struct
 
 from scapy.all import sendp, get_if_hwaddr
-from scapy.all import Ether, IP, UDP, TCP
+from scapy.all import Ether, IP, TCP
 
 def main():
     if len(sys.argv)<3:

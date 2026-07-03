@@ -9,7 +9,6 @@ from typing import Any
 
 from agent.memory.models import EvaluationEvidence, SkillStep
 from agent.memory.runtime import (
-    INTEGRATED_GUIDANCE_MARKER,
     strip_integrated_learning_guidance,
 )
 from agent.memory.service import ProceduralMemoryModule, _metric_success

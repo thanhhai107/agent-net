@@ -1,5 +1,3 @@
-import logging
-
 from pydantic import BaseModel, Field
 
 from nika.generator.fault.injector_tc import FaultInjectorTC

@@ -1,5 +1,3 @@
-import logging
-
 from pydantic import BaseModel, Field
 
 from nika.generator.fault.injector_base import FaultInjectorBase
@@ -9,9 +7,6 @@ from nika.orchestrator.tasks.detection import DetectionTask
 from nika.orchestrator.tasks.localization import LocalizationTask
 from nika.orchestrator.tasks.rca import RCATask
 from nika.service.kathara import KatharaAPIALL, KatharaBaseAPI
-from nika.utils.logger import system_logger
-
-logger = system_logger
 
 # ==================================================================
 # Problem: P4 switch device failure (bmv2 switch down)

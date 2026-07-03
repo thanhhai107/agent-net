@@ -4,20 +4,20 @@ import random
 import re
 import time
 from collections import defaultdict
-from typing import Dict, Literal, Optional, Protocol, runtime_checkable
+from typing import Any, Dict, Literal, Optional, Protocol, runtime_checkable
 
 from func_timeout import func_timeout
 from func_timeout.exceptions import FunctionTimedOut
 from Kathara.exceptions import MachineNotFoundError
 from Kathara.manager.docker.stats.DockerLinkStats import DockerLinkStats
-from Kathara.manager.Kathara import Kathara, Lab
+from Kathara.manager.Kathara import Kathara
 from Kathara.model.Machine import Machine
 
 
 @runtime_checkable
 class _SupportsBase(Protocol):
     instance: "Kathara"
-    lab: "Lab"
+    lab: Any
 
     def _run_cmd(self, host_name: str, command: str) -> str: ...
 
