@@ -12,7 +12,7 @@ license = { text = "MIT" }
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-    "pydantic",
+    "pydantic>=2.11,<2.14",
     "openai",
     "instructor",
     "kathara",
@@ -20,7 +20,7 @@ dependencies = [
     "python-dotenv",
     "langchain-deepseek",
     "langgraph",
-    "mcp[cli]",
+    "mcp[cli]==1.28.0",
     "langchain-mcp-adapters",
     "langchain-ollama",
     "langchain",

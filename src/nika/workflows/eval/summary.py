@@ -94,5 +94,5 @@ def run_eval_summary(
         selected.append(session_dir)
 
     eval_results = [build_eval_result_from_session_dir(session_dir) for session_dir in selected]
-    out_path = write_eval_summary_csv(eval_results, output_path or default_summary_csv_path())
+    out_path = write_eval_summary_csv(eval_results, output_path or default_summary_csv_path(results_dir))
     return out_path

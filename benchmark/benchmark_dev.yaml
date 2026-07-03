@@ -1,0 +1,11 @@
+cases:
+- scenario: dc_clos_bgp
+  topo_size: s
+  problem: bgp_asn_misconfig
+  inject:
+    host_name: leaf_router_0_0
+- scenario: ospf_enterprise_dhcp
+  topo_size: s
+  problem: arp_acl_block
+  inject:
+    host_name: pc_1_1_1_1
