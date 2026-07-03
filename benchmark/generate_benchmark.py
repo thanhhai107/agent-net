@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from collections import Counter
 from pathlib import Path
@@ -52,6 +53,67 @@ SELECTED_EVOLVING_CASES: list[tuple[str, str, str]] = [
     ("p4_bloom_filter", "p4_table_entry_missing", ""),
     ("p4_bloom_filter", "p4_table_entry_misconfig", ""),
 ]
+
+EVALUATE_EVOLUTION_PROBLEMS: list[str] = [
+    # Service and address-management motifs.
+    "dns_lookup_latency",
+    "dns_port_blocked",
+    "dns_record_error",
+    "dns_service_down",
+    "dhcp_missing_subnet",
+    "dhcp_service_down",
+    "dhcp_spoofed_dns",
+    "dhcp_spoofed_gateway",
+    "dhcp_spoofed_subnet",
+    # Host/IP configuration motifs.
+    "host_incorrect_dns",
+    "host_incorrect_gateway",
+    "host_incorrect_ip",
+    "host_incorrect_netmask",
+    "host_ip_conflict",
+    "host_missing_ip",
+    "host_static_blackhole",
+    # Link and traffic-quality motifs.
+    "link_bandwidth_throttling",
+    "link_down",
+    "link_flap",
+    "link_high_packet_corruption",
+    # Routing and control-plane motifs.
+    "bgp_acl_block",
+    "bgp_asn_misconfig",
+    "bgp_blackhole_route_leak",
+    "bgp_hijacking",
+    "bgp_missing_route_advertisement",
+    "frr_service_down",
+    "ospf_acl_block",
+    "ospf_area_misconfiguration",
+    "ospf_neighbor_missing",
+    # Security and policy motifs.
+    "arp_acl_block",
+    "arp_cache_poisoning",
+    "http_acl_block",
+    "icmp_acl_block",
+    # Application/resource-pressure motifs.
+    "incast_traffic_network_limitation",
+    "receiver_resource_contention",
+    "web_dos_attack",
+    # SDN motifs.
+    "flow_rule_loop",
+    "flow_rule_shadowing",
+    "sdn_controller_crash",
+    "southbound_port_block",
+    # P4 motifs.
+    "bmv2_switch_down",
+    "p4_header_definition_error",
+    "p4_table_entry_misconfig",
+    "p4_table_entry_missing",
+]
+
+EVALUATE_HEADER = (
+    "# 100-case curriculum-evaluation subset of benchmark_full.yaml.\n"
+    "# Cases 1-44 are evolution variants for broad motif learning.\n"
+    "# Cases 45-100 are benchmark_selected.yaml: one case per root cause.\n"
+)
 
 SELECTED_SCENARIO_FOR_PROBLEM: dict[str, str] = {
     "arp_acl_block": "ospf_enterprise_dhcp",
@@ -197,6 +259,78 @@ def iter_test_cases() -> list[dict]:
     return rows
 
 
+def _row_key(row: dict) -> str:
+    return json.dumps(row, sort_keys=True, ensure_ascii=False)
+
+
+def _evaluate_variant_score(
+    row: dict,
+    *,
+    selected_row: dict,
+) -> tuple[int, int, int, str]:
+    same_scenario = row["scenario"] == selected_row["scenario"]
+    scenario_rank = 0 if same_scenario else 1
+    size_rank = {"m": 0, "l": 1, "s": 2, None: 3}.get(row.get("topo_size"), 4)
+    p4_rank = {
+        "p4_counter": 0,
+        "p4_int": 1,
+        "p4_mpls": 2,
+        "p4_bloom_filter": 3,
+    }.get(row["scenario"], 4)
+    return (scenario_rank, size_rank, p4_rank, row["scenario"])
+
+
+def iter_evaluate_cases(
+    *,
+    full_rows: list[dict] | None = None,
+    selected_rows: list[dict] | None = None,
+) -> list[dict]:
+    full_rows = full_rows or iter_full_cases()
+    selected_rows = selected_rows or iter_selected_cases()
+    selected_by_problem = {row["problem"]: row for row in selected_rows}
+    selected_keys = {_row_key(row) for row in selected_rows}
+    full_by_problem: dict[str, list[dict]] = {}
+    for row in full_rows:
+        full_by_problem.setdefault(row["problem"], []).append(row)
+
+    if len(EVALUATE_EVOLUTION_PROBLEMS) != 44:
+        raise ValueError("Evaluate evolution phase must contain exactly 44 problems")
+    if len(set(EVALUATE_EVOLUTION_PROBLEMS)) != len(EVALUATE_EVOLUTION_PROBLEMS):
+        raise ValueError("Evaluate evolution phase contains duplicate problems")
+
+    evolution_rows: list[dict] = []
+    for problem in EVALUATE_EVOLUTION_PROBLEMS:
+        selected_row = selected_by_problem.get(problem)
+        if selected_row is None:
+            raise ValueError(f"Evaluate problem missing selected case: {problem}")
+        candidates = [
+            row for row in full_by_problem.get(problem, [])
+            if _row_key(row) not in selected_keys
+        ]
+        if not candidates:
+            raise ValueError(f"No non-selected evaluate variant for {problem}")
+        evolution_rows.append(
+            sorted(
+                candidates,
+                key=lambda row: _evaluate_variant_score(
+                    row,
+                    selected_row=selected_row,
+                ),
+            )[0]
+        )
+
+    rows = evolution_rows + selected_rows
+    row_keys = {_row_key(row) for row in rows}
+    full_keys = {_row_key(row) for row in full_rows}
+    if len(rows) != 100 or len(row_keys) != 100:
+        raise ValueError("benchmark_evaluate.yaml must contain 100 unique cases")
+    if not row_keys.issubset(full_keys):
+        raise ValueError("benchmark_evaluate.yaml must be a subset of full")
+    if len({row["problem"] for row in rows[44:]}) != len(selected_rows):
+        raise ValueError("Evaluate coverage phase must cover each selected problem")
+    return rows
+
+
 def _print_stats(label: str, rows: list[dict]) -> None:
     by_scenario = Counter(r["scenario"] for r in rows)
     by_problem = Counter(r["problem"] for r in rows)
@@ -205,29 +339,38 @@ def _print_stats(label: str, rows: list[dict]) -> None:
         print(f"  {scenario}: {count}")
 
 
-def generate_benchmark() -> tuple[list[dict], list[dict], list[dict]]:
+def generate_benchmark() -> tuple[list[dict], list[dict], list[dict], list[dict]]:
     full_rows = iter_full_cases()
     selected_rows = iter_selected_cases()
     test_rows = iter_test_cases()
+    evaluate_rows = iter_evaluate_cases(
+        full_rows=full_rows,
+        selected_rows=selected_rows,
+    )
 
     _print_stats("benchmark_full.yaml", full_rows)
+    _print_stats("benchmark_evaluate.yaml", evaluate_rows)
     _print_stats("benchmark_selected.yaml", selected_rows)
     _print_stats("benchmark_test.yaml", test_rows)
 
     benchmark_dir = Path(cur_path)
     for name, rows in (
         ("benchmark_full.yaml", full_rows),
+        ("benchmark_evaluate.yaml", evaluate_rows),
         ("benchmark_selected.yaml", selected_rows),
         ("benchmark_test.yaml", test_rows),
     ):
         out_path = benchmark_dir / name
+        content = yaml.dump({"cases": rows}, sort_keys=False, allow_unicode=True)
+        if name == "benchmark_evaluate.yaml":
+            content = EVALUATE_HEADER + content
         out_path.write_text(
-            yaml.dump({"cases": rows}, sort_keys=False, allow_unicode=True),
+            content,
             encoding="utf-8",
         )
         print(f"Wrote {len(rows)} cases to {out_path}")
 
-    return full_rows, selected_rows, test_rows
+    return full_rows, evaluate_rows, selected_rows, test_rows
 
 
 if __name__ == "__main__":
