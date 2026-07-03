@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from nika.service.mcp_server.task_mcp_server import _validate_submission, submit
+from nika.workflows.eval.session import detection_confusion_metrics
 
 
 class TaskMcpSubmissionValidationTest(unittest.TestCase):
@@ -59,13 +60,18 @@ class TaskMcpSubmissionValidationTest(unittest.TestCase):
                 root_cause_name=["link_down"],
             )
 
-    def test_anomaly_submission_needs_some_supported_detail(self) -> None:
-        with self.assertRaisesRegex(ValueError, "is_anomaly=True"):
-            _validate_submission(
-                is_anomaly=True,
-                faulty_devices=[],
-                root_cause_name=[],
-            )
+    def test_accepts_anomaly_only_submission_for_inconclusive_localization(
+        self,
+    ) -> None:
+        parsed = _validate_submission(
+            is_anomaly=True,
+            faulty_devices=[],
+            root_cause_name=[],
+        )
+
+        self.assertTrue(parsed.is_anomaly)
+        self.assertEqual(parsed.faulty_devices, [])
+        self.assertEqual(parsed.root_cause_name, [])
 
     def test_submit_does_not_write_invalid_problem_names(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -100,6 +106,40 @@ class TaskMcpSubmissionValidationTest(unittest.TestCase):
         self.assertEqual(result, ["Submission success."])
         self.assertEqual(submission["faulty_devices"], ["pc1"])
         self.assertEqual(submission["root_cause_name"], ["link_down"])
+
+
+class DetectionConfusionMetricsTest(unittest.TestCase):
+    def test_false_positive_anomaly_submission_is_visible(self) -> None:
+        metrics = detection_confusion_metrics(
+            {"is_anomaly": False},
+            {"is_anomaly": True},
+        )
+
+        self.assertTrue(metrics["detection_valid"])
+        self.assertEqual(metrics["detection_tp"], 0)
+        self.assertEqual(metrics["detection_tn"], 0)
+        self.assertEqual(metrics["detection_fp"], 1)
+        self.assertEqual(metrics["detection_fn"], 0)
+        self.assertEqual(metrics["detection_precision"], 0.0)
+        self.assertEqual(metrics["detection_false_positive_rate"], 1.0)
+        self.assertIsNone(metrics["detection_recall"])
+
+    def test_true_positive_anomaly_submission_has_full_detection_breakdown(
+        self,
+    ) -> None:
+        metrics = detection_confusion_metrics(
+            {"is_anomaly": True},
+            {"is_anomaly": True},
+        )
+
+        self.assertTrue(metrics["detection_valid"])
+        self.assertEqual(metrics["detection_tp"], 1)
+        self.assertEqual(metrics["detection_tn"], 0)
+        self.assertEqual(metrics["detection_fp"], 0)
+        self.assertEqual(metrics["detection_fn"], 0)
+        self.assertEqual(metrics["detection_precision"], 1.0)
+        self.assertEqual(metrics["detection_recall"], 1.0)
+        self.assertEqual(metrics["detection_f1"], 1.0)
 
 
 if __name__ == "__main__":

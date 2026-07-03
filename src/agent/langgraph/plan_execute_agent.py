@@ -16,6 +16,13 @@ from typing_extensions import TypedDict
 from agent.langgraph.phases.diagnosis import DiagnosisPhase as DiagnosisAgent
 from agent.langgraph.phases.submission import SubmissionPhase as SubmissionAgent
 from agent.langgraph.langfuse_tracing import callback_config, create_langfuse_callbacks
+from agent.langgraph.evidence_gate import (
+    ToolObservation,
+    evidence_gate_enabled,
+    evidence_gate_plan_steps,
+    evaluate_fault_family_evidence,
+    observations_from_runtime_snapshot,
+)
 from agent.langgraph.workflow_models import (
     InvestigationPlan,
     PlanStep,
@@ -92,12 +99,14 @@ class PlanExecuteAgent:
         tool_planned_checks: int = 4,
         tool_next_checks: int = 2,
         use_problem_tool_hints: bool = True,
+        evidence_gate_enabled: bool = True,
     ) -> None:
         if max_steps < 1:
             raise ValueError("max_steps must be >= 1")
 
         self.session_id = session_id
         self.max_steps = max_steps
+        self.evidence_gate_enabled = evidence_gate_enabled
         self.session = Session()
         self.session.load_running_session(session_id=session_id)
         self.session_dir = self.session.session_dir
@@ -218,6 +227,48 @@ class PlanExecuteAgent:
             agent="diagnosis_agent",
             session_dir=self.session_dir,
             extra_fields={"phase": phase},
+        )
+
+    def _current_tool_observations(
+        self,
+        state: PlanExecuteState,
+    ) -> list[ToolObservation]:
+        observations: list[ToolObservation] = []
+        runtime = getattr(self, "skill_tool_runtime", None)
+        if runtime is not None and hasattr(runtime, "snapshot"):
+            observations.extend(observations_from_runtime_snapshot(runtime.snapshot()))
+        for item in state.get("completed_steps", []):
+            observations.append(
+                ToolObservation(
+                    tool=item.step.action,
+                    tool_input=item.step.expected_evidence,
+                    summary=item.observation,
+                )
+            )
+        return observations
+
+    def _diagnosis_tool_names(self) -> list[str]:
+        if getattr(self, "diagnosis_tool_names", None):
+            return list(self.diagnosis_tool_names)
+        phase = getattr(self, "_diagnosis_phase", None)
+        return [tool.name for tool in getattr(phase, "tools", []) or []]
+
+    def _evidence_gate(
+        self,
+        *,
+        state: PlanExecuteState,
+        diagnosis_report: str,
+    ):
+        return evaluate_fault_family_evidence(
+            task_description=state.get("task_description", ""),
+            diagnosis_report=diagnosis_report,
+            observations=self._current_tool_observations(state),
+            available_tools=self._diagnosis_tool_names(),
+        )
+
+    def _is_evidence_gate_enabled(self) -> bool:
+        return evidence_gate_enabled(
+            bool(getattr(self, "evidence_gate_enabled", True))
         )
 
     async def run(self, task_description: str) -> dict[str, Any]:
@@ -373,6 +424,30 @@ class PlanExecuteAgent:
             )
             decision = ReplanDecision.model_validate(raw_decision)
             if decision.completed:
+                gate = None
+                if self._is_evidence_gate_enabled():
+                    gate = self._evidence_gate(
+                        state=state,
+                        diagnosis_report=decision.diagnosis_report,
+                    )
+                if (
+                    gate is not None
+                    and not gate.sufficient
+                    and state.get("executed_steps", 0) < self.max_steps
+                ):
+                    callback._log(
+                        "evidence_gate_blocked",
+                        gate.to_log_payload(),
+                    )
+                    gate_steps = [
+                        PlanStep.model_validate(item)
+                        for item in evidence_gate_plan_steps(gate)
+                    ]
+                    if gate_steps:
+                        return {
+                            "diagnosis_report": "",
+                            "plan": gate_steps,
+                        }
                 return {
                     "diagnosis_report": decision.diagnosis_report,
                     "plan": [],

@@ -40,14 +40,14 @@ def learning_backend(default: str | None) -> str | None:
     value = os.getenv(ENV_LEARNING_LLM_BACKEND)
     if value is None:
         return default
-    return value.strip() or None
+    return value.strip() or default
 
 
 def learning_model(default: str | None) -> str | None:
     value = os.getenv(ENV_LEARNING_LLM_MODEL)
     if value is None:
         return default
-    return value.strip() or None
+    return value.strip() or default
 
 
 def format_learning_error(exc: Exception) -> str:

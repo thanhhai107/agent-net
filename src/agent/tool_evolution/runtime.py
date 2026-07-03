@@ -276,7 +276,9 @@ class ToolEvolutionRuntime:
             "to choose valid arguments, avoid known failure modes, and follow "
             "DRAFT Explorer/Analyzer/Rewriter next-check suggestions when more "
             "evidence is needed. Treat DRAFT guidance as tool-use guidance, not "
-            "as evidence by itself.\n"
+            "as evidence by itself. Use DRAFT checks to distinguish competing "
+            "hypotheses; do not transfer faulty-device or root-cause labels from "
+            "past trials.\n"
             + (
                 f"{state.library_usage_description}\n"
                 if state.library_usage_description and not tool_filter
@@ -315,7 +317,8 @@ class ToolEvolutionRuntime:
         )
         if planned:
             planned_text = (
-                "DRAFT planned active checks: " + _format_checks(planned)
+                "DRAFT planned active checks to distinguish hypotheses: "
+                + _format_checks(planned)
             )[: max(160, max_chars // 2)]
             base_budget = max(200, max_chars - len(planned_text) - 1)
             text = self._refined_description(

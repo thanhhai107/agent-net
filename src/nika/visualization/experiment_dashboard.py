@@ -323,6 +323,14 @@ def _sum(values: list[float]) -> str:
     return "-" if not values else f"{sum(values):.0f}"
 
 
+def _ratio(numerator: float, denominator: float) -> str:
+    return "-" if denominator <= 0 else f"{numerator / denominator:.2f}"
+
+
+def _fmt_delta(value: float | None) -> str:
+    return "-" if value is None else f"{value:+.2f}"
+
+
 def _parse_duration(meta: dict) -> float | None:
     st = meta.get("start_time")
     et = meta.get("end_time")
@@ -344,6 +352,114 @@ def _top_result_root(run_path: Path) -> Path:
     return RESULTS_DIR / rel.parts[0]
 
 
+def _case_key(meta: dict) -> object:
+    if meta.get("benchmark_index") is not None:
+        return meta.get("benchmark_index")
+    problem_names = meta.get("problem_names") or []
+    return (
+        meta.get("root_cause_name"),
+        tuple(problem_names),
+        meta.get("scenario_name"),
+        meta.get("fault_seed"),
+    )
+
+
+def _is_baseline_meta(meta: dict) -> bool:
+    return (
+        not bool(meta.get("tool_evolution_enabled"))
+        and str(meta.get("memory_mode") or "off") == "off"
+    )
+
+
+def _metric_total(metrics: dict) -> float | None:
+    values = [
+        _float(metrics.get("detection_score")),
+        _float(metrics.get("localization_f1")),
+        _float(metrics.get("rca_f1")),
+    ]
+    if any(value is None for value in values):
+        return None
+    return sum(value or 0.0 for value in values) / 3
+
+
+def _root_case_map(run_paths: list[Path]) -> dict[object, dict[str, object]]:
+    cases: dict[object, dict[str, object]] = {}
+    for run_path in run_paths:
+        meta = _read_json(run_path)
+        metrics = _read_json(run_path.parent / "eval_metrics.json")
+        key = _case_key(meta)
+        if key is None:
+            continue
+        cases[key] = {"meta": meta, "metrics": metrics}
+    return cases
+
+
+def _paired_stats(
+    *,
+    root: Path,
+    root_cases: dict[Path, dict[object, dict[str, object]]],
+    baseline_roots: list[Path],
+) -> dict[str, object]:
+    target_cases = root_cases.get(root) or {}
+    if not target_cases:
+        return {}
+    candidate_rows: list[tuple[int, float, Path, set[object]]] = []
+    target_keys = set(target_cases)
+    for baseline_root in baseline_roots:
+        if baseline_root == root:
+            continue
+        baseline_cases = root_cases.get(baseline_root) or {}
+        overlap = target_keys & set(baseline_cases)
+        if not overlap:
+            continue
+        mtime = baseline_root.stat().st_mtime if baseline_root.exists() else 0.0
+        candidate_rows.append((len(overlap), mtime, baseline_root, overlap))
+    if not candidate_rows:
+        return {}
+    _, _, baseline_root, overlap = max(candidate_rows)
+    deltas: dict[str, list[float]] = {
+        "detection_score": [],
+        "localization_f1": [],
+        "rca_f1": [],
+    }
+    wins = losses = ties = 0
+    for key in overlap:
+        target_metrics = target_cases[key]["metrics"]
+        baseline_metrics = root_cases[baseline_root][key]["metrics"]
+        for metric, values in deltas.items():
+            target_value = _float(target_metrics.get(metric))
+            baseline_value = _float(baseline_metrics.get(metric))
+            if target_value is not None and baseline_value is not None:
+                values.append(target_value - baseline_value)
+        target_total = _metric_total(target_metrics)
+        baseline_total = _metric_total(baseline_metrics)
+        if target_total is None or baseline_total is None:
+            continue
+        delta = target_total - baseline_total
+        if delta > 0.01:
+            wins += 1
+        elif delta < -0.01:
+            losses += 1
+        else:
+            ties += 1
+    return {
+        "paired_baseline": baseline_root.name,
+        "paired_cases": len(overlap),
+        "paired_delta_detection": _fmt_delta(_avg_float(deltas["detection_score"])),
+        "paired_delta_localization_f1": _fmt_delta(
+            _avg_float(deltas["localization_f1"])
+        ),
+        "paired_delta_rca_f1": _fmt_delta(_avg_float(deltas["rca_f1"])),
+        "paired_wins": wins,
+        "paired_losses": losses,
+        "paired_ties": ties,
+    }
+
+
+def _avg_float(values: list[float]) -> float | None:
+    return None if not values else sum(values) / len(values)
+
+
 def _result_rows(*, benchmark_name: str | None = None) -> list[dict[str, object]]:
     if not RESULTS_DIR.exists():
         return []
@@ -357,6 +473,21 @@ def _result_rows(*, benchmark_name: str | None = None) -> list[dict[str, object]
         group_key = root
         grouped.setdefault(group_key, []).append(run_path)
 
+    root_cases = {
+        root: _root_case_map(run_paths)
+        for root, run_paths in grouped.items()
+    }
+    baseline_roots = [
+        root
+        for root, cases in root_cases.items()
+        if cases
+        and all(
+            _is_baseline_meta(case["meta"])
+            for case in cases.values()
+            if isinstance(case.get("meta"), dict)
+        )
+    ]
+
     rows: list[dict[str, object]] = []
     for gkey, run_paths in sorted(
         grouped.items(),
@@ -368,6 +499,10 @@ def _result_rows(*, benchmark_name: str | None = None) -> list[dict[str, object]
         rca_f1s: list[float] = []
         localization_precisions: list[float] = []
         rca_precisions: list[float] = []
+        detection_tp = 0.0
+        detection_tn = 0.0
+        detection_fp = 0.0
+        detection_fn = 0.0
         tool_calls: list[float] = []
         in_tokens: list[float] = []
         out_tokens: list[float] = []
@@ -416,6 +551,11 @@ def _result_rows(*, benchmark_name: str | None = None) -> list[dict[str, object]
                 if value is not None:
                     target.append(value)
 
+            detection_tp += _float(metrics.get("detection_tp")) or 0.0
+            detection_tn += _float(metrics.get("detection_tn")) or 0.0
+            detection_fp += _float(metrics.get("detection_fp")) or 0.0
+            detection_fn += _float(metrics.get("detection_fn")) or 0.0
+
             memory_update = metrics.get("memory_update") or {}
             if isinstance(memory_update, dict):
                 for key, target in (
@@ -428,7 +568,9 @@ def _result_rows(*, benchmark_name: str | None = None) -> list[dict[str, object]
                     if value is not None:
                         target.append(value)
                 if memory_update.get("episode_success") is not None:
-                    memory_successes.append(1.0 if memory_update.get("episode_success") else 0.0)
+                    memory_successes.append(
+                        1.0 if memory_update.get("episode_success") else 0.0
+                    )
             for key, target in (
                 ("draft_planned_explorations", draft_planned),
                 ("draft_consumed_explorations", draft_consumed),
@@ -458,38 +600,58 @@ def _result_rows(*, benchmark_name: str | None = None) -> list[dict[str, object]
 
         display_name = gkey.name
 
-        rows.append(
-            {
-                "result_root": display_name,
-                "cases": len(run_paths),
-                "finished": finished,
-                "failed": failed,
-                "submitted": submitted,
-                "detection_score": _avg(detections),
-                "localization_f1": _avg(localization_f1s),
-                "rca_f1": _avg(rca_f1s),
-                "localization_precision": _avg(localization_precisions),
-                "rca_precision": _avg(rca_precisions),
-                "tool_calls": _avg(tool_calls),
-                "tool_errors": _sum(tool_errors),
-                "token_in": _sum(in_tokens),
-                "token_out": _sum(out_tokens),
-                "memory_reward": _avg(memory_rewards),
-                "memory_advantage": _avg(memory_advantages),
-                "memory_success": _avg(memory_successes),
-                "memory_added_tokens": _sum(memory_added_tokens),
-                "memory_delta_tokens_step": _avg(memory_delta_tokens),
-                "memory_selector": ", ".join(sorted(memory_selectors)) or "-",
-                "memory_controller": ", ".join(sorted(memory_controllers)) or "-",
-                "draft_planned": _sum(draft_planned),
-                "draft_consumed": _sum(draft_consumed),
-                "duration": f"{int(sum(durations))}s" if durations else "-",
-                "modules": ", ".join(sorted(result_modules)) or "-",
-                "agent": ", ".join(sorted(agents)) or "-",
-                "model": ", ".join(sorted(models)) or "-",
-                "updated": updated,
-            }
+        row = {
+            "result_root": display_name,
+            "cases": len(run_paths),
+            "finished": finished,
+            "failed": failed,
+            "submitted": submitted,
+            "detection_score": _avg(detections),
+            "detection_precision": _ratio(detection_tp, detection_tp + detection_fp),
+            "detection_recall": _ratio(detection_tp, detection_tp + detection_fn),
+            "detection_f1": (
+                "-"
+                if detection_tp + detection_fp <= 0
+                or detection_tp + detection_fn <= 0
+                else _ratio(
+                    2 * detection_tp,
+                    2 * detection_tp + detection_fp + detection_fn,
+                )
+            ),
+            "detection_fpr": _ratio(detection_fp, detection_fp + detection_tn),
+            "detection_fp": f"{detection_fp:.0f}",
+            "detection_fn": f"{detection_fn:.0f}",
+            "localization_f1": _avg(localization_f1s),
+            "rca_f1": _avg(rca_f1s),
+            "localization_precision": _avg(localization_precisions),
+            "rca_precision": _avg(rca_precisions),
+            "tool_calls": _avg(tool_calls),
+            "tool_errors": _sum(tool_errors),
+            "token_in": _sum(in_tokens),
+            "token_out": _sum(out_tokens),
+            "memory_reward": _avg(memory_rewards),
+            "memory_advantage": _avg(memory_advantages),
+            "memory_success": _avg(memory_successes),
+            "memory_added_tokens": _sum(memory_added_tokens),
+            "memory_delta_tokens_step": _avg(memory_delta_tokens),
+            "memory_selector": ", ".join(sorted(memory_selectors)) or "-",
+            "memory_controller": ", ".join(sorted(memory_controllers)) or "-",
+            "draft_planned": _sum(draft_planned),
+            "draft_consumed": _sum(draft_consumed),
+            "duration": f"{int(sum(durations))}s" if durations else "-",
+            "modules": ", ".join(sorted(result_modules)) or "-",
+            "agent": ", ".join(sorted(agents)) or "-",
+            "model": ", ".join(sorted(models)) or "-",
+            "updated": updated,
+        }
+        row.update(
+            _paired_stats(
+                root=gkey,
+                root_cases=root_cases,
+                baseline_roots=baseline_roots,
+            )
         )
+        rows.append(row)
     return rows
 
 
@@ -1016,8 +1178,13 @@ if not result_rows:
     import pandas as pd
     cols = [
         "result_root", "cases", "finished", "failed", "submitted",
-        "detection_score", "localization_f1", "rca_f1",
+        "detection_score", "detection_precision", "detection_recall",
+        "detection_f1", "detection_fpr", "detection_fp", "detection_fn",
+        "localization_f1", "rca_f1",
         "localization_precision", "rca_precision", "tool_calls", "tool_errors",
+        "paired_baseline", "paired_cases", "paired_delta_detection",
+        "paired_delta_localization_f1", "paired_delta_rca_f1",
+        "paired_wins", "paired_losses", "paired_ties",
         "token_in", "token_out", "memory_reward", "memory_advantage",
         "memory_success", "memory_added_tokens", "memory_delta_tokens_step",
         "memory_selector", "memory_controller", "draft_planned", "draft_consumed",

@@ -74,10 +74,6 @@ def _validate_submission(
         raise ValueError(
             "is_anomaly=False requires empty faulty_devices and root_cause_name."
         )
-    if parsed.is_anomaly and not (parsed.faulty_devices or parsed.root_cause_name):
-        raise ValueError(
-            "is_anomaly=True requires at least one supported faulty_device or root_cause_name."
-        )
 
     available = set(_list_avail_problems())
     invalid = [name for name in parsed.root_cause_name if name not in available]

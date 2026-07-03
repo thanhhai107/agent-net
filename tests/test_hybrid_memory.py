@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, patch
 
 from langchain_core.tools import StructuredTool
 
+from agent.memory.attributes import infer_memory_attributes
 from agent.memory.models import (
     EvaluationEvidence,
     MemoryQuery,
@@ -37,6 +38,22 @@ from nika.workflows.eval.session import run_eval_metrics
 
 
 class SkillProMemoryTest(unittest.TestCase):
+    def test_attribute_mining_ignores_scenario_design_noise(self) -> None:
+        attrs = infer_memory_attributes(
+            (
+                "Network Description: OSPF enterprise network with DHCP, DNS, "
+                "HTTP web services and load balancer.\n\n"
+                "Your goal is to analyze the network condition."
+            ),
+            scenario="ospf_enterprise_dhcp",
+            topology_class="s",
+            tools=[],
+        )
+
+        self.assertNotIn("ospf", attrs.protocols)
+        self.assertNotIn("dhcp", attrs.protocols)
+        self.assertNotIn("addressing", attrs.services)
+
     def test_detection_only_episode_gets_no_positive_learning_reward(self) -> None:
         detection_only = EvaluationEvidence(
             session_id="s-detect-only",
@@ -243,6 +260,124 @@ class SkillProMemoryTest(unittest.TestCase):
         self.assertIn(report["skill_id"], [item.skill.skill_id for item in retrieved])
         self.assertIn("Activation", context)
         self.assertNotIn("bgp_missing_route_advertisement", context)
+
+    def test_retrieval_blocks_learned_skill_without_current_signature(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            module = ProceduralMemoryModule(
+                bank_id="skill",
+                store_path=Path(tmp) / "skills.json",
+            )
+            state = module.store.load()
+            state.skills["missing_ip_skill"] = ProceduralSkill(
+                skill_id="missing_ip_skill",
+                title="Missing IP procedure",
+                activation_condition="Use when current evidence shows a host has no IPv4 address.",
+                execution_steps=[
+                    SkillStep(
+                        order=1,
+                        action="Check the host interface address.",
+                        tool_name="get_host_net_config",
+                    )
+                ],
+                termination_condition="Stop after IP assignment evidence is collected.",
+                scenarios=["ospf_enterprise_dhcp"],
+                services=["addressing"],
+                symptoms=["missing_ip"],
+                tools=["get_host_net_config"],
+                status="validated",
+                score=1.0,
+            )
+            module.store.save(state)
+
+            retrieved = module.retrieve(
+                query=MemoryQuery(
+                    text="Generic enterprise network diagnosis with no current observations.",
+                    scenario="ospf_enterprise_dhcp",
+                    top_k=5,
+                )
+            )
+
+        self.assertNotIn("missing_ip_skill", [item.skill.skill_id for item in retrieved])
+
+    def test_retrieval_blocks_symptom_mismatched_learned_skill(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            module = ProceduralMemoryModule(
+                bank_id="skill",
+                store_path=Path(tmp) / "skills.json",
+            )
+            state = module.store.load()
+            state.skills["missing_ip_skill"] = ProceduralSkill(
+                skill_id="missing_ip_skill",
+                title="Missing IP procedure",
+                activation_condition="Use when current evidence shows a host has no IPv4 address.",
+                execution_steps=[
+                    SkillStep(
+                        order=1,
+                        action="Check the host interface address.",
+                        tool_name="get_host_net_config",
+                    )
+                ],
+                termination_condition="Stop after IP assignment evidence is collected.",
+                scenarios=["ospf_enterprise_dhcp"],
+                services=["addressing"],
+                symptoms=["missing_ip"],
+                tools=["get_host_net_config"],
+                status="validated",
+                score=1.0,
+            )
+            module.store.save(state)
+
+            retrieved = module.retrieve(
+                query=MemoryQuery(
+                    text="Current evidence shows the host uses an incorrect default gateway.",
+                    scenario="ospf_enterprise_dhcp",
+                    services=["addressing"],
+                    symptoms=["bad_gateway"],
+                    tools=["get_host_net_config"],
+                    top_k=5,
+                )
+            )
+
+        self.assertNotIn("missing_ip_skill", [item.skill.skill_id for item in retrieved])
+
+    def test_partial_rca_episode_is_not_promoted_to_reusable_skill(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            module = ProceduralMemoryModule(
+                bank_id="skill",
+                store_path=Path(tmp) / "skills.json",
+                evolution_threshold=1,
+            )
+            before = set(module.store.load().skills)
+            report = module.learn_from_episode(
+                evidence=EvaluationEvidence(
+                    session_id="partial",
+                    task_description="Host reachability failure.",
+                    scenario="ospf_enterprise_dhcp",
+                    metrics={
+                        "detection_score": 1.0,
+                        "localization_accuracy": 1.0,
+                        "localization_f1": 1.0,
+                        "rca_accuracy": 0.0,
+                        "rca_f1": 0.0,
+                    },
+                    steps=6,
+                    tool_calls=4,
+                    success=False,
+                ),
+                tool_steps=[
+                    SkillStep(
+                        order=1,
+                        action="Check host network configuration.",
+                        tool_name="get_host_net_config",
+                        observation_summary="Host has no IPv4 address.",
+                    )
+                ],
+            )
+            after = set(module.store.load().skills)
+
+        self.assertEqual(report["status"], "rejected")
+        self.assertIn("unsafe", report["reason"])
+        self.assertEqual(after, before)
 
     def test_runtime_context_does_not_label_candidate_as_active_without_active_skill(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

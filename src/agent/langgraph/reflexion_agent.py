@@ -16,6 +16,12 @@ from typing_extensions import TypedDict
 from agent.langgraph.phases.diagnosis import DiagnosisPhase as DiagnosisAgent
 from agent.langgraph.phases.submission import SubmissionPhase as SubmissionAgent
 from agent.langgraph.langfuse_tracing import callback_config, create_langfuse_callbacks
+from agent.langgraph.evidence_gate import (
+    ToolObservation,
+    evidence_gate_enabled,
+    evaluate_fault_family_evidence,
+    observations_from_runtime_snapshot,
+)
 from agent.langgraph.workflow_models import ReflexionEvaluation, ReflexionMemory
 from agent.llm.model_factory import DEFAULT_LLM_BACKEND, DEFAULT_MODEL, load_model
 from agent.memory.runtime import strip_integrated_learning_guidance
@@ -106,6 +112,7 @@ class ReflexionAgent:
         tool_planned_checks: int = 4,
         tool_next_checks: int = 2,
         use_problem_tool_hints: bool = True,
+        evidence_gate_enabled: bool = True,
     ) -> None:
         if max_steps < 1:
             raise ValueError("max_steps must be >= 1")
@@ -115,6 +122,7 @@ class ReflexionAgent:
         self.session_id = session_id
         self.max_steps = max_steps
         self.max_attempts = max_attempts
+        self.evidence_gate_enabled = evidence_gate_enabled
         self.session = Session()
         self.session.load_running_session(session_id=session_id)
         self.session_dir = self.session.session_dir
@@ -231,6 +239,52 @@ class ReflexionAgent:
             agent="diagnosis_agent",
             session_dir=self.session_dir,
             extra_fields={"phase": phase},
+        )
+
+    def _diagnosis_tool_names(self) -> list[str]:
+        if getattr(self, "diagnosis_tool_names", None):
+            return list(self.diagnosis_tool_names)
+        phase = getattr(self, "_diagnosis_phase", None)
+        return [tool.name for tool in getattr(phase, "tools", []) or []]
+
+    def _current_tool_observations(
+        self,
+        state: ReflexionState,
+    ) -> list[ToolObservation]:
+        observations: list[ToolObservation] = []
+        runtime = getattr(self, "skill_tool_runtime", None)
+        if runtime is not None and hasattr(runtime, "snapshot"):
+            observations.extend(observations_from_runtime_snapshot(runtime.snapshot()))
+        for item in state.get("attempt_trace", []):
+            if not isinstance(item, dict):
+                continue
+            message_type = str(item.get("type") or "")
+            name = str(item.get("name") or "")
+            content = str(item.get("content") or "")
+            if "ToolMessage" not in message_type and not name:
+                continue
+            observations.append(
+                ToolObservation(
+                    tool=name,
+                    summary=content,
+                )
+            )
+        return observations
+
+    def _evidence_gate(
+        self,
+        state: ReflexionState,
+    ):
+        return evaluate_fault_family_evidence(
+            task_description=state.get("task_description", ""),
+            diagnosis_report=state.get("attempt_report", ""),
+            observations=self._current_tool_observations(state),
+            available_tools=self._diagnosis_tool_names(),
+        )
+
+    def _is_evidence_gate_enabled(self) -> bool:
+        return evidence_gate_enabled(
+            bool(getattr(self, "evidence_gate_enabled", True))
         )
 
     def _route_after_evaluation(self, state: ReflexionState) -> str:
@@ -406,6 +460,30 @@ class ReflexionAgent:
                 config={"callbacks": [callback]},
             )
             evaluation = ReflexionEvaluation.model_validate(raw_evaluation)
+            gate = (
+                self._evidence_gate(state)
+                if self._is_evidence_gate_enabled()
+                else None
+            )
+            if gate is not None and not gate.sufficient:
+                callback._log("evidence_gate_blocked", gate.to_log_payload())
+                evaluation = ReflexionEvaluation(
+                    success=False,
+                    quality_score=min(evaluation.quality_score, 0.79),
+                    evidence_sufficient=False,
+                    anomaly_assessment=evaluation.anomaly_assessment,
+                    localization_assessment=evaluation.localization_assessment,
+                    root_cause_assessment=evaluation.root_cause_assessment,
+                    contradictions=list(evaluation.contradictions),
+                    missing_evidence=[
+                        *evaluation.missing_evidence,
+                        *gate.missing_evidence,
+                    ],
+                    failure_reasons=[
+                        *evaluation.failure_reasons,
+                        "Fault-family evidence gate did not pass.",
+                    ],
+                )
             update: dict[str, Any] = {
                 "evaluation": evaluation,
                 "evaluation_failed": False,

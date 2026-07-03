@@ -8,7 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 from langgraph.errors import GraphRecursionError
 from pydantic import ValidationError
@@ -25,6 +25,11 @@ from agent.langgraph.plan_execute_agent import (
     REPLANNER_PROMPT,
     SYNTHESIS_PROMPT,
     PlanExecuteAgent,
+)
+from agent.langgraph.evidence_gate import (
+    ToolObservation,
+    evidence_gate_enabled,
+    evaluate_fault_family_evidence,
 )
 from agent.langgraph.phases.diagnosis import DiagnosisPhase
 from agent.langgraph.react_agent import BasicReActAgent
@@ -62,7 +67,11 @@ from agent.llm.model_factory import (
 )
 from agent.registry import create_agent
 from agent.utils.loggers import AgentCallbackLogger
-from agent.utils.template import EVIDENCE_CONTRACT_PROMPT, OVERALL_DIAGNOSIS_PROMPT
+from agent.utils.template import (
+    DISCRIMINATING_EVIDENCE_PROMPT,
+    EVIDENCE_CONTRACT_PROMPT,
+    OVERALL_DIAGNOSIS_PROMPT,
+)
 from nika.cli.commands.agent import (
     SUPPORTED_AGENT_TYPES,
     SUPPORTED_LLM_BACKENDS,
@@ -122,7 +131,14 @@ class WorkflowModelTest(unittest.TestCase):
 
     def test_diagnosis_prompt_has_evidence_based_stop_condition(self) -> None:
         self.assertIn("Stop calling tools", OVERALL_DIAGNOSIS_PROMPT)
-        self.assertIn("final diagnosis report", OVERALL_DIAGNOSIS_PROMPT)
+        self.assertIn("Final report format", OVERALL_DIAGNOSIS_PROMPT)
+        self.assertIn(
+            "Discriminating evidence policy",
+            DISCRIMINATING_EVIDENCE_PROMPT,
+        )
+        self.assertIn("Discriminating evidence policy", EVIDENCE_CONTRACT_PROMPT)
+        self.assertNotIn("DNS/resolver", OVERALL_DIAGNOSIS_PROMPT)
+        self.assertNotIn("BGP", OVERALL_DIAGNOSIS_PROMPT)
 
     def test_plan_requires_at_least_one_valid_step(self) -> None:
         with self.assertRaises(ValidationError):
@@ -148,6 +164,80 @@ class WorkflowModelTest(unittest.TestCase):
                 localization_assessment="Device identified",
                 root_cause_assessment="Cause identified",
             )
+
+
+class EvidenceGateTest(unittest.TestCase):
+    def test_dns_gate_blocks_reachability_only_report(self) -> None:
+        result = evaluate_fault_family_evidence(
+            task_description="Users cannot resolve local DNS names.",
+            diagnosis_report=(
+                "Anomaly exists. The root cause is DNS service failure on dns_server."
+            ),
+            observations=[
+                ToolObservation(
+                    tool="ping_pair",
+                    summary="pc_1_1 can ping dns_server successfully.",
+                )
+            ],
+            available_tools=[
+                "ping_pair",
+                "curl_web_test",
+                "cat_file",
+                "systemctl_ops",
+                "netstat",
+            ],
+        )
+
+        self.assertFalse(result.sufficient)
+        self.assertIn("DNS/resolver", result.families)
+        self.assertTrue(
+            any("DNS/resolver" in item for item in result.missing_evidence)
+        )
+        self.assertIn("Evidence gate blocked finalization", result.prompt)
+
+    def test_dns_gate_accepts_resolution_or_resolver_evidence(self) -> None:
+        result = evaluate_fault_family_evidence(
+            task_description="Users cannot resolve local DNS names.",
+            diagnosis_report=(
+                "Anomaly exists. DNS lookup for web0.local fails from pc_1_1."
+            ),
+            observations=[
+                ToolObservation(
+                    tool="exec_shell",
+                    summary="nslookup web0.local returns SERVFAIL from dns_server.",
+                )
+            ],
+            available_tools=["exec_shell", "curl_web_test", "cat_file"],
+        )
+
+        self.assertTrue(result.sufficient)
+        self.assertEqual(result.missing_evidence, ())
+
+    def test_bgp_gate_blocks_ping_only_route_report(self) -> None:
+        result = evaluate_fault_family_evidence(
+            task_description="BGP missing route advertisement between leaves.",
+            diagnosis_report=(
+                "Anomaly exists. Root cause is missing BGP advertisement on leaf_router_0_0."
+            ),
+            observations=[
+                ToolObservation(
+                    tool="ping_pair",
+                    summary="Traffic fails between hosts in different racks.",
+                )
+            ],
+            available_tools=[
+                "ping_pair",
+                "frr_show_bgp_summary",
+                "frr_get_bgp_conf",
+                "frr_show_ip_route",
+            ],
+        )
+
+        self.assertFalse(result.sufficient)
+        self.assertIn("BGP control plane", result.families)
+        self.assertTrue(
+            any("frr_show_bgp_summary" in item for item in result.suggested_steps)
+        )
 
 
 class WorkflowRegistrationTest(unittest.TestCase):
@@ -749,6 +839,87 @@ class ReactBehaviorTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Current integrated learning context", messages[1].content)
         self.assertIn("react_route", messages[1].content)
         self.assertEqual(update["diagnosis_report"], "Evidence-backed report")
+
+    async def test_diagnosis_retries_when_evidence_gate_blocks_report(self) -> None:
+        self.agent.evidence_gate_retries = 1
+        self.agent.diagnosis_tool_names = ["ping_pair", "exec_shell"]
+        self.agent.skill_tool_runtime = None
+        self.agent.diagnosis_agent = AsyncMock()
+        self.agent.diagnosis_agent.ainvoke.side_effect = [
+            {
+                "messages": [
+                    AIMessage(
+                        content=(
+                            "Anomaly exists. Root cause is DNS service failure on dns_server."
+                        )
+                    )
+                ]
+            },
+            {
+                "messages": [
+                    ToolMessage(
+                        content="nslookup web0.local returns SERVFAIL from dns_server.",
+                        tool_call_id="call_1",
+                        name="exec_shell",
+                    ),
+                    AIMessage(
+                        content=(
+                            "Anomaly exists. DNS resolution fails based on nslookup "
+                            "SERVFAIL from dns_server."
+                        )
+                    ),
+                ]
+            },
+        ]
+
+        update = await self.agent.diagnosis_agent_builder(
+            {
+                "task_description": "Users cannot resolve local DNS names.",
+                "messages": [
+                    HumanMessage(content="Users cannot resolve local DNS names.")
+                ],
+            }
+        )
+
+        self.assertEqual(self.agent.diagnosis_agent.ainvoke.await_count, 2)
+        retry_payload = self.agent.diagnosis_agent.ainvoke.call_args_list[1].args[0]
+        self.assertIn(
+            "Evidence gate blocked finalization",
+            retry_payload["messages"][-1].content,
+        )
+        self.assertIn("DNS resolution fails", update["diagnosis_report"])
+
+    async def test_diagnosis_does_not_retry_when_evidence_gate_disabled(self) -> None:
+        self.agent.evidence_gate_enabled = False
+        self.agent.evidence_gate_retries = 1
+        self.agent.diagnosis_tool_names = ["ping_pair", "exec_shell"]
+        self.agent.skill_tool_runtime = None
+        self.agent.diagnosis_agent = AsyncMock()
+        self.agent.diagnosis_agent.ainvoke.return_value = {
+            "messages": [
+                AIMessage(
+                    content="Anomaly exists. Root cause is DNS service failure on dns_server."
+                )
+            ]
+        }
+
+        update = await self.agent.diagnosis_agent_builder(
+            {
+                "task_description": "Users cannot resolve local DNS names.",
+                "messages": [
+                    HumanMessage(content="Users cannot resolve local DNS names.")
+                ],
+            }
+        )
+
+        self.assertEqual(self.agent.diagnosis_agent.ainvoke.await_count, 1)
+        self.assertIn("DNS service failure", update["diagnosis_report"])
+
+    def test_evidence_gate_enabled_env_override(self) -> None:
+        with patch.dict("os.environ", {"NIKA_EVIDENCE_GATE_ENABLED": "false"}):
+            self.assertFalse(evidence_gate_enabled(default=True))
+        with patch.dict("os.environ", {"NIKA_EVIDENCE_GATE_ENABLED": "true"}):
+            self.assertTrue(evidence_gate_enabled(default=False))
 
     async def test_diagnosis_max_steps_matches_upstream_error_contract(
         self,

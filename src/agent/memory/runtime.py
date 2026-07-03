@@ -229,6 +229,8 @@ class SkillToolRuntime:
                 "- After each tool result, decide whether the active skill should continue, terminate, or switch.",
                 "- Skill termination only controls switching skills; it is not a final diagnosis stop condition.",
                 "- Treat DRAFT tool docs and next-check suggestions as tool-use guidance, not as evidence.",
+                "- Reuse a learned skill only when the current evidence signature matches its activation condition; if observations diverge, abandon the skill.",
+                "- Skills may suggest checks, but must not transfer a faulty device or root-cause label from a prior episode.",
                 "- Final diagnosis must cite current tool observations; memory and docs cannot replace evidence.",
             ]
             active_label = "Advisory Skill-MDP option selected before next LLM action"
@@ -239,6 +241,7 @@ class SkillToolRuntime:
                 "- Do not treat a candidate as activated or reused until an execution step or tool call selects it.",
                 "- Plan checks whose observations can test a skill initiation, advance a policy step, or verify termination.",
                 "- Treat DRAFT tool docs and next-check suggestions as tool-use guidance, not as evidence.",
+                "- Use retrieved skills to choose discriminating checks, not to predict the answer.",
                 "- Final diagnosis must cite current tool observations; memory and docs cannot replace evidence.",
             ]
             active_label = "Currently active Skill-MDP option from prior execution"
@@ -328,6 +331,10 @@ class SkillToolRuntime:
                 "Use this tool as part of the advisory Skill-MDP loop when its "
                 "output can test a current hypothesis, cover an untested "
                 "layer, or advance a skill policy step."
+            ),
+            (
+                "Do not infer faulty devices or root causes from learned tool "
+                "guidance alone; use the output as current-run evidence."
             ),
         ]
         if skill_lines:

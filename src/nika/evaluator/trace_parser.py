@@ -9,8 +9,7 @@ import json
 from collections.abc import Collection
 from datetime import datetime
 
-from agent.utils.phases import DIAGNOSIS
-
+DIAGNOSIS = "diagnosis"
 DIAGNOSIS_AGENT_NAMES = frozenset({DIAGNOSIS, "diagnosis_agent"})
 
 

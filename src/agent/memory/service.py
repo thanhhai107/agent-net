@@ -65,6 +65,14 @@ def _metric_success(metrics: dict[str, Any]) -> bool:
     )
 
 
+def _safe_skill_promotion(metrics: dict[str, Any]) -> bool:
+    return (
+        float(metrics.get("detection_score") or 0) >= 1.0
+        and _component_reward(metrics, "localization") >= 0.6
+        and _component_reward(metrics, "rca") >= 0.6
+    )
+
+
 def _component_reward(metrics: dict[str, Any], prefix: str) -> float:
     accuracy = float(metrics.get(f"{prefix}_accuracy") or 0.0)
     precision = float(metrics.get(f"{prefix}_precision") or 0.0)
@@ -165,6 +173,29 @@ def _clamp(value: float, low: float, high: float) -> float:
 
 def _skill_base_id(skill_id: str) -> str:
     return re.sub(r"_v\d+(?:_[a-f0-9]{6})?$", "", skill_id)
+
+
+def _is_seed_skill(skill: ProceduralSkill) -> bool:
+    return skill.skill_id.startswith("seed_")
+
+
+def _episode_attribute_text(
+    evidence: EvaluationEvidence,
+    tool_steps: list[SkillStep],
+) -> str:
+    step_text = " ".join(
+        " ".join(
+            str(item or "")
+            for item in (
+                step.action,
+                step.tool_name,
+                step.arguments_hint,
+                step.observation_summary,
+            )
+        )
+        for step in tool_steps
+    )
+    return " ".join([evidence.task_description, step_text])
 
 
 def _redact_hidden_labels(text: str, evidence: EvaluationEvidence) -> str:
@@ -322,6 +353,14 @@ class ProceduralMemoryModule:
                 continue
             reasons: list[str] = []
             score = self._skill_effective_score(skill)
+            scope_delta, scope_reasons, scope_blocked = self._transfer_scope_adjustment(
+                skill=skill,
+                query=query,
+            )
+            if scope_blocked:
+                continue
+            score += scope_delta
+            reasons.extend(scope_reasons)
             if query.scenario and skill.scenarios:
                 if query.scenario in skill.scenarios:
                     score += 0.2
@@ -400,6 +439,64 @@ class ProceduralMemoryModule:
         if record_reuse:
             selected = self._record_skill_reuse(selected)
         return selected
+
+    def _transfer_scope_adjustment(
+        self,
+        *,
+        skill: ProceduralSkill,
+        query: MemoryQuery,
+    ) -> tuple[float, list[str], bool]:
+        if _is_seed_skill(skill):
+            return 0.0, [], False
+        reasons: list[str] = []
+        if query.scenario and skill.scenarios and query.scenario not in skill.scenarios:
+            return 0.0, [], True
+
+        query_scope = {
+            "protocol": set(query.protocols),
+            "service": set(query.services),
+            "symptom": set(query.symptoms),
+        }
+        skill_scope = {
+            "protocol": set(skill.protocols),
+            "service": set(skill.services),
+            "symptom": set(skill.symptoms),
+        }
+        discriminating_query_labels = set().union(*query_scope.values())
+        discriminating_skill_labels = set().union(*skill_scope.values())
+        if discriminating_skill_labels and not discriminating_query_labels:
+            return -0.45, ["needs_current_evidence_signature"], True
+
+        delta = 0.0
+        overlap_count = 0
+        mismatch_count = 0
+        for label, skill_values in skill_scope.items():
+            query_values = query_scope[label]
+            if not skill_values or not query_values:
+                continue
+            overlap = skill_values & query_values
+            if overlap:
+                overlap_count += len(overlap)
+                delta += 0.12 * len(overlap)
+                reasons.append(f"scope_{label}:{','.join(sorted(overlap))}")
+            else:
+                mismatch_count += 1
+                if label == "symptom":
+                    return 0.0, [], True
+                delta -= 0.18
+        if discriminating_skill_labels and discriminating_query_labels and overlap_count == 0:
+            return 0.0, [], True
+
+        query_tools = set(query.tools)
+        skill_tools = set(skill.tools)
+        if skill_tools and query_tools:
+            tool_overlap = skill_tools & query_tools
+            if tool_overlap:
+                delta += min(0.12, 0.04 * len(tool_overlap))
+                reasons.append(f"scope_tool:{','.join(sorted(tool_overlap)[:3])}")
+            elif mismatch_count:
+                delta -= 0.08
+        return delta, reasons, False
 
     def select_skill_llm_topk_lcb(
         self,
@@ -604,7 +701,7 @@ class ProceduralMemoryModule:
         if not tool_steps:
             raise ValueError("Skill-Pro requires at least one observed execution step.")
         attrs = infer_memory_attributes(
-            evidence.task_description,
+            _episode_attribute_text(evidence, tool_steps),
             scenario=evidence.scenario,
             topology_class=evidence.topology_class,
             tools=[step.tool_name for step in tool_steps if step.tool_name],
@@ -884,23 +981,30 @@ class ProceduralMemoryModule:
         )
         j_score = replay["j_score"]
         margin = 0.03
-        accepted = (
-            evidence.success
-            and baseline is None
-            and candidate_score > 0
-        ) or (
-            candidate_score >= baseline_score + margin
-            and j_score > -margin
-        ) or (
-            evidence.success
-            and baseline is not None
-            and current_reward >= baseline_score + margin
-            and j_score > -margin
+        promotion_safe = _safe_skill_promotion(evidence.metrics)
+        accepted = promotion_safe and (
+            (
+                evidence.success
+                and baseline is None
+                and candidate_score > 0
+            ) or (
+                candidate_score >= baseline_score + margin
+                and j_score > -margin
+            ) or (
+                evidence.success
+                and baseline is not None
+                and current_reward >= baseline_score + margin
+                and j_score > -margin
+            )
         )
         reason = (
             "candidate passed Skill-Pro PPO gate"
             if accepted
-            else "candidate failed Skill-Pro PPO gate"
+            else (
+                "candidate failed Skill-Pro PPO gate: unsafe partial outcome"
+                if not promotion_safe
+                else "candidate failed Skill-Pro PPO gate"
+            )
         )
         return PPOGateDecision(
             accepted=accepted,
@@ -1006,6 +1110,71 @@ class ProceduralMemoryModule:
                 total_skill_calls=1,
                 skill_call_count=1,
             )
+
+        promotion_safe = _safe_skill_promotion(evidence.metrics)
+        if not promotion_safe:
+            reason = (
+                "episode outcome is unsafe for Skill-Pro promotion: "
+                "detection, localization, and RCA must all be sufficiently supported"
+            )
+            self._maintain(state)
+            state.evolution_log.append(
+                {
+                    "iteration": state.iteration,
+                    "parent": parent.skill_id if parent else "",
+                    "runtime_skill_ids": sorted(set(experience_skill_ids)),
+                    "candidate": "",
+                    "action": "rejected",
+                    "reason": reason,
+                    "sample_count": 0,
+                    "required_sample_count": self.evolution_threshold,
+                }
+            )
+            self.store.save(state)
+            return {
+                "status": "rejected",
+                "reason": reason,
+                "skill_id": parent.skill_id if parent else "",
+                "episode_reward": reward,
+                "episode_baseline": baseline_value,
+                "episode_advantage": reward - baseline_value,
+                "episode_success": evidence.success,
+                "total_added_tokens": experience.total_added_tokens,
+                "delta_prompt_tokens_per_step": round(
+                    experience.total_added_tokens
+                    / max(evidence.steps or len(tool_steps), 1),
+                    6,
+                ),
+                "prompt_added_tokens": int(
+                    evidence.metrics.get("memory_prompt_added_tokens") or 0
+                ),
+                "tool_description_added_tokens": int(
+                    evidence.metrics.get("memory_tool_description_added_tokens") or 0
+                ),
+                "followup_added_tokens": int(
+                    evidence.metrics.get("memory_followup_added_tokens") or 0
+                ),
+                "prompt_injection_count": int(
+                    evidence.metrics.get("memory_prompt_injection_count") or 0
+                ),
+                "tool_description_injection_count": int(
+                    evidence.metrics.get("memory_tool_description_injection_count") or 0
+                ),
+                "followup_guidance_count": int(
+                    evidence.metrics.get("memory_followup_guidance_count") or 0
+                ),
+                "semantic_gradient_source": "not_promoted",
+                "semantic_gradient_llm_attempted": False,
+                "semantic_gradient_llm_failed": False,
+                "semantic_gradient_llm_error": "",
+                "decision": None,
+                "sample_count": 0,
+                "required_sample_count": self.evolution_threshold,
+                "skills": len(state.skills),
+                "experience_id": experience.experience_id,
+                "runtime_skill_ids": sorted(set(experience_skill_ids)),
+                "method": "Skill-Pro",
+            }
 
         samples = self._evolution_batch(state, parent)
         if len(samples) < self.evolution_threshold:
@@ -1217,7 +1386,7 @@ class ProceduralMemoryModule:
         tool_steps: list[SkillStep],
     ) -> SkillRetrieval | None:
         attrs = infer_memory_attributes(
-            evidence.task_description,
+            _episode_attribute_text(evidence, tool_steps),
             scenario=evidence.scenario,
             topology_class=evidence.topology_class,
             tools=[step.tool_name for step in tool_steps if step.tool_name],

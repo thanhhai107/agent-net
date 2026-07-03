@@ -73,6 +73,66 @@ def generic_eval(gt, submission):
     )
 
 
+def _safe_ratio(numerator: float, denominator: float) -> float | None:
+    if denominator <= 0:
+        return None
+    return numerator / denominator
+
+
+def invalid_detection_confusion_metrics() -> dict[str, float | int | bool | None]:
+    return {
+        "detection_valid": False,
+        "detection_tp": 0,
+        "detection_tn": 0,
+        "detection_fp": 0,
+        "detection_fn": 0,
+        "detection_precision": None,
+        "detection_recall": None,
+        "detection_f1": None,
+        "detection_false_positive_rate": None,
+        "detection_true_positive_rate": None,
+    }
+
+
+def detection_confusion_metrics(gt, submission) -> dict[str, float | int | bool | None]:
+    """Return binary detection confusion counts and derived metrics for one session."""
+    try:
+        gt_is_anomaly = bool(gt["is_anomaly"])
+        parsed_detect_sub = DetectionSubmission.model_validate(
+            {"is_anomaly": submission["is_anomaly"]}
+        )
+        submitted_is_anomaly = bool(parsed_detect_sub.is_anomaly)
+    except Exception:
+        return invalid_detection_confusion_metrics()
+
+    tp = int(gt_is_anomaly and submitted_is_anomaly)
+    tn = int((not gt_is_anomaly) and (not submitted_is_anomaly))
+    fp = int((not gt_is_anomaly) and submitted_is_anomaly)
+    fn = int(gt_is_anomaly and (not submitted_is_anomaly))
+    precision = _safe_ratio(tp, tp + fp)
+    recall = _safe_ratio(tp, tp + fn)
+    f1 = (
+        None
+        if precision is None or recall is None or precision + recall == 0
+        else 2 * precision * recall / (precision + recall)
+    )
+    false_positive_rate = _safe_ratio(fp, fp + tn)
+    true_positive_rate = recall
+
+    return {
+        "detection_valid": True,
+        "detection_tp": tp,
+        "detection_tn": tn,
+        "detection_fp": fp,
+        "detection_fn": fn,
+        "detection_precision": precision,
+        "detection_recall": recall,
+        "detection_f1": f1,
+        "detection_false_positive_rate": false_positive_rate,
+        "detection_true_positive_rate": true_positive_rate,
+    }
+
+
 def run_eval_metrics(
     *,
     session_id: str | None = None,
@@ -89,6 +149,7 @@ def run_eval_metrics(
     submission_path = Path(session.session_dir) / "submission.json"
     if submission_path.exists():
         submission = json.loads(submission_path.read_text())
+        detection_breakdown = detection_confusion_metrics(gt, submission)
         (
             detection_score,
             loc_acc,
@@ -103,6 +164,7 @@ def run_eval_metrics(
     else:
         logger.error(f"Submission file not found: {submission_path}")
         detection_score = -1.0
+        detection_breakdown = invalid_detection_confusion_metrics()
         loc_acc = loc_prec = loc_rec = loc_f1 = -1.0
         rca_acc = rca_prec = rca_rec = rca_f1 = -1.0
 
@@ -111,6 +173,7 @@ def run_eval_metrics(
 
     payload = {
         "detection_score": detection_score,
+        **detection_breakdown,
         "localization_accuracy": loc_acc,
         "localization_precision": loc_prec,
         "localization_recall": loc_rec,

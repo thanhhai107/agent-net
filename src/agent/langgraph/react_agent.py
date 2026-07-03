@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+from typing import Any
 
 from dotenv import load_dotenv
 from langchain_core.messages import BaseMessage, HumanMessage
@@ -10,6 +11,14 @@ from pydantic import Field, ValidationError
 from typing_extensions import TypedDict
 
 from agent.langgraph.langfuse_tracing import callback_config, create_langfuse_callbacks
+from agent.langgraph.evidence_gate import (
+    EvidenceGateResult,
+    ToolObservation,
+    evidence_gate_enabled,
+    evaluate_fault_family_evidence,
+    observations_from_messages,
+    observations_from_runtime_snapshot,
+)
 from agent.langgraph.phases.diagnosis import DiagnosisPhase
 from agent.langgraph.phases.submission import SubmissionPhase
 from agent.llm.model_factory import DEFAULT_LLM_BACKEND, DEFAULT_MODEL
@@ -28,6 +37,10 @@ logging.basicConfig(level=logging.INFO)
 class AgentState(TypedDict):
     """The state of the agent."""
 
+    task_description: str = Field(
+        default="",
+        description="The original user-visible diagnosis task.",
+    )
     messages: list[BaseMessage]
     diagnosis_report: str = Field(
         default="",
@@ -54,10 +67,16 @@ class BasicReActAgent:
         tool_planned_checks: int = 4,
         tool_next_checks: int = 2,
         use_problem_tool_hints: bool = True,
+        evidence_gate_enabled: bool = True,
+        evidence_gate_retries: int = 1,
     ):
         self.session_id = session_id
         self.model = model
         self.max_steps = max_steps
+        self.evidence_gate_enabled = evidence_gate_enabled
+        self.evidence_gate_retries = self._resolve_evidence_gate_retries(
+            evidence_gate_retries
+        )
         self.session = Session()
         self.session.load_running_session(session_id=session_id)
         self.session_dir = self.session.session_dir
@@ -130,6 +149,63 @@ class BasicReActAgent:
             f"{suffix}"
         )
 
+    @staticmethod
+    def _resolve_evidence_gate_retries(default: int) -> int:
+        raw_value = os.getenv("NIKA_EVIDENCE_GATE_RETRIES")
+        if raw_value is None:
+            return max(0, int(default))
+        try:
+            return max(0, int(raw_value))
+        except ValueError:
+            return max(0, int(default))
+
+    def _diagnosis_tool_names(self) -> list[str]:
+        if getattr(self, "diagnosis_tool_names", None):
+            return list(self.diagnosis_tool_names)
+        phase = getattr(self, "_diagnosis_phase", None)
+        return [tool.name for tool in getattr(phase, "tools", []) or []]
+
+    def _state_task_description(self, state: AgentState) -> str:
+        task_description = str(state.get("task_description") or "").strip()
+        if task_description:
+            return task_description
+        for message in state.get("messages", []):
+            content = str(getattr(message, "content", "") or "").strip()
+            if content:
+                return content
+        session_task = getattr(getattr(self, "session", None), "task_description", "")
+        return str(session_task or "")
+
+    def _current_tool_observations(
+        self,
+        messages: list[Any],
+    ) -> list[ToolObservation]:
+        observations: list[ToolObservation] = []
+        runtime = getattr(self, "skill_tool_runtime", None)
+        if runtime is not None and hasattr(runtime, "snapshot"):
+            observations.extend(observations_from_runtime_snapshot(runtime.snapshot()))
+        observations.extend(observations_from_messages(messages))
+        return observations
+
+    def _evaluate_evidence_gate(
+        self,
+        *,
+        task_description: str,
+        diagnosis_report: str,
+        messages: list[Any],
+    ) -> EvidenceGateResult:
+        return evaluate_fault_family_evidence(
+            task_description=task_description,
+            diagnosis_report=diagnosis_report,
+            observations=self._current_tool_observations(messages),
+            available_tools=self._diagnosis_tool_names(),
+        )
+
+    def _is_evidence_gate_enabled(self) -> bool:
+        return evidence_gate_enabled(
+            bool(getattr(self, "evidence_gate_enabled", True))
+        )
+
     def install_memory_runtime(
         self,
         *,
@@ -172,6 +248,7 @@ class BasicReActAgent:
             try:
                 return await self.graph.ainvoke(
                     {
+                        "task_description": task_description,
                         "messages": [HumanMessage(content=task_description)],
                     },
                     config=callback_config(self.langfuse_callbacks),
@@ -186,6 +263,7 @@ class BasicReActAgent:
         try:
             cb = AgentCallbackLogger(agent=DIAGNOSIS, session_dir=self.session_dir)
             messages = list(state["messages"])
+            task_description = self._state_task_description(state)
             learning_context = self._learning_prompt_suffix()
             if learning_context:
                 messages.append(HumanMessage(content=learning_context))
@@ -197,8 +275,56 @@ class BasicReActAgent:
                 },
                 debug=True,
             )
+            report_messages = list(diagnosis_report.get("messages", []))
+            report_text = str(report_messages[-1].content)
+            gate = None
+            if self._is_evidence_gate_enabled():
+                gate = self._evaluate_evidence_gate(
+                    task_description=task_description,
+                    diagnosis_report=report_text,
+                    messages=report_messages,
+                )
+            if (
+                gate is not None
+                and not gate.sufficient
+                and getattr(self, "evidence_gate_retries", 1) > 0
+                and gate.prompt
+            ):
+                cb._log(
+                    "evidence_gate_blocked",
+                    {
+                        "attempt": 1,
+                        **gate.to_log_payload(),
+                    },
+                )
+                retry_messages = [
+                    *report_messages,
+                    HumanMessage(content=gate.prompt),
+                ]
+                diagnosis_report = await self.diagnosis_agent.ainvoke(
+                    {"messages": retry_messages},
+                    config={
+                        "callbacks": [cb],
+                        "recursion_limit": self.max_steps,
+                    },
+                    debug=True,
+                )
+                report_messages = list(diagnosis_report.get("messages", []))
+                report_text = str(report_messages[-1].content)
+                retry_gate = self._evaluate_evidence_gate(
+                    task_description=task_description,
+                    diagnosis_report=report_text,
+                    messages=report_messages,
+                )
+                cb._log(
+                    "evidence_gate_retry_result",
+                    {
+                        "attempt": 1,
+                        **retry_gate.to_log_payload(),
+                    },
+                )
             return {
-                "diagnosis_report": diagnosis_report["messages"][-1].content,
+                "diagnosis_report": report_text,
                 "is_max_steps_reached": False,
             }
         except ValidationError as e:

@@ -96,6 +96,16 @@ class EvalResult:
     llm_judge_final_outcome_score: int = None
     llm_judge_overall_score: int = None
     detection_score: float = None
+    detection_valid: bool | None = None
+    detection_tp: int = None
+    detection_tn: int = None
+    detection_fp: int = None
+    detection_fn: int = None
+    detection_precision: float = None
+    detection_recall: float = None
+    detection_f1: float = None
+    detection_false_positive_rate: float = None
+    detection_true_positive_rate: float = None
     localization_accuracy: float = None
     localization_precision: float = None
     localization_recall: float = None
@@ -302,6 +312,18 @@ def build_eval_result_from_session_dir(session_dir: Path) -> EvalResult:
         llm_judge_final_outcome_score=final_outcome_score,
         llm_judge_overall_score=overall_score,
         detection_score=metrics_blob.get("detection_score", -1.0),
+        detection_valid=metrics_blob.get("detection_valid"),
+        detection_tp=metrics_blob.get("detection_tp"),
+        detection_tn=metrics_blob.get("detection_tn"),
+        detection_fp=metrics_blob.get("detection_fp"),
+        detection_fn=metrics_blob.get("detection_fn"),
+        detection_precision=metrics_blob.get("detection_precision"),
+        detection_recall=metrics_blob.get("detection_recall"),
+        detection_f1=metrics_blob.get("detection_f1"),
+        detection_false_positive_rate=metrics_blob.get(
+            "detection_false_positive_rate"
+        ),
+        detection_true_positive_rate=metrics_blob.get("detection_true_positive_rate"),
         localization_accuracy=metrics_blob.get("localization_accuracy", -1.0),
         localization_precision=metrics_blob.get("localization_precision", -1.0),
         localization_recall=metrics_blob.get("localization_recall", -1.0),
