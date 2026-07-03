@@ -24,8 +24,9 @@ src/agent/
 ├── sdk/                  # SDK agents (claude-agent-sdk, openai-codex)
 │   ├── claude_sdk/       # -a sdk.claude_sdk
 │   └── codex_sdk/        # -a sdk.codex_sdk
+├── skills/               # Shared skill library (.claude/ + .agents/)
 ├── llm/                  # LangChain model factory (langgraph path)
-└── utils/                # MCP config, phases, loggers
+└── utils/                # MCP config, phases, loggers, skills helpers
 ```
 
 ## Agent Types
@@ -33,13 +34,13 @@ src/agent/
 | CLI name | Orchestration | LLM access | Status |
 |----------|---------------|------------|--------|
 | `byo.langgraph` | LangGraph `StateGraph` | LangChain ReAct + `load_model()` | Implemented |
-| `local_cli.codex_cli` | LangGraph `StateGraph` | `codex exec` subprocess | Implemented |
-| `local_cli.claude_cli` | LangGraph `StateGraph` | `claude -p` subprocess | Implemented |
+| `local_cli.codex_cli` | LangGraph `StateGraph` | `codex exec` subprocess + shared `.agents/skills/` | Implemented |
+| `local_cli.claude_cli` | LangGraph `StateGraph` | `claude -p` subprocess + shared `.claude/skills/` | Implemented |
 | `byo.mcp_agent` | mcp-agent `Workflow` | mcp-agent + OpenAI | Implemented |
 | `byo.autogen` | AutoGen `GraphFlow` | AutoGen AgentChat + OpenAI | Implemented |
 | `community.sade` | Single Claude Code session + 15-skill library | `claude-agent-sdk` (optional extra `sade`) | Implemented |
-| `sdk.claude_sdk` | Native two-phase `ClaudeSDKClient` sessions | `claude-agent-sdk` (optional extra `sdk`) | Implemented |
-| `sdk.codex_sdk` | Native two-phase `AsyncCodex` threads | `openai-codex` (optional extra `sdk`) | Implemented |
+| `sdk.claude_sdk` | Native two-phase `ClaudeSDKClient` sessions | `claude-agent-sdk` + shared skills (optional extra `sdk`) | Implemented |
+| `sdk.codex_sdk` | Native two-phase `AsyncCodex` threads | `openai-codex` + shared skills (optional extra `sdk`) | Implemented |
 
 ## Community Agents
 
@@ -48,6 +49,14 @@ same `protocols.TroubleshootingAgent` contract.
 
 See [`community/sade/README.md`](community/sade/README.md) for SADE setup, DeepSeek
 credentials, and the paper citation (arXiv:2605.04530).
+
+## Agent Skills
+
+Claude Code and Codex agents load the shared skill library from `src/agent/skills/` when
+`NIKA_ENABLE_SKILLS=true` (default). Helpers live in `agent.utils.skills`.
+
+See **[docs/agent-skills.md](../../docs/agent-skills.md)** for authoring custom skills.
+Integration tests: `tests/agents/test_skills.py`.
 
 ## Shared Pipeline
 

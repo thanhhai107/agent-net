@@ -165,7 +165,7 @@ Each `nika env run` creates a **session** (printed as `session_id=…`). Session
    nika eval clean -y                              # wipe results/, session JSON, and SQLite index
    ```
 
-Full CLI documentation (benchmark batch mode, traffic types, parameter tables, and conventions) lives in **[src/nika/cli/README.md](src/nika/cli/README.md)**.
+Full CLI documentation (benchmark batch mode, traffic types, parameter tables, and conventions) lives in **[src/nika/cli/README.md](src/nika/cli/README.md)**. Developer guides: **[Creating Benchmark Tasks](docs/creating-benchmark-tasks.md)**, **[Custom Agents](docs/custom-agents.md)**, and **[Agent Skills](docs/agent-skills.md)**.
 
 ### Optional: benchmark or traffic from the CLI
 
@@ -196,7 +196,7 @@ uv run --with pytest pytest tests/test_session.py -v
 
 ## Troubleshooting Agents
 
-Agent implementations live under [`src/agent/`](src/agent/). All agents share the same contract (`async run(task_description) -> dict`), the same two-phase pipeline (**diagnosis** → **submission**), and write `results/{session_id}/messages.jsonl` plus `submission.json`. Extension details: **[src/agent/README.md](src/agent/README.md)**.
+Agent implementations live under [`src/agent/`](src/agent/). All agents share the same contract (`async run(task_description) -> dict`), the same two-phase pipeline (**diagnosis** → **submission**), and write `results/{session_id}/messages.jsonl` plus `submission.json`. Extension details: **[Custom Agents](docs/custom-agents.md)** and **[src/agent/README.md](src/agent/README.md)**.
 
 ### Layout
 
@@ -221,11 +221,11 @@ src/agent/
 | `byo.langgraph` | `byo/langgraph` | LangGraph `StateGraph` | LangChain ReAct + `load_model()` |
 | `byo.mcp_agent` | `byo/mcp_agent` | mcp-agent `Workflow` | [mcp-agent SDK](https://docs.mcp-agent.com/mcp-agent-sdk/overview) + OpenAI |
 | `byo.autogen` | `byo/autogen` | AutoGen `GraphFlow` | [AutoGen AgentChat](https://microsoft.github.io/autogen/stable/) + OpenAI |
-| `local_cli.codex_cli` | `local_cli/codex_cli` | LangGraph `StateGraph` | `codex exec` subprocess |
-| `local_cli.claude_cli` | `local_cli/claude_cli` | LangGraph `StateGraph` | `claude -p` subprocess |
+| `local_cli.codex_cli` | `local_cli/codex_cli` | LangGraph `StateGraph` | `codex exec` subprocess + shared skills |
+| `local_cli.claude_cli` | `local_cli/claude_cli` | LangGraph `StateGraph` | `claude -p` subprocess + shared skills |
 | `community.sade` | `community/sade` | Single Claude Code session + skill library | `claude-agent-sdk` (optional extra `sade`) |
-| `sdk.claude_sdk` | `sdk/claude_sdk` | Native two-phase `ClaudeSDKClient` | `claude-agent-sdk` (optional extra `sdk`) |
-| `sdk.codex_sdk` | `sdk/codex_sdk` | Native two-phase `AsyncCodex` | `openai-codex` (optional extra `sdk`) |
+| `sdk.claude_sdk` | `sdk/claude_sdk` | Native two-phase `ClaudeSDKClient` | `claude-agent-sdk` + shared skills (optional extra `sdk`) |
+| `sdk.codex_sdk` | `sdk/codex_sdk` | Native two-phase `AsyncCodex` | `openai-codex` + shared skills (optional extra `sdk`) |
 
 ### Shared configuration
 
@@ -237,6 +237,16 @@ src/agent/
 | `--session_id` | — | Target session (default: current running session) |
 
 Model resolution: `-m` → `NIKA_MODEL` → agent-specific env (below).
+
+### Agent skills
+
+Claude Code and Codex agents load reusable skill libraries during diagnosis when `NIKA_ENABLE_SKILLS=true` (default). The shared library lives under [`src/agent/skills/`](src/agent/skills/). Override with `NIKA_SKILLS_DIR`.
+
+- **Claude agents** (`local_cli.claude_cli`, `sdk.claude_sdk`): native `Skill(skill="...")` tool + `.claude/skills/`
+- **Codex agents** (`local_cli.codex_cli`, `sdk.codex_sdk`): `.agents/skills/` + workspace `AGENTS.md`
+- **SADE** (`community.sade`): separate 15-skill library under `src/agent/community/sade/.claude/`
+
+Authoring guide: **[docs/agent-skills.md](docs/agent-skills.md)**.
 
 ### `byo.langgraph` (`byo/langgraph`)
 
@@ -285,7 +295,7 @@ nika agent run -a byo.autogen -m gpt-4.1-mini -n 20
 
 ### `local_cli.codex_cli` (`local_cli/codex_cli`)
 
-Requires [Codex CLI](https://developers.openai.com/codex) on `PATH`; auth via `codex login` or `OPENAI_API_KEY`. Workspace: `{result_dir}/{session_id}/codex_workspace/`.
+Requires [Codex CLI](https://developers.openai.com/codex) on `PATH`; auth via `codex login` or `OPENAI_API_KEY`. Workspace: `{result_dir}/{session_id}/codex_workspace/`. Loads shared skills from `src/agent/skills/` when `NIKA_ENABLE_SKILLS=true`.
 
 | Flag | Env | Notes |
 |------|-----|-------|
@@ -299,7 +309,7 @@ nika agent run -a local_cli.codex_cli -m gpt-5.4-mini -e medium
 
 ### `local_cli.claude_cli` (`local_cli/claude_cli`)
 
-Requires [Claude Code](https://docs.anthropic.com/en/docs/claude-code) on `PATH`. Workspace: `{result_dir}/{session_id}/claude_workspace/`.
+Requires [Claude Code](https://docs.anthropic.com/en/docs/claude-code) on `PATH`. Workspace: `{result_dir}/{session_id}/claude_workspace/`. Loads shared skills via `--setting-sources project` when `NIKA_ENABLE_SKILLS=true`.
 
 Auth (pick one): `ANTHROPIC_API_KEY`, `ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN`, or `claude auth login`.
 
@@ -312,7 +322,7 @@ nika agent run -a local_cli.claude_cli -m deepseek-v4-flash
 
 ### `sdk.claude_sdk` (`sdk/claude_sdk`)
 
-Native two-phase pipeline via `claude-agent-sdk` `ClaudeSDKClient` sessions (no LangGraph). Requires `uv sync --extra sdk --prerelease=allow`.
+Native two-phase pipeline via `claude-agent-sdk` `ClaudeSDKClient` sessions (no LangGraph). Requires `uv sync --extra sdk --prerelease=allow`. Loads shared skills when `NIKA_ENABLE_SKILLS=true`.
 
 Auth: DeepSeek or Anthropic via `ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN` (same as `local_cli.claude_cli`).
 
@@ -328,7 +338,7 @@ nika agent run -a sdk.claude_sdk -m deepseek-v4-flash
 
 ### `sdk.codex_sdk` (`sdk/codex_sdk`)
 
-Native two-phase pipeline via `openai-codex` `AsyncCodex` threads. Requires `uv sync --extra sdk --prerelease=allow`.
+Native two-phase pipeline via `openai-codex` `AsyncCodex` threads. Requires `uv sync --extra sdk --prerelease=allow`. Loads shared skills when `NIKA_ENABLE_SKILLS=true`.
 
 Auth: local only — `codex login` → `~/.codex/auth.json`.
 
@@ -341,6 +351,21 @@ Auth: local only — `codex login` → `~/.codex/auth.json`.
 codex login
 nika agent run -a sdk.codex_sdk -m gpt-5.4-mini -e medium
 ```
+
+### `community.sade` (`community/sade`)
+
+Single Claude Code session with SADE's phase-gated prompt and a **15-skill fault-family library** under `src/agent/community/sade/.claude/`. Requires `uv sync --extra sade`. Auth same as `local_cli.claude_cli` (env API only).
+
+| Env | Notes |
+|-----|-------|
+| `NIKA_SADE_MODEL` | Optional model override |
+| `ANTHROPIC_MODEL` chain | Same as `local_cli.claude_cli` |
+
+```shell
+nika agent run -a community.sade -n 20
+```
+
+See [`src/agent/community/sade/README.md`](src/agent/community/sade/README.md) and the [SADE paper](https://arxiv.org/abs/2605.04530).
 
 ### Example: `simple_bgp` with `link_down`
 
@@ -400,7 +425,7 @@ Registered scenarios (see `nika env list`) live under `src/nika/net_env/`:
 | `k8s_lab` | -- | Fat-tree BGP fabric with k3s cluster, MetalLB, NGINX Ingress, and sample microservices. See [k8s_lab README](src/nika/net_env/kubernetes/k8s_lab/README.md). |
 | `llmd_lab` | -- | Star topology with k3s cluster running llm-d disaggregated Prefill/Decode inference (simulated, no GPU). See [llmd_lab README](src/nika/net_env/kubernetes/llmd_lab/README.md). |
 
-Each scenario is defined in a Kathará `lab.py` file, which specifies the network topology, devices, and initial configurations. Check [Kathará API Docs](https://github.com/KatharaFramework/Kathara/wiki/Kathara-API-Docs) for more details if you want to create your scenarios.
+Each scenario is defined in a Kathará `lab.py` file, which specifies the network topology, devices, and initial configurations. See **[Creating Benchmark Tasks](docs/creating-benchmark-tasks.md)** for the NIKA extension workflow, and check [Kathará API Docs](https://github.com/KatharaFramework/Kathara/wiki/Kathara-API-Docs) for Kathará details.
 
 ## Network issues
 

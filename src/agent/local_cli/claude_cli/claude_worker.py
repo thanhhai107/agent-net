@@ -36,6 +36,7 @@ from agent.local_cli.claude_cli.config import (
 from agent.utils.loggers import MessageLogger
 from agent.utils.mcp_servers import MCPServerConfig, select_diagnosis_servers
 from agent.utils.phases import PHASES, SUBMISSION
+from agent.utils.skills import prepare_claude_workspace, skills_enabled
 
 
 def _build_mcp_json(servers: dict) -> str:
@@ -116,6 +117,7 @@ class ClaudeWorker:
 
     def _setup_workspace(self) -> None:
         self.workspace.mkdir(parents=True, exist_ok=True)
+        prepare_claude_workspace(self.workspace)
         self._write_mcp_config()
 
     def _write_mcp_config(self) -> None:
@@ -149,7 +151,8 @@ class ClaudeWorker:
         self._setup_workspace()
 
         env = prepare_claude_subprocess_env()
-        bare = use_bare_claude_mode()
+        # --bare disables Claude Code project skills (including the Skill tool).
+        bare = use_bare_claude_mode() and not skills_enabled()
 
         assert self._mcp_config_path is not None
         cmd = [
@@ -164,8 +167,10 @@ class ClaudeWorker:
             "--model", self.model,
             "--output-format", "stream-json",
             "--verbose",
-            prompt,
         ]
+        if skills_enabled():
+            cmd += ["--setting-sources", "project"]
+        cmd.append(prompt)
 
         self._logger.log("subprocess_start", {"command": " ".join(cmd[:6] + ["..."]), "phase": self.phase})
 

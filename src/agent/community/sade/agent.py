@@ -37,6 +37,7 @@ from agent.sdk.mcp import to_sdk_mcp_servers
 from agent.utils.loggers import MessageLogger
 from agent.utils.mcp_servers import MCPServerConfig
 from agent.utils.phases import DIAGNOSIS
+from agent.utils.skills import CLAUDE_SETTING_SOURCES, skills_enabled
 from nika.utils.logger import system_logger
 from nika.utils.session import Session
 
@@ -116,17 +117,19 @@ class SadeAgent:
         logger = MessageLogger(agent=AGENT_TAG, session_dir=self.session.session_dir)
         system_logger.info(f"sade: starting session {self.session_id}")
 
-        options = ClaudeAgentOptions(
-            system_prompt=SADE_PROMPT,
-            model=self.model,
-            cwd=str(PACKAGE_DIR),
-            mcp_servers=self.mcp_servers,
-            max_turns=self.max_steps,
-            permission_mode="bypassPermissions",
-            # Exposes this package's `.claude/` skill library + CLAUDE.md.
-            setting_sources=["project"],
-            env=sdk_env,
-        )
+        options_kwargs: dict[str, Any] = {
+            "system_prompt": SADE_PROMPT,
+            "model": self.model,
+            "cwd": str(PACKAGE_DIR),
+            "mcp_servers": self.mcp_servers,
+            "max_turns": self.max_steps,
+            "permission_mode": "bypassPermissions",
+            "env": sdk_env,
+        }
+        if skills_enabled():
+            options_kwargs["setting_sources"] = CLAUDE_SETTING_SOURCES
+
+        options = ClaudeAgentOptions(**options_kwargs)
 
         logger.log(
             "llm_start",

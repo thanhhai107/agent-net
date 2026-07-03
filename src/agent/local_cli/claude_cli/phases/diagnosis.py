@@ -6,6 +6,7 @@ async ``run()`` that returns a free-text diagnosis report.
 """
 
 from agent.local_cli.claude_cli.claude_worker import ClaudeWorker
+from agent.utils.skills import diagnosis_prompt_with_skills
 from agent.utils.template import OVERALL_DIAGNOSIS_PROMPT
 from agent.utils.phases import DIAGNOSIS
 
@@ -50,8 +51,9 @@ class ClaudeDiagnosisPhase:
             problem_names=problem_names or [],
             stream_output=stream_output,
         )
+        self._diagnosis_prompt = diagnosis_prompt_with_skills(OVERALL_DIAGNOSIS_PROMPT)
 
     async def run(self, task_description: str) -> str:
         """Return a free-text diagnosis report produced by ``claude -p``."""
-        prompt = f"{OVERALL_DIAGNOSIS_PROMPT}\n\nTask: {task_description}"
+        prompt = f"{self._diagnosis_prompt}\n\nTask: {task_description}"
         return await self._worker.run(prompt)

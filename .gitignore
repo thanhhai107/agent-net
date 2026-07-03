@@ -16,7 +16,11 @@ tmp/
 notebooks/
 uv.lock
 .agents/
+!src/agent/skills/.agents/
+!src/agent/skills/.agents/**
 .cursor/
 .DS_Store
 .claude/
+!src/agent/skills/.claude/
+!src/agent/skills/.claude/**
 .pytest_cache/

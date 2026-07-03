@@ -9,6 +9,7 @@ from agent.sdk.mcp import to_sdk_mcp_servers
 from agent.utils.loggers import MessageLogger
 from agent.utils.mcp_servers import MCPServerConfig, select_diagnosis_servers
 from agent.utils.phases import PHASES, SUBMISSION
+from agent.utils.skills import CLAUDE_SETTING_SOURCES, claude_skills_package_dir
 from nika.utils.logger import system_logger
 
 
@@ -106,14 +107,20 @@ class ClaudeSdkWorker:
             },
         )
 
-        options = ClaudeAgentOptions(
-            system_prompt=self.system_prompt,
-            model=self.model,
-            mcp_servers=mcp_servers,
-            max_turns=self.max_steps,
-            permission_mode="bypassPermissions",
-            env=sdk_env,
-        )
+        options_kwargs: dict[str, Any] = {
+            "system_prompt": self.system_prompt,
+            "model": self.model,
+            "mcp_servers": mcp_servers,
+            "max_turns": self.max_steps,
+            "permission_mode": "bypassPermissions",
+            "env": sdk_env,
+        }
+        skills_dir = claude_skills_package_dir()
+        if skills_dir is not None and self.phase != SUBMISSION:
+            options_kwargs["cwd"] = str(skills_dir)
+            options_kwargs["setting_sources"] = CLAUDE_SETTING_SOURCES
+
+        options = ClaudeAgentOptions(**options_kwargs)
 
         result_text = ""
         turn_text: list[str] = []

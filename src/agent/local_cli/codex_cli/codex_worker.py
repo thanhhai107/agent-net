@@ -32,6 +32,7 @@ from agent.local_cli.codex_cli.codex_display import format_codex_event
 from agent.utils.loggers import MessageLogger
 from agent.utils.mcp_servers import MCPServerConfig, select_diagnosis_servers
 from agent.utils.phases import DIAGNOSIS, PHASES, SUBMISSION
+from agent.utils.skills import prepare_codex_workspace
 
 REASONING_EFFORT_LEVELS = ("none", "minimal", "low", "medium", "high", "xhigh")
 
@@ -153,6 +154,7 @@ class CodexWorker:
         if not auth_link.exists() and global_auth.exists():
             auth_link.symlink_to(global_auth)
 
+        prepare_codex_workspace(self.workspace)
         self._write_mcp_config()
 
     def _write_mcp_config(self) -> None:
@@ -299,10 +301,48 @@ class CodexWorker:
                 print(raw, flush=True)
             return
 
-        self._logger.log(
-            event.get("type", "codex_event"),
-            {"codex_event": event},
-        )
+        self._log_codex_event(event)
+
+    def _log_codex_event(self, event: dict) -> None:
+        event_type = event.get("type", "codex_event")
+        self._logger.log(event_type, {"codex_event": event})
+
+        item = event.get("item") or {}
+        if item.get("type") == "mcp_tool_call":
+            tool = str(item.get("tool", ""))
+            if event_type == "item.started":
+                arguments = item.get("arguments")
+                self._logger.log(
+                    "tool_start",
+                    {
+                        "tool": {"name": tool},
+                        "input": json.dumps(arguments, ensure_ascii=False)
+                        if arguments is not None
+                        else "{}",
+                    },
+                )
+            elif event_type == "item.completed":
+                if item.get("error") is not None:
+                    self._logger.log("tool_error", {"output": str(item.get("error"))})
+                else:
+                    result = item.get("result")
+                    if isinstance(result, dict):
+                        content = result.get("content")
+                        if isinstance(content, list):
+                            output = "\n".join(
+                                str(block.get("text", ""))
+                                for block in content
+                                if isinstance(block, dict) and block.get("type") == "text"
+                            )
+                        else:
+                            output = json.dumps(result, ensure_ascii=False)
+                    else:
+                        output = str(result or "")
+                    self._logger.log(
+                        "tool_end",
+                        {"output": output, "output_type": "tool_result"},
+                    )
+
         if self._stream_output:
             display = format_codex_event(event)
             if display:

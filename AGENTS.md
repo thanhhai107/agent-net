@@ -47,6 +47,7 @@
 - SDK agents require `uv sync --extra sdk --prerelease=allow` (`claude-agent-sdk` + `openai-codex`).
 - Agent runs should write `messages.jsonl` and `submission.json` in the session result directory.
 - MCP server behavior lives under `src/nika/service/mcp_server/`; avoid duplicating tool behavior in agent code.
+- Shared agent skills live under `src/agent/skills/`; helpers in `agent.utils.skills`. See `docs/agent-skills.md`. SADE keeps its own skill library under `src/agent/community/sade/.claude/`.
 
 ## Testing Guidance
 

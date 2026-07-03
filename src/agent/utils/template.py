@@ -12,6 +12,14 @@ Basic requirements:
 - Rely only on the MCP tools available to you; do not execute arbitrary shell commands.\
 """
 
+SKILLS_PROMPT_SUFFIX = dedent("""\
+    ## Skills
+    Project skills are available for structured troubleshooting workflows.
+    - Claude Code agents: read `CLAUDE.md`, then invoke `Skill(skill="nika-test-skill")` at the start of every session and follow its marker-first workflow.
+    - Codex agents: invoke `$nika-test-skill` at the start of every session and follow its marker-first workflow.
+    Always invoke this skill first; do not skip it.\
+""").strip()
+
 SUBMIT_PROMPT_TEMPLATE = dedent("""\
     You are an expert network engineer.
     Your task is to submit the final solution for this network problem based on the diagnosis report provided.

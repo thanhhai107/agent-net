@@ -14,6 +14,7 @@ from agent.sdk.codex_sdk.config import validate_reasoning_effort
 from agent.utils.loggers import MessageLogger
 from agent.utils.mcp_servers import MCPServerConfig, select_diagnosis_servers
 from agent.utils.phases import PHASES, SUBMISSION
+from agent.utils.skills import prepare_codex_workspace
 
 
 def _unwrap_thread_item(item: Any) -> Any:
@@ -87,6 +88,8 @@ class CodexSdkWorker:
         global_auth = Path.home() / ".codex" / "auth.json"
         if not auth_link.exists() and global_auth.exists():
             auth_link.symlink_to(global_auth)
+
+        prepare_codex_workspace(self.workspace)
 
         mcp_cfg = MCPServerConfig(session_id=self.session_id)
         if self.phase == SUBMISSION:
