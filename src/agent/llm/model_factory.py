@@ -15,9 +15,6 @@ from langchain_openai import ChatOpenAI
 load_dotenv()
 
 NETMIND_API_URL = "https://stream-netmind.viettel.vn/gateway/v1"
-CUSTOM_DEFAULT_API_URL = NETMIND_API_URL
-CUSTOM_TIMEOUT_SECONDS = 90.0
-CUSTOM_MAX_RETRIES = 0
 DEFAULT_LLM_BACKEND = "custom"
 DEFAULT_MODEL = "openai/gpt-oss-20b"
 
@@ -71,7 +68,7 @@ def _normalize_api_url(url: str) -> str:
 
 
 def _custom_api_url() -> str:
-    return _env_str("CUSTOM_API_URL") or CUSTOM_DEFAULT_API_URL
+    return _env_str("CUSTOM_API_URL") or NETMIND_API_URL
 
 
 def _is_netmind_api_url(api_url: str) -> bool:
@@ -247,12 +244,16 @@ class NetmindGLM47ChatOpenAI(GLM47ChatOpenAI):
 
 
 def load_model(
-    llm_backend: str = DEFAULT_LLM_BACKEND,
-    model: str = DEFAULT_MODEL,
+    llm_backend: str | None = None,
+    model: str | None = None,
     *,
     timeout: float | None = None,
     max_retries: int | None = None,
 ) -> BaseChatModel:
+    if llm_backend is None:
+        llm_backend = os.getenv("NIKA_LLM_PROVIDER") or DEFAULT_LLM_BACKEND
+    if model is None:
+        model = os.getenv("NIKA_REACT_MODEL") or DEFAULT_MODEL
     if llm_backend == "ollama":
         return ChatOllama(
             model=model,
@@ -296,15 +297,12 @@ def load_model(
             timeout=(
                 timeout
                 if timeout is not None
-                else _env_float("CUSTOM_TIMEOUT_SECONDS", CUSTOM_TIMEOUT_SECONDS)
+                else _env_float("CUSTOM_TIMEOUT_SECONDS", 90.0)
             ),
             max_retries=(
                 max_retries
                 if max_retries is not None
-                else _env_non_negative_int(
-                    "CUSTOM_MAX_RETRIES",
-                    CUSTOM_MAX_RETRIES,
-                )
+                else _env_non_negative_int("CUSTOM_MAX_RETRIES", 0)
             ),
         )
 

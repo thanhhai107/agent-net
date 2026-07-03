@@ -49,7 +49,7 @@ def benchmark_run(
         None,
         "-f",
         "--file",
-        help="Benchmark YAML path for batch mode. Defaults to benchmark/benchmark_test.yaml.",
+        help="Benchmark YAML path for batch mode. Defaults to benchmark/benchmark_evaluate.yaml.",
     ),
     problem: str | None = typer.Option(
         None,

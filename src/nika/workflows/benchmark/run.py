@@ -44,7 +44,7 @@ def is_no_fault_problem(problem: str | None) -> bool:
 
 
 def default_benchmark_yaml_path() -> str:
-    return str(BENCHMARK_DIR / "benchmark_test.yaml")
+    return str(BENCHMARK_DIR / "benchmark_evaluate.yaml")
 
 
 def _new_benchmark_results_root(benchmark_name: str) -> Path:

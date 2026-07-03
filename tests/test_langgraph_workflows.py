@@ -53,9 +53,6 @@ from agent.langgraph.workflow_models import (
 )
 from agent.memory.runtime import strip_integrated_learning_guidance
 from agent.llm.model_factory import (
-    CUSTOM_DEFAULT_API_URL,
-    CUSTOM_MAX_RETRIES,
-    CUSTOM_TIMEOUT_SECONDS,
     DEFAULT_LLM_BACKEND,
     DEFAULT_MODEL,
     GLM47ChatOpenAI,
@@ -524,10 +521,7 @@ class ModelFactoryTest(unittest.TestCase):
 
         self.assertEqual(chat_openai.call_args.kwargs["model"], DEFAULT_MODEL)
         self.assertEqual(chat_openai.call_args.kwargs["api_key"], "password")
-        self.assertEqual(
-            chat_openai.call_args.kwargs["base_url"],
-            CUSTOM_DEFAULT_API_URL,
-        )
+        self.assertEqual(chat_openai.call_args.kwargs["base_url"], NETMIND_API_URL)
 
     @patch.dict("os.environ", {"CUSTOM_API_KEY": "password"}, clear=True)
     @patch("agent.llm.model_factory.NetmindChatOpenAI")
@@ -536,14 +530,8 @@ class ModelFactoryTest(unittest.TestCase):
 
         self.assertEqual(chat_openai.call_args.kwargs["api_key"], "password")
         self.assertEqual(chat_openai.call_args.kwargs["base_url"], NETMIND_API_URL)
-        self.assertEqual(
-            chat_openai.call_args.kwargs["timeout"],
-            CUSTOM_TIMEOUT_SECONDS,
-        )
-        self.assertEqual(
-            chat_openai.call_args.kwargs["max_retries"],
-            CUSTOM_MAX_RETRIES,
-        )
+        self.assertEqual(chat_openai.call_args.kwargs["timeout"], 90.0)
+        self.assertEqual(chat_openai.call_args.kwargs["max_retries"], 0)
 
     @patch.dict("os.environ", {}, clear=True)
     def test_netmind_requires_custom_api_key_password(self) -> None:
@@ -586,8 +574,8 @@ class ModelFactoryTest(unittest.TestCase):
             api_key="test-key",
             base_url="https://custom.example/v1",
             temperature=0,
-            timeout=CUSTOM_TIMEOUT_SECONDS,
-            max_retries=CUSTOM_MAX_RETRIES,
+            timeout=90.0,
+            max_retries=0,
         )
 
     @patch.dict(
