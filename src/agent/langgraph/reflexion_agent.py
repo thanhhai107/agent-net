@@ -81,6 +81,7 @@ class ReflexionState(TypedDict, total=False):
     attempt_error: str
     attempt_trace: list[dict[str, Any]]
     diagnosis_report: str
+    is_max_steps_reached: bool
     best_score: float
     evaluation: ReflexionEvaluation | None
     evaluation_failed: bool
@@ -233,6 +234,8 @@ class ReflexionAgent:
         )
 
     def _route_after_evaluation(self, state: ReflexionState) -> str:
+        if state.get("is_max_steps_reached"):
+            return "end"
         evaluation = state.get("evaluation")
         if evaluation is not None and evaluation.success:
             return "submission"
@@ -283,6 +286,7 @@ class ReflexionAgent:
                         "attempt_error": "",
                         "attempt_trace": [],
                         "diagnosis_report": "",
+                        "is_max_steps_reached": False,
                         "best_score": -1.0,
                         "evaluation_failed": False,
                         "memories": [],
@@ -299,6 +303,8 @@ class ReflexionAgent:
                 )
 
     async def _attempt(self, state: ReflexionState) -> dict[str, Any]:
+        if state.get("is_max_steps_reached"):
+            return {}
         attempt_count = state.get("attempt_count", 0) + 1
         callback = self._callback(f"attempt_{attempt_count}")
         task_description = state.get("task_description", "")
@@ -340,6 +346,25 @@ class ReflexionAgent:
                 "evaluation": None,
                 "evaluation_failed": False,
             }
+        except GraphRecursionError:
+            callback._log(
+                "error",
+                {
+                    "message": (
+                        f"Reflexion attempt {attempt_count} reached max recursion limit."
+                    )
+                },
+            )
+            return {
+                "attempt_count": attempt_count,
+                "attempt_report": "",
+                "attempt_error": "ERROR_MAX_STEPS_REACHED",
+                "attempt_trace": [],
+                "diagnosis_report": "ERROR_MAX_STEPS_REACHED",
+                "is_max_steps_reached": True,
+                "evaluation": None,
+                "evaluation_failed": False,
+            }
         except Exception as exc:
             error = str(exc).strip() or exc.__class__.__name__
             callback._log(
@@ -356,6 +381,8 @@ class ReflexionAgent:
             }
 
     async def _evaluate(self, state: ReflexionState) -> dict[str, Any]:
+        if state.get("is_max_steps_reached"):
+            return {"evaluation": None, "evaluation_failed": True}
         attempt_count = state.get("attempt_count", 0)
         callback = self._callback(f"evaluator_{attempt_count}")
         task_description = state.get("task_description", "")

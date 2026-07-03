@@ -750,7 +750,7 @@ class ReactBehaviorTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("react_route", messages[1].content)
         self.assertEqual(update["diagnosis_report"], "Evidence-backed report")
 
-    async def test_diagnosis_max_steps_uses_recent_observations_as_fallback(
+    async def test_diagnosis_max_steps_matches_upstream_error_contract(
         self,
     ) -> None:
         self.agent.diagnosis_agent = AsyncMock()
@@ -772,44 +772,14 @@ class ReactBehaviorTest(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertTrue(update["is_max_steps_reached"])
-        self.assertIn("max recursion limit", update["diagnosis_report"])
-        self.assertIn("pc_0_0 eth0 state DOWN", update["diagnosis_report"])
-        self.assertIn("Current evidence-backed diagnosis report", update["diagnosis_report"])
-        self.assertIn("interface/link-down fault", update["diagnosis_report"])
-        self.assertNotIn("`link_down`", update["diagnosis_report"])
-        self.assertNotIn("stopped before a final report", update["diagnosis_report"])
-        self.assertNotEqual(update["diagnosis_report"], "ERROR_MAX_STEPS_REACHED")
-
-    async def test_fallback_report_prioritizes_strong_older_evidence(self) -> None:
-        transitions = [
-            {
-                "tool": "get_host_net_config",
-                "tool_input": {"host_name": "pc_0_0"},
-                "observation_summary": "pc_0_0 eth0 state DOWN; ip_route is empty",
-            }
-        ]
-        transitions.extend(
-            {
-                "tool": f"check_{index}",
-                "tool_input": {"index": index},
-                "observation_summary": f"routine healthy observation {index}",
-            }
-            for index in range(10)
+        self.assertEqual(update["diagnosis_report"], "ERROR_MAX_STEPS_REACHED")
+        self.assertEqual(
+            update["messages"][-1].content,
+            "Error: diagnosis did not finish within max steps.",
         )
-        self.agent.skill_tool_runtime = SimpleNamespace(
-            snapshot=lambda: {"recent_transitions": transitions}
-        )
-
-        report = self.agent._fallback_diagnosis_report("max recursion limit")
-
-        self.assertIn("pc_0_0 eth0 state DOWN", report)
-        self.assertIn("interface/link-down fault", report)
-        self.assertNotIn("`link_down`", report)
-        self.assertNotIn("stopped before a final report", report)
-
 
 class ReactGraphRoutingTest(unittest.TestCase):
-    def test_graph_submits_after_diagnosis_max_steps(self) -> None:
+    def test_graph_stops_before_submission_after_diagnosis_max_steps(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             diagnosis_agent = SimpleNamespace(ainvoke=AsyncMock())
             diagnosis_agent.ainvoke.side_effect = GraphRecursionError()
@@ -867,10 +837,13 @@ class ReactGraphRoutingTest(unittest.TestCase):
                     )
                 )
 
-            submission_agent.ainvoke.assert_awaited_once()
-            prompt = submission_agent.ainvoke.await_args.args[0]["messages"][0].content
-            self.assertIn("pc_0_0 eth0 state DOWN", prompt)
-            self.assertEqual(result["messages"][-1].content, "submitted")
+            submission_agent.ainvoke.assert_not_awaited()
+            self.assertEqual(result["diagnosis_report"], "ERROR_MAX_STEPS_REACHED")
+            self.assertTrue(result["is_max_steps_reached"])
+            self.assertEqual(
+                result["messages"][-1].content,
+                "Error: diagnosis did not finish within max steps.",
+            )
 
 
 class PlanExecuteBehaviorTest(unittest.IsolatedAsyncioTestCase):
@@ -1135,7 +1108,7 @@ class PlanExecuteBehaviorTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(update["plan"], [revised_step])
 
-    def test_plan_item_limit_routes_to_synthesis(self) -> None:
+    def test_plan_item_limit_stops_before_synthesis_and_submission(self) -> None:
         self.assertEqual(
             self.agent._route_after_replan(
                 {
@@ -1150,7 +1123,33 @@ class PlanExecuteBehaviorTest(unittest.IsolatedAsyncioTestCase):
                     ],
                 }
             ),
-            "synthesis",
+            "end",
+        )
+
+    async def test_executor_max_steps_stops_plan_execute_before_submission(self) -> None:
+        step = PlanStep(
+            step_id="routes",
+            action="Inspect routes",
+            expected_evidence="Route state",
+        )
+        self.agent.executor = AsyncMock()
+        self.agent.executor.ainvoke.side_effect = GraphRecursionError()
+
+        update = await self.agent._execute(
+            {
+                "task_description": "Diagnose",
+                "objective": "Find the fault",
+                "plan": [step],
+                "completed_steps": [],
+                "executed_steps": 0,
+            }
+        )
+
+        self.assertTrue(update["is_max_steps_reached"])
+        self.assertEqual(update["diagnosis_report"], "ERROR_MAX_STEPS_REACHED")
+        self.assertEqual(
+            self.agent._route_after_replan(update),
+            "end",
         )
 
     async def test_empty_report_skips_submission(self) -> None:
@@ -1267,7 +1266,7 @@ class ReflexionBehaviorTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("paused host", prompt)
         self.assertIn('"attempt": 2', prompt)
 
-    async def test_attempt_failure_is_preserved_for_evaluation(self) -> None:
+    async def test_attempt_max_steps_stops_reflexion_before_submission(self) -> None:
         self.agent.actor = AsyncMock()
         self.agent.actor.ainvoke.side_effect = GraphRecursionError()
 
@@ -1282,7 +1281,31 @@ class ReflexionBehaviorTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(update["attempt_count"], 1)
         self.assertEqual(update["attempt_report"], "")
-        self.assertTrue(update["attempt_error"])
+        self.assertEqual(update["attempt_error"], "ERROR_MAX_STEPS_REACHED")
+        self.assertTrue(update["is_max_steps_reached"])
+        self.assertEqual(update["diagnosis_report"], "ERROR_MAX_STEPS_REACHED")
+        self.assertEqual(
+            self.agent._route_after_evaluation(update),
+            "end",
+        )
+
+    async def test_attempt_non_recursion_failure_is_preserved_for_evaluation(self) -> None:
+        self.agent.actor = AsyncMock()
+        self.agent.actor.ainvoke.side_effect = RuntimeError("temporary failure")
+
+        update = await self.agent._attempt(
+            {
+                "task_description": "Diagnose",
+                "attempt_count": 0,
+                "diagnosis_report": "",
+                "memories": [],
+            }
+        )
+
+        self.assertEqual(update["attempt_count"], 1)
+        self.assertEqual(update["attempt_report"], "")
+        self.assertIn("temporary failure", update["attempt_error"])
+        self.assertNotIn("is_max_steps_reached", update)
 
     async def test_evaluator_returns_structured_success(self) -> None:
         self.agent.evaluator = AsyncMock()

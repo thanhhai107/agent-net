@@ -71,6 +71,7 @@ class PlanExecuteState(TypedDict, total=False):
     executed_steps: int
     diagnosis_report: str
     planning_failed: bool
+    is_max_steps_reached: bool
     messages: list[Any]
 
 
@@ -138,7 +139,6 @@ class PlanExecuteAgent:
         builder.add_node("planner", self._plan)
         builder.add_node("executor", self._execute)
         builder.add_node("replanner", self._replan)
-        builder.add_node("synthesis", self._synthesize)
         builder.add_node("submission", self._submit)
         builder.add_edge(START, "planner")
         builder.add_conditional_edges(
@@ -152,11 +152,10 @@ class PlanExecuteAgent:
             self._route_after_replan,
             {
                 "executor": "executor",
-                "synthesis": "synthesis",
                 "submission": "submission",
+                "end": END,
             },
         )
-        builder.add_edge("synthesis", "submission")
         builder.add_edge("submission", END)
         self.graph = builder.compile()
 
@@ -241,6 +240,7 @@ class PlanExecuteAgent:
                         "executed_steps": 0,
                         "diagnosis_report": "",
                         "planning_failed": False,
+                        "is_max_steps_reached": False,
                         "messages": [HumanMessage(content=task_description)],
                     },
                     config={
@@ -318,6 +318,18 @@ class PlanExecuteAgent:
                 result["messages"][-1].content
             )
             step_result = StepResult(step=step, observation=observation)
+        except GraphRecursionError:
+            callback._log(
+                "error",
+                {"message": f"Executor reached max recursion limit for {step.step_id}."},
+            )
+            return {
+                "plan": state["plan"][1:],
+                "completed_steps": state.get("completed_steps", []),
+                "executed_steps": state.get("executed_steps", 0),
+                "diagnosis_report": "ERROR_MAX_STEPS_REACHED",
+                "is_max_steps_reached": True,
+            }
         except Exception as exc:
             callback._log(
                 "error",
@@ -371,40 +383,15 @@ class PlanExecuteAgent:
             return {"plan": state.get("plan", [])}
 
     def _route_after_replan(self, state: PlanExecuteState) -> str:
+        if state.get("is_max_steps_reached"):
+            return "end"
         if state.get("diagnosis_report", "").strip():
             return "submission"
         if state.get("executed_steps", 0) >= self.max_steps:
-            return "synthesis"
+            return "end"
         if state.get("plan"):
             return "executor"
-        return "synthesis"
-
-    async def _synthesize(self, state: PlanExecuteState) -> dict[str, Any]:
-        callback = self._callback("synthesis")
-        evidence = [item.model_dump() for item in state.get("completed_steps", [])]
-        try:
-            response = await self.llm.ainvoke(
-                [
-                    SystemMessage(
-                        content=SYNTHESIS_PROMPT
-                        + self._learning_prompt_suffix(activate_skill=False)
-                    ),
-                    HumanMessage(
-                        content=json.dumps(
-                            {
-                                "task": state["task_description"],
-                                "evidence": evidence,
-                            },
-                            ensure_ascii=False,
-                        )
-                    ),
-                ],
-                config={"callbacks": [callback]},
-            )
-            return {"diagnosis_report": str(response.content)}
-        except Exception as exc:
-            callback._log("error", {"message": f"Synthesis failed: {exc}"})
-            return {"diagnosis_report": ""}
+        return "end"
 
     async def _submit(self, state: PlanExecuteState) -> dict[str, Any]:
         report = state.get("diagnosis_report", "").strip()
