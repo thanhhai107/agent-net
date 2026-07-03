@@ -90,6 +90,8 @@ class RCATask(TaskBase):
         # 4. Get normalized component sets
         correct_rc_names = {str(c).strip() for c in gt.root_cause_name}
         sub_rc_names = {str(c).strip() for c in sub_rc_names}
+        if not correct_rc_names and not sub_rc_names:
+            return 1.0, 1.0, 1.0, 1.0
 
         # 5. Calculate precision, recall, F1 score
         tp = len(correct_rc_names & sub_rc_names)

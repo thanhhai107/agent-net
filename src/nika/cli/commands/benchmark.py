@@ -15,6 +15,7 @@ from nika.workflows.benchmark.inject_defaults import resolve_inject_params
 from nika.workflows.benchmark.run import (
     _new_benchmark_results_root,
     default_benchmark_yaml_path,
+    is_no_fault_problem,
     run_benchmark_from_yaml,
     run_single_benchmark,
 )
@@ -310,8 +311,15 @@ def benchmark_run(
             )
         topo = tier or ""
         benchmark_root = result_root or _new_benchmark_results_root(scenario)
-        inject_params = resolve_inject_params(problem, scenario, topo)
-        inject_params.update(_parse_set_options(sets))
+        if is_no_fault_problem(problem):
+            if sets:
+                raise typer.BadParameter(
+                    "--set is invalid for no-fault benchmark cases."
+                )
+            inject_params = {}
+        else:
+            inject_params = resolve_inject_params(problem, scenario, topo)
+            inject_params.update(_parse_set_options(sets))
         run_single_benchmark(
             problem=problem,
             scenario=scenario,

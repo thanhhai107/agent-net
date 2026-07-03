@@ -101,6 +101,8 @@ class LocalizationTask(TaskBase):
         submitted_components_norm = {
             str(c).strip().lower() for c in submitted_components
         }
+        if not correct_components and not submitted_components_norm:
+            return 1.0, 1.0, 1.0, 1.0
 
         # 5. Calculate precision, recall, F1 score
         tp = len(correct_components & submitted_components_norm)

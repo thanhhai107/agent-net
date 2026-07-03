@@ -30,6 +30,20 @@ def test_localization_accuracy_requires_exact_set() -> None:
     assert f1 == 0.6667
 
 
+def test_localization_empty_submission_matches_empty_ground_truth() -> None:
+    task = LocalizationTask()
+
+    accuracy, precision, recall, f1 = task.eval(
+        {"faulty_devices": []},
+        {"faulty_devices": []},
+    )
+
+    assert accuracy == 1.0
+    assert precision == 1.0
+    assert recall == 1.0
+    assert f1 == 1.0
+
+
 def test_rca_accuracy_requires_exact_set() -> None:
     task = RCATask()
 
@@ -42,3 +56,17 @@ def test_rca_accuracy_requires_exact_set() -> None:
     assert precision == 0.5
     assert recall == 1.0
     assert f1 == 0.6667
+
+
+def test_rca_empty_submission_matches_empty_ground_truth() -> None:
+    task = RCATask()
+
+    accuracy, precision, recall, f1 = task.eval(
+        {"root_cause_name": []},
+        {"root_cause_name": []},
+    )
+
+    assert accuracy == 1.0
+    assert precision == 1.0
+    assert recall == 1.0
+    assert f1 == 1.0

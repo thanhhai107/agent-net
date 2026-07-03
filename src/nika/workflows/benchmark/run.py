@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import subprocess
 import sys
+import textwrap
 import time
 from pathlib import Path
 
@@ -15,9 +16,10 @@ from agent.composition import (
     validate_agent_extensions,
 )
 from nika.config import BENCHMARK_DIR, RESULTS_DIR
-from nika.net_env.net_env_pool import scenario_requires_topo_tier
+from nika.net_env.net_env_pool import get_net_env_instance, scenario_requires_topo_tier
 from nika.utils.experiment_naming import benchmark_stem, next_experiment_id
 from nika.utils.kathara_cleanup import ensure_kathara_clean
+from nika.utils.logger import log_event
 from nika.workflows.agent.run import start_agent
 from nika.workflows.benchmark.inject_defaults import resolve_inject_params
 from nika.workflows.benchmark.load_config import load_benchmark_yaml
@@ -31,6 +33,14 @@ _BENCHMARK_FAILED_PREFIX = "benchmark_failed "
 _BENCHMARK_PROGRESS_PREFIX = "benchmark_progress "
 _BENCHMARK_START_PREFIX = "benchmark_start "
 _BENCHMARK_SUMMARY_PREFIX = "benchmark_summary "
+
+NO_FAULT_PROBLEM = "no_fault"
+_NO_FAULT_ALIASES = frozenset({NO_FAULT_PROBLEM, "clean", "normal", "none", "healthy"})
+
+
+def is_no_fault_problem(problem: str | None) -> bool:
+    """Return True for benchmark rows that intentionally inject no failure."""
+    return str(problem or "").strip().lower() in _NO_FAULT_ALIASES
 
 
 def default_benchmark_yaml_path() -> str:
@@ -248,6 +258,66 @@ def _progress_row_label(row: dict) -> str:
     )
 
 
+def _no_fault_ground_truth() -> dict[str, object]:
+    return {
+        "is_anomaly": False,
+        "faulty_devices": [],
+        "root_cause_name": [],
+    }
+
+
+def _diagnostic_task_description_for_current_state(
+    *,
+    scenario: str,
+    tier: str | None,
+    lab_name: str,
+) -> str:
+    net_env = get_net_env_instance(scenario, topo_size=tier, lab_name=lab_name)
+    net_desc = net_env.get_info()
+    tmpl = """\
+        You are provided with the following network description and its current state:
+        {net_desc}
+
+        Your goal is to analyze the network condition and, if needed, use the available tools.
+        You need to generate a troubleshooting diagnosis report.
+        The report should reflect your assessment of the network's health,
+        indicate any abnormal behavior you identify, and describe relevant
+        findings based on your analysis.
+
+        Focus on producing an informative and coherent diagnostic report
+        derived from the network state.
+        Do not need to propose any solutions or remediation steps at this stage.
+        """
+    return textwrap.dedent(tmpl).format(net_desc=net_desc).strip()
+
+
+def _prepare_no_fault_session(
+    session,
+    *,
+    scenario: str,
+    tier: str | None,
+) -> None:
+    session.update_session("problem_names", [])
+    session.update_session("root_cause_name", NO_FAULT_PROBLEM)
+    session.update_session("root_cause_category", "none")
+    session.update_session(
+        "task_description",
+        _diagnostic_task_description_for_current_state(
+            scenario=scenario,
+            tier=tier,
+            lab_name=session.lab_name,
+        ),
+    )
+    session.write_gt(_no_fault_ground_truth())
+    log_event(
+        "no_fault_ground_truth_saved",
+        f"Clean benchmark control saved for session {session.session_id}.",
+        session_id=session.session_id,
+        scenario=scenario,
+        topo_size=tier,
+    )
+
+
 def run_single_benchmark(
     problem: str,
     scenario: str,
@@ -312,16 +382,27 @@ def run_single_benchmark(
     if benchmark_index is not None:
         session.update_session("benchmark_index", benchmark_index)
 
-    params = dict(inject_params or resolve_inject_params(problem, scenario, topo_size or ""))
-    inject_failure(
-        problem_names=[problem],
-        session_id=session_id,
-        param_overrides=params,
-    )
-    session = Session().load_running_session(session_id=session_id)
-    session_dir = Path(
-        getattr(session, "session_dir", Path(result_root or RESULTS_DIR) / session_id)
-    )
+    if is_no_fault_problem(problem):
+        if inject_params:
+            raise ValueError("No-fault benchmark cases do not accept inject parameters.")
+        _prepare_no_fault_session(
+            session,
+            scenario=scenario,
+            tier=tier,
+        )
+    else:
+        params = dict(
+            inject_params or resolve_inject_params(problem, scenario, topo_size or "")
+        )
+        inject_failure(
+            problem_names=[problem],
+            session_id=session_id,
+            param_overrides=params,
+        )
+        session = Session().load_running_session(session_id=session_id)
+        session_dir = Path(
+            getattr(session, "session_dir", Path(result_root or RESULTS_DIR) / session_id)
+        )
 
     try:
         start_agent(

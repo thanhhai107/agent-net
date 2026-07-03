@@ -1,6 +1,7 @@
-# 100-case curriculum-evaluation subset of benchmark_full.yaml.
-# Cases 1-44 are evolution variants for broad motif learning.
-# Cases 45-100 are benchmark_selected.yaml: one case per root cause.
+# 125-case curriculum-evaluation benchmark.
+# The 100 fault cases preserve curriculum order: 44 evolution variants,
+# then benchmark_selected.yaml as one case per root cause.
+# The 25 no-fault clean controls are deterministically interleaved.
 cases:
 - scenario: ospf_enterprise_dhcp
   topo_size: m
@@ -9,6 +10,10 @@ cases:
     host_name: dns_server
     intf_name: eth0
     delay_ms: '1000'
+- scenario: p4_mpls
+  topo_size: null
+  problem: no_fault
+  inject: {}
 - scenario: ospf_enterprise_dhcp
   topo_size: m
   problem: dns_port_blocked
@@ -38,6 +43,10 @@ cases:
   inject:
     host_name: dhcp_server
     host_name_2: pc_1_1_1_1
+- scenario: sdn_clos
+  topo_size: s
+  problem: no_fault
+  inject: {}
 - scenario: ospf_enterprise_dhcp
   topo_size: m
   problem: dhcp_spoofed_dns
@@ -66,6 +75,10 @@ cases:
   problem: host_incorrect_gateway
   inject:
     host_name: pc_1_1_1_1
+- scenario: ospf_enterprise_dhcp
+  topo_size: s
+  problem: no_fault
+  inject: {}
 - scenario: ospf_enterprise_static
   topo_size: m
   problem: host_incorrect_ip
@@ -88,6 +101,10 @@ cases:
   problem: host_missing_ip
   inject:
     host_name: pc_1_1_1_1
+- scenario: dc_clos_service
+  topo_size: m
+  problem: no_fault
+  inject: {}
 - scenario: dc_clos_bgp
   topo_size: m
   problem: host_static_blackhole
@@ -123,6 +140,10 @@ cases:
     host_name: pc_0_0
     intf_name: eth0
     corruption_percentage: '60'
+- scenario: simple_bgp
+  topo_size: null
+  problem: no_fault
+  inject: {}
 - scenario: dc_clos_bgp
   topo_size: m
   problem: bgp_acl_block
@@ -143,11 +164,19 @@ cases:
   problem: bgp_hijacking
   inject:
     host_name: leaf_router_0_0
+- scenario: rip_small_internet_vpn
+  topo_size: s
+  problem: no_fault
+  inject: {}
 - scenario: dc_clos_bgp
   topo_size: m
   problem: bgp_missing_route_advertisement
   inject:
     host_name: leaf_router_0_0
+- scenario: dc_clos_service
+  topo_size: l
+  problem: no_fault
+  inject: {}
 - scenario: ospf_enterprise_dhcp
   topo_size: m
   problem: frr_service_down
@@ -178,6 +207,10 @@ cases:
   problem: arp_cache_poisoning
   inject:
     host_name: pc_1_1_1_1
+- scenario: ospf_enterprise_static
+  topo_size: l
+  problem: no_fault
+  inject: {}
 - scenario: ospf_enterprise_dhcp
   topo_size: m
   problem: http_acl_block
@@ -210,6 +243,10 @@ cases:
     host_name: web_server_0
     attacker_device: pc_2_2_2_2
 - scenario: sdn_clos
+  topo_size: l
+  problem: no_fault
+  inject: {}
+- scenario: sdn_clos
   topo_size: m
   problem: flow_rule_loop
   inject:
@@ -225,6 +262,10 @@ cases:
   problem: sdn_controller_crash
   inject:
     host_name: controller
+- scenario: dc_clos_bgp
+  topo_size: l
+  problem: no_fault
+  inject: {}
 - scenario: sdn_clos
   topo_size: m
   problem: southbound_port_block
@@ -251,6 +292,10 @@ cases:
   problem: p4_table_entry_missing
   inject:
     host_name: s1
+- scenario: p4_bloom_filter
+  topo_size: null
+  problem: no_fault
+  inject: {}
 - scenario: ospf_enterprise_dhcp
   topo_size: s
   problem: arp_acl_block
@@ -271,6 +316,10 @@ cases:
   problem: bgp_asn_misconfig
   inject:
     host_name: leaf_router_0_0
+- scenario: ospf_enterprise_dhcp
+  topo_size: l
+  problem: no_fault
+  inject: {}
 - scenario: dc_clos_bgp
   topo_size: s
   problem: bgp_blackhole_route_leak
@@ -291,6 +340,10 @@ cases:
   problem: bmv2_switch_down
   inject:
     host_name: switch_1
+- scenario: ospf_enterprise_static
+  topo_size: s
+  problem: no_fault
+  inject: {}
 - scenario: ospf_enterprise_dhcp
   topo_size: s
   problem: dhcp_missing_subnet
@@ -309,6 +362,10 @@ cases:
   inject:
     host_name: dhcp_server
     host_name_2: pc_1_1_1_1
+- scenario: sdn_star
+  topo_size: m
+  problem: no_fault
+  inject: {}
 - scenario: ospf_enterprise_dhcp
   topo_size: s
   problem: dhcp_spoofed_gateway
@@ -340,6 +397,10 @@ cases:
     host_name: dns_server
     target_website: web0
     target_domain: local
+- scenario: p4_int
+  topo_size: null
+  problem: no_fault
+  inject: {}
 - scenario: ospf_enterprise_dhcp
   topo_size: s
   problem: dns_service_down
@@ -351,6 +412,10 @@ cases:
   inject:
     host_name: leaf_1
     host_name_2: leaf_2
+- scenario: ospf_enterprise_dhcp
+  topo_size: m
+  problem: no_fault
+  inject: {}
 - scenario: sdn_clos
   topo_size: s
   problem: flow_rule_shadowing
@@ -381,6 +446,10 @@ cases:
   problem: host_incorrect_ip
   inject:
     host_name: pc_1_1_1_1
+- scenario: dc_clos_bgp
+  topo_size: m
+  problem: no_fault
+  inject: {}
 - scenario: ospf_enterprise_static
   topo_size: s
   problem: host_incorrect_netmask
@@ -398,6 +467,10 @@ cases:
   problem: host_missing_ip
   inject:
     host_name: pc_1_1_1_1
+- scenario: sdn_star
+  topo_size: s
+  problem: no_fault
+  inject: {}
 - scenario: dc_clos_bgp
   topo_size: s
   problem: host_static_blackhole
@@ -419,6 +492,10 @@ cases:
   problem: icmp_acl_block
   inject:
     host_name: pc_1_1_1_1
+- scenario: ospf_enterprise_static
+  topo_size: m
+  problem: no_fault
+  inject: {}
 - scenario: ospf_enterprise_dhcp
   topo_size: s
   problem: incast_traffic_network_limitation
@@ -457,6 +534,10 @@ cases:
     intf_name: eth0
     down_time: '30'
     up_time: '30'
+- scenario: p4_counter
+  topo_size: null
+  problem: no_fault
+  inject: {}
 - scenario: dc_clos_bgp
   topo_size: s
   problem: link_fragmentation_disabled
@@ -483,6 +564,10 @@ cases:
   inject:
     host_name: load_balancer
     host_name_2: backend_web_0
+- scenario: dc_clos_bgp
+  topo_size: s
+  problem: no_fault
+  inject: {}
 - scenario: p4_mpls
   topo_size: null
   problem: mpls_label_limit_exceeded
@@ -503,11 +588,19 @@ cases:
   problem: ospf_neighbor_missing
   inject:
     host_name: router_core_1
+- scenario: rip_small_internet_vpn
+  topo_size: m
+  problem: no_fault
+  inject: {}
 - scenario: p4_bloom_filter
   topo_size: null
   problem: p4_aggressive_detection_thresholds
   inject:
     host_name: switch_1
+- scenario: rip_small_internet_vpn
+  topo_size: l
+  problem: no_fault
+  inject: {}
 - scenario: p4_bloom_filter
   topo_size: null
   problem: p4_compilation_error_parser_state
@@ -544,6 +637,10 @@ cases:
   problem: sender_application_delay
   inject:
     host_name: web_server_0
+- scenario: dc_clos_service
+  topo_size: s
+  problem: no_fault
+  inject: {}
 - scenario: ospf_enterprise_dhcp
   topo_size: s
   problem: sender_resource_contention
@@ -569,3 +666,7 @@ cases:
   inject:
     host_name: web_server_0
     attacker_device: pc_2_1_1_1
+- scenario: sdn_clos
+  topo_size: m
+  problem: no_fault
+  inject: {}

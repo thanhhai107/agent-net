@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import random
 from collections import Counter
 from pathlib import Path
 
@@ -110,10 +111,42 @@ EVALUATE_EVOLUTION_PROBLEMS: list[str] = [
 ]
 
 EVALUATE_HEADER = (
-    "# 100-case curriculum-evaluation subset of benchmark_full.yaml.\n"
-    "# Cases 1-44 are evolution variants for broad motif learning.\n"
-    "# Cases 45-100 are benchmark_selected.yaml: one case per root cause.\n"
+    "# 125-case curriculum-evaluation benchmark.\n"
+    "# The 100 fault cases preserve curriculum order: 44 evolution variants,\n"
+    "# then benchmark_selected.yaml as one case per root cause.\n"
+    "# The 25 no-fault clean controls are deterministically interleaved.\n"
 )
+
+NO_FAULT_PROBLEM = "no_fault"
+EVALUATE_CLEAN_SHUFFLE_SEED = 20260703
+NO_FAULT_CASES: list[tuple[str, str]] = [
+    # Keep clean controls on non-Kubernetes labs used by the fault benchmarks.
+    ("dc_clos_bgp", "s"),
+    ("dc_clos_bgp", "m"),
+    ("dc_clos_bgp", "l"),
+    ("dc_clos_service", "s"),
+    ("dc_clos_service", "m"),
+    ("dc_clos_service", "l"),
+    ("ospf_enterprise_dhcp", "s"),
+    ("ospf_enterprise_dhcp", "m"),
+    ("ospf_enterprise_dhcp", "l"),
+    ("ospf_enterprise_static", "s"),
+    ("ospf_enterprise_static", "m"),
+    ("ospf_enterprise_static", "l"),
+    ("rip_small_internet_vpn", "s"),
+    ("rip_small_internet_vpn", "m"),
+    ("rip_small_internet_vpn", "l"),
+    ("sdn_clos", "s"),
+    ("sdn_clos", "m"),
+    ("sdn_clos", "l"),
+    ("sdn_star", "s"),
+    ("sdn_star", "m"),
+    ("simple_bgp", ""),
+    ("p4_bloom_filter", ""),
+    ("p4_counter", ""),
+    ("p4_int", ""),
+    ("p4_mpls", ""),
+]
 
 SELECTED_SCENARIO_FOR_PROBLEM: dict[str, str] = {
     "arp_acl_block": "ospf_enterprise_dhcp",
@@ -190,6 +223,43 @@ def _make_row(scenario: str, problem: str, topo_size: str) -> dict:
         "problem": problem,
         "inject": inject,
     }
+
+
+def _make_no_fault_row(scenario: str, topo_size: str) -> dict:
+    return {
+        "scenario": scenario,
+        "topo_size": topo_size or None,
+        "problem": NO_FAULT_PROBLEM,
+        "inject": {},
+    }
+
+
+def _interleave_clean_controls(
+    *,
+    fault_rows: list[dict],
+    clean_rows: list[dict],
+) -> list[dict]:
+    """Insert clean controls throughout the fault curriculum with stable jitter."""
+    if not clean_rows:
+        return list(fault_rows)
+
+    rng = random.Random(EVALUATE_CLEAN_SHUFFLE_SEED)
+    shuffled_clean = list(clean_rows)
+    rng.shuffle(shuffled_clean)
+
+    block_size = max(1, len(fault_rows) // len(clean_rows))
+    rows: list[dict] = []
+    for clean_idx, clean_row in enumerate(shuffled_clean):
+        block_start = clean_idx * block_size
+        block = fault_rows[block_start : block_start + block_size]
+        insert_at = rng.randrange(1, len(block) + 1) if block else 0
+        rows.extend(block[:insert_at])
+        rows.append(clean_row)
+        rows.extend(block[insert_at:])
+
+    consumed = len(shuffled_clean) * block_size
+    rows.extend(fault_rows[consumed:])
+    return rows
 
 
 def iter_full_cases() -> list[dict]:
@@ -287,6 +357,7 @@ def iter_evaluate_cases(
 ) -> list[dict]:
     full_rows = full_rows or iter_full_cases()
     selected_rows = selected_rows or iter_selected_cases()
+    net_envs = list_all_net_envs()
     selected_by_problem = {row["problem"]: row for row in selected_rows}
     selected_keys = {_row_key(row) for row in selected_rows}
     full_by_problem: dict[str, list[dict]] = {}
@@ -319,15 +390,43 @@ def iter_evaluate_cases(
             )[0]
         )
 
-    rows = evolution_rows + selected_rows
+    clean_rows: list[dict] = []
+    seen_clean: set[tuple[str, str]] = set()
+    if len(NO_FAULT_CASES) != 25:
+        raise ValueError("Evaluate clean-control phase must contain exactly 25 cases")
+    for scenario, topo_size in NO_FAULT_CASES:
+        key = (scenario, topo_size)
+        if key in seen_clean:
+            raise ValueError(f"Duplicate no-fault evaluate case: {key!r}")
+        seen_clean.add(key)
+        if scenario not in net_envs:
+            raise ValueError(f"Unknown no-fault scenario {scenario!r}")
+        requires_tier = scenario_requires_topo_tier(scenario)
+        if requires_tier and topo_size not in {"s", "m", "l"}:
+            raise ValueError(f"No-fault scenario {scenario} requires topo_size s/m/l")
+        if not requires_tier and topo_size:
+            raise ValueError(f"No-fault scenario {scenario} does not accept topo_size")
+        clean_rows.append(_make_no_fault_row(scenario, topo_size))
+
+    ordered_fault_rows = evolution_rows + selected_rows
+    rows = _interleave_clean_controls(
+        fault_rows=ordered_fault_rows,
+        clean_rows=clean_rows,
+    )
     row_keys = {_row_key(row) for row in rows}
     full_keys = {_row_key(row) for row in full_rows}
-    if len(rows) != 100 or len(row_keys) != 100:
-        raise ValueError("benchmark_evaluate.yaml must contain 100 unique cases")
-    if not row_keys.issubset(full_keys):
-        raise ValueError("benchmark_evaluate.yaml must be a subset of full")
-    if len({row["problem"] for row in rows[44:]}) != len(selected_rows):
-        raise ValueError("Evaluate coverage phase must cover each selected problem")
+    fault_keys = {_row_key(row) for row in rows if row["problem"] != NO_FAULT_PROBLEM}
+    if len(rows) != 125 or len(row_keys) != 125:
+        raise ValueError("benchmark_evaluate.yaml must contain 125 unique cases")
+    if not fault_keys.issubset(full_keys):
+        raise ValueError("Fault cases in benchmark_evaluate.yaml must be a subset of full")
+    actual_fault_rows = [row for row in rows if row["problem"] != NO_FAULT_PROBLEM]
+    if [_row_key(row) for row in actual_fault_rows] != [
+        _row_key(row) for row in ordered_fault_rows
+    ]:
+        raise ValueError("Evaluate fault rows must preserve curriculum order")
+    if sum(row["problem"] == NO_FAULT_PROBLEM for row in rows) != len(clean_rows):
+        raise ValueError("Evaluate clean-control phase must use no_fault rows")
     return rows
 
 
