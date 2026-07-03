@@ -206,6 +206,9 @@ class ReflexionAgent:
         token_budget: int = 1500,
         skill_selector_mode: str = "lcb",
         meta_controller_mode: str = "heuristic",
+        max_skill_age: int = 4,
+        selector_min_lcb: float = -0.05,
+        selector_nominee_k: int = 3,
     ) -> None:
         self._diagnosis_phase.install_memory_runtime(
             memory=memory,
@@ -216,6 +219,9 @@ class ReflexionAgent:
             session_dir=self.session_dir,
             skill_selector_mode=skill_selector_mode,
             meta_controller_mode=meta_controller_mode,
+            max_skill_age=max_skill_age,
+            selector_min_lcb=selector_min_lcb,
+            selector_nominee_k=selector_nominee_k,
         )
         self._refresh_actor()
 

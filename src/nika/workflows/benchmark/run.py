@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import hashlib
-import re
 import subprocess
 import sys
 import time
-from datetime import datetime
 from pathlib import Path
 
 from agent.composition import (
@@ -18,6 +16,7 @@ from agent.composition import (
 )
 from nika.config import BENCHMARK_DIR, RESULTS_DIR
 from nika.net_env.net_env_pool import scenario_requires_topo_tier
+from nika.utils.experiment_naming import benchmark_stem, next_experiment_id
 from nika.utils.kathara_cleanup import ensure_kathara_clean
 from nika.workflows.agent.run import start_agent
 from nika.workflows.benchmark.inject_defaults import resolve_inject_params
@@ -38,14 +37,8 @@ def default_benchmark_yaml_path() -> str:
     return str(BENCHMARK_DIR / "benchmark_test.yaml")
 
 
-def _slugify_benchmark_name(raw: str) -> str:
-    slug = re.sub(r"[^A-Za-z0-9_.-]+", "-", raw).strip(".-")
-    return slug or "benchmark"
-
-
 def _new_benchmark_results_root(benchmark_name: str) -> Path:
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-    root = Path(RESULTS_DIR) / f"{_slugify_benchmark_name(benchmark_name)}-{timestamp}"
+    root = Path(RESULTS_DIR) / next_experiment_id(benchmark_name)
     root.mkdir(parents=True, exist_ok=False)
     return root
 
@@ -404,7 +397,7 @@ def run_benchmark_from_yaml(
     if not rows:
         print(f"No benchmark cases found in {benchmark_file}")
         return
-    benchmark_name = Path(benchmark_file).stem
+    benchmark_name = benchmark_stem(benchmark_file)
     benchmark_root = (
         Path(result_root)
         if result_root is not None

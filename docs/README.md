@@ -64,6 +64,8 @@ nika benchmark run --file benchmark/benchmark_test.yaml \
 
 Use `--memory-read <bank>` for read-only retrieval. Persistent state is local
 JSON under `runtime/memory/<bank>/skills.json`.
+Studio-created memory banks use the shared experiment id format
+`<benchmark>-<NNNN>` unless a bank id is explicitly provided.
 
 Each skill has:
 
@@ -121,6 +123,8 @@ nika benchmark run --file benchmark/benchmark_test.yaml \
 ```
 
 Persistent libraries live under `runtime/tool_evolution/<library_id>/state.json`.
+Studio-created tool libraries use the shared experiment id format
+`<benchmark>-<NNNN>` unless a library id is explicitly provided.
 They store tool trials, comprehension gaps, structured LLM documentation
 rewrites, Explorer observations, Analyzer suggestions, rewrite history,
 tool-level usage summaries, path-rate metrics, mastery/convergence stats,

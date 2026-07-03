@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
@@ -165,6 +165,39 @@ class WorkflowRegistrationTest(unittest.TestCase):
         self.assertEqual(callback_config([]), {})
         callback = object()
         self.assertEqual(callback_config([callback]), {"callbacks": [callback]})
+
+    def test_memory_runtime_config_is_forwarded_by_agent_facades(self) -> None:
+        cases = (
+            (BasicReActAgent, "_refresh_diagnosis_agent"),
+            (PlanExecuteAgent, "_refresh_executor"),
+            (ReflexionAgent, "_refresh_actor"),
+        )
+        for agent_cls, refresh_name in cases:
+            with self.subTest(agent_cls=agent_cls.__name__):
+                agent = agent_cls.__new__(agent_cls)
+                agent.session_dir = "/tmp/session"
+                agent._diagnosis_phase = Mock()
+                setattr(agent, refresh_name, Mock())
+
+                agent.install_memory_runtime(
+                    memory=object(),
+                    memory_mode="evolve",
+                    task_description="task",
+                    top_k=7,
+                    token_budget=2100,
+                    skill_selector_mode="llm_topk_lcb",
+                    meta_controller_mode="llm",
+                    max_skill_age=6,
+                    selector_min_lcb=-0.02,
+                    selector_nominee_k=4,
+                )
+
+                kwargs = agent._diagnosis_phase.install_memory_runtime.call_args.kwargs
+                self.assertEqual(kwargs["session_dir"], "/tmp/session")
+                self.assertEqual(kwargs["max_skill_age"], 6)
+                self.assertEqual(kwargs["selector_min_lcb"], -0.02)
+                self.assertEqual(kwargs["selector_nominee_k"], 4)
+                getattr(agent, refresh_name).assert_called_once_with()
 
     def test_cli_lists_all_agent_types(self) -> None:
         self.assertEqual(

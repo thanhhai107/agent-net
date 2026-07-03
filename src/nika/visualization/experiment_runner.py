@@ -13,8 +13,9 @@ from pathlib import Path
 from typing import Any
 
 from agent.llm.model_factory import DEFAULT_LLM_BACKEND, DEFAULT_MODEL
-from nika.config import RUNTIME_DIR, _REPO_ROOT
+from nika.config import RESULTS_DIR, RUNTIME_DIR, _REPO_ROOT
 from nika.utils.agent_config import resolve_max_steps
+from nika.utils.experiment_naming import next_experiment_id
 from nika.utils.kathara_cleanup import ensure_kathara_clean
 from nika.workflows.benchmark.run import default_benchmark_yaml_path
 
@@ -40,10 +41,6 @@ class CommandPlan:
     name: str
     command: list[str]
     variant: str = "setup"
-
-
-def _now_id() -> str:
-    return datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")
 
 
 def _python_module_command(*args: str) -> list[str]:
@@ -109,6 +106,8 @@ def _benchmark_command(config: dict[str, Any]) -> list[str]:
         *_common_agent_args(config),
         *_judge_args(config),
     )
+    if config.get("result_root"):
+        command.extend(["--result-root", str(config["result_root"])])
     return command
 
 
@@ -119,6 +118,15 @@ def selected_modules(config: dict[str, Any]) -> set[str]:
 
 def agent_type(config: dict[str, Any]) -> str:
     return str(config.get("agent_type") or "react").lower()
+
+
+def _command_experiment_id(config: dict[str, Any]) -> str:
+    configured = str(config.get("experiment_id") or "").strip()
+    if configured:
+        return configured
+    return next_experiment_id(
+        _str(config.get("benchmark_file"), default_benchmark_yaml_path())
+    )
 
 
 def experiment_label(config: dict[str, Any]) -> str:
@@ -134,6 +142,7 @@ def build_experiment_command(config: dict[str, Any]) -> list[str]:
     modules = selected_modules(config)
     tool_enabled = "tool_evolution" in modules
     memory_enabled = "memory_evolution" in modules
+    default_library_id = _command_experiment_id(config)
 
     command = _benchmark_command(config)
 
@@ -141,7 +150,10 @@ def build_experiment_command(config: dict[str, Any]) -> list[str]:
         command.extend(
             [
                 "--tools",
-                _str(config.get("tool_library_id"), "tools-streamlit"),
+                _str(
+                    config.get("tool_library_id"),
+                    default_library_id,
+                ),
                 "--tool-doc-chars",
                 str(_int(config.get("tool_doc_chars"), 500)),
                 "--tool-prompt-doc-limit",
@@ -161,7 +173,10 @@ def build_experiment_command(config: dict[str, Any]) -> list[str]:
         command.extend(
             [
                 "--memory",
-                _str(config.get("memory_bank"), "memory-streamlit"),
+                _str(
+                    config.get("memory_bank"),
+                    default_library_id,
+                ),
                 "--memory-k",
                 str(_int(config.get("memory_k"), 5)),
                 "--memory-tokens",
@@ -202,9 +217,27 @@ def build_command_plan(config: dict[str, Any]) -> list[CommandPlan]:
     return plan
 
 
+def prepare_experiment_config(config: dict[str, Any]) -> dict[str, Any]:
+    prepared = dict(config)
+    benchmark_file = _str(prepared.get("benchmark_file"), default_benchmark_yaml_path())
+    run_id = _str(prepared.get("experiment_id"), "")
+    if not run_id:
+        run_id = next_experiment_id(benchmark_file)
+    prepared["experiment_id"] = run_id
+    if not str(prepared.get("result_root") or "").strip():
+        prepared["result_root"] = str(RESULTS_DIR / run_id)
+    modules = selected_modules(prepared)
+    if "tool_evolution" in modules and not str(prepared.get("tool_library_id") or "").strip():
+        prepared["tool_library_id"] = run_id
+    if "memory_evolution" in modules and not str(prepared.get("memory_bank") or "").strip():
+        prepared["memory_bank"] = run_id
+    return prepared
+
+
 def create_run(config: dict[str, Any]) -> Path:
     RUNS_DIR.mkdir(parents=True, exist_ok=True)
-    run_id = f"ui-{_now_id()}"
+    config = prepare_experiment_config(config)
+    run_id = str(config["experiment_id"])
     run_dir = RUNS_DIR / run_id
     run_dir.mkdir(parents=True, exist_ok=False)
     plan = build_command_plan(config)

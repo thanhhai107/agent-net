@@ -51,6 +51,7 @@ Aligned with `nika agent run`:
 - **`--tools <library-id>`**: enable DRAFT Tool Evolution for a LangGraph workflow. It refines documentation for fixed primitive tools, stores Explorer/Analyzer/Rewriter artifacts, tracks path-rate/mastery/LLM-failure stats, and writes JSON state under `runtime/tool_evolution/<library-id>/`.
 - **Tool Evolution knobs**: `--tool-doc-chars`, `--tool-prompt-doc-limit`, `--tool-scoped-prompt-doc-limit`, `--tool-planned-checks`, `--tool-next-checks`, and `--tool-convergence-threshold` control DRAFT prompt budget, Explorer guidance injection, and document-freeze convergence.
 - **Memory Evolution knobs**: `--memory-max-skill-age`, `--memory-selector-min-lcb`, `--memory-selector-nominee-k`, `--memory-pool-size`, `--memory-evolution-threshold`, `--memory-best-of-n`, and `--memory-ppo-epsilon` control Skill-Pro runtime option selection and offline evolution.
+- **Auto names**: Studio-created result roots, runtime runs, memory banks, and tool libraries share `<benchmark>-<NNNN>` such as `benchmark_test-0001`.
 
 Learning-module LLM calls inherit `-b/--backend` and `-m/--model` unless
 `NIKA_LEARNING_LLM_BACKEND` / `NIKA_LEARNING_LLM_MODEL` are set.

@@ -205,7 +205,9 @@ nika studio --host 0.0.0.0 --port 8502 --no-browser
 ```
 
 The studio writes run specs and logs under `runtime/streamlit_runs/`; benchmark
-artifacts still land under `results/`.
+artifacts still land under `results/`. Auto-created experiment names use
+`<benchmark>-<NNNN>` across runtime runs, result roots, memory banks, and tool
+libraries, for example `benchmark_test-0001`.
 
 ### Optional: benchmark or traffic from the CLI
 
@@ -317,6 +319,8 @@ nika tools reset bgp-study
 ```
 
 The persistent library is `runtime/tool_evolution/<library_id>/state.json`.
+When Studio auto-names a Tool Evolution run, `<library_id>` is the shared
+experiment id such as `benchmark_test-0001`.
 Runtime DRAFT behavior can be tuned with `--tool-doc-chars`,
 `--tool-prompt-doc-limit`, `--tool-scoped-prompt-doc-limit`,
 `--tool-planned-checks`, `--tool-next-checks`, and

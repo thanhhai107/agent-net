@@ -3,11 +3,13 @@ from __future__ import annotations
 import sys
 
 from agent.llm.model_factory import DEFAULT_LLM_BACKEND, DEFAULT_MODEL
+import nika.visualization.experiment_runner as experiment_runner
 from nika.utils.agent_config import resolve_max_steps
 from nika.visualization.experiment_runner import (
     build_experiment_command,
     build_command_plan,
     parse_progress_events,
+    prepare_experiment_config,
 )
 
 
@@ -126,6 +128,33 @@ def test_command_plan_for_memory_has_no_service_prerequisite() -> None:
     assert len(plan) == 1
     assert plan[0].variant == "benchmark"
     assert plan[0].name == "ReAct + Memory Evolution"
+
+
+def test_prepare_experiment_config_uses_one_sequential_name_for_outputs(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setattr(
+        experiment_runner,
+        "next_experiment_id",
+        lambda _benchmark: "benchmark_test-0007",
+    )
+    monkeypatch.setattr(experiment_runner, "RESULTS_DIR", tmp_path / "results")
+
+    prepared = prepare_experiment_config(
+        _config(
+            modules=["tool_evolution", "memory_evolution"],
+            tool_library_id="",
+            memory_bank="",
+        )
+    )
+    command = build_experiment_command(prepared)
+
+    assert prepared["experiment_id"] == "benchmark_test-0007"
+    assert prepared["result_root"] == str(tmp_path / "results" / "benchmark_test-0007")
+    assert command[command.index("--result-root") + 1].endswith("benchmark_test-0007")
+    assert command[command.index("--tools") + 1] == "benchmark_test-0007"
+    assert command[command.index("--memory") + 1] == "benchmark_test-0007"
 
 
 def test_parse_progress_events_reads_benchmark_and_ui_events() -> None:

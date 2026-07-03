@@ -19,6 +19,7 @@ from nika.visualization.experiment_runner import (
     create_run,
     list_runs,
     parse_progress_events,
+    prepare_experiment_config,
     read_run_log,
     read_run_spec,
     run_status,
@@ -599,7 +600,8 @@ with col_modules[0]:
         with t_col1:
             tool_library_id = st.text_input(
                 "Tool library ID",
-                value="tools-gptoss20-test",
+                value="",
+                placeholder="auto",
                 disabled=not tool_selected,
             )
         with t_col2:
@@ -666,7 +668,8 @@ with col_modules[1]:
         with m_col1:
             memory_bank = st.text_input(
                 "Memory bank", 
-                value="memory-gptoss120-test", 
+                value="",
+                placeholder="auto",
                 disabled=not memory_selected
             )
         with m_col2:
@@ -808,7 +811,8 @@ config = {
     "judge_backend": judge_backend,
     "judge_model": judge_model,
 }
-plan = build_command_plan(config)
+prepared_config = prepare_experiment_config(config)
+plan = build_command_plan(prepared_config)
 
 # Renders the commands directly under the Current Config grid with a top spacing
 st.markdown('<div style="margin-top: 1rem;"></div>', unsafe_allow_html=True)
@@ -847,7 +851,7 @@ if is_running:
     col1, col2 = st.columns(2, gap="medium")
     with col1:
         if st.button("Add Queue", type="secondary", disabled=row_count is None, width="stretch"):
-            run_dir = create_run(config)
+            run_dir = create_run(prepared_config)
             st.session_state["active_run_dir"] = str(run_dir)
             st.rerun()
     with col2:
@@ -857,7 +861,7 @@ if is_running:
             st.rerun()
 else:
     if st.button("Run", type="primary", disabled=row_count is None, width="stretch"):
-        run_dir = create_run(config)
+        run_dir = create_run(prepared_config)
         st.session_state["active_run_dir"] = str(run_dir)
         st.rerun()
 if row_count is None:
