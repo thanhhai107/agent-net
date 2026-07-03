@@ -108,9 +108,20 @@ st.markdown(
       [data-testid="stMetricLabel"] {color: var(--muted); font-size: .78rem;}
       [data-testid="stMetricValue"] {color: var(--ink); font-weight: 700;}
 
+      [data-testid="stTabs"] {
+        border: 1px solid var(--line) !important;
+        border-radius: 16px !important;
+        background: var(--panel) !important;
+        padding: 1.2rem !important;
+        box-shadow: 0 10px 30px rgba(15, 23, 42, 0.03) !important;
+      }
       [data-testid="stTabs"] [data-baseweb="tab-list"] {
         gap: .35rem; background: rgba(241, 245, 249, 0.85); border: 1px solid var(--line);
-        border-radius: 14px; padding: .32rem; margin: .7rem 0 1.2rem;
+        border-radius: 12px; padding: .32rem; margin: 0 0 1rem 0 !important;
+      }
+      [data-testid="stTabs"] [data-baseweb="tab-panel"] {
+        padding-top: 0px !important;
+        padding-bottom: 0px !important;
       }
       [data-testid="stTabs"] [data-baseweb="tab"] {
         height: 42px; border-radius: 10px; padding: 0 1.2rem;
@@ -118,6 +129,9 @@ st.markdown(
       }
       [data-testid="stTabs"] [aria-selected="true"] {
         background: rgba(14, 165, 233, 0.1); color: #0284c7;
+      }
+      div[data-baseweb="tab-border"] {
+        display: none !important;
       }
       [data-testid="stDataFrame"] {
         border: 1px solid var(--line); border-radius: 14px; overflow: hidden;
@@ -192,9 +206,10 @@ st.markdown(
       }
 
       div[data-testid="stCodeBlock"] {
-        border: 1px solid var(--line) !important;
+        border: 2px solid var(--cyan) !important;
         border-radius: 12px !important;
-        background: #f8fafc !important;
+        background: #f0f9ff !important;
+        box-shadow: 0 4px 18px rgba(14, 165, 233, 0.14) !important;
       }
       textarea {
         font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important;
@@ -537,193 +552,213 @@ st.markdown(
 
 st.markdown('<div class="section-title">Studio</div>', unsafe_allow_html=True)
 
-cfg_cols = st.columns(4, gap="medium")
-with cfg_cols[0]:
-    benchmark_name = st.text_input(
-        "Benchmark",
-        value=Path(default_benchmark_yaml_path()).stem,
-    )
-    benchmark_path = _benchmark_path_from_name(benchmark_name)
-    row_count = _count_rows(benchmark_path)
-with cfg_cols[1]:
-    default_max_steps = resolve_max_steps(None)
-    max_steps_str = st.text_input("Steps", value=str(default_max_steps))
-    max_steps = int(max_steps_str) if max_steps_str.isdigit() else default_max_steps
-with cfg_cols[2]:
-    backend_options = ["custom", "openai", "deepseek", "ollama"]
-    llm_backend = st.selectbox(
-        "Backend",
-        backend_options,
-        index=backend_options.index(DEFAULT_LLM_BACKEND)
-        if DEFAULT_LLM_BACKEND in backend_options
-        else 0,
-    )
-with cfg_cols[3]:
-    model = st.text_input("Model", value=DEFAULT_MODEL)
+with st.expander("Baseline Settings", expanded=True):
+    b_col1, b_col2, b_col3 = st.columns([1.2, 1, 1.5], gap="small")
+    with b_col1:
+        agent_type = st.selectbox(
+            "Workflow",
+            ["react", "plan-execute", "reflexion", "mock"],
+        )
+    with b_col2:
+        backend_options = ["custom", "openai", "deepseek", "ollama"]
+        llm_backend = st.selectbox(
+            "Backend",
+            backend_options,
+            index=backend_options.index(DEFAULT_LLM_BACKEND)
+            if DEFAULT_LLM_BACKEND in backend_options
+            else 0,
+        )
+    with b_col3:
+        model = st.text_input("Model", value=DEFAULT_MODEL)
 
-agent_cols = st.columns(2, gap="medium")
-with agent_cols[0]:
-    agent_type = st.selectbox(
-        "Agent baseline",
-        ["react", "plan-execute", "reflexion", "mock"],
-    )
+    b_col4, b_col5, b_col6 = st.columns([1.5, 1, 0.8], gap="small")
+    with b_col4:
+        benchmark_name = st.text_input(
+            "Benchmark",
+            value=Path(default_benchmark_yaml_path()).stem,
+        )
+        benchmark_path = _benchmark_path_from_name(benchmark_name)
+        row_count = _count_rows(benchmark_path)
+    with b_col5:
+        default_max_steps = resolve_max_steps(None)
+        max_steps_str = st.text_input("Steps", value=str(default_max_steps))
+        max_steps = int(max_steps_str) if max_steps_str.isdigit() else default_max_steps
+    with b_col6:
+        max_attempts_str = st.text_input("Attempts", value="3")
+        max_attempts = int(max_attempts_str) if max_attempts_str.isdigit() else 3
+ 
+st.markdown("<div style='margin-top: 0.5rem;'></div>", unsafe_allow_html=True)
+col_modules = st.columns(2, gap="medium")
 
-with agent_cols[1]:
-    max_attempts_str = st.text_input("Attempts", value="3")
-    max_attempts = int(max_attempts_str) if max_attempts_str.isdigit() else 3
+with col_modules[0]:
+    with st.expander("Tool Evolution Settings", expanded=False):
+        tool_selected = st.checkbox("Enable Tool Evolution", value=False)
+        st.markdown("<div style='margin-top: 0.5rem;'></div>", unsafe_allow_html=True)
+        
+        t_col1, t_col2 = st.columns([1.5, 1], gap="small")
+        with t_col1:
+            tool_library_id = st.text_input(
+                "Tool library ID",
+                value="tools-gptoss20-test",
+                disabled=not tool_selected,
+            )
+        with t_col2:
+            tool_doc_chars = st.number_input(
+                "Tool doc chars",
+                min_value=100,
+                max_value=2000,
+                value=500,
+                step=50,
+                disabled=not tool_selected,
+            )
+            
+        t_col3, t_col4 = st.columns(2, gap="small")
+        with t_col3:
+            tool_prompt_doc_limit = st.number_input(
+                "DRAFT docs",
+                min_value=1,
+                max_value=20,
+                value=6,
+                disabled=not tool_selected,
+            )
+        with t_col4:
+            tool_scoped_prompt_doc_limit = st.number_input(
+                "Scoped docs",
+                min_value=1,
+                max_value=20,
+                value=4,
+                disabled=not tool_selected,
+            )
+            
+        t_col5, t_col6, t_col7 = st.columns(3, gap="small")
+        with t_col5:
+            tool_planned_checks = st.number_input(
+                "Planned checks",
+                min_value=0,
+                max_value=20,
+                value=4,
+                disabled=not tool_selected,
+            )
+        with t_col6:
+            tool_next_checks = st.number_input(
+                "Next checks",
+                min_value=0,
+                max_value=10,
+                value=2,
+                disabled=not tool_selected,
+            )
+        with t_col7:
+            tool_convergence_threshold = st.number_input(
+                "Convergence",
+                min_value=0.0,
+                max_value=1.0,
+                value=0.75,
+                step=0.05,
+                disabled=not tool_selected,
+            )
 
-st.markdown(
-    "<div style='font-size: 0.8rem; font-weight: bold; color: var(--muted); "
-    "margin-top: 0.5rem; margin-bottom: 0.25rem;'>Modules</div>",
-    unsafe_allow_html=True,
-)
-
-col_t1, col_t2, col_t3 = st.columns([1, 1.5, 1.5], gap="medium")
-with col_t1:
-    st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
-    tool_selected = st.checkbox("Tool Evolution", value=False)
-with col_t2:
-    tool_library_id = st.text_input(
-        "Tool library ID",
-        value="tools-gptoss20-test",
-        disabled=not tool_selected,
-    )
-with col_t3:
-    tool_doc_chars = st.number_input(
-        "Tool doc chars",
-        min_value=100,
-        max_value=2000,
-        value=500,
-        step=50,
-        disabled=not tool_selected,
-    )
-
-col_t4, col_t5, col_t6, col_t7, col_t8 = st.columns([1, 1, 1, 1, 1], gap="medium")
-with col_t4:
-    tool_prompt_doc_limit = st.number_input(
-        "DRAFT docs",
-        min_value=1,
-        max_value=20,
-        value=6,
-        disabled=not tool_selected,
-    )
-with col_t5:
-    tool_scoped_prompt_doc_limit = st.number_input(
-        "Scoped docs",
-        min_value=1,
-        max_value=20,
-        value=4,
-        disabled=not tool_selected,
-    )
-with col_t6:
-    tool_planned_checks = st.number_input(
-        "Planned checks",
-        min_value=0,
-        max_value=20,
-        value=4,
-        disabled=not tool_selected,
-    )
-with col_t7:
-    tool_next_checks = st.number_input(
-        "Next checks",
-        min_value=0,
-        max_value=10,
-        value=2,
-        disabled=not tool_selected,
-    )
-with col_t8:
-    tool_convergence_threshold = st.number_input(
-        "Convergence",
-        min_value=0.0,
-        max_value=1.0,
-        value=0.75,
-        step=0.05,
-        disabled=not tool_selected,
-    )
-
-col_mem1, col_mem2, col_mem3, col_mem4 = st.columns([1, 1.5, 0.75, 0.75], gap="medium")
-with col_mem1:
-    st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
-    memory_selected = st.checkbox("Memory Evolution", value=False)
-with col_mem2:
-    memory_bank = st.text_input("Memory bank", value="memory-gptoss120-test", disabled=not memory_selected)
-with col_mem3:
-    memory_k = st.number_input("Memory top-k", min_value=1, max_value=20, value=5, disabled=not memory_selected)
-with col_mem4:
-    memory_tokens = st.number_input("Memory tokens", min_value=100, max_value=8000, value=1500, step=100, disabled=not memory_selected)
-
-col_mem5, col_mem6 = st.columns([1, 1], gap="medium")
-with col_mem5:
-    memory_selector = st.selectbox(
-        "Memory selector",
-        ["lcb", "llm_topk_lcb"],
-        disabled=not memory_selected,
-    )
-with col_mem6:
-    memory_meta_controller = st.selectbox(
-        "Memory controller",
-        ["heuristic", "llm"],
-        disabled=not memory_selected,
-    )
-
-col_mem7, col_mem8, col_mem9 = st.columns([1, 1, 1], gap="medium")
-with col_mem7:
-    memory_max_skill_age = st.number_input(
-        "Skill max age",
-        min_value=1,
-        max_value=20,
-        value=4,
-        disabled=not memory_selected,
-    )
-with col_mem8:
-    memory_selector_min_lcb = st.number_input(
-        "Selector min LCB",
-        value=-0.05,
-        step=0.01,
-        disabled=not memory_selected,
-    )
-with col_mem9:
-    memory_selector_nominee_k = st.number_input(
-        "Nominee k",
-        min_value=1,
-        max_value=20,
-        value=3,
-        disabled=not memory_selected,
-    )
-
-col_mem10, col_mem11, col_mem12, col_mem13 = st.columns([1, 1, 1, 1], gap="medium")
-with col_mem10:
-    memory_pool_size = st.number_input(
-        "Skill pool",
-        min_value=1,
-        max_value=200,
-        value=32,
-        disabled=not memory_selected,
-    )
-with col_mem11:
-    memory_evolution_threshold = st.number_input(
-        "Evolution samples",
-        min_value=1,
-        max_value=50,
-        value=3,
-        disabled=not memory_selected,
-    )
-with col_mem12:
-    memory_best_of_n = st.number_input(
-        "Best of N",
-        min_value=1,
-        max_value=20,
-        value=3,
-        disabled=not memory_selected,
-    )
-with col_mem13:
-    memory_ppo_epsilon = st.number_input(
-        "PPO epsilon",
-        min_value=0.0,
-        value=0.2,
-        step=0.05,
-        disabled=not memory_selected,
-    )
+with col_modules[1]:
+    with st.expander("Memory Evolution Settings", expanded=False):
+        memory_selected = st.checkbox("Enable Memory Evolution", value=False)
+        st.markdown("<div style='margin-top: 0.5rem;'></div>", unsafe_allow_html=True)
+        
+        m_col1, m_col2, m_col3 = st.columns([1.5, 1, 1.2], gap="small")
+        with m_col1:
+            memory_bank = st.text_input(
+                "Memory bank", 
+                value="memory-gptoss120-test", 
+                disabled=not memory_selected
+            )
+        with m_col2:
+            memory_k = st.number_input(
+                "Memory top-k", 
+                min_value=1, 
+                max_value=20, 
+                value=5, 
+                disabled=not memory_selected
+            )
+        with m_col3:
+            memory_tokens = st.number_input(
+                "Memory tokens", 
+                min_value=100, 
+                max_value=8000, 
+                value=1500, 
+                step=100, 
+                disabled=not memory_selected
+            )
+            
+        m_col4, m_col5, m_col6 = st.columns(3, gap="small")
+        with m_col4:
+            memory_selector = st.selectbox(
+                "Memory selector",
+                ["lcb", "llm_topk_lcb"],
+                disabled=not memory_selected,
+            )
+        with m_col5:
+            memory_meta_controller = st.selectbox(
+                "Memory controller",
+                ["heuristic", "llm"],
+                disabled=not memory_selected,
+            )
+        with m_col6:
+            memory_max_skill_age = st.number_input(
+                "Skill max age",
+                min_value=1,
+                max_value=20,
+                value=4,
+                disabled=not memory_selected,
+            )
+            
+        m_col7, m_col8, m_col9 = st.columns(3, gap="small")
+        with m_col7:
+            memory_selector_min_lcb = st.number_input(
+                "Selector min LCB",
+                value=-0.05,
+                step=0.01,
+                disabled=not memory_selected,
+            )
+        with m_col8:
+            memory_selector_nominee_k = st.number_input(
+                "Nominee k",
+                min_value=1,
+                max_value=20,
+                value=3,
+                disabled=not memory_selected,
+            )
+        with m_col9:
+            memory_pool_size = st.number_input(
+                "Skill pool",
+                min_value=1,
+                max_value=200,
+                value=32,
+                disabled=not memory_selected,
+            )
+            
+        m_col10, m_col11, m_col12 = st.columns(3, gap="small")
+        with m_col10:
+            memory_evolution_threshold = st.number_input(
+                "Evolution samples",
+                min_value=1,
+                max_value=50,
+                value=3,
+                disabled=not memory_selected,
+            )
+        with m_col11:
+            memory_best_of_n = st.number_input(
+                "Best of N",
+                min_value=1,
+                max_value=20,
+                value=3,
+                disabled=not memory_selected,
+            )
+        with m_col12:
+            memory_ppo_epsilon = st.number_input(
+                "PPO epsilon",
+                min_value=0.0,
+                value=0.2,
+                step=0.05,
+                disabled=not memory_selected,
+            )
 
 modules = []
 if tool_selected:
@@ -732,19 +767,14 @@ if memory_selected:
     modules.append("memory_evolution")
 
 # Evaluation Settings
-st.markdown(
-    "<div style='font-size: 0.8rem; font-weight: bold; color: var(--muted); "
-    "margin-top: 1rem; margin-bottom: 0.25rem;'>Evaluation Settings</div>",
-    unsafe_allow_html=True,
-)
-col_e1, col_e2, col_e3 = st.columns([1, 1.5, 1.5], gap="medium")
-with col_e1:
-    st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
+st.markdown("<div style='margin-top: 0.5rem;'></div>", unsafe_allow_html=True)
+with st.expander("Evaluation Settings", expanded=False):
     run_judge = st.checkbox("Run LLM judge", value=False)
-with col_e2:
-    judge_backend = st.text_input("Judge backend", value=llm_backend)
-with col_e3:
-    judge_model = st.text_input("Judge model", value=model)
+    e_col1, e_col2 = st.columns(2, gap="small")
+    with e_col1:
+        judge_backend = st.text_input("Judge backend", value=llm_backend, disabled=not run_judge)
+    with e_col2:
+        judge_model = st.text_input("Judge model", value=model, disabled=not run_judge)
 
 config = {
     "benchmark_file": str(benchmark_path),
@@ -816,17 +846,17 @@ is_running = running_run is not None
 if is_running:
     col1, col2 = st.columns(2, gap="medium")
     with col1:
-        if st.button("Add Queue", icon=":material/queue:", type="secondary", disabled=row_count is None, width="stretch"):
+        if st.button("Add Queue", type="secondary", disabled=row_count is None, width="stretch"):
             run_dir = create_run(config)
             st.session_state["active_run_dir"] = str(run_dir)
             st.rerun()
     with col2:
-        if st.button("Stop Current", icon=":material/stop:", type="primary", width="stretch"):
+        if st.button("Stop Current", type="primary", width="stretch"):
             with st.spinner("Stopping run and wiping Kathara containers..."):
                 stop_run(running_run)
             st.rerun()
 else:
-    if st.button("Run", icon=":material/play_arrow:", type="primary", disabled=row_count is None, width="stretch"):
+    if st.button("Run", type="primary", disabled=row_count is None, width="stretch"):
         run_dir = create_run(config)
         st.session_state["active_run_dir"] = str(run_dir)
         st.rerun()
@@ -877,8 +907,10 @@ else:
 
 
 
-def format_event_message(ev: dict) -> str | None:
+def format_event_message_html(ev: dict) -> str | None:
     event = ev.get("event")
+    style = "font-size: 0.8rem; padding: 6px 0; border-bottom: 1px solid rgba(15, 23, 42, 0.05); color: #334155; line-height: 1.4;"
+    
     if event == "ui_step_start":
         cmd = ev.get("command") or ""
         if isinstance(cmd, str) and cmd.startswith("[") and cmd.endswith("]"):
@@ -894,56 +926,70 @@ def format_event_message(ev: dict) -> str | None:
             cmd_str = str(cmd)
         if len(cmd_str) > 80:
             cmd_str = cmd_str[:77] + "..."
-        return f"**[Step {ev.get('index')}/{ev.get('total')}]** Starting: `{cmd_str}`"
+        return f"<div style='{style}'><b>[Step {ev.get('index')}/{ev.get('total')}]</b> Starting: <code style='font-size: 0.75rem; background: #f1f5f9; padding: 2px 4px; border-radius: 4px;'>{cmd_str}</code></div>"
     elif event == "ui_step_done":
         ret = ev.get("returncode", "0")
         status_word = "Completed" if str(ret) == "0" else "Failed"
-        return f"**[Step {ev.get('index')}/{ev.get('total')}]** {status_word} (Exit: `{ret}`)"
+        color = "#16a34a" if str(ret) == "0" else "#dc2626"
+        return f"<div style='{style}'><b>[Step {ev.get('index')}/{ev.get('total')}]</b> <span style='color: {color}; font-weight: bold;'>{status_word}</span> (Exit: <code>{ret}</code>)</div>"
     elif event == "ui_run_done":
         code = ev.get("exit_code", "0")
-        return f"**Run Finished** (Exit: `{code}`)"
+        return f"<div style='{style}; font-weight: bold; color: #1e293b;'>Run Finished (Exit: <code>{code}</code>)</div>"
     elif event == "ui_run_stopped":
-        return "**Run Stopped** by user. Starting next queued run if available."
+        return f"<div style='{style}; color: #d97706;'><b>Run Stopped</b> by user. Starting next queued run if available.</div>"
     elif event == "benchmark_start":
         index = ev.get("index") or "?"
         scenario = ev.get("scenario") or "?"
         problem = ev.get("problem") or "?"
-        return f"**[Scenario {index}]** Starting: `{scenario} / {problem}`"
+        return f"<div style='{style}'><b>[Scenario {index}]</b> Starting: <code style='font-size: 0.75rem; background: #f1f5f9; padding: 2px 4px; border-radius: 4px;'>{scenario} / {problem}</code></div>"
     elif event == "benchmark_progress":
         completed = ev.get("completed", "0")
         failed = ev.get("failed", "0")
         total = ev.get("total") or "30"
-        return f"**Benchmark Progress**: {completed}/{total} completed (Failed: {failed})"
+        return f"<div style='{style}; color: #2563eb;'><b>Benchmark Progress</b>: {completed}/{total} completed (Failed: <span style='color: #dc2626;'>{failed}</span>)</div>"
     elif event == "benchmark_done":
         scenario = ev.get("scenario") or "?"
         problem = ev.get("problem") or "?"
-        return f"**[Scenario]** Finished: `{scenario} / {problem}`"
+        return f"<div style='{style}; color: #16a34a;'><b>[Scenario]</b> Finished: <code>{scenario} / {problem}</code></div>"
     elif event == "benchmark_failed":
         scenario = ev.get("scenario") or "?"
         problem = ev.get("problem") or "?"
-        return f"**[Scenario]** Failed: `{scenario} / {problem}`"
+        return f"<div style='{style}; color: #dc2626;'><b>[Scenario]</b> Failed: <code>{scenario} / {problem}</code></div>"
     return None
-
+ 
 st.markdown('<div class="section-title" style="margin-top: 1.5rem;">Tracking</div>', unsafe_allow_html=True)
 tab_progress, tab_logs = st.tabs(["Progress", "Logs"])
-
+ 
 with tab_progress:
-    st.markdown('<div style="margin-top: 0.5rem;"></div>', unsafe_allow_html=True)
-    st.progress(fraction, text=progress_label)
+    # Render a professional custom HTML/CSS progress bar with text inside
+    pct = int(fraction * 100)
+    st.markdown(
+        f"""
+        <div style="margin: 0.5rem auto 1rem auto; width: 98%; max-width: 1400px; height: 28px; background-color: rgba(15, 23, 42, 0.06); border-radius: 8px; position: relative; overflow: hidden; display: flex; align-items: center; box-shadow: inset 0 1px 2px rgba(0,0,0,0.06); box-sizing: border-box;">
+          <div style="width: {pct}%; height: 100%; background: linear-gradient(90deg, #0ea5e9, #2563eb); border-radius: 8px; transition: width 0.4s ease;"></div>
+          <div style="position: absolute; width: 100%; text-align: center; left: 0; top: 0; line-height: 28px; font-size: 0.82rem; font-weight: 800; color: #ffffff; text-shadow: 0 1.5px 4px rgba(0, 0, 0, 0.95); z-index: 2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0 12px; box-sizing: border-box; pointer-events: none; letter-spacing: 0.02em;">
+            {progress_label} ({pct}%)
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
     
     formatted_msgs = []
     for ev in events:
-        msg = format_event_message(ev)
+        msg = format_event_message_html(ev)
         if msg:
             formatted_msgs.append(msg)
     
     if formatted_msgs:
-        st.markdown('<div style="margin-top: 1rem;"></div>', unsafe_allow_html=True)
-        for msg in formatted_msgs[-12:]:
-            st.markdown(msg)
+        st.markdown('<div style="margin-top: 0.8rem;"></div>', unsafe_allow_html=True)
+        # Render HTML block with all events inside to snapping them perfectly
+        st.markdown(
+            f"<div style='border: 1px solid rgba(15, 23, 42, 0.08); border-radius: 10px; padding: 0.2rem 0.8rem; background: #ffffff;'>{''.join(formatted_msgs[-12:])}</div>",
+            unsafe_allow_html=True
+        )
         
 with tab_logs:
-    st.markdown('<div style="margin-top: 0.5rem;"></div>', unsafe_allow_html=True)
     # Keep only the last 1000 lines to avoid UI freezes with large logs
     log_lines = log_text.splitlines() if log_text else []
     truncated_log = "\n".join(log_lines[-1000:])
