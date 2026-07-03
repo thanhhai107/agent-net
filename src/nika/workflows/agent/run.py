@@ -64,9 +64,43 @@ def start_agent(
             "memory_meta_controller_mode",
             agent_config.memory.meta_controller_mode,
         )
+        session.update_session("memory_max_skill_age", agent_config.memory.max_skill_age)
+        session.update_session(
+            "memory_selector_min_lcb",
+            agent_config.memory.selector_min_lcb,
+        )
+        session.update_session(
+            "memory_selector_nominee_k",
+            agent_config.memory.selector_nominee_k,
+        )
+        session.update_session("memory_pool_size", agent_config.memory.pool_size)
+        session.update_session(
+            "memory_evolution_threshold",
+            agent_config.memory.evolution_threshold,
+        )
+        session.update_session("memory_best_of_n", agent_config.memory.best_of_n)
+        session.update_session("memory_ppo_epsilon", agent_config.memory.ppo_epsilon)
     session.update_session("tool_evolution_enabled", agent_config.tool_evolution.enabled)
     if agent_config.tool_evolution.enabled:
         session.update_session("tool_library_id", agent_config.tool_evolution.library_id)
+        session.update_session("tool_doc_chars", agent_config.tool_evolution.tool_doc_chars)
+        session.update_session(
+            "tool_prompt_doc_limit",
+            agent_config.tool_evolution.prompt_doc_limit,
+        )
+        session.update_session(
+            "tool_scoped_prompt_doc_limit",
+            agent_config.tool_evolution.scoped_prompt_doc_limit,
+        )
+        session.update_session(
+            "tool_planned_checks",
+            agent_config.tool_evolution.planned_checks,
+        )
+        session.update_session("tool_next_checks", agent_config.tool_evolution.next_checks)
+        session.update_session(
+            "tool_convergence_threshold",
+            agent_config.tool_evolution.convergence_threshold,
+        )
     session.start_session()
 
     bind_session_dir(session.session_dir)

@@ -125,6 +125,8 @@ class SkillToolRuntime:
         top_k: int = 5,
         token_budget: int = 1500,
         max_skill_age: int = 4,
+        selector_min_lcb: float = -0.05,
+        selector_nominee_k: int = 3,
         meta_controller_llm: Any | None = None,
         meta_controller_mode: str | None = None,
         skill_selector_mode: str | None = None,
@@ -138,6 +140,8 @@ class SkillToolRuntime:
         self.top_k = top_k
         self.token_budget = token_budget
         self.max_skill_age = max(1, max_skill_age)
+        self.selector_min_lcb = float(selector_min_lcb)
+        self.selector_nominee_k = max(1, int(selector_nominee_k))
         self.meta_controller_llm = meta_controller_llm
         self.meta_controller_mode = (
             meta_controller_mode
@@ -307,11 +311,14 @@ class SkillToolRuntime:
         tool_guidance = ""
         draft_checks: list[str] = []
         if self.tool_evolution_runtime is not None:
-            draft_checks = self.tool_evolution_runtime.next_checks(tool.name, limit=2)
+            draft_checks = self.tool_evolution_runtime.next_checks(
+                tool.name,
+                limit=self.tool_evolution_runtime.next_checks_limit,
+            )
             if not has_draft_guidance:
                 tool_guidance = self.tool_evolution_runtime.tool_runtime_guidance(
                     tool.name,
-                    max_chars=320,
+                    max_chars=max(160, self.tool_evolution_runtime.tool_doc_chars // 2),
                 )
         if not skill_lines and not tool_guidance and not draft_checks:
             return description
@@ -457,6 +464,13 @@ class SkillToolRuntime:
             "meta_controller_cache_hits": self.meta_controller_cache_hits,
             "meta_controller_mode": self.meta_controller_mode,
             "skill_selector_mode": self.skill_selector_mode,
+            "config": {
+                "top_k": self.top_k,
+                "token_budget": self.token_budget,
+                "max_skill_age": self.max_skill_age,
+                "selector_min_lcb": self.selector_min_lcb,
+                "selector_nominee_k": self.selector_nominee_k,
+            },
             "skill_cooldowns": dict(self.skill_cooldowns),
             "tool_names": self.tool_names,
             "recent_observations": self.recent_observations,
@@ -613,7 +627,7 @@ class SkillToolRuntime:
         pieces: list[str] = []
         tool_filter = {tool for tool in tools if tool}
         planned = self.tool_evolution_runtime.planned_explorations(
-            limit=6,
+            limit=self.tool_evolution_runtime.planned_checks,
             diagnosis_only=True,
         )
         planned_lines: list[str] = []
@@ -639,7 +653,7 @@ class SkillToolRuntime:
         for tool_name in sorted(tool_filter or set(self.tool_names))[:6]:
             checks = self.tool_evolution_runtime.next_checks(
                 tool_name,
-                limit=2,
+                limit=self.tool_evolution_runtime.next_checks_limit,
                 diagnosis_only=True,
             )
             if checks:
@@ -824,6 +838,8 @@ class SkillToolRuntime:
                 llm_agent=self.meta_controller_llm,
                 session_id=session_id,
                 top_k=max(3, self.top_k),
+                nominee_k=self.selector_nominee_k,
+                min_lcb=self.selector_min_lcb,
                 exclude_skill_ids=self.skill_cooldowns,
                 allow_excluded_fallback=True,
             )
@@ -832,6 +848,7 @@ class SkillToolRuntime:
                 query=query,
                 session_id=session_id,
                 top_k=max(3, self.top_k),
+                min_lcb=self.selector_min_lcb,
                 exclude_skill_ids=self.skill_cooldowns,
                 allow_excluded_fallback=True,
             )
@@ -984,7 +1001,7 @@ class SkillToolRuntime:
             if self.tool_evolution_runtime is not None:
                 next_checks = self.tool_evolution_runtime.next_checks(
                     tool_name,
-                    limit=2,
+                    limit=self.tool_evolution_runtime.next_checks_limit,
                     diagnosis_only=True,
                 )
                 if next_checks:
@@ -1023,7 +1040,7 @@ class SkillToolRuntime:
         scope = {
             str(item.get("tool_name") or "")
             for item in self.tool_evolution_runtime.planned_explorations(
-                limit=8,
+                limit=self.tool_evolution_runtime.planned_checks * 2,
                 diagnosis_only=True,
             )
         }
@@ -1167,7 +1184,7 @@ class SkillToolRuntime:
         if self.tool_evolution_runtime is not None:
             next_checks = self.tool_evolution_runtime.next_checks(
                 tool_name,
-                limit=2,
+                limit=self.tool_evolution_runtime.next_checks_limit,
                 diagnosis_only=True,
             )
             if next_checks:

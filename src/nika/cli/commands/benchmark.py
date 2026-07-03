@@ -127,6 +127,47 @@ def benchmark_run(
         "--memory-meta-controller",
         help="Skill-Pro option termination controller: heuristic or llm.",
     ),
+    memory_max_skill_age: int = typer.Option(
+        4,
+        "--memory-max-skill-age",
+        min=1,
+        help="Maximum tool transitions controlled by one active Skill-Pro option.",
+    ),
+    memory_selector_min_lcb: float = typer.Option(
+        -0.05,
+        "--memory-selector-min-lcb",
+        help="Minimum LCB score accepted for mature Skill-Pro options.",
+    ),
+    memory_selector_nominee_k: int = typer.Option(
+        3,
+        "--memory-selector-nominee-k",
+        min=1,
+        help="Number of LLM-nominated skills before LCB selection.",
+    ),
+    memory_pool_size: int = typer.Option(
+        32,
+        "--memory-pool-size",
+        min=1,
+        help="Maximum active Skill-Pro skill pool size.",
+    ),
+    memory_evolution_threshold: int = typer.Option(
+        3,
+        "--memory-evolution-threshold",
+        min=1,
+        help="Minimum replay samples before Skill-Pro refinement/retirement decisions.",
+    ),
+    memory_best_of_n: int = typer.Option(
+        3,
+        "--memory-best-of-n",
+        min=1,
+        help="Number of candidate Skill-Pro procedures proposed per episode.",
+    ),
+    memory_ppo_epsilon: float = typer.Option(
+        0.2,
+        "--memory-ppo-epsilon",
+        min=0.0,
+        help="PPO-style clipping epsilon for Skill-Pro evolution gate.",
+    ),
     run_judge: bool = typer.Option(
         False,
         "--judge",
@@ -146,6 +187,43 @@ def benchmark_run(
         None,
         "--tools",
         help="Enable DRAFT Tool Evolution with this documentation library id.",
+    ),
+    tool_doc_chars: int = typer.Option(
+        500,
+        "--tool-doc-chars",
+        min=100,
+        help="Maximum DRAFT refined-doc characters appended to each tool.",
+    ),
+    tool_prompt_doc_limit: int = typer.Option(
+        6,
+        "--tool-prompt-doc-limit",
+        min=1,
+        help="Maximum DRAFT tool docs included in the diagnosis prompt.",
+    ),
+    tool_scoped_prompt_doc_limit: int = typer.Option(
+        4,
+        "--tool-scoped-prompt-doc-limit",
+        min=1,
+        help="Maximum DRAFT docs included when scoped to active tools.",
+    ),
+    tool_planned_checks: int = typer.Option(
+        4,
+        "--tool-planned-checks",
+        min=0,
+        help="Maximum planned DRAFT Explorer checks injected into prompt context.",
+    ),
+    tool_next_checks: int = typer.Option(
+        2,
+        "--tool-next-checks",
+        min=0,
+        help="Maximum DRAFT next-check suggestions shown per tool.",
+    ),
+    tool_convergence_threshold: float = typer.Option(
+        0.75,
+        "--tool-convergence-threshold",
+        min=0.0,
+        max=1.0,
+        help="DRAFT documentation convergence threshold for freezing docs.",
     ),
     result_root: Path | None = typer.Option(
         None,
@@ -193,10 +271,23 @@ def benchmark_run(
         token_budget=memory_tokens,
         skill_selector_mode=memory_selector,
         meta_controller_mode=memory_meta_controller,
+        max_skill_age=memory_max_skill_age,
+        selector_min_lcb=memory_selector_min_lcb,
+        selector_nominee_k=memory_selector_nominee_k,
+        pool_size=memory_pool_size,
+        evolution_threshold=memory_evolution_threshold,
+        best_of_n=memory_best_of_n,
+        ppo_epsilon=memory_ppo_epsilon,
     )
     tool_config = ToolEvolutionConfig(
         enabled=tool_evolution_enabled,
         library_id=tool_library_id,
+        tool_doc_chars=tool_doc_chars,
+        prompt_doc_limit=tool_prompt_doc_limit,
+        scoped_prompt_doc_limit=tool_scoped_prompt_doc_limit,
+        planned_checks=tool_planned_checks,
+        next_checks=tool_next_checks,
+        convergence_threshold=tool_convergence_threshold,
     )
 
     if scenario is not None and file is not None:

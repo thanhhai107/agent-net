@@ -1026,6 +1026,8 @@ class SkillProMemoryTest(unittest.TestCase):
             snapshot = runtime.snapshot()
 
         self.assertGreater(snapshot["prompt_added_tokens"], 0)
+        self.assertEqual(snapshot["config"]["max_skill_age"], 4)
+        self.assertEqual(snapshot["config"]["selector_nominee_k"], 3)
         self.assertGreater(snapshot["tool_description_added_tokens"], 0)
         self.assertGreater(snapshot["followup_added_tokens"], 0)
         self.assertEqual(snapshot["prompt_injection_count"], 1)
@@ -2771,6 +2773,13 @@ class SkillProMemoryTest(unittest.TestCase):
                     run_meta={
                         "memory_mode": "evolve",
                         "memory_bank": "skill",
+                        "memory_pool_size": 24,
+                        "memory_evolution_threshold": 2,
+                        "memory_best_of_n": 5,
+                        "memory_ppo_epsilon": 0.15,
+                        "memory_max_skill_age": 6,
+                        "memory_selector_min_lcb": -0.02,
+                        "memory_selector_nominee_k": 4,
                         "session_id": "s1",
                         "task_description": "DNS record resolves to wrong host",
                         "scenario_name": "enterprise",
@@ -2788,6 +2797,13 @@ class SkillProMemoryTest(unittest.TestCase):
             self.assertTrue((session_dir / "memory_update.json").exists())
 
         self.assertEqual(report["method"], "Skill-Pro")
+        self.assertEqual(report["memory_config"]["pool_size"], 24)
+        self.assertEqual(report["memory_config"]["evolution_threshold"], 2)
+        self.assertEqual(report["memory_config"]["best_of_n"], 5)
+        self.assertEqual(report["memory_config"]["ppo_epsilon"], 0.15)
+        self.assertEqual(report["memory_config"]["max_skill_age"], 6)
+        self.assertEqual(report["memory_config"]["selector_min_lcb"], -0.02)
+        self.assertEqual(report["memory_config"]["selector_nominee_k"], 4)
         self.assertEqual(report["total_added_tokens"], 120)
         self.assertEqual(report["delta_prompt_tokens_per_step"], 30.0)
         self.assertEqual(report["prompt_added_tokens"], 80)

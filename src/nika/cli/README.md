@@ -49,6 +49,8 @@ Aligned with `nika agent run`:
 - **`-n` / `--max-steps`**: per-worker recursion limit for LangGraph agents; also caps executed plan items for `plan-execute`.
 - **`-r` / `--max-attempts`**: maximum Reflexion attempts for `reflexion` (default: `3`).
 - **`--tools <library-id>`**: enable DRAFT Tool Evolution for a LangGraph workflow. It refines documentation for fixed primitive tools, stores Explorer/Analyzer/Rewriter artifacts, tracks path-rate/mastery/LLM-failure stats, and writes JSON state under `runtime/tool_evolution/<library-id>/`.
+- **Tool Evolution knobs**: `--tool-doc-chars`, `--tool-prompt-doc-limit`, `--tool-scoped-prompt-doc-limit`, `--tool-planned-checks`, `--tool-next-checks`, and `--tool-convergence-threshold` control DRAFT prompt budget, Explorer guidance injection, and document-freeze convergence.
+- **Memory Evolution knobs**: `--memory-max-skill-age`, `--memory-selector-min-lcb`, `--memory-selector-nominee-k`, `--memory-pool-size`, `--memory-evolution-threshold`, `--memory-best-of-n`, and `--memory-ppo-epsilon` control Skill-Pro runtime option selection and offline evolution.
 
 Learning-module LLM calls inherit `-b/--backend` and `-m/--model` unless
 `NIKA_LEARNING_LLM_BACKEND` / `NIKA_LEARNING_LLM_MODEL` are set.
@@ -122,10 +124,12 @@ Example: `nika exec pc1 ping -c 3 10.0.0.2 --timeout 30`
   | `-r` / `--max-attempts` | `reflexion` | Maximum attempt → evaluate → reflect cycles |
   | `--session-id` | all | target session |
   | `--tools` | LangGraph workflows | enable Tool Evolution with a persistent library id |
+  | `--tool-*` | Tool Evolution | tune DRAFT prompt budgets, planned/next checks, and convergence threshold |
   | `--memory` | LangGraph workflows | enable evolving procedural memory with a bank id |
   | `--memory-read` | LangGraph workflows | read a frozen procedural-memory bank |
   | `--memory-selector` | memory | choose `lcb` or `llm_topk_lcb` Skill-Pro selection |
   | `--memory-meta-controller` | memory | choose `heuristic` or `llm` Skill-Pro termination |
+  | `--memory-*` | memory | tune Skill-Pro runtime and offline evolution config |
 
   Examples:
 

@@ -317,6 +317,11 @@ nika tools reset bgp-study
 ```
 
 The persistent library is `runtime/tool_evolution/<library_id>/state.json`.
+Runtime DRAFT behavior can be tuned with `--tool-doc-chars`,
+`--tool-prompt-doc-limit`, `--tool-scoped-prompt-doc-limit`,
+`--tool-planned-checks`, `--tool-next-checks`, and
+`--tool-convergence-threshold`. Setting planned/next checks to `0` disables
+that prompt guidance.
 Tool-evolving sessions write `tool_evolution.json` with trial counts,
 documentation revisions, LLM rewrite counts, gaps, exploration/analyzer counts,
 mastered tools, path rates, LLM rewrite failures, and frozen-document counts.
@@ -385,6 +390,11 @@ LLM-nominate-then-LCB policy, pass `--memory-selector llm_topk_lcb`.
 Option termination defaults to the heuristic controller; pass
 `--memory-meta-controller llm` to use an LLM Skill-Pro meta-controller that
 returns DONE/CONTINUE from current observations and the active option.
+Runtime Skill-MDP behavior can also be tuned with `--memory-max-skill-age`,
+`--memory-selector-min-lcb`, and `--memory-selector-nominee-k`. Offline
+Skill-Pro evolution is controlled by `--memory-pool-size`,
+`--memory-evolution-threshold`, `--memory-best-of-n`, and
+`--memory-ppo-epsilon`.
 
 ### Example: `simple_bgp` with `link_down`
 

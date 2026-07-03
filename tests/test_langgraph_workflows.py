@@ -222,6 +222,11 @@ class WorkflowRegistrationTest(unittest.TestCase):
             max_steps=7,
             tool_evolution_enabled=False,
             tool_library_id="default",
+            tool_doc_chars=500,
+            tool_prompt_doc_limit=6,
+            tool_scoped_prompt_doc_limit=4,
+            tool_planned_checks=4,
+            tool_next_checks=2,
         )
         reflexion_agent.assert_called_once_with(
             session_id="session",
@@ -231,6 +236,11 @@ class WorkflowRegistrationTest(unittest.TestCase):
             max_attempts=4,
             tool_evolution_enabled=False,
             tool_library_id="default",
+            tool_doc_chars=500,
+            tool_prompt_doc_limit=6,
+            tool_scoped_prompt_doc_limit=4,
+            tool_planned_checks=4,
+            tool_next_checks=2,
         )
         react_agent.assert_called_once_with(
             session_id="session",
@@ -239,11 +249,20 @@ class WorkflowRegistrationTest(unittest.TestCase):
             max_steps=11,
             tool_evolution_enabled=True,
             tool_library_id="experiment-a",
+            tool_doc_chars=500,
+            tool_prompt_doc_limit=6,
+            tool_scoped_prompt_doc_limit=4,
+            tool_planned_checks=4,
+            tool_next_checks=2,
         )
         memory_module.assert_called_once_with(
             bank_id="experiment",
             llm_backend="openai",
             model="model",
+            pool_size=32,
+            evolution_threshold=3,
+            best_of_n=3,
+            ppo_epsilon=0.2,
         )
         memory_adapter.assert_called_once_with(
             react_agent.return_value,
@@ -253,6 +272,9 @@ class WorkflowRegistrationTest(unittest.TestCase):
             memory_token_budget=900,
             memory_skill_selector_mode="llm_topk_lcb",
             memory_meta_controller_mode="llm",
+            memory_max_skill_age=4,
+            memory_selector_min_lcb=-0.05,
+            memory_selector_nominee_k=3,
         )
 
     def test_cli_lists_custom_backend(self) -> None:
@@ -309,6 +331,9 @@ class WorkflowRegistrationTest(unittest.TestCase):
                     memory_token_budget=1500,
                     memory_skill_selector_mode="lcb",
                     memory_meta_controller_mode="heuristic",
+                    memory_max_skill_age=4,
+                    memory_selector_min_lcb=-0.05,
+                    memory_selector_nominee_k=3,
                 )
 
     def test_memory_rejects_unsupported_workflow(self) -> None:
@@ -331,13 +356,36 @@ class WorkflowRegistrationTest(unittest.TestCase):
             tool_evolution=ToolEvolutionConfig(
                 enabled=True,
                 library_id="tools-a",
+                tool_doc_chars=640,
+                prompt_doc_limit=5,
+                scoped_prompt_doc_limit=3,
+                planned_checks=2,
+                next_checks=1,
+                convergence_threshold=0.8,
             ),
-            memory=MemoryConfig(mode="read", bank="memory-a"),
+            memory=MemoryConfig(
+                mode="read",
+                bank="memory-a",
+                top_k=7,
+                token_budget=2100,
+                max_skill_age=6,
+                selector_min_lcb=-0.02,
+                selector_nominee_k=4,
+                pool_size=24,
+                evolution_threshold=2,
+                best_of_n=5,
+                ppo_epsilon=0.15,
+            ),
         )
 
         kwargs = workflow_agent_kwargs(config)
 
         self.assertEqual(kwargs["tool_library_id"], "tools-a")
+        self.assertEqual(kwargs["tool_doc_chars"], 640)
+        self.assertEqual(kwargs["tool_prompt_doc_limit"], 5)
+        self.assertEqual(kwargs["tool_scoped_prompt_doc_limit"], 3)
+        self.assertEqual(kwargs["tool_planned_checks"], 2)
+        self.assertEqual(kwargs["tool_next_checks"], 1)
         self.assertNotIn("use_problem_tool_hints", kwargs)
 
 

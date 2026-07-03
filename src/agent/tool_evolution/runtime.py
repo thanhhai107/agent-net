@@ -158,6 +158,11 @@ class ToolEvolutionRuntime:
         model: str = "",
         task_description: str = "",
         store: ToolEvolutionStore | None = None,
+        tool_doc_chars: int = 500,
+        prompt_doc_limit: int = 6,
+        scoped_prompt_doc_limit: int = 4,
+        planned_checks: int = 4,
+        next_checks: int = 2,
     ) -> None:
         self.session = session
         self.primitive_tools = list(primitive_tools)
@@ -165,6 +170,11 @@ class ToolEvolutionRuntime:
         self.model = model
         self.task_description = task_description
         self.store = store or ToolEvolutionStore(library_id)
+        self.tool_doc_chars = max(100, int(tool_doc_chars))
+        self.prompt_doc_limit = max(1, int(prompt_doc_limit))
+        self.scoped_prompt_doc_limit = max(1, int(scoped_prompt_doc_limit))
+        self.planned_checks = max(0, int(planned_checks))
+        self.next_checks_limit = max(0, int(next_checks))
         self._claimed_exploration_ids: set[str] = set()
         self._base_descriptions = {
             tool.name: (getattr(tool, "description", "") or "").strip()
@@ -198,7 +208,7 @@ class ToolEvolutionRuntime:
             if doc is None:
                 tool.description = base_description
                 continue
-            refined = self._doc_runtime_text(tool.name, max_chars=500)
+            refined = self._doc_runtime_text(tool.name, max_chars=self.tool_doc_chars)
             if refined and refined not in base_description:
                 tool.description = (
                     f"{base_description}\n\nDRAFT refined guidance:\n{refined}"
@@ -223,7 +233,7 @@ class ToolEvolutionRuntime:
                 return ""
         state = self.store.load()
         planned_queue = self.planned_explorations(
-            limit=4,
+            limit=self.planned_checks,
             diagnosis_only=diagnosis_only,
         )
         if tool_filter:
@@ -243,11 +253,11 @@ class ToolEvolutionRuntime:
             for item in planned_queue
         ]
         snippets = []
-        doc_limit = 4 if tool_filter else 6
+        doc_limit = self.scoped_prompt_doc_limit if tool_filter else self.prompt_doc_limit
         for doc in sorted(active_docs, key=lambda item: item.name)[:doc_limit]:
             planned_checks = self.next_checks(
                 doc.name,
-                limit=2,
+                limit=self.next_checks_limit,
                 diagnosis_only=diagnosis_only,
             )
             suffix = (
@@ -300,7 +310,7 @@ class ToolEvolutionRuntime:
             return ""
         planned = self.next_checks(
             tool_name,
-            limit=2,
+            limit=self.next_checks_limit,
             diagnosis_only=diagnosis_only,
         )
         if planned:
@@ -432,6 +442,8 @@ class ToolEvolutionRuntime:
         diagnosis_only: bool = True,
     ) -> list[str]:
         """Return active DRAFT exploration directions for one tool."""
+        if limit <= 0:
+            return []
         doc = self._docs.get(tool_name)
         if doc is None:
             return []
@@ -525,6 +537,8 @@ class ToolEvolutionRuntime:
         diagnosis_only: bool = False,
     ) -> list[dict[str, Any]]:
         """Return structured DRAFT Explorer checks waiting to be tried."""
+        if limit <= 0:
+            return []
         state = self.store.load()
         rows: list[dict[str, Any]] = []
         for item in state.explorations:
@@ -574,6 +588,13 @@ class ToolEvolutionRuntime:
                 for exploration in state.explorations
             ),
             "planned_queue": self.planned_explorations(limit=8),
+            "config": {
+                "tool_doc_chars": self.tool_doc_chars,
+                "prompt_doc_limit": self.prompt_doc_limit,
+                "scoped_prompt_doc_limit": self.scoped_prompt_doc_limit,
+                "planned_checks": self.planned_checks,
+                "next_checks": self.next_checks_limit,
+            },
             "claimed_exploration_ids": sorted(self._claimed_exploration_ids),
             "analyzer_suggestions": len(state.analyzer_suggestions),
             "primitive_tools": [tool.name for tool in self.primitive_tools],

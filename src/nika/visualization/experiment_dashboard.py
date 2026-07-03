@@ -583,9 +583,63 @@ with col_t1:
     st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
     tool_selected = st.checkbox("Tool Evolution", value=False)
 with col_t2:
-    tool_library_id = st.text_input("Tool library ID", value="tools-gptoss120-test", disabled=not tool_selected)
+    tool_library_id = st.text_input(
+        "Tool library ID",
+        value="tools-gptoss20-test",
+        disabled=not tool_selected,
+    )
 with col_t3:
-    pass
+    tool_doc_chars = st.number_input(
+        "Tool doc chars",
+        min_value=100,
+        max_value=2000,
+        value=500,
+        step=50,
+        disabled=not tool_selected,
+    )
+
+col_t4, col_t5, col_t6, col_t7, col_t8 = st.columns([1, 1, 1, 1, 1], gap="medium")
+with col_t4:
+    tool_prompt_doc_limit = st.number_input(
+        "DRAFT docs",
+        min_value=1,
+        max_value=20,
+        value=6,
+        disabled=not tool_selected,
+    )
+with col_t5:
+    tool_scoped_prompt_doc_limit = st.number_input(
+        "Scoped docs",
+        min_value=1,
+        max_value=20,
+        value=4,
+        disabled=not tool_selected,
+    )
+with col_t6:
+    tool_planned_checks = st.number_input(
+        "Planned checks",
+        min_value=0,
+        max_value=20,
+        value=4,
+        disabled=not tool_selected,
+    )
+with col_t7:
+    tool_next_checks = st.number_input(
+        "Next checks",
+        min_value=0,
+        max_value=10,
+        value=2,
+        disabled=not tool_selected,
+    )
+with col_t8:
+    tool_convergence_threshold = st.number_input(
+        "Convergence",
+        min_value=0.0,
+        max_value=1.0,
+        value=0.75,
+        step=0.05,
+        disabled=not tool_selected,
+    )
 
 col_mem1, col_mem2, col_mem3, col_mem4 = st.columns([1, 1.5, 0.75, 0.75], gap="medium")
 with col_mem1:
@@ -609,6 +663,65 @@ with col_mem6:
     memory_meta_controller = st.selectbox(
         "Memory controller",
         ["heuristic", "llm"],
+        disabled=not memory_selected,
+    )
+
+col_mem7, col_mem8, col_mem9 = st.columns([1, 1, 1], gap="medium")
+with col_mem7:
+    memory_max_skill_age = st.number_input(
+        "Skill max age",
+        min_value=1,
+        max_value=20,
+        value=4,
+        disabled=not memory_selected,
+    )
+with col_mem8:
+    memory_selector_min_lcb = st.number_input(
+        "Selector min LCB",
+        value=-0.05,
+        step=0.01,
+        disabled=not memory_selected,
+    )
+with col_mem9:
+    memory_selector_nominee_k = st.number_input(
+        "Nominee k",
+        min_value=1,
+        max_value=20,
+        value=3,
+        disabled=not memory_selected,
+    )
+
+col_mem10, col_mem11, col_mem12, col_mem13 = st.columns([1, 1, 1, 1], gap="medium")
+with col_mem10:
+    memory_pool_size = st.number_input(
+        "Skill pool",
+        min_value=1,
+        max_value=200,
+        value=32,
+        disabled=not memory_selected,
+    )
+with col_mem11:
+    memory_evolution_threshold = st.number_input(
+        "Evolution samples",
+        min_value=1,
+        max_value=50,
+        value=3,
+        disabled=not memory_selected,
+    )
+with col_mem12:
+    memory_best_of_n = st.number_input(
+        "Best of N",
+        min_value=1,
+        max_value=20,
+        value=3,
+        disabled=not memory_selected,
+    )
+with col_mem13:
+    memory_ppo_epsilon = st.number_input(
+        "PPO epsilon",
+        min_value=0.0,
+        value=0.2,
+        step=0.05,
         disabled=not memory_selected,
     )
 
@@ -643,11 +756,24 @@ config = {
     "max_attempts": int(max_attempts),
     "parallel": 1,
     "tool_library_id": tool_library_id,
+    "tool_doc_chars": int(tool_doc_chars),
+    "tool_prompt_doc_limit": int(tool_prompt_doc_limit),
+    "tool_scoped_prompt_doc_limit": int(tool_scoped_prompt_doc_limit),
+    "tool_planned_checks": int(tool_planned_checks),
+    "tool_next_checks": int(tool_next_checks),
+    "tool_convergence_threshold": float(tool_convergence_threshold),
     "memory_bank": memory_bank,
     "memory_k": int(memory_k),
     "memory_tokens": int(memory_tokens),
     "memory_selector": memory_selector,
     "memory_meta_controller": memory_meta_controller,
+    "memory_max_skill_age": int(memory_max_skill_age),
+    "memory_selector_min_lcb": float(memory_selector_min_lcb),
+    "memory_selector_nominee_k": int(memory_selector_nominee_k),
+    "memory_pool_size": int(memory_pool_size),
+    "memory_evolution_threshold": int(memory_evolution_threshold),
+    "memory_best_of_n": int(memory_best_of_n),
+    "memory_ppo_epsilon": float(memory_ppo_epsilon),
     "run_judge": bool(run_judge),
     "judge_backend": judge_backend,
     "judge_model": judge_model,

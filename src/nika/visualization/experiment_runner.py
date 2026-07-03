@@ -142,6 +142,18 @@ def build_experiment_command(config: dict[str, Any]) -> list[str]:
             [
                 "--tools",
                 _str(config.get("tool_library_id"), "tools-streamlit"),
+                "--tool-doc-chars",
+                str(_int(config.get("tool_doc_chars"), 500)),
+                "--tool-prompt-doc-limit",
+                str(_int(config.get("tool_prompt_doc_limit"), 6)),
+                "--tool-scoped-prompt-doc-limit",
+                str(_int(config.get("tool_scoped_prompt_doc_limit"), 4)),
+                "--tool-planned-checks",
+                str(_int(config.get("tool_planned_checks"), 4)),
+                "--tool-next-checks",
+                str(_int(config.get("tool_next_checks"), 2)),
+                "--tool-convergence-threshold",
+                _str(config.get("tool_convergence_threshold"), "0.75"),
             ]
         )
 
@@ -158,6 +170,20 @@ def build_experiment_command(config: dict[str, Any]) -> list[str]:
                 _str(config.get("memory_selector"), "lcb"),
                 "--memory-meta-controller",
                 _str(config.get("memory_meta_controller"), "heuristic"),
+                "--memory-max-skill-age",
+                str(_int(config.get("memory_max_skill_age"), 4)),
+                "--memory-selector-min-lcb",
+                _str(config.get("memory_selector_min_lcb"), "-0.05"),
+                "--memory-selector-nominee-k",
+                str(_int(config.get("memory_selector_nominee_k"), 3)),
+                "--memory-pool-size",
+                str(_int(config.get("memory_pool_size"), 32)),
+                "--memory-evolution-threshold",
+                str(_int(config.get("memory_evolution_threshold"), 3)),
+                "--memory-best-of-n",
+                str(_int(config.get("memory_best_of_n"), 3)),
+                "--memory-ppo-epsilon",
+                _str(config.get("memory_ppo_epsilon"), "0.2"),
             ]
         )
 

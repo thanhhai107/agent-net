@@ -99,6 +99,11 @@ class ReflexionAgent:
         max_attempts: int = 3,
         tool_evolution_enabled: bool = False,
         tool_library_id: str = "default",
+        tool_doc_chars: int = 500,
+        tool_prompt_doc_limit: int = 6,
+        tool_scoped_prompt_doc_limit: int = 4,
+        tool_planned_checks: int = 4,
+        tool_next_checks: int = 2,
         use_problem_tool_hints: bool = True,
     ) -> None:
         if max_steps < 1:
@@ -124,6 +129,11 @@ class ReflexionAgent:
             load_all_tools=not use_problem_tool_hints,
             tool_evolution_enabled=tool_evolution_enabled,
             tool_library_id=tool_library_id,
+            tool_doc_chars=tool_doc_chars,
+            tool_prompt_doc_limit=tool_prompt_doc_limit,
+            tool_scoped_prompt_doc_limit=tool_scoped_prompt_doc_limit,
+            tool_planned_checks=tool_planned_checks,
+            tool_next_checks=tool_next_checks,
         )
         asyncio.run(diagnosis.load_tools())
         self._diagnosis_phase = diagnosis

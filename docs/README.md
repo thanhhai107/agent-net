@@ -99,6 +99,11 @@ Runtime Skill-Pro selection defaults to LCB ranking. Use
 LCB selector, and `--memory-meta-controller llm` for the Skill-Pro
 DONE/CONTINUE option-termination controller. These modes are stored in run
 metadata as `memory_skill_selector_mode` and `memory_meta_controller_mode`.
+Additional runtime knobs are `--memory-max-skill-age`,
+`--memory-selector-min-lcb`, and `--memory-selector-nominee-k`. Offline
+evolution knobs are `--memory-pool-size`, `--memory-evolution-threshold`,
+`--memory-best-of-n`, and `--memory-ppo-epsilon`; these are persisted in
+session metadata and reused by the evaluation-time Skill-Pro update.
 
 ## Tool Evolution
 
@@ -121,6 +126,12 @@ rewrites, Explorer observations, Analyzer suggestions, rewrite history,
 tool-level usage summaries, path-rate metrics, mastery/convergence stats,
 revisions, LLM rewrite failures, and frozen documents. Use a fresh library id
 per experimental condition.
+
+The DRAFT runtime is configurable through CLI, benchmark forwarding, and Studio:
+`--tool-doc-chars`, `--tool-prompt-doc-limit`,
+`--tool-scoped-prompt-doc-limit`, `--tool-planned-checks`,
+`--tool-next-checks`, and `--tool-convergence-threshold`. Planned/next checks
+accept `0` when prompt injection for those queues should be disabled.
 
 ## Clean Ablations
 

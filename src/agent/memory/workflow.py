@@ -179,6 +179,20 @@ def _runtime_overhead_metrics(runtime_snapshot: dict[str, Any]) -> dict[str, int
     return metrics
 
 
+def _int_meta(run_meta: dict[str, Any], key: str, default: int) -> int:
+    try:
+        return int(run_meta.get(key) if run_meta.get(key) is not None else default)
+    except (TypeError, ValueError):
+        return default
+
+
+def _float_meta(run_meta: dict[str, Any], key: str, default: float) -> float:
+    try:
+        return float(run_meta.get(key) if run_meta.get(key) is not None else default)
+    except (TypeError, ValueError):
+        return default
+
+
 def _strip_integrated_guidance(value: Any) -> str:
     return strip_integrated_learning_guidance(value)
 
@@ -208,6 +222,10 @@ async def evolve_session_memory(
         bank_id=bank_id,
         llm_backend=run_meta.get("llm_backend"),
         model=run_meta.get("model"),
+        pool_size=_int_meta(run_meta, "memory_pool_size", 32),
+        evolution_threshold=_int_meta(run_meta, "memory_evolution_threshold", 3),
+        best_of_n=_int_meta(run_meta, "memory_best_of_n", 3),
+        ppo_epsilon=_float_meta(run_meta, "memory_ppo_epsilon", 0.2),
     )
     evidence = EvaluationEvidence(
         session_id=str(run_meta.get("session_id") or session_path.name),
@@ -225,7 +243,37 @@ async def evolve_session_memory(
         evidence=evidence,
         tool_steps=extract_skill_steps(session_path / MESSAGES_FILENAME),
     )
-    report.update({"method": "Skill-Pro", "bank_id": bank_id})
+    report.update(
+        {
+            "method": "Skill-Pro",
+            "bank_id": bank_id,
+            "memory_config": {
+                "top_k": _int_meta(run_meta, "memory_top_k", 5),
+                "token_budget": _int_meta(run_meta, "memory_token_budget", 1500),
+                "skill_selector_mode": str(
+                    run_meta.get("memory_skill_selector_mode") or "lcb"
+                ),
+                "meta_controller_mode": str(
+                    run_meta.get("memory_meta_controller_mode") or "heuristic"
+                ),
+                "max_skill_age": _int_meta(run_meta, "memory_max_skill_age", 4),
+                "selector_min_lcb": _float_meta(
+                    run_meta,
+                    "memory_selector_min_lcb",
+                    -0.05,
+                ),
+                "selector_nominee_k": _int_meta(
+                    run_meta,
+                    "memory_selector_nominee_k",
+                    3,
+                ),
+                "pool_size": module.pool_size,
+                "evolution_threshold": module.evolution_threshold,
+                "best_of_n": module.best_of_n,
+                "ppo_epsilon": module.ppo_epsilon,
+            },
+        }
+    )
     (session_path / "memory_update.json").write_text(
         json.dumps(report, ensure_ascii=False, indent=2),
         encoding="utf-8",

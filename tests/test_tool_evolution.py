@@ -995,6 +995,52 @@ class DraftToolEvolutionTest(unittest.TestCase):
         self.assertNotIn(">20 hosts", prompt)
         self.assertNotIn("invalid host", prompt)
 
+    def test_runtime_zero_check_limits_disable_draft_prompt_queues(self) -> None:
+        def ping(host: str) -> str:
+            return host
+
+        tool = StructuredTool.from_function(
+            ping,
+            name="ping_pair",
+            description="Ping a host.",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            store = ToolEvolutionStore("draft", root=tmp)
+            state = store.load()
+            state.documents["ping_pair"] = ToolDocumentation(
+                name="ping_pair",
+                description="Ping a host.",
+                exploration_suggestions=["Ping pc_0_0 to verify reachability."],
+            )
+            state.explorations.append(
+                DraftExploration(
+                    exploration_id="explore_ping_pc",
+                    session_id="s1",
+                    tool_name="ping_pair",
+                    intent="diagnosis_check",
+                    status="planned",
+                    next_exploration="Ping pc_0_0 to verify endpoint reachability.",
+                )
+            )
+            store.save(state)
+            runtime = ToolEvolutionRuntime(
+                session=object(),
+                primitive_tools=[tool],
+                library_id="draft",
+                store=store,
+                planned_checks=0,
+                next_checks=0,
+            )
+
+            prompt = runtime.prompt_suffix(tool_names=["ping_pair"])
+            planned = runtime.planned_explorations(limit=0)
+            next_checks = runtime.next_checks("ping_pair", limit=0)
+
+        self.assertEqual(planned, [])
+        self.assertEqual(next_checks, [])
+        self.assertNotIn("Active DRAFT Explorer queue", prompt)
+        self.assertNotIn("Next active checks", prompt)
+
     def test_runtime_validates_diagnosis_explorations_against_generic_topology_hosts(self) -> None:
         def net_config(host_name: str) -> str:
             return host_name

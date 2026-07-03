@@ -1037,6 +1037,7 @@ def rewrite_documentation(
     documented_tools_at_start: set[str] | None = None,
     session_id: str = "",
     task_description: str = "",
+    convergence_threshold: float = DRAFT_CONVERGENCE_THRESHOLD,
 ) -> list[DocumentationRevision]:
     state = store.load()
     start_docs = (
@@ -1216,7 +1217,7 @@ def rewrite_documentation(
             and len(set(recent_hashes + [after_hash])) == 1
         )
         converged = (
-            convergence_score >= DRAFT_CONVERGENCE_THRESHOLD
+            convergence_score >= convergence_threshold
             and len(doc.rewrite_history) >= 2
             and doc.mastery_score >= 0.5
         )
@@ -1303,6 +1304,14 @@ def finalize_tool_evolution_session(
     session = Session()
     session.load_closed_session(session_id=session_id)
     library_id = getattr(session, "tool_library_id", "default")
+    raw_convergence_threshold = getattr(
+        session,
+        "tool_convergence_threshold",
+        DRAFT_CONVERGENCE_THRESHOLD,
+    )
+    if raw_convergence_threshold is None:
+        raw_convergence_threshold = DRAFT_CONVERGENCE_THRESHOLD
+    convergence_threshold = float(raw_convergence_threshold)
     session_dir = Path(session.session_dir)
     trace_path = session_dir / MESSAGES_FILENAME
     store = ToolEvolutionStore(library_id)
@@ -1327,6 +1336,7 @@ def finalize_tool_evolution_session(
         documented_tools_at_start=documented_tools_at_start,
         session_id=session_id,
         task_description=str(getattr(session, "task_description", "") or ""),
+        convergence_threshold=convergence_threshold,
     )
     state = store.load()
     llm_attempts = sum(
@@ -1371,6 +1381,18 @@ def finalize_tool_evolution_session(
             revision.metrics.get("llm_rewrite") == 1.0 for revision in revisions
         ),
         "draft_llm_errors": llm_errors[:5],
+        "draft_config": {
+            "convergence_threshold": convergence_threshold,
+            "tool_doc_chars": getattr(session, "tool_doc_chars", None),
+            "prompt_doc_limit": getattr(session, "tool_prompt_doc_limit", None),
+            "scoped_prompt_doc_limit": getattr(
+                session,
+                "tool_scoped_prompt_doc_limit",
+                None,
+            ),
+            "planned_checks": getattr(session, "tool_planned_checks", None),
+            "next_checks": getattr(session, "tool_next_checks", None),
+        },
     }
     (session_dir / "tool_evolution.json").write_text(
         json.dumps(report, ensure_ascii=False, indent=2),
