@@ -25,6 +25,10 @@ ENV_MCP_AGENT_MODEL = "NIKA_MCP_AGENT_MODEL"
 # SADE community agent
 ENV_SADE_MODEL = "NIKA_SADE_MODEL"
 
+# SDK agents
+ENV_CLAUDE_SDK_MODEL = "NIKA_CLAUDE_SDK_MODEL"
+ENV_CODEX_SDK_MODEL = "NIKA_CODEX_SDK_MODEL"
+
 # AutoGen agent
 ENV_AUTOGEN_MODEL = "NIKA_AUTOGEN_MODEL"
 
@@ -92,6 +96,14 @@ def resolve_agent_model(agent_type: str, model: str | None = None) -> str:
             if sade_model := _env_str(ENV_SADE_MODEL):
                 return sade_model
             return resolve_claude_model(None)
+        case "sdk.claude_sdk":
+            if claude_sdk_model := _env_str(ENV_CLAUDE_SDK_MODEL):
+                return claude_sdk_model
+            return resolve_claude_model(None)
+        case "sdk.codex_sdk":
+            if codex_sdk_model := _env_str(ENV_CODEX_SDK_MODEL):
+                return codex_sdk_model
+            return _require_str(value=None, env_key=ENV_CODEX_MODEL, cli_flag="-m/--model")
         case "local_cli.codex_cli":
             return _require_str(value=None, env_key=ENV_CODEX_MODEL, cli_flag="-m/--model")
         case "mock":

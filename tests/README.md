@@ -20,6 +20,8 @@ pipeline** on the same real scenario:
 | `test_mcp_agent.py` | `byo.mcp_agent` | byo.mcp_agent CLI config | Docker + `OPENAI_API_KEY` |
 | `test_autogen.py` | `byo.autogen` | byo.autogen CLI config | Docker + `DEEPSEEK_API_KEY` |
 | `test_sade.py` | `community.sade` | community.sade config + MCP adapter | Docker + `claude-agent-sdk` + Anthropic-compatible creds |
+| `test_claude_sdk.py` | `sdk.claude_sdk` | sdk.claude_sdk config + MCP adapter | Docker + `claude-agent-sdk` + Anthropic-compatible creds |
+| `test_codex_sdk.py` | `sdk.codex_sdk` | sdk.codex_sdk config + MCP TOML | Docker + `openai-codex` + `~/.codex/auth.json` |
 
 Shared pipeline helpers: [`tests/integration_pipeline.py`](integration_pipeline.py)
 

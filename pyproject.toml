@@ -35,6 +35,8 @@ dependencies = [
 [project.optional-dependencies]
 # SADE community agent (src/agent/community/sade) drives Claude Code via the SDK.
 sade = ["claude-agent-sdk"]
+# SDK agents (src/agent/sdk/claude_sdk, src/agent/sdk/codex_sdk).
+sdk = ["claude-agent-sdk", "openai-codex>=0.1.0b3"]
 
 [project.scripts]
 nika = "nika.cli.main:main"
@@ -50,4 +52,7 @@ filterwarnings = [
     "ignore::DeprecationWarning:fs.opener",
     "ignore::DeprecationWarning:pkg_resources",
 ]
+
+[tool.uv]
+prerelease = "allow"
 

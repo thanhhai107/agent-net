@@ -211,7 +211,9 @@ src/agent/
 │   └── claude_cli/       # -a local_cli.claude_cli
 ├── community/            # Community-contributed agents
 │   └── sade/             # -a community.sade
-└── sdk/                  # -a sdk (planned)
+└── sdk/                  # SDK agents
+    ├── claude_sdk/       # -a sdk.claude_sdk
+    └── codex_sdk/        # -a sdk.codex_sdk
 ```
 
 | CLI name | Package | Orchestration | LLM access |
@@ -222,7 +224,8 @@ src/agent/
 | `local_cli.codex_cli` | `local_cli/codex_cli` | LangGraph `StateGraph` | `codex exec` subprocess |
 | `local_cli.claude_cli` | `local_cli/claude_cli` | LangGraph `StateGraph` | `claude -p` subprocess |
 | `community.sade` | `community/sade` | Single Claude Code session + skill library | `claude-agent-sdk` (optional extra `sade`) |
-| `sdk` | `sdk/` | — | Planned |
+| `sdk.claude_sdk` | `sdk/claude_sdk` | Native two-phase `ClaudeSDKClient` | `claude-agent-sdk` (optional extra `sdk`) |
+| `sdk.codex_sdk` | `sdk/codex_sdk` | Native two-phase `AsyncCodex` | `openai-codex` (optional extra `sdk`) |
 
 ### Shared configuration
 
@@ -305,6 +308,38 @@ Model when `-m` omitted (first non-empty): `ANTHROPIC_MODEL` → `CLAUDE_CODE_SU
 ```shell
 nika agent run -a local_cli.claude_cli
 nika agent run -a local_cli.claude_cli -m deepseek-v4-flash
+```
+
+### `sdk.claude_sdk` (`sdk/claude_sdk`)
+
+Native two-phase pipeline via `claude-agent-sdk` `ClaudeSDKClient` sessions (no LangGraph). Requires `uv sync --extra sdk --prerelease=allow`.
+
+Auth: DeepSeek or Anthropic via `ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN` (same as `local_cli.claude_cli`).
+
+| Flag | Env | Notes |
+|------|-----|-------|
+| `-n` / `--max-steps` | `NIKA_MAX_STEPS` | SDK `max_turns` per phase |
+| `-m` / `--model` | `NIKA_CLAUDE_SDK_MODEL` or `ANTHROPIC_MODEL` chain | |
+
+```shell
+nika agent run -a sdk.claude_sdk -n 20
+nika agent run -a sdk.claude_sdk -m deepseek-v4-flash
+```
+
+### `sdk.codex_sdk` (`sdk/codex_sdk`)
+
+Native two-phase pipeline via `openai-codex` `AsyncCodex` threads. Requires `uv sync --extra sdk --prerelease=allow`.
+
+Auth: local only — `codex login` → `~/.codex/auth.json`.
+
+| Flag | Env | Notes |
+|------|-----|-------|
+| `-m` / `--model` | `NIKA_CODEX_SDK_MODEL` or `NIKA_CODEX_MODEL` | Default `gpt-5.4-mini` |
+| `-e` / `--reasoning-effort` | `NIKA_CODEX_REASONING_EFFORT` | Same as `local_cli.codex_cli` |
+
+```shell
+codex login
+nika agent run -a sdk.codex_sdk -m gpt-5.4-mini -e medium
 ```
 
 ### Example: `simple_bgp` with `link_down`

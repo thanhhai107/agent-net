@@ -21,8 +21,9 @@ src/agent/
 │   └── sade/             # -a community.sade
 ├── mock/                 # Test-only deterministic agent (see tests/README.md)
 │   └── mock_agent.py
-├── sdk/                  # [planned] Claude / Codex SDK
-│   └── agent.py
+├── sdk/                  # SDK agents (claude-agent-sdk, openai-codex)
+│   ├── claude_sdk/       # -a sdk.claude_sdk
+│   └── codex_sdk/        # -a sdk.codex_sdk
 ├── llm/                  # LangChain model factory (langgraph path)
 └── utils/                # MCP config, phases, loggers
 ```
@@ -37,7 +38,8 @@ src/agent/
 | `byo.mcp_agent` | mcp-agent `Workflow` | mcp-agent + OpenAI | Implemented |
 | `byo.autogen` | AutoGen `GraphFlow` | AutoGen AgentChat + OpenAI | Implemented |
 | `community.sade` | Single Claude Code session + 15-skill library | `claude-agent-sdk` (optional extra `sade`) | Implemented |
-| `sdk` | TBD | Claude / Codex SDK | Planned |
+| `sdk.claude_sdk` | Native two-phase `ClaudeSDKClient` sessions | `claude-agent-sdk` (optional extra `sdk`) | Implemented |
+| `sdk.codex_sdk` | Native two-phase `AsyncCodex` threads | `openai-codex` (optional extra `sdk`) | Implemented |
 
 ## Community Agents
 
@@ -246,12 +248,53 @@ No LangSmith / Langfuse integration in this path (observability deferred).
 
 ---
 
-## sdk (planned)
+## sdk.claude_sdk
 
-**Entry**: `agent.sdk.agent.SdkAgent` — not implemented.
+Native two-phase pipeline via ``claude-agent-sdk`` ``ClaudeSDKClient`` (no LangGraph). Each phase starts a separate SDK session with phase-specific MCP servers.
+
+**Entry**: `agent.sdk.claude_sdk.agent.ClaudeSdkAgent`
+
+**Requires**: `uv sync --extra sdk --prerelease=allow`
+
+**Auth**: DeepSeek or Anthropic via env (same as `local_cli.claude_cli` option B):
 
 ```bash
-# nika agent run -a sdk   # raises ValueError
+ANTHROPIC_BASE_URL=https://api.deepseek.com/anthropic
+ANTHROPIC_AUTH_TOKEN=sk-...
+ANTHROPIC_MODEL=deepseek-v4-pro[1m]
+```
+
+| Flag | Env | Notes |
+|------|-----|-------|
+| `-n` / `--max-steps` | `NIKA_MAX_STEPS` | Passed to SDK `max_turns` per phase |
+| `-m` / `--model` | `NIKA_CLAUDE_SDK_MODEL` or `ANTHROPIC_MODEL` chain | |
+
+```bash
+nika agent run -a sdk.claude_sdk -n 20
+nika agent run -a sdk.claude_sdk -m deepseek-v4-flash
+```
+
+---
+
+## sdk.codex_sdk
+
+Native two-phase pipeline via ``openai-codex`` ``AsyncCodex`` threads (no LangGraph). MCP config is written to an isolated `CODEX_HOME` per phase.
+
+**Entry**: `agent.sdk.codex_sdk.agent.CodexSdkAgent`
+
+**Requires**: `uv sync --extra sdk --prerelease=allow`
+
+**Auth**: Local only — `codex login` → `~/.codex/auth.json` (does not use `OPENAI_API_KEY`).
+
+| Flag | Env | Notes |
+|------|-----|-------|
+| `-m` / `--model` | `NIKA_CODEX_SDK_MODEL` or `NIKA_CODEX_MODEL` | Default `gpt-5.4-mini` |
+| `-e` / `--reasoning-effort` | `NIKA_CODEX_REASONING_EFFORT` | `none`, `minimal`, `low`, `medium`, `high`, `xhigh` |
+
+```bash
+codex login   # once
+
+nika agent run -a sdk.codex_sdk -m gpt-5.4-mini -e medium
 ```
 
 ---

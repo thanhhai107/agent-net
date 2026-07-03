@@ -1,22 +1,19 @@
-"""Claude / Codex SDK agents (planned).
+"""Claude / Codex SDK agents.
 
 Direct integration with vendor SDKs, bypassing LangChain chat models:
-- Anthropic SDK for Claude (`agent.claude_sdk`, planned)
-- Cursor SDK (``cursor-sdk`` / ``@cursor/sdk``) for Codex (`agent.codex_sdk`, planned)
+- ``sdk.claude_sdk`` — ``claude-agent-sdk`` (DeepSeek via Anthropic-compatible API)
+- ``sdk.codex_sdk`` — ``openai-codex`` (local ``~/.codex/auth.json``)
 
-Expected layout::
+Install optional dependencies::
 
-    sdk/
-      claude_sdk/       # Claude SDK agent (planned)
-      codex_sdk/        # Codex SDK agent (planned)
+    uv sync --extra sdk --prerelease=allow
 
 CLI-based agents live under ``agent.local_cli``:
 - ``agent.local_cli.claude_cli`` — Claude Code CLI subprocess workers
 - ``agent.local_cli.codex_cli`` — Codex CLI subprocess workers
 
-Both phases (diagnosis → submission) should still write to
-``{session_dir}/messages.jsonl`` via ``AgentCallbackLogger`` or an SDK-specific
-adapter with the same event schema.
+Both phases (diagnosis → submission) write to ``{session_dir}/messages.jsonl``
+via ``MessageLogger`` with the same event schema as other agents.
 """
 
 __all__: list[str] = []

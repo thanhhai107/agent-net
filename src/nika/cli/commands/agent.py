@@ -18,6 +18,8 @@ SUPPORTED_AGENT_TYPES = (
     "local_cli.codex_cli",
     "local_cli.claude_cli",
     "community.sade",
+    "sdk.claude_sdk",
+    "sdk.codex_sdk",
 )
 SUPPORTED_LLM_PROVIDERS = ("openai", "ollama", "deepseek", "custom")
 
@@ -33,7 +35,7 @@ def agent_list() -> None:
     typer.echo("llm_providers (byo.langgraph only):")
     for provider in SUPPORTED_LLM_PROVIDERS:
         typer.echo(f"  {provider}")
-    typer.echo("reasoning_effort (local_cli.codex_cli only):")
+    typer.echo("reasoning_effort (local_cli.codex_cli, sdk.codex_sdk):")
     for level in REASONING_EFFORT_LEVELS:
         typer.echo(f"  {level}")
 
@@ -66,14 +68,14 @@ def agent_run(
         "-n",
         "--max-steps",
         envvar=ENV_MAX_STEPS,
-        help="Max steps per phase (required unless NIKA_MAX_STEPS is in .env; byo.langgraph, byo.mcp_agent, byo.autogen, community.sade).",
+        help="Max steps per phase (required unless NIKA_MAX_STEPS is in .env; byo.langgraph, byo.mcp_agent, byo.autogen, community.sade, sdk.claude_sdk).",
     ),
     reasoning_effort: str | None = typer.Option(
         None,
         "-e",
         "--reasoning-effort",
         envvar=ENV_CODEX_REASONING_EFFORT,
-        help="Codex model_reasoning_effort (local_cli.codex_cli only): none, minimal, low, medium, high, xhigh.",
+        help="Codex model_reasoning_effort (local_cli.codex_cli, sdk.codex_sdk): none, minimal, low, medium, high, xhigh.",
     ),
     session_id: str | None = typer.Option(None, "--session_id", help="Target session id."),
 ) -> None:

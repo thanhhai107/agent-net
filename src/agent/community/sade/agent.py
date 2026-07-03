@@ -16,7 +16,6 @@ Reference: SADE (arXiv:2605.04530), built on NIKA.
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +33,7 @@ from claude_agent_sdk import (
 )
 from dotenv import load_dotenv
 
+from agent.sdk.mcp import to_sdk_mcp_servers
 from agent.utils.loggers import MessageLogger
 from agent.utils.mcp_servers import MCPServerConfig
 from agent.utils.phases import DIAGNOSIS
@@ -67,37 +67,6 @@ SADE_REMINDER = (
     "only if that sweep finds nothing. Check the submit() signature in CLAUDE.md "
     "before calling — wrong types end the session."
 )
-
-
-def _resolve_python() -> str:
-    """Interpreter used to spawn the stdio MCP servers.
-
-    NIKA's ``MCPServerConfig`` uses ``sys.executable`` for stdio MCP servers. The
-    SDK adapter still rewrites legacy ``python3`` / ``python`` commands when
-    present in an external config dict.
-    """
-    return sys.executable or "python3"
-
-
-def _to_sdk_mcp_servers(config: dict[str, Any]) -> dict[str, Any]:
-    """Adapt NIKA's MultiServerMCPClient config to claude-agent-sdk stdio format.
-
-    NIKA returns ``{"transport": "stdio", "command": ..., "args": ...}`` (the
-    langchain-mcp-adapters shape); claude-agent-sdk expects
-    ``{"type": "stdio", "command": ..., "args": ..., "env": ...}``.
-    """
-    servers: dict[str, Any] = {}
-    for name, spec in config.items():
-        command = spec.get("command")
-        if command in ("python3", "python"):
-            command = _resolve_python()
-        servers[name] = {
-            "type": "stdio",
-            "command": command,
-            "args": list(spec.get("args", [])),
-            "env": dict(spec.get("env", {})),
-        }
-    return servers
 
 
 def _usage_metadata(usage: dict[str, Any] | None) -> dict[str, int]:
@@ -140,7 +109,7 @@ class SadeAgent:
 
         mcp = MCPServerConfig(session_id=session_id)
         merged = {**mcp.load_config(if_submit=False), **mcp.load_config(if_submit=True)}
-        self.mcp_servers = _to_sdk_mcp_servers(merged)
+        self.mcp_servers = to_sdk_mcp_servers(merged)
 
     async def run(self, task_description: str) -> dict[str, Any]:
         sdk_env = prepare_sade_sdk_env(session_id=self.session_id)

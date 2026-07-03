@@ -39,10 +39,23 @@ def create_agent(
                 model=model,
                 max_steps=max_steps,
             )
-        case "sdk":
-            raise ValueError(
-                "Agent type 'sdk' is not implemented yet. "
-                "See src/agent/README.md for the codex_sdk / claude_sdk path."
+        case "sdk.claude_sdk":
+            from agent.sdk.claude_sdk.agent import ClaudeSdkAgent
+
+            return ClaudeSdkAgent(
+                session_id=session_id,
+                model=model,
+                max_steps=max_steps,
+                stream_output=stream_output,
+            )
+        case "sdk.codex_sdk":
+            from agent.sdk.codex_sdk.agent import CodexSdkAgent
+
+            return CodexSdkAgent(
+                session_id=session_id,
+                model=model,
+                reasoning_effort=reasoning_effort,
+                stream_output=stream_output,
             )
         case "local_cli.codex_cli":
             return CodexCliAgent(
