@@ -103,6 +103,10 @@ def _benchmark_row_cli_args(
             str(memory.top_k),
             "--memory-tokens",
             str(memory.token_budget),
+            "--memory-selector",
+            memory.skill_selector_mode,
+            "--memory-meta-controller",
+            memory.meta_controller_mode,
         ]
     elif memory.mode == "read":
         args += [
@@ -112,6 +116,10 @@ def _benchmark_row_cli_args(
             str(memory.top_k),
             "--memory-tokens",
             str(memory.token_budget),
+            "--memory-selector",
+            memory.skill_selector_mode,
+            "--memory-meta-controller",
+            memory.meta_controller_mode,
         ]
     if tool_evolution.enabled:
         args += [
@@ -174,7 +182,7 @@ def _run_benchmark_row_subprocess(
         fault_seed=fault_seed,
     )
     proc = subprocess.run(
-        [sys.executable, "-m", "nika.codex_cli.main", "benchmark", "run", *cli_args],
+        [sys.executable, "-m", "nika.cli.main", "benchmark", "run", *cli_args],
         capture_output=True,
         text=True,
     )

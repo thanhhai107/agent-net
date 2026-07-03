@@ -118,9 +118,26 @@ class ToolEvolutionStore:
             "successful_trials": successes,
             "error_trials": errors,
             "explorations": len(state.explorations),
+            "planned_explorations": sum(
+                exploration.status == "planned"
+                for exploration in state.explorations
+            ),
+            "consumed_explorations": sum(
+                exploration.status == "consumed"
+                for exploration in state.explorations
+            ),
             "analyzer_suggestions": len(state.analyzer_suggestions),
             "gaps": len(state.gaps),
             "revisions": len(state.revisions),
+            "llm_attempts": sum(
+                revision.metrics.get("llm_attempted") == 1.0
+                for revision in state.revisions
+            ),
+            "llm_failures": sum(bool(revision.llm_error) for revision in state.revisions),
+            "llm_rewrites": sum(
+                revision.metrics.get("llm_rewrite") == 1.0
+                for revision in state.revisions
+            ),
             "frozen_documents": frozen,
             "mastered_tools": mastered,
             "avg_documented_path_rate": (

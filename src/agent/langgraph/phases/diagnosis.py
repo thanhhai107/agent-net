@@ -4,6 +4,8 @@ from langchain_core.tools import BaseTool
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
 from agent.llm.model_factory import DEFAULT_LLM_BACKEND, DEFAULT_MODEL, load_model
+from agent.memory.runtime import SkillToolRuntime
+from agent.memory.service import ProceduralMemoryModule
 from agent.tool_evolution.runtime import ToolEvolutionRuntime
 from agent.utils.mcp_servers import MCPServerConfig, select_diagnosis_servers
 from agent.utils.phases import DIAGNOSIS
@@ -40,6 +42,9 @@ class DiagnosisPhase:
         self.tool_evolution_enabled = tool_evolution_enabled
         self.tool_library_id = tool_library_id
         self.tool_evolution_runtime: ToolEvolutionRuntime | None = None
+        self.skill_tool_runtime: SkillToolRuntime | None = None
+        self._memory_runtime_base_tools: list[BaseTool] = []
+        self.session = Session().load_running_session(session_id=session_id)
 
     async def load_tools(self):
         self.tools = await self.client.get_tools()
@@ -47,26 +52,73 @@ class DiagnosisPhase:
             tool.handle_tool_error = True
             tool.handle_validation_error = True
         if self.tool_evolution_enabled:
-            session = Session().load_running_session(session_id=self.session_id)
             self.tool_evolution_runtime = ToolEvolutionRuntime(
-                session=session,
+                session=self.session,
                 primitive_tools=self.tools,
                 library_id=self.tool_library_id,
                 model=self.model,
-                task_description=getattr(session, "task_description", ""),
+                task_description=getattr(self.session, "task_description", ""),
             )
             self.tools = self.tool_evolution_runtime.build_tools()
+        self._memory_runtime_base_tools = list(self.tools)
 
-    def prompt_suffix(self) -> str:
-        parts: list[str] = []
+    def install_memory_runtime(
+        self,
+        *,
+        memory: ProceduralMemoryModule,
+        memory_mode: str,
+        task_description: str,
+        top_k: int = 5,
+        token_budget: int = 1500,
+        session_dir: str = "",
+        skill_selector_mode: str = "lcb",
+        meta_controller_mode: str = "heuristic",
+    ) -> None:
+        if not self.tools:
+            raise RuntimeError("Diagnosis tools must be loaded before installing memory")
         if self.tool_evolution_runtime is not None:
+            self._memory_runtime_base_tools = self.tool_evolution_runtime.build_tools(
+                append_docs=False
+            )
+        self.tools = list(self._memory_runtime_base_tools or self.tools)
+        self.skill_tool_runtime = SkillToolRuntime(
+            memory=memory,
+            memory_mode=memory_mode,
+            session=self.session,
+            task_description=task_description,
+            tools=self.tools,
+            session_dir=session_dir,
+            tool_evolution_runtime=self.tool_evolution_runtime,
+            top_k=top_k,
+            token_budget=token_budget,
+            meta_controller_llm=self.llm,
+            meta_controller_mode=meta_controller_mode,
+            skill_selector_mode=skill_selector_mode,
+        )
+        self.tools = self.skill_tool_runtime.wrap_tools(self.tools)
+
+    def prompt_suffix(self, *, activate_skill: bool = True) -> str:
+        parts: list[str] = []
+        if (
+            self.tool_evolution_runtime is not None
+            and self.skill_tool_runtime is None
+        ):
             parts.append(self.tool_evolution_runtime.prompt_suffix())
+        if self.skill_tool_runtime is not None:
+            parts.append(
+                self.skill_tool_runtime.prompt_suffix(
+                    activate_skill=activate_skill
+                )
+            )
         return "\n".join(parts)
 
-    def get_agent(self):
+    def get_agent(self, *, include_learning_context: bool = False):
+        system_prompt = OVERALL_DIAGNOSIS_PROMPT
+        if include_learning_context:
+            system_prompt += self.prompt_suffix()
         return create_agent(
             model=self.llm,
-            system_prompt=OVERALL_DIAGNOSIS_PROMPT + self.prompt_suffix(),
+            system_prompt=system_prompt,
             tools=self.tools,
             name=DIAGNOSIS,
         )

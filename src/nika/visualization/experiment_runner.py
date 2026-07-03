@@ -47,7 +47,7 @@ def _now_id() -> str:
 
 
 def _python_module_command(*args: str) -> list[str]:
-    return [sys.executable, "-m", "nika.codex_cli.main", *args]
+    return [sys.executable, "-m", "nika.cli.main", *args]
 
 
 def _str(value: Any, default: str) -> str:
@@ -154,6 +154,10 @@ def build_experiment_command(config: dict[str, Any]) -> list[str]:
                 str(_int(config.get("memory_k"), 5)),
                 "--memory-tokens",
                 str(_int(config.get("memory_tokens"), 1500)),
+                "--memory-selector",
+                _str(config.get("memory_selector"), "lcb"),
+                "--memory-meta-controller",
+                _str(config.get("memory_meta_controller"), "heuristic"),
             ]
         )
 

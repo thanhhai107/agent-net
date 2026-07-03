@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from nika.utils.session import Session
 from nika.utils.session_index import SessionIndex
 from nika.utils.session_store import SessionStore
 
@@ -96,6 +97,28 @@ class SessionIndexTestCase(unittest.TestCase):
         self.assertEqual(row["faulty_devices"], ["pc1"])
         self.assertEqual(row["detection_score"], 1.0)
         self.assertEqual(row["failure_count"], 1)
+
+    def test_load_closed_session_from_custom_results_dir(self) -> None:
+        session_id = "20260104-120000-custom"
+        custom_root = self.root / "custom-results"
+        session_dir = custom_root / session_id
+        session_dir.mkdir(parents=True)
+        run_meta = {
+            "session_id": session_id,
+            "status": "finished",
+            "scenario_name": "bgp",
+            "lab_name": "bgp__custom",
+            "session_dir": str(session_dir),
+        }
+        (session_dir / RUN_FILENAME).write_text(json.dumps(run_meta), encoding="utf-8")
+
+        session = Session().load_closed_session(
+            session_id=session_id,
+            results_dir=custom_root,
+        )
+
+        self.assertEqual(session.session_id, session_id)
+        self.assertEqual(Path(session.session_dir), session_dir)
 
 
 if __name__ == "__main__":

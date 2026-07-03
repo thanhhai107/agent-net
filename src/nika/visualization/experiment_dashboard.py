@@ -134,28 +134,61 @@ st.markdown(
         font-weight: 800;
         transition: all 0.2s ease;
       }
-      /* Primary button styling */
-      button[data-testid="baseButton-primary"] {
-        border: 1px solid #0284c7 !important;
-        background: linear-gradient(135deg, #0ea5e9, #0284c7) !important;
+      /* Run button styling (Green) - matches primary buttons by default */
+      div.stButton button[data-testid="baseButton-primary"] {
+        border: 1px solid #16a34a !important;
+        background: linear-gradient(135deg, #22c55e, #16a34a) !important;
         color: #ffffff !important;
+        border-radius: 11px !important;
+        font-weight: 800 !important;
+        transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1) !important;
       }
-      button[data-testid="baseButton-primary"]:hover {
-        border-color: #0284c7 !important;
-        background: linear-gradient(135deg, #38bdf8, #0ea5e9) !important;
+      div.stButton button[data-testid="baseButton-primary"]:hover {
+        border-color: #15803d !important;
+        background: linear-gradient(135deg, #4ade80, #22c55e) !important;
         color: #ffffff !important;
-        box-shadow: 0 0 15px rgba(14, 165, 233, 0.25) !important;
+        transform: translateY(-1.5px) !important;
+        box-shadow: 0 6px 20px rgba(34, 197, 94, 0.35) !important;
+      }
+      div.stButton button[data-testid="baseButton-primary"]:active {
+        transform: translateY(0.5px) !important;
+      }
+
+      /* Stop Current button styling (Red) - matches primary buttons in the second column of a horizontal block row */
+      div[data-testid="stHorizontalBlock"] div[data-testid="column"]:nth-of-type(2) div.stButton button[data-testid="baseButton-primary"] {
+        border: 1px solid #dc2626 !important;
+        background: linear-gradient(135deg, #ef4444, #dc2626) !important;
+        color: #ffffff !important;
+        border-radius: 11px !important;
+        font-weight: 800 !important;
+        transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1) !important;
+      }
+      div[data-testid="stHorizontalBlock"] div[data-testid="column"]:nth-of-type(2) div.stButton button[data-testid="baseButton-primary"]:hover {
+        border-color: #b91c1c !important;
+        background: linear-gradient(135deg, #f87171, #ef4444) !important;
+        color: #ffffff !important;
+        transform: translateY(-1.5px) !important;
+        box-shadow: 0 6px 20px rgba(239, 68, 68, 0.35) !important;
+      }
+      div[data-testid="stHorizontalBlock"] div[data-testid="column"]:nth-of-type(2) div.stButton button[data-testid="baseButton-primary"]:active {
+        transform: translateY(0.5px) !important;
       }
       /* Secondary button styling */
       button[data-testid="baseButton-secondary"], .stDownloadButton > button {
         border: 1px solid rgba(14, 165, 233, .28) !important;
         background: rgba(14, 165, 233, .08) !important;
         color: #0284c7 !important;
+        transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1) !important;
       }
       button[data-testid="baseButton-secondary"]:hover, .stDownloadButton > button:hover {
         border-color: #0ea5e9 !important;
         color: #0369a1 !important;
         background: rgba(14, 165, 233, .15) !important;
+        transform: translateY(-1.5px);
+        box-shadow: 0 6px 20px rgba(14, 165, 233, 0.15) !important;
+      }
+      button[data-testid="baseButton-secondary"]:active, .stDownloadButton > button:active {
+        transform: translateY(0.5px);
       }
 
       div[data-testid="stCodeBlock"] {
@@ -315,20 +348,30 @@ def _result_rows(*, benchmark_name: str | None = None) -> list[dict[str, object]
         reverse=True,
     ):
         detections: list[float] = []
-        localizations: list[float] = []
-        rcas: list[float] = []
-        steps: list[float] = []
+        localization_f1s: list[float] = []
+        rca_f1s: list[float] = []
+        localization_precisions: list[float] = []
+        rca_precisions: list[float] = []
         tool_calls: list[float] = []
         in_tokens: list[float] = []
         out_tokens: list[float] = []
         tool_errors: list[float] = []
         durations: list[float] = []
+        memory_rewards: list[float] = []
+        memory_advantages: list[float] = []
+        memory_successes: list[float] = []
+        memory_added_tokens: list[float] = []
+        memory_delta_tokens: list[float] = []
+        draft_planned: list[float] = []
+        draft_consumed: list[float] = []
         submitted = 0
         finished = 0
         failed = 0
         result_modules: set[str] = set()
         agents: set[str] = set()
         models: set[str] = set()
+        memory_selectors: set[str] = set()
+        memory_controllers: set[str] = set()
         updated = "-"
 
         for run_path in run_paths:
@@ -344,13 +387,35 @@ def _result_rows(*, benchmark_name: str | None = None) -> list[dict[str, object]
 
             for key, target in (
                 ("detection_score", detections),
-                ("localization_accuracy", localizations),
-                ("rca_accuracy", rcas),
-                ("steps", steps),
+                ("localization_f1", localization_f1s),
+                ("rca_f1", rca_f1s),
+                ("localization_precision", localization_precisions),
+                ("rca_precision", rca_precisions),
                 ("tool_calls", tool_calls),
                 ("in_tokens", in_tokens),
                 ("out_tokens", out_tokens),
                 ("tool_errors", tool_errors),
+            ):
+                value = _float(metrics.get(key))
+                if value is not None:
+                    target.append(value)
+
+            memory_update = metrics.get("memory_update") or {}
+            if isinstance(memory_update, dict):
+                for key, target in (
+                    ("episode_reward", memory_rewards),
+                    ("episode_advantage", memory_advantages),
+                    ("total_added_tokens", memory_added_tokens),
+                    ("delta_prompt_tokens_per_step", memory_delta_tokens),
+                ):
+                    value = _float(memory_update.get(key))
+                    if value is not None:
+                        target.append(value)
+                if memory_update.get("episode_success") is not None:
+                    memory_successes.append(1.0 if memory_update.get("episode_success") else 0.0)
+            for key, target in (
+                ("draft_planned_explorations", draft_planned),
+                ("draft_consumed_explorations", draft_consumed),
             ):
                 value = _float(metrics.get(key))
                 if value is not None:
@@ -364,6 +429,10 @@ def _result_rows(*, benchmark_name: str | None = None) -> list[dict[str, object]
                 result_modules.add("Tool Evolution")
             if meta.get("memory_mode") and meta.get("memory_mode") != "off":
                 result_modules.add("Memory Evolution")
+                if meta.get("memory_skill_selector_mode"):
+                    memory_selectors.add(str(meta["memory_skill_selector_mode"]))
+                if meta.get("memory_meta_controller_mode"):
+                    memory_controllers.add(str(meta["memory_meta_controller_mode"]))
             if meta.get("agent_type"):
                 agent_name = str(meta["agent_type"])
                 agents.add(agent_name)
@@ -380,14 +449,24 @@ def _result_rows(*, benchmark_name: str | None = None) -> list[dict[str, object]
                 "finished": finished,
                 "failed": failed,
                 "submitted": submitted,
-                "detection": _avg(detections),
-                "localization": _avg(localizations),
-                "rca": _avg(rcas),
-                "steps": _avg(steps),
+                "detection_score": _avg(detections),
+                "localization_f1": _avg(localization_f1s),
+                "rca_f1": _avg(rca_f1s),
+                "localization_precision": _avg(localization_precisions),
+                "rca_precision": _avg(rca_precisions),
                 "tool_calls": _avg(tool_calls),
                 "tool_errors": _sum(tool_errors),
                 "token_in": _sum(in_tokens),
                 "token_out": _sum(out_tokens),
+                "memory_reward": _avg(memory_rewards),
+                "memory_advantage": _avg(memory_advantages),
+                "memory_success": _avg(memory_successes),
+                "memory_added_tokens": _sum(memory_added_tokens),
+                "memory_delta_tokens_step": _avg(memory_delta_tokens),
+                "memory_selector": ", ".join(sorted(memory_selectors)) or "-",
+                "memory_controller": ", ".join(sorted(memory_controllers)) or "-",
+                "draft_planned": _sum(draft_planned),
+                "draft_consumed": _sum(draft_consumed),
                 "duration": f"{int(sum(durations))}s" if durations else "-",
                 "modules": ", ".join(sorted(result_modules)) or "-",
                 "agent": ", ".join(sorted(agents)) or "-",
@@ -519,6 +598,20 @@ with col_mem3:
 with col_mem4:
     memory_tokens = st.number_input("Memory tokens", min_value=100, max_value=8000, value=1500, step=100, disabled=not memory_selected)
 
+col_mem5, col_mem6 = st.columns([1, 1], gap="medium")
+with col_mem5:
+    memory_selector = st.selectbox(
+        "Memory selector",
+        ["lcb", "llm_topk_lcb"],
+        disabled=not memory_selected,
+    )
+with col_mem6:
+    memory_meta_controller = st.selectbox(
+        "Memory controller",
+        ["heuristic", "llm"],
+        disabled=not memory_selected,
+    )
+
 modules = []
 if tool_selected:
     modules.append("tool_evolution")
@@ -553,6 +646,8 @@ config = {
     "memory_bank": memory_bank,
     "memory_k": int(memory_k),
     "memory_tokens": int(memory_tokens),
+    "memory_selector": memory_selector,
+    "memory_meta_controller": memory_meta_controller,
     "run_judge": bool(run_judge),
     "judge_backend": judge_backend,
     "judge_model": judge_model,
@@ -595,17 +690,17 @@ is_running = running_run is not None
 if is_running:
     col1, col2 = st.columns(2, gap="medium")
     with col1:
-        if st.button("Queue Run", type="secondary", disabled=row_count is None, width="stretch"):
+        if st.button("Add Queue", icon=":material/queue:", type="secondary", disabled=row_count is None, width="stretch"):
             run_dir = create_run(config)
             st.session_state["active_run_dir"] = str(run_dir)
             st.rerun()
     with col2:
-        if st.button("Stop", type="primary", width="stretch"):
+        if st.button("Stop Current", icon=":material/stop:", type="primary", width="stretch"):
             with st.spinner("Stopping run and wiping Kathara containers..."):
                 stop_run(running_run)
             st.rerun()
 else:
-    if st.button("Run", type="primary", disabled=row_count is None, width="stretch"):
+    if st.button("Run", icon=":material/play_arrow:", type="primary", disabled=row_count is None, width="stretch"):
         run_dir = create_run(config)
         st.session_state["active_run_dir"] = str(run_dir)
         st.rerun()
@@ -745,8 +840,12 @@ if not result_rows:
     import pandas as pd
     cols = [
         "result_root", "cases", "finished", "failed", "submitted",
-        "detection", "localization", "rca", "steps", "tool_calls", "tool_errors",
-        "token_in", "token_out", "duration", "modules", "agent", "model", "updated"
+        "detection_score", "localization_f1", "rca_f1",
+        "localization_precision", "rca_precision", "tool_calls", "tool_errors",
+        "token_in", "token_out", "memory_reward", "memory_advantage",
+        "memory_success", "memory_added_tokens", "memory_delta_tokens_step",
+        "memory_selector", "memory_controller", "draft_planned", "draft_consumed",
+        "duration", "modules", "agent", "model", "updated"
     ]
     df = pd.DataFrame(columns=cols)
     st.dataframe(df, width="stretch", hide_index=True)

@@ -16,6 +16,7 @@ from agent.memory.models import (
     SkillTransition,
 )
 from agent.memory.service import ProceduralMemoryModule
+from agent.memory.runtime import SkillAwareTool, SkillToolRuntime
 from agent.memory.workflow import evolve_session_memory
 
 __all__ = [
@@ -32,6 +33,8 @@ __all__ = [
     "SkillRetrieval",
     "SkillStep",
     "SkillTransition",
+    "SkillAwareTool",
+    "SkillToolRuntime",
     "evolve_session_memory",
     "infer_memory_attributes",
 ]

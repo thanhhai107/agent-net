@@ -2,14 +2,12 @@
 
 import typer
 
-from agent.codex_cli.codex_worker import REASONING_EFFORT_LEVELS
 from agent.composition import (
     AgentRunConfig,
     MemoryConfig,
     ToolEvolutionConfig,
 )
 from agent.llm.model_factory import (
-    CUSTOM_RECOMMENDED_MODELS,
     DEFAULT_LLM_BACKEND,
     DEFAULT_MODEL,
 )
@@ -20,9 +18,6 @@ SUPPORTED_AGENT_TYPES = (
     "plan-execute",
     "reflexion",
     "mock",
-    "cli",
-    "codex_cli",
-    "claude_cli",
 )
 SUPPORTED_LLM_BACKENDS = ("openai", "ollama", "deepseek", "custom")
 
@@ -38,12 +33,6 @@ def agent_list() -> None:
     typer.echo("llm_backends:")
     for backend in SUPPORTED_LLM_BACKENDS:
         typer.echo(f"  {backend}")
-    typer.echo("custom_recommended_models:")
-    for model in CUSTOM_RECOMMENDED_MODELS:
-        typer.echo(f"  {model}")
-    typer.echo("reasoning_effort (cli/codex_cli only):")
-    for level in REASONING_EFFORT_LEVELS:
-        typer.echo(f"  {level}")
 
 
 @agent_app.command("run")
@@ -58,7 +47,7 @@ def agent_run(
         help="LLM provider (openai, ollama, deepseek, custom).",
     ),
     model: str | None = typer.Option(
-        None, "-m", "--model", help="Model id for the chosen backend or CLI agent."
+        None, "-m", "--model", help="Model id for the chosen backend."
     ),
     max_steps: int | None = typer.Option(
         None,
@@ -75,12 +64,6 @@ def agent_run(
         "--max-attempts",
         min=1,
         help="Maximum attempts for the reflexion agent; ignored by other agents.",
-    ),
-    reasoning_effort: str | None = typer.Option(
-        None,
-        "-e",
-        "--reasoning-effort",
-        help="Codex model_reasoning_effort (cli/codex_cli only): none, minimal, low, medium, high, xhigh.",
     ),
     session_id: str | None = typer.Option(
         None, "--session-id", help="Target session id (lab_hash)."
@@ -113,19 +96,28 @@ def agent_run(
         min=100,
         help="Maximum estimated tokens used by retrieved memory.",
     ),
+    memory_selector: str = typer.Option(
+        "lcb",
+        "--memory-selector",
+        help="Skill-Pro selector: lcb or llm_topk_lcb.",
+    ),
+    memory_meta_controller: str = typer.Option(
+        "heuristic",
+        "--memory-meta-controller",
+        help="Skill-Pro option termination controller: heuristic or llm.",
+    ),
 ) -> None:
     """Run the agent on the current session task."""
     from nika.workflows.agent.run import start_agent
 
-    normalized_agent = agent_type.lower()
-    if reasoning_effort is not None and reasoning_effort not in REASONING_EFFORT_LEVELS:
-        raise typer.BadParameter(
-            f"reasoning_effort must be one of {', '.join(REASONING_EFFORT_LEVELS)}"
-        )
-    if reasoning_effort is not None and normalized_agent not in {"cli", "codex_cli"}:
-        raise typer.BadParameter("--reasoning-effort is supported only for cli/codex_cli.")
     if memory is not None and memory_read is not None:
         raise typer.BadParameter("Use either --memory or --memory-read, not both.")
+    if memory_selector not in {"lcb", "llm_topk_lcb"}:
+        raise typer.BadParameter("--memory-selector must be lcb or llm_topk_lcb.")
+    if memory_meta_controller not in {"heuristic", "llm"}:
+        raise typer.BadParameter(
+            "--memory-meta-controller must be heuristic or llm."
+        )
     memory_mode = "evolve" if memory is not None else "read" if memory_read else "off"
     memory_bank = memory or memory_read or "default"
     resolved_max_steps = resolve_max_steps(max_steps)
@@ -138,7 +130,6 @@ def agent_run(
                 model=model or DEFAULT_MODEL,
                 max_steps=resolved_max_steps,
                 max_attempts=max_attempts,
-                reasoning_effort=reasoning_effort,
                 tool_evolution=ToolEvolutionConfig(
                     enabled=tools is not None,
                     library_id=tools or "default",
@@ -148,6 +139,8 @@ def agent_run(
                     bank=memory_bank,
                     top_k=memory_k,
                     token_budget=memory_tokens,
+                    skill_selector_mode=memory_selector,
+                    meta_controller_mode=memory_meta_controller,
                 ),
             ),
             session_id=session_id,

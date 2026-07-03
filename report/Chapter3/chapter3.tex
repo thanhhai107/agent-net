@@ -1,108 +1,115 @@
 \chapter{Kiến trúc hệ thống}
 \label{chap:architecture}
 
-Chương này trình bày kiến trúc chi tiết của hệ thống tự chẩn đoán sự cố mạng truyền thông dựa trên hướng tiếp cận Self-Evolving AI Agents tích hợp trên nền tảng NIKA. Kiến trúc hệ thống được thiết kế hướng tới khả năng mô phỏng môi trường mạng thực tế, hỗ trợ nhiều luồng suy luận của agent, và đặc biệt là hai mô-đun tự tiến hóa: Mô-đun bộ nhớ quy trình (Memory Module) và Mô-đun tiến hóa công cụ (Tool Evolution Module).
+Chương này trình bày kiến trúc chi tiết của hệ thống tự chẩn đoán sự cố mạng truyền thông dựa trên hướng tiếp cận Self-Evolving AI Agents tích hợp trên nền tảng NIKA. Kiến trúc hệ thống được thiết kế hướng tới khả năng mô phỏng môi trường mạng thực tế, hỗ trợ nhiều luồng suy luận của agent, và đặc biệt là hai mô-đun tự tiến hóa: Mô-đun bộ nhớ quy trình kỹ năng Skill-Pro (Memory Module) và Mô-đun tiến hóa công cụ DRAFT (Tool Evolution Module).
 
 \section{Kiến trúc tổng quan}
 \label{sec:overall_arch}
 
-Kiến trúc tổng quan của hệ thống bao gồm 4 thành phần chính được kết nối chặt chẽ với nhau như được mô tả trong Hình dưới đây (triển khai dạng luồng tương tác):
+Kiến trúc tổng quan của hệ thống bao gồm 4 thành phần chính được kết nối chặt chẽ với nhau:
 \begin{enumerate}
-    \item **Môi trường mô phỏng mạng (Network Environment):** Chạy trên nền tảng Kathará ảo hóa dưới dạng các Docker container đại diện cho thiết bị mạng (routers, switches, hosts) kết nối theo các topology phức tạp.
-    \item **AI Agent và Workflow chẩn đoán:** Đóng vai trò là thực thể thực hiện chẩn đoán sự cố, hỗ trợ các workflow suy luận phổ biến như ReAct, Plan \& Execute, và Reflexion.
-    \item **Hệ thống MCP Servers:** Cung cấp cầu nối tiêu chuẩn hóa để AI Agent có thể truy vấn thông tin, thực thi lệnh chẩn đoán trên thiết bị mạng ảo hóa, và gửi kết quả chẩn đoán.
-    \item **Mô-đun Tự Tiến Hóa (Self-Evolution Modules):** Gồm mô-đun bộ nhớ quy trình (lưu trữ kinh nghiệm chẩn đoán lâu dài) và mô-đun tiến hóa công cụ (tự sinh công cụ chẩn đoán mới).
+    \item \textbf{Môi trường mô phỏng mạng (Network Environment):} Chạy trên nền tảng Kathará ảo hóa dưới dạng các Docker container đại diện cho thiết bị mạng (routers, switches, hosts) kết nối theo các topology phức tạp.
+    \item \textbf{AI Agent và Workflow chẩn đoán:} Đóng vai trò là thực thể thực hiện chẩn đoán sự cố, hỗ trợ các workflow suy luận phổ biến như ReAct, Plan \& Execute, và Reflexion thông qua framework LangGraph.
+    \item \textbf{Hệ thống MCP Servers:} Cung cấp cầu nối tiêu chuẩn hóa theo giao thức Model Context Protocol (MCP) để AI Agent có thể truy vấn thông tin, thực thi lệnh chẩn đoán trên thiết bị mạng ảo hóa, và gửi kết quả chẩn đoán.
+    \item \textbf{Mô-đun Tự Tiến Hóa (Self-Evolution Modules):} Gồm mô-đun bộ nhớ quy trình kỹ năng Skill-Pro (lưu trữ và tiến hóa kỹ năng chẩn đoán lâu dài) và mô-đun tiến hóa tài liệu công cụ DRAFT (tự cải thiện mô tả công cụ nguyên thủy).
 \end{enumerate}
 
 \section{Môi trường mạng ảo hóa và các dịch vụ MCP}
 \label{sec:net_env_mcp}
 
-Để AI Agent có khả năng tương tác linh hoạt với môi trường mạng giả lập mà không phụ thuộc vào một cấu trúc phần cứng cụ thể, hệ thống ứng dụng giao thức Model Context Protocol (MCP) do Anthropic đề xuất. Nền tảng NIKA thiết kế và khởi chạy 6 máy chủ MCP chuyên biệt trong thư mục \texttt{src/nika/service/mcp\_server}:
+Để AI Agent có khả năng tương tác linh hoạt với môi trường mạng giả lập mà không phụ thuộc vào một cấu trúc phần cứng cụ thể, hệ thống ứng dụng giao thức Model Context Protocol (MCP) do Anthropic đề xuất. Nền tảng NIKA thiết kế và khởi chạy các máy chủ MCP chuyên biệt trong thư mục \texttt{src/nika/service/mcp\_server}, bao gồm:
 \begin{itemize}
-    \item **Kathará Base MCP Server:** Cung cấp các công cụ chẩn đoán cơ bản như kiểm tra kết nối giữa các host (\texttt{get\_reachability}), ping một cặp thiết bị (\texttt{ping\_pair}), đo băng thông (\texttt{iperf\_test}), kiểm tra dịch vụ (\texttt{systemctl\_ops}), xem cấu hình giao tiếp mạng (\texttt{get\_host\_net\_config}), thống kê giao thức (\texttt{netstat}) và thực thi shell command trong container (\texttt{exec\_shell}).
-    \item **FRR MCP Server:** Tương tác với phần mềm định tuyến FRRouting chạy trên các router để trích xuất cấu hình định tuyến động OSPF (\texttt{frr\_get\_ospf\_conf}), BGP (\texttt{frr\_get\_bgp\_conf}) và bảng định tuyến hiện tại (\texttt{frr\_show\_ip\_route}).
-    \item **BMv2 MCP Server:** Tương tác với các P4 software switches chạy phần mềm BMv2 để đọc dữ liệu telemetry, đọc giá trị counter (\texttt{bmv2\_counter\_read}), dump các bảng luồng hành vi (\texttt{bmv2\_table\_dump}) và đọc thanh ghi (\texttt{bmv2\_register\_read}).
-    \item **Telemetry MCP Server:** Truy vấn cơ sở dữ liệu InfluxDB thu thập từ In-band Network Telemetry (INT) để lấy các chỉ số đo lường hiệu năng mạng theo thời gian thực.
-    \item **Task Management MCP Server:** Cung cấp công cụ \texttt{submit} để agent gửi kết quả chẩn đoán cuối cùng (gồm trạng thái lỗi, thiết bị bị lỗi và phân tích nguyên nhân gốc rễ RCA).
-    \item **Evolved Diagnostic Toolbox MCP Server:** Cung cấp công cụ khám phá (\texttt{list\_evolved\_tools}) và thực thi (\texttt{execute\_evolved\_tool}) các công cụ chẩn đoán mới được tiến hóa thành công trong thư viện.
+    \item \textbf{Kathará Base MCP Server:} Cung cấp các công cụ chẩn đoán cơ bản như kiểm tra kết nối giữa tất cả các cặp host (\texttt{get\_reachability}), ping một cặp thiết bị (\texttt{ping\_pair}), đo băng thông (\texttt{iperf\_test}), kiểm tra và quản lý dịch vụ (\texttt{systemctl\_ops}), xem cấu hình mạng (\texttt{get\_host\_net\_config}), thống kê giao thức (\texttt{netstat}), thực thi lệnh shell đơn hoặc song song trong container (\texttt{exec\_shell}, \texttt{exec\_shell\_dual}).
+    \item \textbf{FRR MCP Server:} Tương tác với phần mềm định tuyến FRRouting chạy trên các router để trích xuất cấu hình định tuyến động OSPF (\texttt{frr\_get\_ospf\_conf}), BGP (\texttt{frr\_get\_bgp\_conf}), bảng định tuyến hiện tại (\texttt{frr\_show\_ip\_route}), và thực thi lệnh vtysh tùy ý (\texttt{frr\_exec}).
+    \item \textbf{BMv2 MCP Server:} Tương tác với các P4 software switch chạy phần mềm BMv2 để đọc log (\texttt{bmv2\_get\_log}), dump các bảng luồng hành vi (\texttt{bmv2\_table\_dump}), đọc giá trị counter (\texttt{bmv2\_counter\_read}) và thanh ghi (\texttt{bmv2\_register\_read}).
+    \item \textbf{Telemetry MCP Server:} Truy vấn cơ sở dữ liệu InfluxDB thu thập từ In-band Network Telemetry (INT) để lấy các chỉ số đo lường hiệu năng mạng theo thời gian thực (\texttt{influx\_query\_measurement}).
+    \item \textbf{Task Management MCP Server:} Cung cấp công cụ \texttt{submit} để agent gửi kết quả chẩn đoán cuối cùng (gồm trạng thái lỗi \texttt{is\_anomaly}, danh sách thiết bị bị lỗi \texttt{faulty\_devices} và phân tích nguyên nhân gốc rễ \texttt{root\_cause\_name}).
+    \item \textbf{Tool Evolution MCP Server:} Cung cấp công cụ khám phá thư viện tài liệu công cụ đã được tinh chỉnh (\texttt{list\_refined\_tool\_docs}) và truy xuất tài liệu chi tiết cho một công cụ cụ thể (\texttt{get\_refined\_tool\_doc}). Server này đọc trạng thái từ thư mục \texttt{runtime/tool\_evolution/\{library\_id\}/state.json}.
 \end{itemize}
+
+Tập hợp MCP server được kích hoạt phụ thuộc vào kịch bản mạng: \texttt{kathara\_frr\_mcp\_server} chỉ được khởi động khi kịch bản có giao thức định tuyến BGP/OSPF/RIP, \texttt{kathara\_bmv2\_mcp\_server} khi có P4/BMv2/SDN, và \texttt{kathara\_telemetry\_mcp\_server} khi có INT/InfluxDB.
 
 \section{Các luồng suy luận chẩn đoán của AI Agent}
 \label{sec:agent_workflows}
 
-AI Agent trong hệ thống đóng vai trò nhận mô tả tác vụ từ môi trường và sử dụng các công cụ chẩn đoán MCP để tìm ra thiết bị lỗi và nguyên nhân gốc rễ. Hệ thống hỗ trợ ba cơ chế workflow chẩn đoán chính:
+AI Agent trong hệ thống đóng vai trò nhận mô tả tác vụ từ môi trường và sử dụng các công cụ chẩn đoán MCP để tìm ra thiết bị lỗi và nguyên nhân gốc rễ. Toàn bộ agent được xây dựng trên nền tảng LangGraph và chia quá trình thực thi thành hai pha: pha chẩn đoán (Diagnosis Phase) sử dụng đầy đủ công cụ MCP, và pha nộp bài (Submission Phase) chỉ sử dụng Task MCP Server để gửi kết quả. Hệ thống hỗ trợ ba cơ chế workflow chẩn đoán chính:
 \begin{itemize}
-    \item **ReAct (Reasoning and Acting):** Agent luân phiên thực hiện bước suy luận ngữ cảnh (Thought) và gọi công cụ chẩn đoán tương ứng (Action) cho đến khi thu thập đủ bằng chứng chẩn đoán để đưa ra quyết định cuối cùng.
-    \item **Plan \& Execute:** Một bộ lập kế hoạch (Planner) sẽ phân tích bài toán và sinh ra một chuỗi các bước chẩn đoán cần thiết. Một bộ thực thi (Executor) sẽ chạy tuần tự các bước đó. Nếu có lỗi phát sinh hoặc kết quả bất thường, bộ tái lập kế hoạch (Replanner) sẽ điều chỉnh danh sách công việc.
-    \item **Reflexion:** Tích hợp vòng lặp phản tư. Sau mỗi lần chẩn đoán thất bại, agent tự phân tích vết suy luận lỗi, rút kinh nghiệm dưới dạng episodic memory và thực hiện chẩn đoán lại với định hướng chiến lược mới nhằm tránh lặp lại sai lầm.
+    \item \textbf{ReAct (Reasoning and Acting):} Agent (\texttt{BasicReActAgent}) luân phiên thực hiện bước suy luận ngữ cảnh (Thought) và gọi công cụ chẩn đoán tương ứng (Action) cho đến khi thu thập đủ bằng chứng hoặc đạt giới hạn bước (\texttt{max\_steps}).
+    \item \textbf{Plan \& Execute:} Agent (\texttt{PlanExecuteAgent}) gồm ba thành phần: Planner phân tích bài toán và sinh chuỗi bước chẩn đoán có cấu trúc (\texttt{InvestigationPlan}), Executor thực thi từng bước bằng ReAct, và Replanner đánh giá lại và điều chỉnh kế hoạch còn lại khi cần thiết.
+    \item \textbf{Reflexion:} Agent (\texttt{ReflexionAgent}) tích hợp vòng lặp phản tư. Sau mỗi lần chẩn đoán, một Evaluator LLM chấm điểm chất lượng (0--1). Nếu thất bại và chưa đạt \texttt{max\_attempts}, agent tự phân tích vết suy luận lỗi, rút kinh nghiệm dưới dạng \texttt{ReflexionMemory} (phân tích lỗi và chiến lược mới) và thực hiện chẩn đoán lại, giữ lại báo cáo có điểm số tốt nhất.
 \end{itemize}
 
-\section{Mô-đun Bộ Nhớ Quy Trình Tiến Hóa (Memory Module)}
+\section{Mô-đun Bộ Nhớ Quy Trình Kỹ Năng (Skill-Pro Memory Module)}
 \label{sec:memory_module}
 
-Mô-đun Bộ nhớ quy trình giúp lưu trữ tri thức lâu dài cho agent qua các incident chẩn đoán liên tiếp. Mô-đun này được kế thừa và kết hợp các ưu điểm từ 3 công trình lớn: **MemInsight**, **LightMem**, và **A-Mem**.
+Mô-đun bộ nhớ quy trình Skill-Pro giúp lưu trữ và tiến hóa tri thức chẩn đoán lâu dài cho agent qua các incident liên tiếp. Mô-đun được thiết kế dựa trên ngữ nghĩa Skill-MDP, lấy cảm hứng từ các nghiên cứu MemInsight, LightMem và A-Mem, đồng thời tích hợp cơ chế chọn lọc kỹ năng dạng PPO phi tham số.
 
-\subsection{Cơ chế lưu trữ hỗn hợp}
-Bộ nhớ quy trình được lưu trữ dưới hai dạng:
-\begin{enumerate}
-    \item **PostgreSQL (Canonical Store):** Lưu trữ chính thức các bản ghi bộ nhớ, thông tin nguồn gốc (provenance), mức độ tin cậy (confidence), phiên bản, và các liên kết đồ thị giữa các ghi chú.
-    \item **Qdrant (Semantic Index):** Lưu trữ vector nhúng của nội dung ghi nhớ để hỗ trợ tìm kiếm tương đồng ngữ nghĩa. Khi cơ sở dữ liệu Qdrant chưa sẵn sàng, hệ thống tự động fallback sang tìm kiếm văn bản (lexical/full-text search) trên PostgreSQL.
-\end{enumerate}
+\subsection{Cơ chế lưu trữ kỹ năng}
+
+Toàn bộ trạng thái bộ nhớ được lưu trữ trong file JSON tại \texttt{runtime/memory/\{bank\_id\}/skills.json} thông qua class \texttt{SkillMemoryStore}. Mỗi \texttt{ProceduralSkill} trong thư viện kỹ năng gồm các thành phần chính:
+\begin{itemize}
+    \item \textbf{Điều kiện kích hoạt (activation\_condition):} Mô tả ngữ cảnh và triệu chứng cần quan sát để kích hoạt kỹ năng.
+    \item \textbf{Chuỗi bước thực thi (execution\_steps):} Danh sách các \texttt{SkillStep} mô tả hành động, công cụ sử dụng và gợi ý tham số.
+    \item \textbf{Điều kiện kết thúc (termination\_condition):} Mô tả khi nào dừng áp dụng kỹ năng.
+    \item \textbf{Thuộc tính ngữ cảnh:} \texttt{scenarios}, \texttt{protocols}, \texttt{services}, \texttt{symptoms}, \texttt{tools} để hỗ trợ truy xuất có nhận biết thuộc tính.
+    \item \textbf{Thống kê sử dụng:} \texttt{maturity}, \texttt{avg\_gain}, \texttt{success\_count}, \texttt{failure\_count}, \texttt{status} (\texttt{candidate}/\texttt{validated}/\texttt{retired}).
+\end{itemize}
+
+Hệ thống khởi động với 6 kỹ năng mầm (seed skills) được định nghĩa sẵn: StructuredCoT, ReActDecision, HypothesisElimination, SelfConsistencyCheck, ExploreExploitArbitration và StrategicPlanning, cung cấp tri thức chẩn đoán tổng quát ban đầu.
 
 \subsection{Truy xuất nhận biết thuộc tính (MemInsight-style Retrieval)}
-Trước mỗi tập chẩn đoán (episode), từ ngữ cảnh công khai ban đầu (public task context), hệ thống sinh ra một tập thuộc tính truy vấn (\texttt{query\_attributes}) gồm: tên kịch bản mạng, lớp topology, giao thức sử dụng (OSPF, BGP, DHCP, etc.), dịch vụ kích hoạt.
+
+Trước mỗi episode chẩn đoán, từ ngữ cảnh công khai ban đầu (public task context), hệ thống sinh ra một \texttt{MemoryQuery} gồm: văn bản mô tả nhiệm vụ, tên kịch bản mạng, lớp topology, giao thức, dịch vụ, triệu chứng và công cụ liên quan.
 Bộ nhớ được truy xuất theo công thức tính điểm kết hợp:
 \begin{equation}
-\text{Score} = \text{Similarity}_{\text{semantic}} + \text{Bonus}_{\text{attribute}} + \text{Weight}_{\text{confidence}} - \text{Penalty}_{\text{redundancy}}
+\text{Score} = \text{Score}_{\text{keyword}} + \text{Bonus}_{\text{scenario}} + \text{Bonus}_{\text{attribute}} + \text{LCB}_{\text{bonus}}
 \end{equation}
-Điều này giúp agent lọc bỏ các kinh nghiệm chẩn đoán không liên quan đến cấu trúc mạng hiện tại (ví dụ: không lấy kinh nghiệm BGP Clos khi đang chẩn đoán OSPF Enterprise).
+Trong đó: điểm keyword dựa trên Jaccard similarity giữa token văn bản; bonus scenario (+0.2 nếu khớp, -0.35 nếu không khớp); bonus thuộc tính (+0.15 mỗi thuộc tính khớp về protocol/service/symptom/tool, -0.06 đến -0.12 nếu sai lệch); LCB bonus ưu tiên các kỹ năng đã được kiểm chứng nhiều lần. Điều này giúp agent lọc bỏ các kỹ năng không liên quan đến cấu trúc mạng hiện tại.
 
-\subsection{Nén vết tương tác (LightMem-style Compaction)}
-Sau khi tập chẩn đoán kết thúc, thay vì lưu trữ toàn bộ lịch sử hội thoại dài và nhiều nhiễu (\texttt{messages.jsonl}), mô-đun thực hiện quy trình nén vết chẩn đoán:
-\begin{itemize}
-    \item Loại bỏ các thông tin nhạy cảm hoặc định danh cụ thể (redact IPv4/IPv6 thành \texttt{<ip>}, MAC thành \texttt{<mac>}, tên thiết bị thành \texttt{<device\_A>}).
-    \item Phân đoạn lịch sử theo từng pha chẩn đoán (ví dụ: kiểm tra ban đầu, kiểm tra định tuyến, xác định lỗi).
-    \item LLM đóng vai trò nén thông tin, trích xuất thành các ghi chú nguyên tử ngắn gọn (atomic notes).
-\end{itemize}
+Trong quá trình thực thi, \texttt{SkillToolRuntime} bọc các công cụ MCP thành \texttt{SkillAwareTool}. Trước mỗi lần gọi công cụ (\texttt{before\_tool}), runtime chọn hoặc duy trì kỹ năng Skill-MDP đang hoạt động và ghi lại \texttt{SkillTransition}. Sau mỗi lần gọi (\texttt{after\_tool}), runtime gắn thêm hướng dẫn ngữ cảnh từ kỹ năng vào kết quả công cụ. Kỹ năng tự động kết thúc khi đạt độ tuổi tối đa (4 bước), khi điều kiện kết thúc được thỏa mãn, hoặc khi ngữ cảnh thay đổi.
 
-\subsection{Đồ thị liên kết và Cơ chế lọc điểm số (A-Mem \& Score-gated Validation)}
-Các ghi chú nguyên tử mới sinh ra được so sánh với bộ nhớ hiện tại để tạo các liên kết đồ thị:
-\begin{itemize}
-    \item **supports:** Củng cố ghi chú cũ.
-    \item **refines:** Chi tiết hóa hoặc bổ sung điều kiện ràng buộc cho ghi chú cũ.
-    \item **contradicts:** Mâu thuẫn với ghi chú cũ (xảy ra khi môi trường hoặc cấu hình mạng thay đổi).
-\end{itemize}
+\subsection{Tiến hóa kỹ năng sau episode (PPO-style Evolution Gate)}
 
-Để đảm bảo an toàn và tính khách quan cho benchmark (tránh rò rỉ đáp án), việc cập nhật bộ nhớ phải tuân theo cơ chế **Score-gated Validation**:
-\begin{itemize}
-    \item Chỉ khi NIKA Evaluator chấm điểm chẩn đoán thành công tuyệt đối (độ chính xác RCA = 1.0), các ghi chú quy trình chẩn đoán (procedural notes) mới được gán nhãn \texttt{validated} và tăng độ tin cậy.
-    \item Nếu chẩn đoán thất bại hoặc thành công một phần, hệ thống chỉ chấp nhận lưu trữ các ghi chú dạng cảnh báo (avoid rules hoặc caution notes, ví dụ: "Không được kết luận lỗi DNS chỉ dựa vào kiểm tra curl"), đồng thời giảm độ tin cậy của các ghi chú đã hướng dẫn sai.
-\end{itemize}
+Sau khi một episode chẩn đoán kết thúc và được đánh giá, quy trình học \texttt{learn\_from\_episode()} thực hiện các bước sau:
 
-\section{Mô-đun Tiến Hóa Công Cụ (Tool Evolution Module)}
+\begin{enumerate}
+    \item \textbf{Tính toán phần thưởng:} Điểm phần thưởng kết hợp các thành phần: detection score (trọng số 0.2), localization score (0.3) và RCA score (0.5), trừ đi hình phạt bước và lần gọi công cụ thừa.
+    \item \textbf{Cập nhật kinh nghiệm:} Episode được lưu vào \texttt{ExperiencePool} (dung lượng 1000) hoặc \texttt{GoldenExperiencePool} (dung lượng 20, chỉ cho episode thành công). Baseline được cập nhật theo EMA với $\alpha = 0.1$.
+    \item \textbf{Sinh Semantic Gradient:} LLM phân tích vết chẩn đoán và sinh \texttt{SemanticGradient} đề xuất cải tiến kỹ năng (phân tích lỗi, đề xuất cập nhật, cập nhật điều kiện kích hoạt/các bước thực thi/điều kiện kết thúc). Khi LLM thất bại, hệ thống sử dụng gradient xác định (deterministic fallback).
+    \item \textbf{Sinh ứng viên kỹ năng mới (Best-of-N):} Hệ thống sinh N=3 ứng viên kỹ năng (dạng NEW hoặc REFINE từ kỹ năng cha), mỗi ứng viên dựa trên gradient và episode trong pool.
+    \item \textbf{PPO Gate:} Cơ chế chọn lọc phi tham số dựa trên surrogate reward có clipping: tính điểm căn chỉnh Jaccard (\texttt{j\_score}) giữa ứng viên và các episode trong pool, so sánh với baseline kỹ năng hiện có. Kỹ năng ứng viên chỉ được chấp nhận khi \texttt{j\_score} vượt ngưỡng cộng biên độ +0.03, đảm bảo cải thiện thực sự.
+    \item \textbf{Bảo trì thư viện:} Sau khi chấp nhận ứng viên, hệ thống loại bỏ các kỹ năng trùng lặp (theo content hash), nghỉ hưu các kỹ năng có LCB âm, và giới hạn thư viện ở 32 kỹ năng.
+\end{enumerate}
+
+Điều kiện để một episode được coi là thành công (đủ điều kiện vào GoldenExperiencePool) là: \texttt{detection\_score} $\geq 1.0$ \textbf{và} localization score $\geq 0.6$ \textbf{và} RCA score $\geq 0.6$.
+
+\section{Mô-đun Tiến Hóa Tài Liệu Công Cụ (DRAFT Tool Evolution Module)}
 \label{sec:tool_evolution}
 
-Mô-đun Tiến hóa công cụ cho phép AI Agent tự mở rộng thư viện công cụ của mình để vượt qua các giới hạn năng lực tại test-time. Thư viện công cụ lưu trữ dưới dạng \texttt{state.json} gồm 3 thành phần chính:
+Mô-đun tiến hóa công cụ theo phong cách DRAFT cho phép AI Agent tự cải thiện hiểu biết về các công cụ MCP nguyên thủy thông qua tinh chỉnh tài liệu mô tả, mà không cần thay đổi mã nguồn thực thi. Trạng thái thư viện công cụ được lưu trong \texttt{runtime/tool\_evolution/\{library\_id\}/state.json} thông qua \texttt{ToolEvolutionStore}.
 
-\subsection{Mastery mô tả công cụ (DRAFT-like Refinement)}
-Đối với các công cụ nguyên thủy (primitive tools), hệ thống không thay đổi mã nguồn thực thi mà cập nhật một lớp phủ tài liệu hướng dẫn (\texttt{ToolMastery}) dựa trên kết quả chạy thực tế:
+\subsection{Tinh chỉnh tài liệu công cụ (DRAFT-like Refinement)}
+
+Mỗi công cụ nguyên thủy được đại diện bởi một \texttt{ToolDocumentation} chứa thông tin tinh chỉnh:
 \begin{itemize}
-    \item **preconditions:** Điều kiện phù hợp nhất để gọi công cụ.
-    \item **parameter\_guidance:** Hướng dẫn truyền tham số đúng kiểu và đúng ngữ cảnh thiết bị.
-    \item **failure\_semantics:** Ý nghĩa của các mã lỗi trả về.
+    \item \textbf{description:} Mô tả chức năng được cải thiện dựa trên thực nghiệm thực tế.
+    \item \textbf{preconditions:} Điều kiện phù hợp nhất để gọi công cụ (ngữ cảnh thiết bị, trạng thái mạng).
+    \item \textbf{parameters:} Hướng dẫn chi tiết từng tham số: kiểu dữ liệu, ràng buộc, ví dụ đúng và sai.
+    \item \textbf{failure\_modes:} Ý nghĩa của các lỗi trả về và cách xử lý.
+    \item \textbf{usage\_notes, positive\_examples, negative\_examples:} Ví dụ thực tế từ các lần gọi thành công và thất bại.
+    \item \textbf{mastery\_score, convergence\_score:} Chỉ số đánh giá mức độ hiểu biết và hội tụ của tài liệu.
 \end{itemize}
 
-\subsection{Tổng hợp quy trình phức hợp và sinh mã nguồn Python (TTE \& Alita-style)}
-Khi phát hiện một thiếu hụt năng lực chẩn đoán (capability gap), agent có thể đề xuất 2 dạng công cụ mới:
+Tại thời điểm thực thi, \texttt{ToolEvolutionRuntime.build\_tools()} tự động gắn thêm tài liệu tinh chỉnh vào mô tả của mỗi công cụ trước khi cung cấp cho agent, giúp LLM hiểu sâu hơn cách sử dụng công cụ đúng ngữ cảnh.
+
+\subsection{Quy trình học tài liệu ngoại tuyến (Offline Curation)}
+
+Sau khi một session kết thúc, \texttt{finalize\_tool\_evolution\_session()} thực hiện quy trình học DRAFT:
 \begin{enumerate}
-    \item **Composite Workflow:** Chuỗi các bước gọi tuần tự các công cụ nguyên thủy an toàn, được tham số hóa để tái sử dụng (ví dụ: kiểm tra định tuyến tuần tự từ Host -> Router -> Gateway).
-    \item **Generated Python Helper:** Hàm Python thuần thực hiện các tính toán phức tạp trên dữ liệu chẩn đoán thu thập được (ví dụ: tính toán tỷ lệ mất gói từ các số liệu đếm counter).
+    \item \textbf{Explorer:} Phân tích \texttt{messages.jsonl} để trích xuất các \texttt{ToolTrial} — mỗi lần gọi công cụ thực tế cùng tham số, trạng thái và kết quả.
+    \item \textbf{Analyzer:} Xác định các \texttt{ComprehensionGap} — khoảng trống hiểu biết trong tài liệu hiện tại (thiếu mô tả tham số, thiếu điều kiện tiền đề, thiếu giải nghĩa lỗi, thiếu ngữ nghĩa chẩn đoán). LLM sinh \texttt{DraftAnalyzerSuggestion} đề xuất hướng cải thiện cho từng công cụ.
+    \item \textbf{Rewriter:} LLM sinh \texttt{DraftRewriteDraft} — bản viết lại đầy đủ tài liệu công cụ tích hợp các gợi ý từ Analyzer. Tài liệu mới được so sánh hash với phiên bản cũ để ghi nhận thay đổi thực sự.
+    \item \textbf{Adaptive Termination:} Tài liệu công cụ tự động bị đóng băng (\texttt{frozen=True}) khi \texttt{convergence\_score} $\geq 0.75$ và \texttt{mastery\_score} $\geq 0.5$, hoặc khi nội dung không thay đổi qua nhiều lần viết lại.
 \end{enumerate}
 
-\subsection{Quy trình xác thực an toàn (AST \& Sandbox Validation)}
-Để tránh rủi ro bảo mật hệ thống và đảm bảo công cụ sinh ra hoạt động chính xác, toàn bộ các công cụ Python mới sinh ra đều phải đi qua pipeline xác thực nghiêm ngặt:
-\begin{enumerate}
-    \item **Xác thực cấu trúc (AST Verification):** Sử dụng thư viện \texttt{ast} của Python để kiểm tra cấu trúc cú pháp, đảm bảo không sử dụng các hàm cấm (như \texttt{eval}, \texttt{exec}, \texttt{open}, \texttt{\_\_import\_\_}) và chỉ import các thư viện toán học trong allowlist.
-    \item **Thực thi Sandbox (Docker Sandbox execution):** Chạy thử nghiệm công cụ trong một container Docker cô lập hoàn toàn mạng (\texttt{--network none}) với các tham số mẫu. Hàm sinh ra phải chạy thành công và trả về định dạng JSON hợp lệ.
-    \item **Xác thực kết quả thực nghiệm:** Công cụ mới sinh ra ban đầu ở trạng thái thử nghiệm (\texttt{candidate}). Nó chỉ được thăng cấp lên chính thức (\texttt{promoted}) sau khi hỗ trợ agent chẩn đoán thành công sự cố ở ít nhất 2 ngữ cảnh kịch bản mạng khác nhau.
-\end{enumerate}
+Các tài liệu đã tinh chỉnh có thể được truy xuất thông qua Tool Evolution MCP Server (\texttt{list\_refined\_tool\_docs}, \texttt{get\_refined\_tool\_doc}) để agent chủ động khám phá năng lực công cụ.

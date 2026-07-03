@@ -1,6 +1,6 @@
-# Codex CLI reference
+# NIKA CLI reference
 
-Python package: `nika.codex_cli` (directory `src/nika/codex_cli/`). A separate Claude CLI front-end may be added alongside this module later.
+Python package: `nika.cli` (directory `src/nika/cli/`).
 
 Entry point: `nika` (see `[project.scripts]` in `pyproject.toml`). During development use `uv run nika …`.
 
@@ -43,13 +43,15 @@ This flag is reused on **`nika benchmark run`** and **`nika traffic run`** when 
 
 Aligned with `nika agent run`:
 
-- **`-a` / `--agent`**: `react`, `plan-execute`, or `reflexion` (LangGraph + LangChain), `cli` (LangGraph + Codex CLI subprocess), or `mock`.
-- **`-b` / `--backend`**: LLM provider for `react`, `plan-execute`, `reflexion`, and `mock` (`openai`, `ollama`, `deepseek`, `custom`). Ignored for `cli` (Codex uses OpenAI models).
+- **`-a` / `--agent`**: `react`, `plan-execute`, `reflexion`, or `mock`.
+- **`-b` / `--backend`**: LLM provider for `react`, `plan-execute`, `reflexion`, and `mock` (`openai`, `ollama`, `deepseek`, `custom`).
 - **`-m` / `--model`**: model id.
 - **`-n` / `--max-steps`**: per-worker recursion limit for LangGraph agents; also caps executed plan items for `plan-execute`.
 - **`-r` / `--max-attempts`**: maximum Reflexion attempts for `reflexion` (default: `3`).
-- **`-e` / `--reasoning-effort`**: Codex `model_reasoning_effort` (`cli` only): `none`, `minimal`, `low`, `medium`, `high`, `xhigh`.
-- **`--tools <library-id>`**: enable DRAFT Tool Evolution for a LangGraph workflow. It refines documentation for fixed primitive tools, stores Explorer/Analyzer/Rewriter artifacts, tracks path-rate/mastery stats, and writes JSON state under `runtime/tool_evolution/<library-id>/`.
+- **`--tools <library-id>`**: enable DRAFT Tool Evolution for a LangGraph workflow. It refines documentation for fixed primitive tools, stores Explorer/Analyzer/Rewriter artifacts, tracks path-rate/mastery/LLM-failure stats, and writes JSON state under `runtime/tool_evolution/<library-id>/`.
+
+Learning-module LLM calls inherit `-b/--backend` and `-m/--model` unless
+`NIKA_LEARNING_LLM_BACKEND` / `NIKA_LEARNING_LLM_MODEL` are set.
 
 `nika eval judge` uses **`-b`** and **`-m`** for the judge only (no agent in that command).
 
@@ -108,35 +110,36 @@ Example: `nika exec pc1 ping -c 3 10.0.0.2 --timeout 30`
 
 ## `nika agent`
 
-- **`nika agent list`**: supported agent types, LLM backends, and Codex reasoning-effort levels.
+- **`nika agent list`**: supported agent types and LLM backends.
 - **`nika agent run`**: run the agent on one selected session.
 
   | Flag | Applies to | Meaning |
   |------|------------|---------|
-  | `-a` / `--agent` | all | `react`, `plan-execute`, `reflexion`, `cli`, or `mock` |
+  | `-a` / `--agent` | all | `react`, `plan-execute`, `reflexion`, or `mock` |
   | `-b` / `--backend` | `react`, `mock` | `openai`, `ollama`, `deepseek`, or `custom` |
   | `-m` / `--model` | all | model id |
   | `-n` / `--max-steps` | LangGraph, `mock` | Worker step cap; plan-item cap for `plan-execute` |
   | `-r` / `--max-attempts` | `reflexion` | Maximum attempt → evaluate → reflect cycles |
-  | `-e` / `--reasoning-effort` | `cli` | Codex reasoning effort level |
   | `--session-id` | all | target session |
   | `--tools` | LangGraph workflows | enable Tool Evolution with a persistent library id |
   | `--memory` | LangGraph workflows | enable evolving procedural memory with a bank id |
   | `--memory-read` | LangGraph workflows | read a frozen procedural-memory bank |
+  | `--memory-selector` | memory | choose `lcb` or `llm_topk_lcb` Skill-Pro selection |
+  | `--memory-meta-controller` | memory | choose `heuristic` or `llm` Skill-Pro termination |
 
   Examples:
 
   ```shell
-  nika agent run -a react -b custom -m openai/gpt-oss-120b -n 20
-  nika agent run -a plan-execute -b custom -m openai/gpt-oss-120b -n 20
-  nika agent run -a reflexion -b custom -m openai/gpt-oss-120b -n 20 -r 3
-  nika agent run -a react -b custom -m openai/gpt-oss-120b \
+  nika agent run -a react -b custom -m openai/gpt-oss-20b -n 20
+  nika agent run -a plan-execute -b custom -m openai/gpt-oss-20b -n 20
+  nika agent run -a reflexion -b custom -m openai/gpt-oss-20b -n 20 -r 3
+  nika agent run -a react -b custom -m openai/gpt-oss-20b \
     --tools experiment-a
-  nika agent run -a cli -m gpt-5.4-mini -e medium
   nika agent run -a mock -n 5
   ```
 
-  Run `nika agent list` to see the verified NetMind model whitelist.
+  The `custom` backend accepts any OpenAI-compatible model id. Netmind is
+  selected only by `CUSTOM_API_URL`.
 
 ---
 
@@ -205,7 +208,7 @@ cases:
       intf_name: eth0
 ```
 
-Agent and judge options use the same flags as below (including `-a cli` and `-e` for Codex runs; `-n` applies to all agents except `cli`).
+Agent and judge options use the same flags as below.
 
 ### Streamlit experiment studio
 
@@ -224,7 +227,7 @@ Pass **`SCENARIO`** as the first positional argument (like `nika env run NAME`),
 
 ```shell
 nika benchmark run dc_clos_bgp --problem bgp_asn_misconfig -t s \
-  -a react -b custom -m openai/gpt-oss-120b -n 20 \
+  -a react -b custom -m openai/gpt-oss-20b -n 20 \
   --judge
 ```
 

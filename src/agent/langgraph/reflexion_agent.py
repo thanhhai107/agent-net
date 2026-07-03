@@ -18,8 +18,10 @@ from agent.langgraph.phases.submission import SubmissionPhase as SubmissionAgent
 from agent.langgraph.langfuse_tracing import callback_config, create_langfuse_callbacks
 from agent.langgraph.workflow_models import ReflexionEvaluation, ReflexionMemory
 from agent.llm.model_factory import DEFAULT_LLM_BACKEND, DEFAULT_MODEL, load_model
+from agent.memory.runtime import strip_integrated_learning_guidance
 from agent.tool_evolution.integration import write_tool_evolution_session
 from agent.utils.loggers import AgentCallbackLogger
+from agent.utils.template import EVIDENCE_CONTRACT_PROMPT
 from agent.utils.tracing import langsmith_tracing_context
 from nika.utils.session import Session
 
@@ -42,7 +44,7 @@ complete diagnosis report that explicitly states:
 5. remaining uncertainty.
 
 Do not propose mitigation.
-"""
+""" + "\n\n" + EVIDENCE_CONTRACT_PROMPT
 
 EVALUATOR_PROMPT = """\
 You are the strict evaluator in a Reflexion loop. Judge one network-diagnosis
@@ -58,7 +60,7 @@ call tools, rewrite the report, or assume hidden ground truth.
 
 Assign quality_score from 0.0 to 1.0. Set success=true only when quality_score is
 at least 0.8 and the evidence is sufficient.
-"""
+""" + "\n\n" + EVIDENCE_CONTRACT_PROMPT
 
 REFLEXION_PROMPT = """\
 You are the self-review component of a Reflexion agent. Given a failed
@@ -69,7 +71,7 @@ and a materially different next strategy.
 
 Do not solve the task, call tools, or repeat the full report. The memory must be
 actionable and must not promote unverified conclusions to facts.
-"""
+""" + "\n\n" + EVIDENCE_CONTRACT_PROMPT
 
 
 class ReflexionState(TypedDict, total=False):
@@ -124,14 +126,10 @@ class ReflexionAgent:
             tool_library_id=tool_library_id,
         )
         asyncio.run(diagnosis.load_tools())
+        self._diagnosis_phase = diagnosis
         self.tool_evolution_runtime = diagnosis.tool_evolution_runtime
-        self.diagnosis_tool_names = [tool.name for tool in (diagnosis.tools or [])]
-        self.actor = create_agent(
-            model=self.llm,
-            system_prompt=ACTOR_PROMPT + diagnosis.prompt_suffix(),
-            tools=diagnosis.tools,
-            name="ReflexionActor",
-        )
+        self.skill_tool_runtime = diagnosis.skill_tool_runtime
+        self._refresh_actor()
 
         submission = SubmissionAgent(
             session_id=session_id,
@@ -163,6 +161,54 @@ class ReflexionAgent:
         builder.add_edge("submission", END)
         self.graph = builder.compile()
 
+    def _refresh_actor(self) -> None:
+        self.tool_evolution_runtime = self._diagnosis_phase.tool_evolution_runtime
+        self.skill_tool_runtime = self._diagnosis_phase.skill_tool_runtime
+        self.diagnosis_tool_names = [
+            tool.name for tool in (self._diagnosis_phase.tools or [])
+        ]
+        self.actor = create_agent(
+            model=self.llm,
+            system_prompt=ACTOR_PROMPT,
+            tools=self._diagnosis_phase.tools,
+            name="ReflexionActor",
+        )
+
+    def _learning_prompt_suffix(self) -> str:
+        suffix = self._diagnosis_phase.prompt_suffix()
+        if not suffix:
+            return ""
+        return (
+            "\n\nIntegrated learning context for this Reflexion attempt:\n"
+            "Use the following Skill-Pro/DRAFT guidance to choose diagnostic "
+            "checks and avoid repeating completed options. It is not evidence; "
+            "only current tool outputs can support the final diagnosis."
+            f"{suffix}"
+        )
+
+    def install_memory_runtime(
+        self,
+        *,
+        memory,
+        memory_mode: str,
+        task_description: str,
+        top_k: int = 5,
+        token_budget: int = 1500,
+        skill_selector_mode: str = "lcb",
+        meta_controller_mode: str = "heuristic",
+    ) -> None:
+        self._diagnosis_phase.install_memory_runtime(
+            memory=memory,
+            memory_mode=memory_mode,
+            task_description=task_description,
+            top_k=top_k,
+            token_budget=token_budget,
+            session_dir=self.session_dir,
+            skill_selector_mode=skill_selector_mode,
+            meta_controller_mode=meta_controller_mode,
+        )
+        self._refresh_actor()
+
     def _callback(self, phase: str) -> AgentCallbackLogger:
         return AgentCallbackLogger(
             agent="diagnosis_agent",
@@ -183,7 +229,9 @@ class ReflexionAgent:
         """Keep evaluator-visible trajectory evidence within a bounded context."""
         trace: list[dict[str, Any]] = []
         for message in messages[-24:]:
-            content = str(getattr(message, "content", ""))
+            content = strip_integrated_learning_guidance(
+                getattr(message, "content", "")
+            )
             entry: dict[str, Any] = {
                 "type": message.__class__.__name__,
                 "content": content[:2500],
@@ -256,6 +304,9 @@ class ReflexionAgent:
             ensure_ascii=False,
             default=str,
         )
+        learning_context = self._learning_prompt_suffix()
+        if learning_context:
+            prompt += learning_context
         try:
             result = await self.actor.ainvoke(
                 {"messages": [HumanMessage(content=prompt)]},

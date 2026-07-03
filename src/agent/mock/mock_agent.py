@@ -10,6 +10,7 @@ standing up a real LLM endpoint.
 """
 
 import json
+import re
 from typing import Any
 
 from langchain_mcp_adapters.client import MultiServerMCPClient
@@ -17,6 +18,18 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 from agent.utils.mcp_servers import MCPServerConfig
 from agent.utils.phases import DIAGNOSIS, SUBMISSION
 from nika.utils.session import Session
+
+_REPORT_DEVICE_RE = re.compile(
+    r"\b(?:"
+    r"pc[_-]?\d[A-Za-z0-9_.-]*|"
+    r"r\d[A-Za-z0-9_.-]*|"
+    r"router\d*[A-Za-z0-9_.-]*|"
+    r"host\d*[A-Za-z0-9_.-]*|"
+    r"server\d*[A-Za-z0-9_.-]*|"
+    r"switch\d*[A-Za-z0-9_.-]*"
+    r")\b",
+    re.I,
+)
 
 MOCK_DIAGNOSIS_TOOL_CALLS: list[tuple[str, dict[str, Any]]] = [
     ("get_reachability", {}),
@@ -48,6 +61,15 @@ def _tool_text_list(result: object) -> list[str]:
         else:
             texts.append(str(item))
     return texts
+
+
+def _devices_from_report(report: str) -> list[str]:
+    devices: list[str] = []
+    for token in _REPORT_DEVICE_RE.findall(report):
+        normalized = token.strip()
+        if normalized and normalized not in devices:
+            devices.append(normalized)
+    return devices[:4]
 
 
 class MockAgent:
@@ -136,20 +158,17 @@ class MockAgent:
         logger.log("tool_start", {"tool": {"name": "list_avail_problems"}, "input": "{}"})
         avail_raw = await tools["list_avail_problems"].ainvoke({})
         avail = _tool_text_list(avail_raw)
-        session_root_cause = getattr(self.session, "root_cause_name", None)
-        if session_root_cause in avail:
-            mock_root_cause = session_root_cause
-        else:
-            mock_root_cause = avail[0] if avail else "link_down"
+        mock_root_cause = ""
         logger.log(
             "tool_end",
             {"output": json.dumps(avail[:5]) + " ...", "output_type": "list"},
         )
 
+        faulty_devices = _devices_from_report(diagnosis_report)
         submission: dict[str, Any] = {
-            "is_anomaly": True,
-            "faulty_devices": ["pc1"],
-            "root_cause_name": [mock_root_cause],
+            "is_anomaly": bool(faulty_devices),
+            "faulty_devices": faulty_devices,
+            "root_cause_name": [],
         }
         logger.log(
             "tool_start",
@@ -163,7 +182,12 @@ class MockAgent:
 
         logger.log(
             "llm_end",
-            {"text": f"Submitted: root cause = {mock_root_cause}, faulty device = pc1"},
+            {
+                "text": (
+                    f"Submitted: root cause = {mock_root_cause or 'unspecified'}, "
+                    f"faulty devices = {faulty_devices}"
+                )
+            },
         )
 
     def _make_logger(self, agent_name: str):

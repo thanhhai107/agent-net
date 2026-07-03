@@ -14,18 +14,12 @@ from langchain_openai import ChatOpenAI
 
 load_dotenv()
 
-CUSTOM_DEFAULT_API_BASE = "https://stream-netmind.viettel.vn/gateway/v1"
+NETMIND_API_URL = "https://stream-netmind.viettel.vn/gateway/v1"
+CUSTOM_DEFAULT_API_URL = NETMIND_API_URL
 CUSTOM_TIMEOUT_SECONDS = 90.0
 CUSTOM_MAX_RETRIES = 0
 DEFAULT_LLM_BACKEND = "custom"
-DEFAULT_MODEL = "openai/gpt-oss-120b"
-CUSTOM_RECOMMENDED_MODELS = (
-    "MiniMax/MiniMax-M2.7",
-    "Qwen/Qwen3.5-122B-A10B-FP8",
-    "openai/gpt-oss-120b",
-    "openai/gpt-oss-20b",
-    "zai-org/GLM-4.7",
-)
+DEFAULT_MODEL = "openai/gpt-oss-20b"
 
 _GLM_TOOL_CALL_PATTERN = re.compile(
     r"<tool_call>\s*(.*?)\s*</tool_call>",
@@ -62,6 +56,36 @@ def _env_non_negative_int(name: str, default: int) -> int:
     if parsed < 0:
         raise ValueError(f"{name} must be greater than or equal to 0")
     return parsed
+
+
+def _env_str(name: str) -> str | None:
+    value = os.getenv(name)
+    if value is None:
+        return None
+    text = value.strip()
+    return text or None
+
+
+def _normalize_api_url(url: str) -> str:
+    return url.rstrip("/")
+
+
+def _custom_api_url() -> str:
+    return _env_str("CUSTOM_API_URL") or CUSTOM_DEFAULT_API_URL
+
+
+def _is_netmind_api_url(api_url: str) -> bool:
+    return _normalize_api_url(api_url) == _normalize_api_url(NETMIND_API_URL)
+
+
+def _custom_api_key(api_url: str) -> str:
+    password = _env_str("CUSTOM_API_KEY")
+    if _is_netmind_api_url(api_url) and not password:
+        raise ValueError(
+            "CUSTOM_API_KEY is required as the Netmind password when "
+            f"CUSTOM_API_URL={NETMIND_API_URL}."
+        )
+    return password or "dummy"
 
 
 def _coerce_tool_args(raw: Any) -> dict[str, Any]:
@@ -214,9 +238,20 @@ class GLM47ChatOpenAI(ChatOpenAI):
         return _normalize_glm_tool_calls(await super()._agenerate(*args, **kwargs))
 
 
+class NetmindChatOpenAI(ChatOpenAI):
+    """Netmind gateway adapter selected by CUSTOM_API_URL."""
+
+
+class NetmindGLM47ChatOpenAI(GLM47ChatOpenAI):
+    """Netmind GLM adapter with text-formatted tool-call normalization."""
+
+
 def load_model(
     llm_backend: str = DEFAULT_LLM_BACKEND,
     model: str = DEFAULT_MODEL,
+    *,
+    timeout: float | None = None,
+    max_retries: int | None = None,
 ) -> BaseChatModel:
     if llm_backend == "ollama":
         return ChatOllama(
@@ -230,6 +265,8 @@ def load_model(
         return ChatOpenAI(
             model_name=model,
             temperature=0,
+            timeout=timeout,
+            max_retries=max_retries,
         )
 
     if llm_backend == "deepseek":
@@ -237,22 +274,37 @@ def load_model(
             model=model,
             base_url="https://api.deepseek.com",
             temperature=0,
+            timeout=timeout,
+            max_retries=max_retries,
         )
 
     if llm_backend == "custom":
-        chat_model = GLM47ChatOpenAI if model == "zai-org/GLM-4.7" else ChatOpenAI
+        api_url = _custom_api_url()
+        if _is_netmind_api_url(api_url):
+            chat_model = (
+                NetmindGLM47ChatOpenAI
+                if model == "zai-org/GLM-4.7"
+                else NetmindChatOpenAI
+            )
+        else:
+            chat_model = GLM47ChatOpenAI if model == "zai-org/GLM-4.7" else ChatOpenAI
         return chat_model(
             model=model,
-            base_url=os.getenv("CUSTOM_API_BASE") or CUSTOM_DEFAULT_API_BASE,
-            api_key=os.getenv("CUSTOM_API_KEY") or "dummy",
+            base_url=api_url,
+            api_key=_custom_api_key(api_url),
             temperature=0,
-            timeout=_env_float(
-                "CUSTOM_TIMEOUT_SECONDS",
-                CUSTOM_TIMEOUT_SECONDS,
+            timeout=(
+                timeout
+                if timeout is not None
+                else _env_float("CUSTOM_TIMEOUT_SECONDS", CUSTOM_TIMEOUT_SECONDS)
             ),
-            max_retries=_env_non_negative_int(
-                "CUSTOM_MAX_RETRIES",
-                CUSTOM_MAX_RETRIES,
+            max_retries=(
+                max_retries
+                if max_retries is not None
+                else _env_non_negative_int(
+                    "CUSTOM_MAX_RETRIES",
+                    CUSTOM_MAX_RETRIES,
+                )
             ),
         )
 

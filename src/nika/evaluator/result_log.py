@@ -44,6 +44,10 @@ class EvalResult:
     tool_errors: int = None
     tool_evolution_enabled: bool | None = None
     tool_library_id: str = None
+    memory_mode: str = None
+    memory_bank: str = None
+    memory_skill_selector_mode: str = None
+    memory_meta_controller_mode: str = None
     benchmark_index: int = None
     draft_trials: int = None
     draft_trials_added: int = None
@@ -53,12 +57,34 @@ class EvalResult:
     draft_documented_tools: int = None
     draft_unique_trial_tools: int = None
     draft_explorations: int = None
+    draft_planned_explorations: int = None
+    draft_consumed_explorations: int = None
     draft_analyzer_suggestions: int = None
     draft_mastered_tools: int = None
     draft_documented_path_rate: float = None
     draft_success_path_rate: float = None
     draft_converged_documents: int = None
+    draft_llm_attempts: int = None
+    draft_llm_failures: int = None
     draft_llm_revisions: int = None
+    memory_update_status: str = None
+    memory_skill_id: str = None
+    memory_runtime_skill_ids: list[str] = None
+    memory_episode_reward: float = None
+    memory_episode_baseline: float = None
+    memory_episode_advantage: float = None
+    memory_episode_success: bool | None = None
+    memory_total_added_tokens: int = None
+    memory_delta_prompt_tokens_per_step: float = None
+    memory_prompt_added_tokens: int = None
+    memory_tool_description_added_tokens: int = None
+    memory_followup_added_tokens: int = None
+    memory_ppo_j_score: float = None
+    memory_candidate_alignment: float = None
+    memory_baseline_alignment: float = None
+    memory_semantic_gradient_source: str = None
+    memory_semantic_gradient_llm_failed: bool | None = None
+    memory_skills: int = None
     incident_success: bool = None
     efficiency_evolution_rate: float = None
     evolutionary_gain: float = None
@@ -173,6 +199,12 @@ def build_eval_result_from_session_dir(session_dir: Path) -> EvalResult:
         trace_path = session_dir / MESSAGES_FILENAME
         if trace_path.exists():
             trace_metrics = AgentTraceParser(trace_path=str(trace_path)).parse_trace()
+    memory_update = metrics_blob.get("memory_update") or {}
+    memory_decision = (
+        memory_update.get("decision")
+        if isinstance(memory_update.get("decision"), dict)
+        else {}
+    )
 
     if judge_response:
         relevance_score = judge_response.scores.relevance.score
@@ -201,6 +233,10 @@ def build_eval_result_from_session_dir(session_dir: Path) -> EvalResult:
         tool_evolution_enabled=bool(run_meta.get("tool_evolution_enabled", False)),
         tool_library_id=metrics_blob.get("tool_library_id")
         or run_meta.get("tool_library_id"),
+        memory_mode=run_meta.get("memory_mode"),
+        memory_bank=run_meta.get("memory_bank"),
+        memory_skill_selector_mode=run_meta.get("memory_skill_selector_mode"),
+        memory_meta_controller_mode=run_meta.get("memory_meta_controller_mode"),
         benchmark_index=run_meta.get("benchmark_index"),
         draft_trials=metrics_blob.get("draft_trials"),
         draft_trials_added=metrics_blob.get("draft_trials_added"),
@@ -210,12 +246,44 @@ def build_eval_result_from_session_dir(session_dir: Path) -> EvalResult:
         draft_documented_tools=metrics_blob.get("draft_documented_tools"),
         draft_unique_trial_tools=metrics_blob.get("draft_unique_trial_tools"),
         draft_explorations=metrics_blob.get("draft_explorations"),
+        draft_planned_explorations=metrics_blob.get(
+            "draft_planned_explorations"
+        ),
+        draft_consumed_explorations=metrics_blob.get(
+            "draft_consumed_explorations"
+        ),
         draft_analyzer_suggestions=metrics_blob.get("draft_analyzer_suggestions"),
         draft_mastered_tools=metrics_blob.get("draft_mastered_tools"),
         draft_documented_path_rate=metrics_blob.get("draft_documented_path_rate"),
         draft_success_path_rate=metrics_blob.get("draft_success_path_rate"),
         draft_converged_documents=metrics_blob.get("draft_converged_documents"),
+        draft_llm_attempts=metrics_blob.get("draft_llm_attempts"),
+        draft_llm_failures=metrics_blob.get("draft_llm_failures"),
         draft_llm_revisions=metrics_blob.get("draft_llm_revisions"),
+        memory_update_status=memory_update.get("status"),
+        memory_skill_id=memory_update.get("skill_id"),
+        memory_runtime_skill_ids=memory_update.get("runtime_skill_ids"),
+        memory_episode_reward=memory_update.get("episode_reward"),
+        memory_episode_baseline=memory_update.get("episode_baseline"),
+        memory_episode_advantage=memory_update.get("episode_advantage"),
+        memory_episode_success=memory_update.get("episode_success"),
+        memory_total_added_tokens=memory_update.get("total_added_tokens"),
+        memory_delta_prompt_tokens_per_step=memory_update.get(
+            "delta_prompt_tokens_per_step"
+        ),
+        memory_prompt_added_tokens=memory_update.get("prompt_added_tokens"),
+        memory_tool_description_added_tokens=memory_update.get(
+            "tool_description_added_tokens"
+        ),
+        memory_followup_added_tokens=memory_update.get("followup_added_tokens"),
+        memory_ppo_j_score=memory_decision.get("j_score"),
+        memory_candidate_alignment=memory_decision.get("candidate_alignment"),
+        memory_baseline_alignment=memory_decision.get("baseline_alignment"),
+        memory_semantic_gradient_source=memory_update.get("semantic_gradient_source"),
+        memory_semantic_gradient_llm_failed=memory_update.get(
+            "semantic_gradient_llm_failed"
+        ),
+        memory_skills=memory_update.get("skills"),
         incident_success=all(
             metrics_blob.get(key) == 1.0
             for key in (

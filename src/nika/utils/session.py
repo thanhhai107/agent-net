@@ -17,8 +17,8 @@ def _is_finished_session(run_meta: dict[str, Any]) -> bool:
     return run_meta.get("status") == "finished" or run_meta.get("end_time") is not None
 
 
-def _iter_session_dirs() -> list[Path]:
-    root = Path(RESULTS_DIR)
+def _iter_session_dirs(results_dir: str | Path | None = None) -> list[Path]:
+    root = Path(results_dir or RESULTS_DIR)
     if not root.exists():
         return []
     return [
@@ -91,13 +91,21 @@ class Session:
             setattr(self, key, value)
         return self
 
-    def load_closed_session(self, session_id: str | None = None):
+    def load_closed_session(
+        self,
+        session_id: str | None = None,
+        *,
+        results_dir: str | Path | None = None,
+    ):
         """Load a finished session from ``results/{session_id}/run.json`` for offline eval."""
         if session_id is not None:
-            return self._load_closed_session_from_id(session_id)
+            return self._load_closed_session_from_id(
+                session_id,
+                results_dir=results_dir,
+            )
 
         candidates: list[tuple[float, dict]] = []
-        for session_dir in _iter_session_dirs():
+        for session_dir in _iter_session_dirs(results_dir):
             run_path = session_dir / RUN_FILENAME
             run_meta = json.loads(run_path.read_text(encoding="utf-8"))
             if not _is_finished_session(run_meta):
@@ -115,7 +123,10 @@ class Session:
             raise ValueError(
                 "Multiple closed sessions found under results/. Please pass --session-id to select one."
             )
-        return self._apply_closed_session_meta(candidates[0][1])
+        return self._apply_closed_session_meta(
+            candidates[0][1],
+            results_dir=results_dir,
+        )
 
     def _session_is_still_running(self, session_id: str) -> bool:
         try:
@@ -123,13 +134,18 @@ class Session:
         except FileNotFoundError:
             return False
 
-    def _load_closed_session_from_id(self, session_id: str):
+    def _load_closed_session_from_id(
+        self,
+        session_id: str,
+        *,
+        results_dir: str | Path | None = None,
+    ):
         if self._session_is_still_running(session_id):
             raise ValueError(
                 f"Session '{session_id}' is still running. Close it with `nika session close` before running eval."
             )
 
-        session_dir = find_session_dir(session_id)
+        session_dir = find_session_dir(session_id, results_dir=results_dir)
         run_path = session_dir / RUN_FILENAME
 
         run_meta = json.loads(run_path.read_text(encoding="utf-8"))
@@ -139,10 +155,19 @@ class Session:
             )
         return self._apply_closed_session_meta(run_meta, session_dir=session_dir)
 
-    def _apply_closed_session_meta(self, run_meta: dict, *, session_dir: Path | None = None):
+    def _apply_closed_session_meta(
+        self,
+        run_meta: dict,
+        *,
+        session_dir: Path | None = None,
+        results_dir: str | Path | None = None,
+    ):
         for key, value in run_meta.items():
             setattr(self, key, value)
-        resolved_dir = session_dir or find_session_dir(run_meta.get("session_id") or "")
+        resolved_dir = session_dir or find_session_dir(
+            run_meta.get("session_id") or "",
+            results_dir=results_dir,
+        )
         self.session_dir = str(resolved_dir)
         return self
 

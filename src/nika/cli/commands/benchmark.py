@@ -117,6 +117,16 @@ def benchmark_run(
         min=100,
         help="Maximum estimated tokens used by retrieved memory.",
     ),
+    memory_selector: str = typer.Option(
+        "lcb",
+        "--memory-selector",
+        help="Skill-Pro selector: lcb or llm_topk_lcb.",
+    ),
+    memory_meta_controller: str = typer.Option(
+        "heuristic",
+        "--memory-meta-controller",
+        help="Skill-Pro option termination controller: heuristic or llm.",
+    ),
     run_judge: bool = typer.Option(
         False,
         "--judge",
@@ -165,6 +175,12 @@ def benchmark_run(
     judge_model = judge_model or DEFAULT_MODEL
     if memory is not None and memory_read is not None:
         raise typer.BadParameter("Use either --memory or --memory-read, not both.")
+    if memory_selector not in {"lcb", "llm_topk_lcb"}:
+        raise typer.BadParameter("--memory-selector must be lcb or llm_topk_lcb.")
+    if memory_meta_controller not in {"heuristic", "llm"}:
+        raise typer.BadParameter(
+            "--memory-meta-controller must be heuristic or llm."
+        )
     memory_mode = "evolve" if memory is not None else "read" if memory_read else "off"
     memory_bank = memory or memory_read or "default"
     resolved_max_steps = resolve_max_steps(max_steps)
@@ -175,6 +191,8 @@ def benchmark_run(
         bank=memory_bank,
         top_k=memory_k,
         token_budget=memory_tokens,
+        skill_selector_mode=memory_selector,
+        meta_controller_mode=memory_meta_controller,
     )
     tool_config = ToolEvolutionConfig(
         enabled=tool_evolution_enabled,

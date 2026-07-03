@@ -10,8 +10,6 @@ import os
 
 from dotenv import load_dotenv
 
-from agent.claude_cli.config import resolve_claude_model
-
 load_dotenv()
 
 # Shared CLI options (nika agent run / nika benchmark run)
@@ -25,10 +23,6 @@ ENV_REACT_MODEL = "NIKA_REACT_MODEL"
 
 # Mock agent
 ENV_MOCK_MODEL = "NIKA_MOCK_MODEL"
-
-# Codex CLI agent
-ENV_CODEX_MODEL = "NIKA_CODEX_MODEL"
-ENV_CODEX_REASONING_EFFORT = "NIKA_CODEX_REASONING_EFFORT"
 
 # LLM judge (nika eval judge / nika benchmark run --judge)
 ENV_JUDGE_PROVIDER = "NIKA_JUDGE_PROVIDER"
@@ -67,13 +61,11 @@ def resolve_llm_provider(value: str | None = None, *, agent_type: str) -> str | 
 
 
 def resolve_max_steps(value: int | None = None) -> int:
-    return _require_int(value=value, env_key=ENV_MAX_STEPS, cli_flag="-n/--max-steps")
-
-
-def resolve_reasoning_effort(value: str | None = None) -> str | None:
     if value is not None:
         return value
-    return _env_str(ENV_CODEX_REASONING_EFFORT)
+    if raw := _env_str(ENV_MAX_STEPS):
+        return int(raw)
+    return 100
 
 
 def resolve_agent_model(agent_type: str, model: str | None = None) -> str:
@@ -84,10 +76,6 @@ def resolve_agent_model(agent_type: str, model: str | None = None) -> str:
         return generic
 
     match agent_type.lower():
-        case "claude_cli":
-            return resolve_claude_model(None)
-        case "codex_cli":
-            return _require_str(value=None, env_key=ENV_CODEX_MODEL, cli_flag="-m/--model")
         case "mock":
             return _require_str(value=None, env_key=ENV_MOCK_MODEL, cli_flag="-m/--model")
         case _:

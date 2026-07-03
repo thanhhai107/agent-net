@@ -31,7 +31,7 @@ dependencies = [
 ]
 
 [project.scripts]
-nika = "nika.codex_cli.main:main"
+nika = "nika.cli.main:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

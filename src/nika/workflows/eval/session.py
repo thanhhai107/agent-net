@@ -19,6 +19,18 @@ from nika.workflows.session.close import close_session
 logger = system_logger
 
 
+def _load_closed_session(
+    session: Session,
+    *,
+    session_id: str | None = None,
+    results_dir: str | Path | None = None,
+) -> None:
+    if results_dir is None:
+        session.load_closed_session(session_id=session_id)
+    else:
+        session.load_closed_session(session_id=session_id, results_dir=results_dir)
+
+
 def generic_eval(gt, submission):
     """Score detection, localization, and RCA from structured ``gt`` and ``submission``."""
     try:
@@ -61,10 +73,14 @@ def generic_eval(gt, submission):
     )
 
 
-def run_eval_metrics(*, session_id: str | None = None) -> None:
+def run_eval_metrics(
+    *,
+    session_id: str | None = None,
+    results_dir: str | Path | None = None,
+) -> None:
     """Compute rule-based scores and trace stats; write ``eval_metrics.json`` under the session dir."""
     session = Session()
-    session.load_closed_session(session_id=session_id)
+    _load_closed_session(session, session_id=session_id, results_dir=results_dir)
     bind_session_dir(session.session_dir)
 
     gt_path = Path(session.session_dir) / "ground_truth.json"
@@ -133,6 +149,12 @@ def run_eval_metrics(*, session_id: str | None = None) -> None:
                     "draft_unique_trial_tools"
                 ),
                 "draft_explorations": evolution.get("draft_explorations"),
+                "draft_planned_explorations": evolution.get(
+                    "draft_planned_explorations"
+                ),
+                "draft_consumed_explorations": evolution.get(
+                    "draft_consumed_explorations"
+                ),
                 "draft_analyzer_suggestions": evolution.get(
                     "draft_analyzer_suggestions"
                 ),
@@ -146,7 +168,10 @@ def run_eval_metrics(*, session_id: str | None = None) -> None:
                 "draft_converged_documents": evolution.get(
                     "draft_converged_documents"
                 ),
+                "draft_llm_attempts": evolution.get("draft_llm_attempts"),
+                "draft_llm_failures": evolution.get("draft_llm_failures"),
                 "draft_llm_revisions": evolution.get("draft_llm_revisions"),
+                "draft_llm_errors": evolution.get("draft_llm_errors"),
             }
         )
     out_path = Path(session.session_dir) / EVAL_METRICS_FILENAME
@@ -172,6 +197,9 @@ def run_eval_metrics(*, session_id: str | None = None) -> None:
                     session_dir=session.session_dir,
                 )
             )
+            payload["memory_update"] = memory_report
+            out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            session.update_run_meta("eval_metrics", payload)
             session.update_run_meta("memory_update", memory_report)
             log_event(
                 "memory_evolution_completed",
@@ -188,6 +216,9 @@ def run_eval_metrics(*, session_id: str | None = None) -> None:
                 session.session_id,
             )
             memory_report = {"status": "failed", "error": str(exc)}
+            payload["memory_update"] = memory_report
+            out_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            session.update_run_meta("eval_metrics", payload)
             session.update_run_meta("memory_update", memory_report)
             log_event(
                 "memory_evolution_failed",
@@ -197,11 +228,15 @@ def run_eval_metrics(*, session_id: str | None = None) -> None:
 
 
 def run_llm_judge(
-    judge_llm_backend: str, judge_model: str, *, session_id: str | None = None
+    judge_llm_backend: str,
+    judge_model: str,
+    *,
+    session_id: str | None = None,
+    results_dir: str | Path | None = None,
 ) -> None:
     """Run LLM-as-judge only; writes ``llm_judge.json`` under the session dir."""
     session = Session()
-    session.load_closed_session(session_id=session_id)
+    _load_closed_session(session, session_id=session_id, results_dir=results_dir)
     bind_session_dir(session.session_dir)
 
     gt_path = Path(session.session_dir) / "ground_truth.json"
@@ -228,10 +263,14 @@ def run_llm_judge(
         )
 
 
-def publish_session_eval(*, session_id: str | None = None) -> None:
+def publish_session_eval(
+    *,
+    session_id: str | None = None,
+    results_dir: str | Path | None = None,
+) -> None:
     """Validate eval artifacts on a closed session and record publish completion."""
     session = Session()
-    session.load_closed_session(session_id=session_id)
+    _load_closed_session(session, session_id=session_id, results_dir=results_dir)
     bind_session_dir(session.session_dir)
 
     metrics_path = Path(session.session_dir) / EVAL_METRICS_FILENAME
@@ -265,8 +304,14 @@ def eval_results(
     session = Session()
     session.load_running_session(session_id=session_id)
     resolved_session_id = session.session_id
+    results_dir = Path(session.session_dir).parent
     close_session(session_id=resolved_session_id, undeploy=destroy_env)
-    run_eval_metrics(session_id=resolved_session_id)
+    run_eval_metrics(session_id=resolved_session_id, results_dir=results_dir)
     if run_judge:
-        run_llm_judge(judge_llm_backend, judge_model, session_id=resolved_session_id)
-    publish_session_eval(session_id=resolved_session_id)
+        run_llm_judge(
+            judge_llm_backend,
+            judge_model,
+            session_id=resolved_session_id,
+            results_dir=results_dir,
+        )
+    publish_session_eval(session_id=resolved_session_id, results_dir=results_dir)

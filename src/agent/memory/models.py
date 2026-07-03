@@ -38,8 +38,11 @@ class MemoryQuery(BaseModel):
 class SkillStep(BaseModel):
     order: int
     action: str
+    skill_id: str = ""
     tool_name: str = ""
     arguments_hint: dict[str, Any] = Field(default_factory=dict)
+    observation_summary: str = ""
+    status: Literal["success", "error", "unknown"] = "unknown"
     rationale: str = ""
 
 
@@ -56,7 +59,20 @@ class SemanticGradient(BaseModel):
     proposed_update: str
     component_update: SkillComponentGradient = Field(default_factory=SkillComponentGradient)
     gradient_source: Literal["llm", "deterministic"] = "deterministic"
+    llm_error: str = ""
     created_at: str = Field(default_factory=utc_now)
+
+
+class SemanticGradientDraft(BaseModel):
+    """Small structured critic payload used for bounded learning LLM calls."""
+
+    source_session_id: str = ""
+    critique: str = ""
+    proposed_update: str = ""
+    initiation: str = ""
+    policy: list[str] = Field(default_factory=list)
+    termination: str = ""
+    is_related: bool = True
 
 
 class EvaluationEvidence(BaseModel):
@@ -78,6 +94,8 @@ class SkillTransition(BaseModel):
     skill_id: str = ""
     tool_name: str = ""
     arguments_hint: dict[str, Any] = Field(default_factory=dict)
+    observation_summary: str = ""
+    status: Literal["success", "error", "unknown"] = "unknown"
     done: bool = False
 
 
@@ -93,6 +111,7 @@ class SkillExperience(BaseModel):
     transitions: list[SkillTransition] = Field(default_factory=list)
     step_count: int = 0
     total_added_tokens: int = 0
+    used_for_evolution: bool = False
     success: bool = False
     created_at: str = Field(default_factory=utc_now)
 
@@ -104,6 +123,7 @@ class ProceduralSkill(BaseModel):
     execution_steps: list[SkillStep] = Field(min_length=1)
     termination_condition: str
     source_sessions: list[str] = Field(default_factory=list)
+    scenarios: list[str] = Field(default_factory=list)
     protocols: list[str] = Field(default_factory=list)
     services: list[str] = Field(default_factory=list)
     symptoms: list[str] = Field(default_factory=list)
@@ -136,6 +156,7 @@ class ProceduralSkill(BaseModel):
                 step.model_dump(mode="json") for step in self.execution_steps
             ],
             "termination_condition": self.termination_condition,
+            "scenarios": self.scenarios,
             "protocols": self.protocols,
             "services": self.services,
             "symptoms": self.symptoms,
@@ -175,6 +196,7 @@ class ProceduralSkill(BaseModel):
         steps = "\n".join(f"- {step.action}" for step in self.execution_steps)
         return (
             f"Skill Name: {self.skill_id}\n"
+            f"Scenarios: {', '.join(self.scenarios) or 'general'}\n"
             f"Initiation (When to use): {self.activation_condition}\n"
             f"Strategy Steps:\n{steps}\n"
             f"Termination (When to stop): {self.termination_condition}"
@@ -200,6 +222,8 @@ class PPOGateDecision(BaseModel):
     candidate_skill_id: str = ""
     parent_skill_id: str = ""
     j_score: float = 0.0
+    candidate_alignment: float = 0.0
+    baseline_alignment: float = 0.0
     sample_count: int = 0
     best_of_n: int = 1
     candidate_type: Literal["NEW", "REFINE"] = "NEW"

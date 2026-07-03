@@ -17,13 +17,15 @@ def _config(**overrides: object) -> dict[str, object]:
         "modules": [],
         "agent_type": "react",
         "llm_backend": "custom",
-        "model": "openai/gpt-oss-120b",
+        "model": "openai/gpt-oss-20b",
         "max_steps": 100,
         "max_attempts": 3,
         "tool_library_id": "tools-test",
         "memory_bank": "memory-test",
         "memory_k": 5,
         "memory_tokens": 1500,
+        "memory_selector": "lcb",
+        "memory_meta_controller": "heuristic",
     }
     config.update(overrides)
     return config
@@ -32,7 +34,7 @@ def _config(**overrides: object) -> dict[str, object]:
 def test_baseline_command_uses_default_sequential_execution() -> None:
     command = build_experiment_command(_config())
 
-    assert command[:3] == [sys.executable, "-m", "nika.codex_cli.main"]
+    assert command[:3] == [sys.executable, "-m", "nika.cli.main"]
     assert command[3:6] == ["benchmark", "run", "--file"]
     assert "benchmark/benchmark_test.yaml" in command
     assert command[command.index("-n") + 1] == "100"
@@ -71,6 +73,21 @@ def test_tool_and_memory_modules_share_one_sequential_command() -> None:
     assert "--parallel" not in command
     assert command[command.index("--tools") + 1] == "tools-test"
     assert command[command.index("--memory") + 1] == "memory-test"
+    assert command[command.index("--memory-selector") + 1] == "lcb"
+    assert command[command.index("--memory-meta-controller") + 1] == "heuristic"
+
+
+def test_memory_command_passes_skill_pro_selector_and_controller() -> None:
+    command = build_experiment_command(
+        _config(
+            modules=["memory_evolution"],
+            memory_selector="llm_topk_lcb",
+            memory_meta_controller="llm",
+        )
+    )
+
+    assert command[command.index("--memory-selector") + 1] == "llm_topk_lcb"
+    assert command[command.index("--memory-meta-controller") + 1] == "llm"
 
 
 def test_command_plan_for_memory_has_no_service_prerequisite() -> None:

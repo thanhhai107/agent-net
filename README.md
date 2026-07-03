@@ -83,10 +83,14 @@ DEEPSEEK_API_KEY=
 OPENAI_API_KEY=
 OLLAMA_API_URL=http://localhost:11434
 
-CUSTOM_API_BASE=https://stream-netmind.viettel.vn/gateway/v1
+CUSTOM_API_URL=https://stream-netmind.viettel.vn/gateway/v1
 CUSTOM_API_KEY=
 CUSTOM_TIMEOUT_SECONDS=90
 CUSTOM_MAX_RETRIES=0
+NIKA_LEARNING_LLM_BACKEND=
+NIKA_LEARNING_LLM_MODEL=
+NIKA_LEARNING_LLM_TIMEOUT_SECONDS=20
+NIKA_LEARNING_LLM_MAX_RETRIES=0
 
 LANGSMITH_TRACING=false
 LANGSMITH_ENDPOINT=https://api.smith.langchain.com
@@ -99,8 +103,12 @@ LANGFUSE_HOST=https://cloud.langfuse.com
 ```
 
 At least one LLM configuration is required for LangChain agents:
-`CUSTOM_API_BASE` plus `CUSTOM_API_KEY`, `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`,
-or `OLLAMA_API_URL`. Skill-Pro memory and DRAFT tool documentation state are
+the `custom` backend uses `CUSTOM_API_URL` plus `CUSTOM_API_KEY` as an
+OpenAI-compatible endpoint. When `CUSTOM_API_URL` is exactly the Netmind gateway,
+NIKA uses its Netmind-specific adapter path while still treating
+`CUSTOM_API_KEY` as the password/token. Alternatively configure `OPENAI_API_KEY`,
+`DEEPSEEK_API_KEY`, or `OLLAMA_API_URL`. Skill-Pro memory and DRAFT tool
+documentation state are
 stored as JSON under `runtime/`; they do not require external database services,
 vector indexes, embeddings, or model weight updates. Langfuse is the default
 tracing path; LangSmith is optional and used only when `LANGSMITH_TRACING=true`.
@@ -148,15 +156,13 @@ Each `nika env run` creates a **session** (printed as `session_id=…`). Session
 
 5. **List agent options and run the agent**
 
-   ```shell
-   nika agent list
-	   nika agent run -a react -b custom -m openai/gpt-oss-120b -n 20   # LangGraph + LangChain ReAct
-	   nika agent run -a cli -m gpt-5.4-mini                    # Codex CLI subprocess worker
-	   nika agent run -a react -b custom -m openai/gpt-oss-120b \
-	     --tools bgp-study
-   nika agent run -a cli -m gpt-5.4-mini -e medium        # optional Codex reasoning effort
-   nika agent run -a mock -n 5                             # no LLM; useful for pipeline testing
-   ```
+	   ```shell
+	   nika agent list
+		   nika agent run -a react -b custom -m openai/gpt-oss-120b -n 20   # LangGraph + LangChain ReAct
+		   nika agent run -a react -b custom -m openai/gpt-oss-120b \
+		     --tools bgp-study
+	   nika agent run -a mock -n 5                             # no LLM; useful for pipeline testing
+	   ```
 
    See **[Troubleshooting Agents](#troubleshooting-agents)** below for architecture notes and a full walkthrough example.
 
@@ -172,7 +178,7 @@ Each `nika env run` creates a **session** (printed as `session_id=…`). Session
    nika eval summary -o results/0_summary/my_run.csv
    ```
 
-Full CLI documentation (benchmark batch mode, traffic types, parameter tables, and conventions) lives in **[src/nika/codex_cli/README.md](src/nika/codex_cli/README.md)**.
+Full CLI documentation (benchmark batch mode, traffic types, parameter tables, and conventions) lives in **[src/nika/cli/README.md](src/nika/cli/README.md)**.
 
 ### Visualize a session
 
@@ -235,8 +241,8 @@ Agent implementations live under [`src/agent/`](src/agent/). For the current
 learning-module boundary and usage, see
 [`docs/README.md`](docs/README.md).
 
-NIKA ships three LangGraph troubleshooting workflows, a Codex CLI workflow,
-and a deterministic mock. Tool Evolution is an optional module applied to a
+NIKA ships three LangGraph troubleshooting workflows and a deterministic
+mock. Tool Evolution is an optional module applied to a
 workflow, not a separate workflow.
 
 | Agent | CLI flag | How it works | Prerequisites |
@@ -244,7 +250,6 @@ workflow, not a separate workflow.
 | **ReAct** | `-a react` | LangGraph orchestrates two LangChain ReAct workers (diagnosis → submission) | LLM API key in `.env` (`OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, or Ollama URL) |
 | **Plan & Execute** | `-a plan-execute` | Structured planner, tool-enabled step executor, and adaptive replanner | Same as ReAct |
 | **Reflexion** | `-a reflexion` | Iterative attempt → evaluate → reflect → retry with episodic memory | Same as ReAct |
-| **Codex CLI** | `-a cli` | Same two-phase LangGraph flow, but each phase runs `codex exec` as a subprocess with Kathara MCP servers | [Codex CLI](https://developers.openai.com/codex) installed and authenticated (`codex login` or `OPENAI_API_KEY`) |
 | **Mock** | `-a mock` | Fixed tool-call script; no LLM | None |
 
 All agents write structured traces to `results/{session_id}/messages.jsonl` and produce `submission.json` via the task MCP server.
@@ -314,7 +319,7 @@ nika tools reset bgp-study
 The persistent library is `runtime/tool_evolution/<library_id>/state.json`.
 Tool-evolving sessions write `tool_evolution.json` with trial counts,
 documentation revisions, LLM rewrite counts, gaps, exploration/analyzer counts,
-mastered tools, path rates, and frozen-document counts.
+mastered tools, path rates, LLM rewrite failures, and frozen-document counts.
 
 See [`docs/README.md`](docs/README.md) for the current learning-module boundary.
 
@@ -340,8 +345,12 @@ For the full benchmark-safe design, see
   state and rebuilds the seed pool.
 - The skill pool tracks frequency, average gain, maturity, parent/version
   lineage, and reuse count.
-- Semantic gradients are structured LLM critiques of the episode, with a
-  deterministic critique used only when the critic is unavailable.
+- Semantic gradients are structured LLM critiques of the episode. If the critic
+  is unavailable, the deterministic recovery path records the LLM error in
+  `memory_update.json` instead of failing silently.
+- Learning-module LLM calls can use `NIKA_LEARNING_LLM_BACKEND` and
+  `NIKA_LEARNING_LLM_MODEL` to override the diagnosis model; leave them blank
+  to inherit `-b/--backend` and `-m/--model`.
 - ExperiencePool and GoldenExperiencePool records are persisted in the same
   bank for PPO verification and future skill evolution.
 - Hidden evaluator labels may be present in offline evidence for scoring, but
@@ -352,7 +361,8 @@ For the full benchmark-safe design, see
 - Score-based maintenance retires low-value or duplicate skills.
 - Persistent state lives in `runtime/memory/<bank>/skills.json`.
 - Each evolving episode writes `memory_update.json`, including whether the
-  accepted/rejected candidate used an LLM or deterministic semantic gradient.
+  accepted/rejected candidate used an LLM semantic gradient, whether the critic
+  failed, and any bounded learning-call error.
 
 Online evolution must be sequential:
 
@@ -370,25 +380,11 @@ Retrieval injects at most 5 skills within an estimated 1,500-token budget by
 default. For `nika memory run`, override with `--k` and `--tokens`; for
 `nika agent run` and `nika benchmark run`, use `--memory-k` and
 `--memory-tokens`.
-
-### Codex CLI agent (`-a cli`)
-
-Requires [Codex CLI](https://developers.openai.com/codex); follow the [official installation guide](https://developers.openai.com/codex/quickstart) to install and authenticate.
-
-```shell
-# authenticate once
-codex login
-
-# run on the current session task
-nika agent run -a cli -m gpt-5.4-mini
-```
-
-- Uses `codex exec --json` under the hood; reasoning steps stream to the terminal in real time (MCP tool calls, agent messages, turn progress) and are logged to `messages.jsonl`.
-- The `-b` backend flag is accepted for CLI parity but ignored — Codex always uses OpenAI models.
-- **`-e` / `--reasoning-effort`**: Codex `model_reasoning_effort` (`none`, `minimal`, `low`, `medium`, `high`, `xhigh`).
-- Per-session Codex workspace: `results/{session_id}/codex_workspace/`
-
-See **[src/nika/codex_cli/README.md](src/nika/codex_cli/README.md)** for full `nika agent` flags and conventions.
+Skill selection defaults to deterministic LCB ranking. To use Skill-Pro's
+LLM-nominate-then-LCB policy, pass `--memory-selector llm_topk_lcb`.
+Option termination defaults to the heuristic controller; pass
+`--memory-meta-controller llm` to use an LLM Skill-Pro meta-controller that
+returns DONE/CONTINUE from current observations and the active option.
 
 ### Example: `simple_bgp` with `link_down`
 
@@ -409,16 +405,12 @@ nika exec pc1 ip link show eth0
 nika exec pc2 ping -c 3 195.11.14.2
 
 # 4. Run a troubleshooting agent on the session task
-# Option A — LangGraph + LangChain ReAct
 nika agent run -a react -b custom -m openai/gpt-oss-120b -n 20
-
-# Option B — Codex CLI (streams step-by-step output to the terminal)
-nika agent run -a cli -m gpt-5.4-mini
 
 # 5. Inspect session state and artifacts
 nika session inspect
 ls results/<session_id>/
-# run.json, ground_truth.json, events.jsonl, messages.jsonl, submission.json, codex_workspace/ (cli only)
+# run.json, ground_truth.json, events.jsonl, messages.jsonl, submission.json
 
 # 6. Close the lab, then evaluate
 nika session close -y
@@ -540,7 +532,7 @@ You can also plug in your own MCP servers following the configuration instructio
 
 ## Logging and Observability
 
-The built-in LangGraph agents trace runs with **Langfuse** by default through the LangChain `CallbackHandler`. **LangSmith** tracing is optional and is enabled only when `LANGSMITH_TRACING=true`. The Codex CLI agent (`cli`) streams `codex exec --json` events to the terminal and logs them to `messages.jsonl` in real time. Configure observability keys in `.env` as shown above. See [LangChain Callbacks](https://python.langchain.com/docs/concepts/callbacks/) for callback details.
+The built-in LangGraph agents trace runs with **Langfuse** by default through the LangChain `CallbackHandler`. **LangSmith** tracing is optional and is enabled only when `LANGSMITH_TRACING=true`. Configure observability keys in `.env` as shown above. See [LangChain Callbacks](https://python.langchain.com/docs/concepts/callbacks/) for callback details.
 
 Each session directory under `results/{session_id}/` also contains:
 
@@ -549,7 +541,7 @@ Each session directory under `results/{session_id}/` also contains:
 
 ### Customized Logger
 
-Agent message logging is built on `MessageLogger` in `src/agent/utils/loggers.py`, which writes structured JSONL to `{session_dir}/messages.jsonl`. The LangGraph ReAct path wraps it with `AgentCallbackLogger` (a LangChain `BaseCallbackHandler`); the Codex CLI path calls `MessageLogger` directly from `CodexWorker`. To extend the ReAct path:
+Agent message logging is built on `MessageLogger` in `src/agent/utils/loggers.py`, which writes structured JSONL to `{session_dir}/messages.jsonl`. The LangGraph ReAct path wraps it with `AgentCallbackLogger` (a LangChain `BaseCallbackHandler`). To extend the ReAct path:
 
 ```python
 from agent.utils.loggers import AgentCallbackLogger

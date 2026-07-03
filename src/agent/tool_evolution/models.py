@@ -31,6 +31,8 @@ class ToolTrial(BaseModel):
     status: Literal["success", "error", "unknown"] = "unknown"
     output_summary: str = ""
     error_summary: str = ""
+    planned_exploration_id: str = ""
+    planned_next_exploration: str = ""
     timestamp: str = Field(default_factory=utc_now)
 
     @property
@@ -52,13 +54,22 @@ class DraftExploration(BaseModel):
     exploration_id: str
     session_id: str
     tool_name: str
+    intent: Literal[
+        "unknown",
+        "diagnosis_check",
+        "tool_validation",
+        "boundary_case",
+        "argument_schema_probe",
+    ] = "unknown"
     user_query: str = ""
     parameters: dict[str, Any] = Field(default_factory=dict)
     observation: str = ""
-    status: Literal["success", "error", "unknown"] = "unknown"
+    status: Literal["success", "error", "unknown", "planned", "consumed"] = "unknown"
     document_hash: str = ""
     analyzer_suggestion: str = ""
     next_exploration: str = ""
+    consumed_by_trial_id: str = ""
+    consumed_at: str = ""
     created_at: str = Field(default_factory=utc_now)
 
 
@@ -81,6 +92,7 @@ class DocumentationRevision(BaseModel):
     reason: str
     metrics: dict[str, float] = Field(default_factory=dict)
     analyzer_suggestion_ids: list[str] = Field(default_factory=list)
+    llm_error: str = ""
     created_at: str = Field(default_factory=utc_now)
 
 
@@ -97,6 +109,22 @@ class DraftRewriteProposal(BaseModel):
     usage_notes: list[str] = Field(default_factory=list)
     positive_examples: list[dict[str, Any]] = Field(default_factory=list)
     negative_examples: list[dict[str, Any]] = Field(default_factory=list)
+    suggestions_for_exploring: str = ""
+    confidence: float = 0.0
+    rationale: str = ""
+
+
+class DraftRewriteDraft(BaseModel):
+    """Small DRAFT rewrite payload used for bounded learning LLM calls."""
+
+    tool_name: str = ""
+    description: str = ""
+    tool_usage_description: str = ""
+    preconditions: list[str] = Field(default_factory=list)
+    parameters: dict[str, str] = Field(default_factory=dict)
+    constraints: list[str] = Field(default_factory=list)
+    failure_modes: list[str] = Field(default_factory=list)
+    usage_notes: list[str] = Field(default_factory=list)
     suggestions_for_exploring: str = ""
     confidence: float = 0.0
     rationale: str = ""
@@ -193,6 +221,8 @@ class DraftToolStats(BaseModel):
     revisions: int = 0
     llm_rewrites: int = 0
     explorations: int = 0
+    planned_explorations: int = 0
+    consumed_explorations: int = 0
     mastery_score: float = 0.0
     convergence_score: float = 0.0
     documented_path_rate: float = 0.0

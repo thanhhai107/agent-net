@@ -27,7 +27,8 @@ def select_diagnosis_servers(
     tokens = set(combined.replace("_", " ").replace("-", " ").split())
 
     servers = ["kathara_base_mcp_server"]
-    if tokens & _FRR_KEYWORDS:
+    clos_service_routing = "clos" in tokens and "sdn" not in tokens
+    if tokens & _FRR_KEYWORDS or clos_service_routing:
         servers.append("kathara_frr_mcp_server")
     if tokens & _BMV2_KEYWORDS:
         servers.append("kathara_bmv2_mcp_server")

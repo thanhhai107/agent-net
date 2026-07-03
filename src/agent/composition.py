@@ -28,6 +28,8 @@ class MemoryConfig:
     bank: str = "default"
     top_k: int = 5
     token_budget: int = 1500
+    skill_selector_mode: str = "lcb"
+    meta_controller_mode: str = "heuristic"
 
     @property
     def enabled(self) -> bool:
@@ -42,7 +44,6 @@ class AgentRunConfig:
     max_steps: int
     session_id: str = ""
     max_attempts: int = 3
-    reasoning_effort: str | None = None
     stream_output: bool = True
     tool_evolution: ToolEvolutionConfig = field(default_factory=ToolEvolutionConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
@@ -64,6 +65,10 @@ def validate_agent_extensions(config: AgentRunConfig) -> None:
         )
     if config.memory.mode not in {"off", "read", "evolve"}:
         raise ValueError("memory_mode must be one of: off, read, evolve")
+    if config.memory.skill_selector_mode not in {"lcb", "llm_topk_lcb"}:
+        raise ValueError("memory skill selector must be one of: lcb, llm_topk_lcb")
+    if config.memory.meta_controller_mode not in {"heuristic", "llm"}:
+        raise ValueError("memory meta controller must be one of: heuristic, llm")
     if config.memory.enabled and agent_type not in LANGGRAPH_DIAGNOSIS_AGENT_TYPES:
         supported = ", ".join(sorted(LANGGRAPH_DIAGNOSIS_AGENT_TYPES))
         raise ValueError(f"memory is supported only for these workflows: {supported}")
@@ -92,8 +97,6 @@ def workflow_agent_kwargs(
     }
     if reflexion:
         kwargs["max_attempts"] = config.max_attempts
-    if config.memory.enabled:
-        kwargs["use_problem_tool_hints"] = False
     return kwargs
 
 
@@ -111,4 +114,6 @@ def wrap_agent_extensions(agent: Any, config: AgentRunConfig) -> Any:
         memory_mode=config.memory.mode,
         memory_top_k=config.memory.top_k,
         memory_token_budget=config.memory.token_budget,
+        memory_skill_selector_mode=config.memory.skill_selector_mode,
+        memory_meta_controller_mode=config.memory.meta_controller_mode,
     )

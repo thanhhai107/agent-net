@@ -4,7 +4,6 @@ import asyncio
 import logging
 from dataclasses import replace
 
-from agent.claude_cli.config import resolve_claude_model
 from agent.composition import (
     AgentRunConfig,
     validate_agent_extensions,
@@ -24,8 +23,6 @@ def _resolve_requested_model(
 ) -> str:
     if requested_model:
         return requested_model
-    if agent_config.normalized_agent_type == "claude_cli":
-        return resolve_claude_model(None)
     return agent_config.model
 
 
@@ -59,8 +56,14 @@ def start_agent(
         session.update_session("memory_bank", agent_config.memory.bank)
         session.update_session("memory_top_k", agent_config.memory.top_k)
         session.update_session("memory_token_budget", agent_config.memory.token_budget)
-    if agent_config.reasoning_effort is not None:
-        session.update_session("reasoning_effort", agent_config.reasoning_effort)
+        session.update_session(
+            "memory_skill_selector_mode",
+            agent_config.memory.skill_selector_mode,
+        )
+        session.update_session(
+            "memory_meta_controller_mode",
+            agent_config.memory.meta_controller_mode,
+        )
     session.update_session("tool_evolution_enabled", agent_config.tool_evolution.enabled)
     if agent_config.tool_evolution.enabled:
         session.update_session("tool_library_id", agent_config.tool_evolution.library_id)
@@ -74,18 +77,6 @@ def start_agent(
         agent_type=agent_config.agent_type,
         model=agent_config.model,
     )
-    if agent_config.normalized_agent_type in {"cli", "codex_cli"} and agent_config.stream_output:
-        effort_line = (
-            f" | Reasoning effort: {agent_config.reasoning_effort}"
-            if agent_config.reasoning_effort
-            else ""
-        )
-        print(
-            f"Session {session.session_id}\n"
-            f"Agent: {agent_config.agent_type} | Model: {agent_config.model}{effort_line}\n"
-            f"Results: {session.session_dir}\n",
-            flush=True,
-        )
     try:
         agent = create_agent(agent_config)
         asyncio.run(agent.run(task_description=session.task_description))
@@ -97,5 +88,3 @@ def start_agent(
             session_id=session.session_id,
             agent_type=agent_config.agent_type,
         )
-    if agent_config.normalized_agent_type in {"cli", "codex_cli"} and agent_config.stream_output:
-        print(f"\nDone. Results saved to {session.session_dir}\n", flush=True)

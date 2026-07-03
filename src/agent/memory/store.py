@@ -19,6 +19,11 @@ from agent.memory.models import (
 )
 
 
+def public_episode_evidence(evidence: EvaluationEvidence) -> EvaluationEvidence:
+    """Return the persistable episode view without hidden answer labels."""
+    return evidence.model_copy(update={"root_cause": [], "faulty_devices": []})
+
+
 def safe_bank_id(bank_id: str) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "_", bank_id).strip("._")
     return cleaned or "default"
@@ -59,7 +64,7 @@ class SkillMemoryStore:
     def record_episode(self, evidence: EvaluationEvidence) -> None:
         state = self.load()
         if not any(item.session_id == evidence.session_id for item in state.episodes):
-            state.episodes.append(evidence)
+            state.episodes.append(public_episode_evidence(evidence))
             self.save(state)
 
     def record_experience(
@@ -99,6 +104,7 @@ class SkillMemoryStore:
             for skill in skills
             for gradient in skill.semantic_gradients
         ]
+        last_decision = state.ppo_decisions[-1] if state.ppo_decisions else None
         return {
             "bank_id": state.bank_id,
             "skills": len(skills),
@@ -109,12 +115,24 @@ class SkillMemoryStore:
             "experiences": len(state.experiences),
             "golden_experiences": len(state.golden_experiences),
             "ppo_decisions": len(state.ppo_decisions),
+            "ppo_accepted": sum(decision.accepted for decision in state.ppo_decisions),
+            "ppo_rejected": sum(not decision.accepted for decision in state.ppo_decisions),
+            "last_ppo_j_score": last_decision.j_score if last_decision else None,
+            "last_candidate_alignment": (
+                last_decision.candidate_alignment if last_decision else None
+            ),
+            "last_baseline_alignment": (
+                last_decision.baseline_alignment if last_decision else None
+            ),
             "iteration": state.iteration,
             "evolution_events": len(state.evolution_log),
             "maintenance_events": len(state.maintenance_log),
             "semantic_gradients": len(gradients),
             "llm_semantic_gradients": sum(
                 gradient.gradient_source == "llm" for gradient in gradients
+            ),
+            "semantic_gradient_llm_failures": sum(
+                bool(gradient.llm_error) for gradient in gradients
             ),
             "total_skill_frequency": sum(skill.frequency for skill in skills),
         }

@@ -57,7 +57,7 @@ evaluation.
 nika benchmark run --file benchmark/benchmark_test.yaml \
   -a react \
   -b custom \
-  -m openai/gpt-oss-120b \
+  -m openai/gpt-oss-20b \
   -n 100 \
   --memory memory-gptoss120
 ```
@@ -86,8 +86,19 @@ Skill-Pro context is procedural only: hidden root-cause names and faulty-device
 labels are redacted from the critic prompt and not written into skill guidance.
 Score-based maintenance retires duplicate, low-value, or over-capacity skills.
 `memory_update.json` records whether each accepted/rejected candidate used an
-LLM or deterministic semantic gradient, and memory-bank stats count both total
-and LLM-produced gradients.
+LLM semantic gradient, whether the critic failed, and the bounded learning-call
+error when deterministic recovery is used. Memory-bank stats count total,
+LLM-produced, and failed LLM gradients.
+
+Skill-Pro and DRAFT learning calls can be decoupled from the diagnosis model
+with `NIKA_LEARNING_LLM_BACKEND` and `NIKA_LEARNING_LLM_MODEL`. Leave them
+blank to inherit the benchmark agent backend/model; set them to a faster
+structured-output-capable model when curator latency dominates.
+Runtime Skill-Pro selection defaults to LCB ranking. Use
+`--memory-selector llm_topk_lcb` for the Skill-Pro top-k LLM nomination plus
+LCB selector, and `--memory-meta-controller llm` for the Skill-Pro
+DONE/CONTINUE option-termination controller. These modes are stored in run
+metadata as `memory_skill_selector_mode` and `memory_meta_controller_mode`.
 
 ## Tool Evolution
 
@@ -99,7 +110,7 @@ DRAFT. It does not create new executable tools or MCP servers.
 nika benchmark run --file benchmark/benchmark_test.yaml \
   -a react \
   -b custom \
-  -m openai/gpt-oss-120b \
+  -m openai/gpt-oss-20b \
   -n 100 \
   --tools tools-gptoss120
 ```
@@ -108,8 +119,8 @@ Persistent libraries live under `runtime/tool_evolution/<library_id>/state.json`
 They store tool trials, comprehension gaps, structured LLM documentation
 rewrites, Explorer observations, Analyzer suggestions, rewrite history,
 tool-level usage summaries, path-rate metrics, mastery/convergence stats,
-revisions, and frozen documents. Use a fresh library id per experimental
-condition.
+revisions, LLM rewrite failures, and frozen documents. Use a fresh library id
+per experimental condition.
 
 ## Clean Ablations
 
@@ -118,16 +129,16 @@ Run one module or baseline at a time before combined experiments:
 ```bash
 # baseline
 nika benchmark run --file benchmark/benchmark_test.yaml \
-  -a react -b custom -m openai/gpt-oss-120b -n 100
+  -a react -b custom -m openai/gpt-oss-20b -n 100
 
 # memory only
 nika benchmark run --file benchmark/benchmark_test.yaml \
-  -a react -b custom -m openai/gpt-oss-120b -n 100 \
+  -a react -b custom -m openai/gpt-oss-20b -n 100 \
   --memory memory-gptoss120
 
 # tool evolution only
 nika benchmark run --file benchmark/benchmark_test.yaml \
-  -a react -b custom -m openai/gpt-oss-120b -n 100 \
+  -a react -b custom -m openai/gpt-oss-20b -n 100 \
   --tools tools-gptoss120
 
 ```

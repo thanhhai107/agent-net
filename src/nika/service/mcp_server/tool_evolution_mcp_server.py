@@ -42,6 +42,16 @@ def list_refined_tool_docs(include_frozen: bool = True) -> list[dict[str, Any]]:
                 "usage_notes": doc.usage_notes,
                 "failure_modes": doc.failure_modes,
                 "exploration_suggestions": doc.exploration_suggestions,
+                "planned_explorations": [
+                    item.model_dump()
+                    for item in state.explorations
+                    if item.tool_name == doc.name and item.status == "planned"
+                ],
+                "consumed_explorations": [
+                    item.model_dump()
+                    for item in state.explorations
+                    if item.tool_name == doc.name and item.status == "consumed"
+                ][-5:],
                 "mastery_score": doc.mastery_score,
                 "last_convergence_score": doc.last_convergence_score,
             }
@@ -57,6 +67,21 @@ def get_refined_tool_doc(tool_name: str) -> dict[str, Any]:
     if doc is None:
         raise ValueError(f"No refined documentation for primitive tool: {tool_name}")
     return doc.model_dump()
+
+
+@safe_tool
+@mcp.tool()
+def list_planned_tool_explorations(tool_name: str | None = None) -> list[dict[str, Any]]:
+    """List DRAFT Explorer checks that should be tried in future diagnosis runs."""
+    state = _store().load()
+    rows = []
+    for exploration in state.explorations:
+        if exploration.status != "planned":
+            continue
+        if tool_name and exploration.tool_name != tool_name:
+            continue
+        rows.append(exploration.model_dump())
+    return sorted(rows, key=lambda item: (item["tool_name"], item["created_at"]))
 
 
 if __name__ == "__main__":

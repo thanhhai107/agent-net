@@ -23,8 +23,10 @@ from agent.langgraph.workflow_models import (
     StepResult,
 )
 from agent.llm.model_factory import DEFAULT_LLM_BACKEND, DEFAULT_MODEL, load_model
+from agent.memory.runtime import strip_integrated_learning_guidance
 from agent.tool_evolution.integration import write_tool_evolution_session
 from agent.utils.loggers import AgentCallbackLogger
+from agent.utils.template import EVIDENCE_CONTRACT_PROMPT
 from agent.utils.tracing import langsmith_tracing_context
 from nika.utils.session import Session
 
@@ -36,14 +38,14 @@ You are a network troubleshooting planner. Create a concise, ordered investigati
 plan for the task. Each step must be independently executable with network
 diagnostic tools and must name the evidence it expects to collect. Do not diagnose
 the fault yet and do not propose mitigation.
-"""
+""" + "\n\n" + EVIDENCE_CONTRACT_PROMPT
 
 EXECUTOR_PROMPT = """\
 You are a network troubleshooting executor. Perform only the assigned investigation
 step using the available tools. Report the commands or checks performed, the
 observations, and what those observations imply. Do not submit a final answer and
 do not perform unrelated plan steps.
-"""
+""" + "\n\n" + EVIDENCE_CONTRACT_PROMPT
 
 REPLANNER_PROMPT = """\
 You are coordinating a network investigation. Review the original objective,
@@ -51,14 +53,14 @@ completed evidence, and remaining plan. If anomaly detection, faulty-device
 localization, and root-cause identification are sufficiently supported, finish with
 a concise diagnosis report. Otherwise return a revised ordered list of only the
 remaining investigation steps. Do not include already completed work.
-"""
+""" + "\n\n" + EVIDENCE_CONTRACT_PROMPT
 
 SYNTHESIS_PROMPT = """\
 You are a network troubleshooting expert. Produce the best possible final diagnosis
 from the collected evidence. Explicitly state whether an anomaly exists, the faulty
 devices, the likely root cause, and the supporting evidence. Acknowledge uncertainty
 when evidence is incomplete. Do not propose mitigation.
-"""
+""" + "\n\n" + EVIDENCE_CONTRACT_PROMPT
 
 
 class PlanExecuteState(TypedDict, total=False):
@@ -107,14 +109,10 @@ class PlanExecuteAgent:
             tool_library_id=tool_library_id,
         )
         asyncio.run(diagnosis.load_tools())
+        self._diagnosis_phase = diagnosis
         self.tool_evolution_runtime = diagnosis.tool_evolution_runtime
-        self.diagnosis_tool_names = [tool.name for tool in (diagnosis.tools or [])]
-        self.executor = create_agent(
-            model=self.llm,
-            system_prompt=EXECUTOR_PROMPT + diagnosis.prompt_suffix(),
-            tools=diagnosis.tools,
-            name="PlanExecutor",
-        )
+        self.skill_tool_runtime = diagnosis.skill_tool_runtime
+        self._refresh_executor()
 
         submission = SubmissionAgent(
             session_id=session_id,
@@ -151,6 +149,54 @@ class PlanExecuteAgent:
         builder.add_edge("synthesis", "submission")
         builder.add_edge("submission", END)
         self.graph = builder.compile()
+
+    def _refresh_executor(self) -> None:
+        self.tool_evolution_runtime = self._diagnosis_phase.tool_evolution_runtime
+        self.skill_tool_runtime = self._diagnosis_phase.skill_tool_runtime
+        self.diagnosis_tool_names = [
+            tool.name for tool in (self._diagnosis_phase.tools or [])
+        ]
+        self.executor = create_agent(
+            model=self.llm,
+            system_prompt=EXECUTOR_PROMPT,
+            tools=self._diagnosis_phase.tools,
+            name="PlanExecutor",
+        )
+
+    def _learning_prompt_suffix(self, *, activate_skill: bool = True) -> str:
+        suffix = self._diagnosis_phase.prompt_suffix(activate_skill=activate_skill)
+        if not suffix:
+            return ""
+        return (
+            "\n\nIntegrated learning context for this workflow:\n"
+            "Use the following Skill-Pro/DRAFT guidance to choose and sequence "
+            "diagnostic checks. It is not evidence; only current tool outputs "
+            "can support the final diagnosis."
+            f"{suffix}"
+        )
+
+    def install_memory_runtime(
+        self,
+        *,
+        memory,
+        memory_mode: str,
+        task_description: str,
+        top_k: int = 5,
+        token_budget: int = 1500,
+        skill_selector_mode: str = "lcb",
+        meta_controller_mode: str = "heuristic",
+    ) -> None:
+        self._diagnosis_phase.install_memory_runtime(
+            memory=memory,
+            memory_mode=memory_mode,
+            task_description=task_description,
+            top_k=top_k,
+            token_budget=token_budget,
+            session_dir=self.session_dir,
+            skill_selector_mode=skill_selector_mode,
+            meta_controller_mode=meta_controller_mode,
+        )
+        self._refresh_executor()
 
     def _callback(self, phase: str) -> AgentCallbackLogger:
         return AgentCallbackLogger(
@@ -197,7 +243,10 @@ class PlanExecuteAgent:
         try:
             raw_plan = await self.planner.ainvoke(
                 [
-                    SystemMessage(content=PLANNER_PROMPT),
+                    SystemMessage(
+                        content=PLANNER_PROMPT
+                        + self._learning_prompt_suffix(activate_skill=False)
+                    ),
                     HumanMessage(content=state["task_description"]),
                 ],
                 config={"callbacks": [callback]},
@@ -235,6 +284,12 @@ class PlanExecuteAgent:
             f"Evidence from completed steps: "
             f"{json.dumps(prior_evidence, ensure_ascii=False)}"
         )
+        learning_context = self._learning_prompt_suffix(activate_skill=True)
+        if learning_context:
+            prompt += (
+                "\n\nCurrent integrated learning context for this execution step:"
+                f"{learning_context}"
+            )
         try:
             result = await self.executor.ainvoke(
                 {"messages": [HumanMessage(content=prompt)]},
@@ -243,7 +298,9 @@ class PlanExecuteAgent:
                     "recursion_limit": self.max_steps,
                 },
             )
-            observation = str(result["messages"][-1].content)
+            observation = strip_integrated_learning_guidance(
+                result["messages"][-1].content
+            )
             step_result = StepResult(step=step, observation=observation)
         except Exception as exc:
             callback._log(
@@ -278,7 +335,10 @@ class PlanExecuteAgent:
         try:
             raw_decision = await self.replanner.ainvoke(
                 [
-                    SystemMessage(content=REPLANNER_PROMPT),
+                    SystemMessage(
+                        content=REPLANNER_PROMPT
+                        + self._learning_prompt_suffix(activate_skill=False)
+                    ),
                     HumanMessage(content=prompt),
                 ],
                 config={"callbacks": [callback]},
@@ -309,7 +369,10 @@ class PlanExecuteAgent:
         try:
             response = await self.llm.ainvoke(
                 [
-                    SystemMessage(content=SYNTHESIS_PROMPT),
+                    SystemMessage(
+                        content=SYNTHESIS_PROMPT
+                        + self._learning_prompt_suffix(activate_skill=False)
+                    ),
                     HumanMessage(
                         content=json.dumps(
                             {

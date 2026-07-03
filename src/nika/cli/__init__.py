@@ -1,2 +1,1 @@
-"""Compatibility package for the upstream ``nika.cli`` import path."""
-
+"""Typer CLI entry for the nika package (``nika.cli``)."""

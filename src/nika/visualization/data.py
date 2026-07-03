@@ -270,7 +270,7 @@ def replay_steps(
     bundle: SessionBundle,
     endpoint_pairs: list[tuple[str, str]] | None = None,
 ) -> list[ReplayStep]:
-    """Normalize LangChain and Codex JSONL records into replayable agent steps."""
+    """Normalize agent JSONL records into replayable steps."""
     pairs = endpoint_pairs if endpoint_pairs is not None else parse_topology(bundle.meta)
     device_names = {
         endpoint_parts(endpoint)[0]
@@ -357,40 +357,5 @@ def replay_steps(
                 )
             )
             continue
-
-        codex_event = message.get("codex_event")
-        if isinstance(codex_event, dict):
-            event_type = str(codex_event.get("type") or event)
-            item = codex_event.get("item") or {}
-            item_type = str(item.get("type") or event_type) if isinstance(item, dict) else event_type
-            if item_type == "mcp_tool_call":
-                title = str(item.get("tool") or item.get("name") or "MCP tool")
-                input_text = _display_value(item.get("arguments") or item.get("input"))
-                output_text = _display_value(item.get("result") or item.get("output"))
-                kind = "tool"
-            elif item_type == "agent_message":
-                title = "Agent response"
-                input_text = ""
-                output_text = _display_value(item.get("text") or item.get("content"))
-                kind = "response"
-            else:
-                title = item_type.replace("_", " ").title()
-                input_text = ""
-                output_text = _display_value(item or codex_event)
-                kind = "event"
-            payload = f"{input_text}\n{output_text}"
-            steps.append(
-                ReplayStep(
-                    index=len(steps),
-                    timestamp=timestamp,
-                    agent=agent,
-                    kind=kind,
-                    title=title,
-                    input=input_text,
-                    output=output_text,
-                    devices=_mentioned_devices(payload, device_names),
-                    raw=message,
-                )
-            )
 
     return steps

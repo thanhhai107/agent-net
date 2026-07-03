@@ -1,8 +1,40 @@
-"""Compatibility wrapper for ``nika.codex_cli.main``."""
+"""Root Typer application for the ``nika`` console script (``nika.cli``)."""
 
-from nika.codex_cli.main import app, main
+import nika.config  # noqa: F401 — load .env before Typer reads envvar defaults
 
-__all__ = ["app", "main"]
+import typer
+
+from nika.cli.commands.agent import agent_app
+from nika.cli.commands.benchmark import benchmark_app
+from nika.cli.commands.env import env_app
+from nika.cli.commands.evaluation import eval_app
+from nika.cli.commands.exec import exec_command
+from nika.cli.commands.failure import failure_app
+from nika.cli.commands.memory import memory_app
+from nika.cli.commands.session import session_app
+from nika.cli.commands.studio import studio_command
+from nika.cli.commands.traffic import traffic_app
+from nika.cli.commands.tools import tools_app
+from nika.cli.commands.visualize import visualize_command
+
+app = typer.Typer(help="NIKA network troubleshooting pipeline CLI.")
+app.add_typer(session_app, name="session")
+app.add_typer(env_app, name="env")
+app.add_typer(failure_app, name="failure")
+app.command("exec", context_settings={"allow_interspersed_args": False})(exec_command)
+app.add_typer(agent_app, name="agent")
+app.add_typer(eval_app, name="eval")
+app.add_typer(memory_app, name="memory")
+app.add_typer(benchmark_app, name="benchmark")
+app.add_typer(traffic_app, name="traffic")
+app.add_typer(tools_app, name="tools")
+app.command("visualize")(visualize_command)
+app.command("studio")(studio_command)
+
+
+def main() -> None:
+    """Console entrypoint for setuptools `[project.scripts]`."""
+    app()
 
 
 if __name__ == "__main__":

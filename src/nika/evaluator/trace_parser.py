@@ -6,13 +6,20 @@ from the diagnosis phase by default (``agent_filter=DIAGNOSIS``).
 """
 
 import json
+from collections.abc import Collection
 from datetime import datetime
 
 from agent.utils.phases import DIAGNOSIS
 
+DIAGNOSIS_AGENT_NAMES = frozenset({DIAGNOSIS, "diagnosis_agent"})
+
 
 class AgentTraceParser:
-    def __init__(self, trace_path: str, agent_filter: str | None = DIAGNOSIS) -> None:
+    def __init__(
+        self,
+        trace_path: str,
+        agent_filter: str | Collection[str] | None = DIAGNOSIS_AGENT_NAMES,
+    ) -> None:
         self.trace_path = trace_path
         self.agent_filter = agent_filter
         self.in_tokens = 0
@@ -33,31 +40,6 @@ class AgentTraceParser:
             usage_metadata = entry.get("usage_metadata") or {}
             self.in_tokens += usage_metadata.get("input_tokens", 0)
             self.out_tokens += usage_metadata.get("output_tokens", 0)
-        elif event == "item.started":
-            codex_item = (entry.get("codex_event") or {}).get("item") or {}
-            if codex_item.get("type") == "mcp_tool_call":
-                self.tool_calls += 1
-        elif event == "item.completed":
-            codex_item = (entry.get("codex_event") or {}).get("item") or {}
-            if codex_item.get("type") == "mcp_tool_call" and codex_item.get("status") == "failed":
-                self.tool_errors += 1
-        elif event == "turn.completed":
-            self.steps += 1
-            usage = (entry.get("codex_event") or {}).get("usage") or {}
-            self.in_tokens += usage.get("input_tokens", 0)
-            self.out_tokens += usage.get("output_tokens", 0)
-        elif event == "assistant":
-            # Claude Code stream-json: tool calls appear in message content blocks.
-            content = ((entry.get("claude_event") or {}).get("message") or {}).get("content") or []
-            self.tool_calls += sum(1 for b in content if isinstance(b, dict) and b.get("type") == "tool_use")
-        elif event == "result":
-            # Claude Code stream-json: final result event carries usage and step count.
-            claude_event = entry.get("claude_event") or {}
-            if not claude_event.get("is_error"):
-                self.steps += 1
-                usage = claude_event.get("usage") or {}
-                self.in_tokens += usage.get("input_tokens", 0)
-                self.out_tokens += usage.get("output_tokens", 0)
 
     def parse_trace(self) -> dict:
         time_start: datetime | None = None
@@ -69,7 +51,13 @@ class AgentTraceParser:
                 if not line:
                     continue
                 entry = json.loads(line)
-                if self.agent_filter and entry.get("agent") != self.agent_filter:
+                if isinstance(self.agent_filter, str):
+                    if entry.get("agent") != self.agent_filter:
+                        continue
+                elif (
+                    self.agent_filter is not None
+                    and entry.get("agent") not in self.agent_filter
+                ):
                     continue
 
                 raw_ts = entry.get("timestamp")

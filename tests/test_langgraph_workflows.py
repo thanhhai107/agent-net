@@ -1,5 +1,6 @@
 """Unit tests for the advanced LangGraph troubleshooting workflows."""
 
+import asyncio
 import json
 import tempfile
 import unittest
@@ -7,7 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 from langgraph.errors import GraphRecursionError
 from pydantic import ValidationError
@@ -18,8 +19,21 @@ from agent.composition import (
     ToolEvolutionConfig,
     workflow_agent_kwargs,
 )
-from agent.langgraph.plan_execute_agent import PlanExecuteAgent
-from agent.langgraph.reflexion_agent import ReflexionAgent
+from agent.langgraph.plan_execute_agent import (
+    EXECUTOR_PROMPT,
+    PLANNER_PROMPT,
+    REPLANNER_PROMPT,
+    SYNTHESIS_PROMPT,
+    PlanExecuteAgent,
+)
+from agent.langgraph.phases.diagnosis import DiagnosisPhase
+from agent.langgraph.react_agent import BasicReActAgent
+from agent.langgraph.reflexion_agent import (
+    ACTOR_PROMPT,
+    EVALUATOR_PROMPT,
+    REFLEXION_PROMPT,
+    ReflexionAgent,
+)
 from agent.langgraph.langfuse_tracing import (
     callback_config,
     create_langfuse_callbacks,
@@ -32,21 +46,24 @@ from agent.langgraph.workflow_models import (
     ReplanDecision,
     StepResult,
 )
+from agent.memory.runtime import strip_integrated_learning_guidance
 from agent.llm.model_factory import (
-    CUSTOM_DEFAULT_API_BASE,
+    CUSTOM_DEFAULT_API_URL,
     CUSTOM_MAX_RETRIES,
-    CUSTOM_RECOMMENDED_MODELS,
     CUSTOM_TIMEOUT_SECONDS,
     DEFAULT_LLM_BACKEND,
     DEFAULT_MODEL,
     GLM47ChatOpenAI,
+    NETMIND_API_URL,
+    NetmindChatOpenAI,
     _extract_glm_tool_calls,
     _normalize_glm_tool_calls,
     load_model,
 )
 from agent.registry import create_agent
 from agent.utils.loggers import AgentCallbackLogger
-from nika.codex_cli.commands.agent import (
+from agent.utils.template import EVIDENCE_CONTRACT_PROMPT, OVERALL_DIAGNOSIS_PROMPT
+from nika.cli.commands.agent import (
     SUPPORTED_AGENT_TYPES,
     SUPPORTED_LLM_BACKENDS,
 )
@@ -76,6 +93,37 @@ def _agent_run_config(
 
 
 class WorkflowModelTest(unittest.TestCase):
+    def test_evidence_contract_is_shared_by_diagnosis_prompts(self) -> None:
+        contract_anchor = "guidance only; they are not evidence"
+        prompts = [
+            OVERALL_DIAGNOSIS_PROMPT,
+            PLANNER_PROMPT,
+            EXECUTOR_PROMPT,
+            REPLANNER_PROMPT,
+            SYNTHESIS_PROMPT,
+            ACTOR_PROMPT,
+            EVALUATOR_PROMPT,
+            REFLEXION_PROMPT,
+        ]
+
+        self.assertIn(contract_anchor, EVIDENCE_CONTRACT_PROMPT)
+        for prompt in prompts:
+            with self.subTest(prompt=prompt[:40]):
+                self.assertIn(contract_anchor, prompt)
+
+    def test_strip_integrated_learning_guidance_keeps_only_observation(self) -> None:
+        text = (
+            "eth0 is down\n\n"
+            "[Integrated learning guidance - not evidence]\n"
+            "Active Skill-MDP option: seed_react_decision"
+        )
+
+        self.assertEqual(strip_integrated_learning_guidance(text), "eth0 is down")
+
+    def test_diagnosis_prompt_has_evidence_based_stop_condition(self) -> None:
+        self.assertIn("Stop calling tools", OVERALL_DIAGNOSIS_PROMPT)
+        self.assertIn("final diagnosis report", OVERALL_DIAGNOSIS_PROMPT)
+
     def test_plan_requires_at_least_one_valid_step(self) -> None:
         with self.assertRaises(ValidationError):
             InvestigationPlan(objective="Diagnose", steps=[])
@@ -126,9 +174,6 @@ class WorkflowRegistrationTest(unittest.TestCase):
                 "plan-execute",
                 "reflexion",
                 "mock",
-                "cli",
-                "codex_cli",
-                "claude_cli",
             ),
         )
 
@@ -164,6 +209,8 @@ class WorkflowRegistrationTest(unittest.TestCase):
                         bank="experiment",
                         top_k=4,
                         token_budget=900,
+                        skill_selector_mode="llm_topk_lcb",
+                        meta_controller_mode="llm",
                     ),
                 )
             )
@@ -192,7 +239,6 @@ class WorkflowRegistrationTest(unittest.TestCase):
             max_steps=11,
             tool_evolution_enabled=True,
             tool_library_id="experiment-a",
-            use_problem_tool_hints=False,
         )
         memory_module.assert_called_once_with(
             bank_id="experiment",
@@ -205,21 +251,13 @@ class WorkflowRegistrationTest(unittest.TestCase):
             memory_mode="read",
             memory_top_k=4,
             memory_token_budget=900,
+            memory_skill_selector_mode="llm_topk_lcb",
+            memory_meta_controller_mode="llm",
         )
 
     def test_cli_lists_custom_backend(self) -> None:
         self.assertIn("custom", SUPPORTED_LLM_BACKENDS)
         self.assertNotIn("netmind", SUPPORTED_LLM_BACKENDS)
-        self.assertEqual(
-            CUSTOM_RECOMMENDED_MODELS,
-            (
-                "MiniMax/MiniMax-M2.7",
-                "Qwen/Qwen3.5-122B-A10B-FP8",
-                "openai/gpt-oss-120b",
-                "openai/gpt-oss-20b",
-                "zai-org/GLM-4.7",
-            ),
-        )
 
     def test_tool_evolution_rejects_non_langgraph_workflows(self) -> None:
         with self.assertRaisesRegex(ValueError, "supports react"):
@@ -262,13 +300,15 @@ class WorkflowRegistrationTest(unittest.TestCase):
                     )
 
                 self.assertIs(result, adapter.return_value)
-                self.assertFalse(workflow.call_args.kwargs["use_problem_tool_hints"])
+                self.assertNotIn("use_problem_tool_hints", workflow.call_args.kwargs)
                 adapter.assert_called_once_with(
                     workflow.return_value,
                     memory_module.return_value,
                     memory_mode="evolve",
                     memory_top_k=5,
                     memory_token_budget=1500,
+                    memory_skill_selector_mode="lcb",
+                    memory_meta_controller_mode="heuristic",
                 )
 
     def test_memory_rejects_unsupported_workflow(self) -> None:
@@ -298,30 +338,33 @@ class WorkflowRegistrationTest(unittest.TestCase):
         kwargs = workflow_agent_kwargs(config)
 
         self.assertEqual(kwargs["tool_library_id"], "tools-a")
-        self.assertFalse(kwargs["use_problem_tool_hints"])
+        self.assertNotIn("use_problem_tool_hints", kwargs)
 
 
 class ModelFactoryTest(unittest.TestCase):
-    def test_default_model_is_custom_gpt_oss_120b(self) -> None:
+    def test_default_model_is_custom_gpt_oss_20b(self) -> None:
         self.assertEqual(DEFAULT_LLM_BACKEND, "custom")
-        self.assertEqual(DEFAULT_MODEL, "openai/gpt-oss-120b")
+        self.assertEqual(DEFAULT_MODEL, "openai/gpt-oss-20b")
 
-    @patch.dict("os.environ", {}, clear=True)
-    @patch("agent.llm.model_factory.ChatOpenAI")
-    def test_load_model_defaults_to_custom_gpt_oss_120b(self, chat_openai) -> None:
+    @patch.dict("os.environ", {"CUSTOM_API_KEY": "password"}, clear=True)
+    @patch("agent.llm.model_factory.NetmindChatOpenAI")
+    def test_load_model_defaults_to_custom_gpt_oss_20b(self, chat_openai) -> None:
         load_model()
 
         self.assertEqual(chat_openai.call_args.kwargs["model"], DEFAULT_MODEL)
-        self.assertEqual(chat_openai.call_args.kwargs["api_key"], "dummy")
-        self.assertEqual(chat_openai.call_args.kwargs["base_url"], CUSTOM_DEFAULT_API_BASE)
+        self.assertEqual(chat_openai.call_args.kwargs["api_key"], "password")
+        self.assertEqual(
+            chat_openai.call_args.kwargs["base_url"],
+            CUSTOM_DEFAULT_API_URL,
+        )
 
-    @patch.dict("os.environ", {"CUSTOM_API_KEY": "test-key"}, clear=True)
-    @patch("agent.llm.model_factory.ChatOpenAI")
-    def test_custom_uses_default_base_url(self, chat_openai) -> None:
+    @patch.dict("os.environ", {"CUSTOM_API_KEY": "password"}, clear=True)
+    @patch("agent.llm.model_factory.NetmindChatOpenAI")
+    def test_custom_netmind_default_uses_custom_api_key(self, chat_openai) -> None:
         load_model()
 
-        self.assertEqual(chat_openai.call_args.kwargs["api_key"], "test-key")
-        self.assertEqual(chat_openai.call_args.kwargs["base_url"], CUSTOM_DEFAULT_API_BASE)
+        self.assertEqual(chat_openai.call_args.kwargs["api_key"], "password")
+        self.assertEqual(chat_openai.call_args.kwargs["base_url"], NETMIND_API_URL)
         self.assertEqual(
             chat_openai.call_args.kwargs["timeout"],
             CUSTOM_TIMEOUT_SECONDS,
@@ -331,11 +374,35 @@ class ModelFactoryTest(unittest.TestCase):
             CUSTOM_MAX_RETRIES,
         )
 
+    @patch.dict("os.environ", {}, clear=True)
+    def test_netmind_requires_custom_api_key_password(self) -> None:
+        with self.assertRaisesRegex(ValueError, "CUSTOM_API_KEY is required"):
+            load_model("custom", "openai/gpt-oss-20b")
+
+    @patch.dict(
+        "os.environ",
+        {
+            "CUSTOM_API_URL": "https://stream-netmind.viettel.vn/gateway/v1",
+            "CUSTOM_API_KEY": "password",
+        },
+        clear=True,
+    )
+    @patch("agent.llm.model_factory.NetmindChatOpenAI")
+    def test_netmind_url_uses_netmind_adapter_without_model_filter(
+        self,
+        chat_openai,
+    ) -> None:
+        load_model("custom", "any/provider-model")
+
+        self.assertEqual(chat_openai.call_args.kwargs["model"], "any/provider-model")
+        self.assertEqual(chat_openai.call_args.kwargs["api_key"], "password")
+        self.assertEqual(chat_openai.call_args.kwargs["base_url"], NETMIND_API_URL)
+
     @patch.dict(
         "os.environ",
         {
             "CUSTOM_API_KEY": "test-key",
-            "CUSTOM_API_BASE": "https://custom.example/v1",
+            "CUSTOM_API_URL": "https://custom.example/v1",
         },
         clear=True,
     )
@@ -455,6 +522,7 @@ class ModelFactoryTest(unittest.TestCase):
         "os.environ",
         {
             "CUSTOM_API_KEY": "test-key",
+            "CUSTOM_API_URL": "https://custom.example/v1",
             "CUSTOM_TIMEOUT_SECONDS": "12.5",
             "CUSTOM_MAX_RETRIES": "2",
         },
@@ -481,7 +549,10 @@ class ModelFactoryTest(unittest.TestCase):
 
     @patch.dict(
         "os.environ",
-        {"CUSTOM_API_KEY": "test-key"},
+        {
+            "CUSTOM_API_KEY": "test-key",
+            "CUSTOM_API_URL": "https://custom.example/v1",
+        },
         clear=True,
     )
     @patch("agent.llm.model_factory.ChatOpenAI")
@@ -512,12 +583,224 @@ class WorkflowLoggingTest(unittest.TestCase):
         self.assertEqual(entry["event"], "test")
 
 
+class DiagnosisPhasePromptTest(unittest.TestCase):
+    def test_get_agent_keeps_learning_context_out_of_static_system_prompt(self) -> None:
+        phase = DiagnosisPhase.__new__(DiagnosisPhase)
+        phase.llm = object()
+        phase.tools = []
+        phase.prompt_suffix = lambda **_: "\nSkill-Pro stale option"
+
+        with patch("agent.langgraph.phases.diagnosis.create_agent") as create:
+            phase.get_agent()
+            static_prompt = create.call_args.kwargs["system_prompt"]
+            create.reset_mock()
+
+            phase.get_agent(include_learning_context=True)
+            explicit_prompt = create.call_args.kwargs["system_prompt"]
+
+        self.assertNotIn("Skill-Pro stale option", static_prompt)
+        self.assertIn("Skill-Pro stale option", explicit_prompt)
+
+    def test_prompt_suffix_lets_skill_runtime_own_draft_context(self) -> None:
+        class FakeDraftRuntime:
+            def __init__(self) -> None:
+                self.calls = 0
+
+            def prompt_suffix(self) -> str:
+                self.calls += 1
+                return "\n\nDRAFT tool documentation memory:\nstandalone"
+
+        class FakeSkillRuntime:
+            def __init__(self) -> None:
+                self.calls: list[bool] = []
+
+            def prompt_suffix(self, *, activate_skill: bool = True) -> str:
+                self.calls.append(activate_skill)
+                return "\n\nIntegrated Skill-Pro + DRAFT diagnosis loop:\nlinked"
+
+        phase = DiagnosisPhase.__new__(DiagnosisPhase)
+        phase.tool_evolution_runtime = FakeDraftRuntime()
+        phase.skill_tool_runtime = FakeSkillRuntime()
+
+        suffix = phase.prompt_suffix(activate_skill=False)
+
+        self.assertIn("Integrated Skill-Pro + DRAFT diagnosis loop", suffix)
+        self.assertIn("linked", suffix)
+        self.assertNotIn("standalone", suffix)
+        self.assertEqual(phase.tool_evolution_runtime.calls, 0)
+        self.assertEqual(phase.skill_tool_runtime.calls, [False])
+
+
+class ReactBehaviorTest(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.agent = BasicReActAgent.__new__(BasicReActAgent)
+        self.agent.max_steps = 3
+        self.agent.session_dir = self.tmp.name
+        self.agent._diagnosis_phase = SimpleNamespace(
+            prompt_suffix=lambda **_: ""
+        )
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    async def test_diagnosis_call_injects_action_time_learning_context(self) -> None:
+        calls: list[bool] = []
+
+        def prompt_suffix(*, activate_skill=True) -> str:
+            calls.append(activate_skill)
+            return "\nSkill-Pro active option: react_route"
+
+        self.agent._diagnosis_phase = SimpleNamespace(prompt_suffix=prompt_suffix)
+        self.agent.diagnosis_agent = AsyncMock()
+        self.agent.diagnosis_agent.ainvoke.return_value = {
+            "messages": [SimpleNamespace(content="Evidence-backed report")]
+        }
+
+        update = await self.agent.diagnosis_agent_builder(
+            {"messages": [HumanMessage(content="Diagnose")]}
+        )
+        payload = self.agent.diagnosis_agent.ainvoke.call_args.args[0]
+        messages = payload["messages"]
+
+        self.assertEqual(calls, [True])
+        self.assertEqual(messages[0].content, "Diagnose")
+        self.assertIn("Current integrated learning context", messages[1].content)
+        self.assertIn("react_route", messages[1].content)
+        self.assertEqual(update["diagnosis_report"], "Evidence-backed report")
+
+    async def test_diagnosis_max_steps_uses_recent_observations_as_fallback(
+        self,
+    ) -> None:
+        self.agent.diagnosis_agent = AsyncMock()
+        self.agent.diagnosis_agent.ainvoke.side_effect = GraphRecursionError()
+        self.agent.skill_tool_runtime = SimpleNamespace(
+            snapshot=lambda: {
+                "recent_transitions": [
+                    {
+                        "tool": "get_host_net_config",
+                        "tool_input": {"host_name": "pc_0_0"},
+                        "observation_summary": "pc_0_0 eth0 state DOWN; ip_route is empty",
+                    }
+                ]
+            }
+        )
+
+        update = await self.agent.diagnosis_agent_builder(
+            {"messages": [HumanMessage(content="Diagnose")]}
+        )
+
+        self.assertTrue(update["is_max_steps_reached"])
+        self.assertIn("max recursion limit", update["diagnosis_report"])
+        self.assertIn("pc_0_0 eth0 state DOWN", update["diagnosis_report"])
+        self.assertIn("Current evidence-backed diagnosis report", update["diagnosis_report"])
+        self.assertIn("interface/link-down fault", update["diagnosis_report"])
+        self.assertNotIn("`link_down`", update["diagnosis_report"])
+        self.assertNotIn("stopped before a final report", update["diagnosis_report"])
+        self.assertNotEqual(update["diagnosis_report"], "ERROR_MAX_STEPS_REACHED")
+
+    async def test_fallback_report_prioritizes_strong_older_evidence(self) -> None:
+        transitions = [
+            {
+                "tool": "get_host_net_config",
+                "tool_input": {"host_name": "pc_0_0"},
+                "observation_summary": "pc_0_0 eth0 state DOWN; ip_route is empty",
+            }
+        ]
+        transitions.extend(
+            {
+                "tool": f"check_{index}",
+                "tool_input": {"index": index},
+                "observation_summary": f"routine healthy observation {index}",
+            }
+            for index in range(10)
+        )
+        self.agent.skill_tool_runtime = SimpleNamespace(
+            snapshot=lambda: {"recent_transitions": transitions}
+        )
+
+        report = self.agent._fallback_diagnosis_report("max recursion limit")
+
+        self.assertIn("pc_0_0 eth0 state DOWN", report)
+        self.assertIn("interface/link-down fault", report)
+        self.assertNotIn("`link_down`", report)
+        self.assertNotIn("stopped before a final report", report)
+
+
+class ReactGraphRoutingTest(unittest.TestCase):
+    def test_graph_submits_after_diagnosis_max_steps(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            diagnosis_agent = SimpleNamespace(ainvoke=AsyncMock())
+            diagnosis_agent.ainvoke.side_effect = GraphRecursionError()
+            submission_agent = SimpleNamespace(ainvoke=AsyncMock())
+            submission_agent.ainvoke.return_value = {
+                "messages": [AIMessage(content="submitted")]
+            }
+            skill_runtime = SimpleNamespace(
+                snapshot=lambda: {
+                    "recent_transitions": [
+                        {
+                            "tool": "get_host_net_config",
+                            "tool_input": {"host_name": "pc_0_0"},
+                            "observation_summary": "pc_0_0 eth0 state DOWN",
+                        }
+                    ]
+                }
+            )
+            diagnosis_phase = SimpleNamespace(
+                llm=object(),
+                tool_evolution_runtime=None,
+                skill_tool_runtime=skill_runtime,
+                tools=[],
+                load_tools=AsyncMock(),
+                get_agent=lambda: diagnosis_agent,
+                prompt_suffix=lambda **_: "",
+            )
+            submission_phase = SimpleNamespace(
+                load_tools=AsyncMock(),
+                get_agent=lambda: submission_agent,
+            )
+
+            with (
+                patch("agent.langgraph.react_agent.DiagnosisPhase") as diag_cls,
+                patch("agent.langgraph.react_agent.SubmissionPhase") as sub_cls,
+                patch("agent.langgraph.react_agent.Session") as session_cls,
+                patch(
+                    "agent.langgraph.react_agent.create_langfuse_callbacks",
+                    return_value=[],
+                ),
+            ):
+                session = session_cls.return_value
+                session.load_running_session.return_value = None
+                session.session_dir = tmp
+                session.scenario_name = "dc_clos_bgp"
+                session.problem_names = ["link_down"]
+                session.scenario_topo_size = "s"
+                diag_cls.return_value = diagnosis_phase
+                sub_cls.return_value = submission_phase
+
+                agent = BasicReActAgent(session_id="s1", max_steps=3)
+                result = asyncio.run(
+                    agent.graph.ainvoke(
+                        {"messages": [HumanMessage(content="Diagnose")]}
+                    )
+                )
+
+            submission_agent.ainvoke.assert_awaited_once()
+            prompt = submission_agent.ainvoke.await_args.args[0]["messages"][0].content
+            self.assertIn("pc_0_0 eth0 state DOWN", prompt)
+            self.assertEqual(result["messages"][-1].content, "submitted")
+
+
 class PlanExecuteBehaviorTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.agent = PlanExecuteAgent.__new__(PlanExecuteAgent)
         self.agent.max_steps = 2
         self.agent.session_dir = self.tmp.name
+        self.agent._diagnosis_phase = SimpleNamespace(
+            prompt_suffix=lambda **_: ""
+        )
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
@@ -551,6 +834,88 @@ class PlanExecuteBehaviorTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(update["plan"], [second])
         self.assertEqual(update["executed_steps"], 1)
         self.assertTrue(update["completed_steps"][0].succeeded)
+
+    async def test_executor_strips_learning_guidance_from_completed_evidence(self) -> None:
+        step = PlanStep(
+            step_id="reachability",
+            action="Check reachability",
+            expected_evidence="Failed pairs",
+        )
+        self.agent.executor = AsyncMock()
+        self.agent.executor.ainvoke.return_value = {
+            "messages": [
+                SimpleNamespace(
+                    content=(
+                        "pc1 cannot reach pc2\n\n"
+                        "[Integrated learning guidance - not evidence]\n"
+                        "Active Skill-MDP option: seed_react_decision"
+                    )
+                )
+            ]
+        }
+
+        update = await self.agent._execute(
+            {
+                "task_description": "Diagnose",
+                "objective": "Find the fault",
+                "plan": [step],
+                "completed_steps": [],
+                "executed_steps": 0,
+            }
+        )
+
+        observation = update["completed_steps"][0].observation
+        self.assertEqual(observation, "pc1 cannot reach pc2")
+        self.assertNotIn("Integrated learning guidance", observation)
+
+    async def test_executor_prompt_refreshes_learning_context_per_step(self) -> None:
+        step = PlanStep(
+            step_id="routes",
+            action="Inspect routes",
+            expected_evidence="Route state",
+        )
+        calls: list[str] = []
+
+        def prompt_suffix(*, activate_skill=True) -> str:
+            calls.append(str(activate_skill))
+            return "\nSkill-Pro active option: followup_route"
+
+        self.agent._diagnosis_phase = SimpleNamespace(prompt_suffix=prompt_suffix)
+        self.agent.executor = AsyncMock()
+        self.agent.executor.ainvoke.return_value = {
+            "messages": [SimpleNamespace(content="route missing")]
+        }
+
+        await self.agent._execute(
+            {
+                "task_description": "Diagnose",
+                "objective": "Find the fault",
+                "plan": [step],
+                "completed_steps": [],
+                "executed_steps": 0,
+            }
+        )
+        payload = self.agent.executor.ainvoke.call_args.args[0]
+        prompt = payload["messages"][0].content
+
+        self.assertEqual(calls, ["True"])
+        self.assertIn("Current integrated learning context", prompt)
+        self.assertIn("followup_route", prompt)
+
+    def test_refresh_executor_keeps_static_prompt_and_defers_learning_context(self) -> None:
+        self.agent.llm = object()
+        self.agent._diagnosis_phase = SimpleNamespace(
+            tool_evolution_runtime=None,
+            skill_tool_runtime=None,
+            tools=[],
+            prompt_suffix=lambda **_: "\nSkill-Pro stale option",
+        )
+        with patch("agent.langgraph.plan_execute_agent.create_agent") as create:
+            self.agent._refresh_executor()
+
+        kwargs = create.call_args.kwargs
+        self.assertIn("network troubleshooting executor", kwargs["system_prompt"])
+        self.assertNotIn("Skill-Pro stale option", kwargs["system_prompt"])
 
     async def test_executor_failure_becomes_observation_for_replanner(self) -> None:
         step = PlanStep(
@@ -611,6 +976,55 @@ class PlanExecuteBehaviorTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(update["planning_failed"])
         self.assertEqual(update["plan"], [])
         self.assertEqual(self.agent._route_after_plan(update), "end")
+
+    async def test_planner_prompt_includes_integrated_learning_context(self) -> None:
+        self.agent._diagnosis_phase = SimpleNamespace(
+            prompt_suffix=lambda **_: "\nSkill-Pro + DRAFT suffix"
+        )
+        self.agent.planner = AsyncMock()
+        self.agent.planner.ainvoke.return_value = InvestigationPlan(
+            objective="Find the fault",
+            steps=[
+                PlanStep(
+                    step_id="reachability",
+                    action="Check reachability",
+                    expected_evidence="Packet loss",
+                )
+            ],
+        )
+
+        await self.agent._plan({"task_description": "Diagnose"})
+        messages = self.agent.planner.ainvoke.call_args.args[0]
+
+        self.assertIn(
+            "Integrated learning context",
+            messages[0].content,
+        )
+        self.assertIn("Skill-Pro + DRAFT suffix", messages[0].content)
+
+    async def test_planner_reads_learning_context_without_activating_skill(self) -> None:
+        calls: list[bool] = []
+
+        def prompt_suffix(*, activate_skill=True) -> str:
+            calls.append(activate_skill)
+            return "\nSkill-Pro candidate context"
+
+        self.agent._diagnosis_phase = SimpleNamespace(prompt_suffix=prompt_suffix)
+        self.agent.planner = AsyncMock()
+        self.agent.planner.ainvoke.return_value = InvestigationPlan(
+            objective="Find the fault",
+            steps=[
+                PlanStep(
+                    step_id="reachability",
+                    action="Check reachability",
+                    expected_evidence="Packet loss",
+                )
+            ],
+        )
+
+        await self.agent._plan({"task_description": "Diagnose"})
+
+        self.assertEqual(calls, [False])
 
     async def test_replanner_can_replace_remaining_plan(self) -> None:
         old_step = PlanStep(
@@ -674,11 +1088,76 @@ class ReflexionBehaviorTest(unittest.IsolatedAsyncioTestCase):
         self.agent.max_steps = 3
         self.agent.max_attempts = 3
         self.agent.session_dir = self.tmp.name
+        self.agent._diagnosis_phase = SimpleNamespace(
+            prompt_suffix=lambda **_: ""
+        )
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
 
+    def test_compact_trace_strips_integrated_learning_guidance(self) -> None:
+        trace = ReflexionAgent._compact_trace(
+            [
+                SimpleNamespace(
+                    content=(
+                        "route missing\n\n"
+                        "[Integrated learning guidance - not evidence]\n"
+                        "DRAFT next checks: inspect interface"
+                    )
+                )
+            ]
+        )
+
+        self.assertEqual(trace[0]["content"], "route missing")
+        self.assertNotIn("DRAFT next checks", trace[0]["content"])
+
+    def test_refresh_actor_keeps_static_prompt_and_defers_learning_context(self) -> None:
+        self.agent.llm = object()
+        self.agent._diagnosis_phase = SimpleNamespace(
+            tool_evolution_runtime=None,
+            skill_tool_runtime=None,
+            tools=[],
+            prompt_suffix=lambda **_: "\nSkill-Pro stale option",
+        )
+        with patch("agent.langgraph.reflexion_agent.create_agent") as create:
+            self.agent._refresh_actor()
+
+        kwargs = create.call_args.kwargs
+        self.assertIn("iterative Reflexion", kwargs["system_prompt"])
+        self.assertNotIn("Skill-Pro stale option", kwargs["system_prompt"])
+
+    async def test_attempt_prompt_refreshes_learning_context_per_attempt(self) -> None:
+        calls: list[str] = []
+
+        def prompt_suffix(*, activate_skill=True) -> str:
+            calls.append(str(activate_skill))
+            return "\nSkill-Pro active option: retry_bgp"
+
+        self.agent._diagnosis_phase = SimpleNamespace(prompt_suffix=prompt_suffix)
+        self.agent.actor = AsyncMock()
+        self.agent.actor.ainvoke.return_value = {
+            "messages": [SimpleNamespace(content="Evidence-backed diagnosis")]
+        }
+
+        await self.agent._attempt(
+            {
+                "task_description": "Diagnose",
+                "attempt_count": 0,
+                "diagnosis_report": "",
+                "memories": [],
+            }
+        )
+        payload = self.agent.actor.ainvoke.call_args.args[0]
+        prompt = payload["messages"][0].content
+
+        self.assertEqual(calls, ["True"])
+        self.assertIn("Integrated learning context for this Reflexion attempt", prompt)
+        self.assertIn("retry_bgp", prompt)
+
     async def test_retry_attempt_receives_episodic_memory(self) -> None:
+        self.agent._diagnosis_phase = SimpleNamespace(
+            prompt_suffix=lambda **_: ""
+        )
         self.agent.actor = AsyncMock()
         self.agent.actor.ainvoke.return_value = {
             "messages": [SimpleNamespace(content="Evidence-backed diagnosis")]
