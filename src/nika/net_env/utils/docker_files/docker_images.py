@@ -68,17 +68,52 @@ def build_nika_image(image: str) -> None:
         raise RuntimeError(f"Failed to build Docker image {image}") from exc
 
 
-def ensure_nika_docker_images(required_images: Iterable[str]) -> None:
-    """Build any missing kathara/nika-* images needed by a lab."""
+def ensure_nika_docker_images(required_images: Iterable[str], *, force_rebuild: bool = False) -> None:
+    """Build kathara/nika-* images needed by a lab.
+
+    By default only missing images are built. With ``force_rebuild=True``, every
+    required NIKA image is rebuilt even if it already exists locally.
+    """
     nika_images = {img for img in required_images if img.startswith(NIKA_IMAGE_PREFIX)}
-    missing = {img for img in nika_images if not image_exists(img)}
-    if not missing:
+    if force_rebuild:
+        to_build = nika_images
+    else:
+        to_build = {img for img in nika_images if not image_exists(img)}
+    if not to_build:
         return
 
-    print(f"Missing Docker images: {', '.join(sorted(missing))}")
-    for image in sorted(missing):
+    if force_rebuild:
+        print(f"Force rebuilding Docker images: {', '.join(sorted(to_build))}")
+    else:
+        print(f"Missing Docker images: {', '.join(sorted(to_build))}")
+    for image in sorted(to_build):
         build_nika_image(image)
 
-    still_missing: Set[str] = {img for img in missing if not image_exists(img)}
+    still_missing: Set[str] = {img for img in to_build if not image_exists(img)}
     if still_missing:
         raise RuntimeError("Failed to build required Docker images: " + ", ".join(sorted(still_missing)))
+
+
+def main() -> None:
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Build NIKA Kathara Docker images.")
+    parser.add_argument(
+        "-f",
+        "--force-rebuild",
+        action="store_true",
+        help="Rebuild images even if they already exist locally.",
+    )
+    parser.add_argument(
+        "images",
+        nargs="*",
+        metavar="IMAGE",
+        help="Images to build (default: all known kathara/nika-* images).",
+    )
+    args = parser.parse_args()
+    required = args.images or list(NIKA_IMAGE_DOCKERFILES.keys())
+    ensure_nika_docker_images(required, force_rebuild=args.force_rebuild)
+
+
+if __name__ == "__main__":
+    main()
