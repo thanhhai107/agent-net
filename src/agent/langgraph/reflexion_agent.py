@@ -18,7 +18,6 @@ from agent.langgraph.phases.submission import SubmissionPhase as SubmissionAgent
 from agent.langgraph.langfuse_tracing import callback_config, create_langfuse_callbacks
 from agent.langgraph.evidence_gate import (
     ToolObservation,
-    evidence_gate_enabled,
     evaluate_fault_family_evidence,
     observations_from_runtime_snapshot,
 )
@@ -28,7 +27,7 @@ from agent.memory.runtime import strip_integrated_learning_guidance
 from agent.tool_evolution.integration import write_tool_evolution_session
 from agent.utils.loggers import AgentCallbackLogger
 from agent.utils.template import EVIDENCE_CONTRACT_PROMPT
-from agent.utils.tracing import langsmith_tracing_context
+from agent.utils.tracing import langsmith_tracing_context, session_problem_label
 from nika.utils.session import Session
 
 load_dotenv()
@@ -283,9 +282,7 @@ class ReflexionAgent:
         )
 
     def _is_evidence_gate_enabled(self) -> bool:
-        return evidence_gate_enabled(
-            bool(getattr(self, "evidence_gate_enabled", True))
-        )
+        return bool(getattr(self, "evidence_gate_enabled", True))
 
     def _route_after_evaluation(self, state: ReflexionState) -> str:
         if state.get("is_max_steps_reached"):
@@ -319,12 +316,11 @@ class ReflexionAgent:
         return trace
 
     async def run(self, task_description: str) -> dict[str, Any]:
-        problem_names = getattr(self.session, "problem_names", [])
         with langsmith_tracing_context(
             project_name=os.getenv("LANGSMITH_PROJECT", "NIKA"),
             metadata={
                 "scenario": self.session.scenario_name,
-                "problem": problem_names[0] if problem_names else "",
+                "problem": session_problem_label(self.session),
                 "topo_size": self.session.scenario_topo_size,
                 "model": getattr(self.session, "model", ""),
                 "agent": "reflexion",

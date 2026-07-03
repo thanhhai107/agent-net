@@ -14,7 +14,6 @@ from agent.langgraph.langfuse_tracing import callback_config, create_langfuse_ca
 from agent.langgraph.evidence_gate import (
     EvidenceGateResult,
     ToolObservation,
-    evidence_gate_enabled,
     evaluate_fault_family_evidence,
     observations_from_messages,
     observations_from_runtime_snapshot,
@@ -25,7 +24,7 @@ from agent.llm.model_factory import DEFAULT_LLM_BACKEND, DEFAULT_MODEL
 from agent.tool_evolution.integration import write_tool_evolution_session
 from agent.utils.loggers import AgentCallbackLogger
 from agent.utils.phases import DIAGNOSIS, SUBMISSION
-from agent.utils.tracing import langsmith_tracing_context
+from agent.utils.tracing import langsmith_tracing_context, session_problem_label
 from nika.utils.session import Session
 
 load_dotenv()
@@ -202,9 +201,7 @@ class BasicReActAgent:
         )
 
     def _is_evidence_gate_enabled(self) -> bool:
-        return evidence_gate_enabled(
-            bool(getattr(self, "evidence_gate_enabled", True))
-        )
+        return bool(getattr(self, "evidence_gate_enabled", True))
 
     def install_memory_runtime(
         self,
@@ -240,7 +237,7 @@ class BasicReActAgent:
             project_name=os.getenv("LANGSMITH_PROJECT", "NIKA"),
             metadata={
                 "scenario": self.session.scenario_name,
-                "problem": self.session.problem_names[0],
+                "problem": session_problem_label(self.session),
                 "topo_size": self.session.scenario_topo_size,
                 "model": self.model,
             },

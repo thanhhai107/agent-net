@@ -331,6 +331,246 @@ def _fmt_delta(value: float | None) -> str:
     return "-" if value is None else f"{value:+.2f}"
 
 
+RESULT_SUMMARY_COLUMNS = [
+    "result_root",
+    "modules",
+    "progress",
+    "detection_score",
+    "localization_f1",
+    "rca_f1",
+    "localization_precision",
+    "rca_precision",
+    "tool_calls",
+    "tool_errors",
+    "total_tokens",
+    "duration",
+    "agent",
+    "model",
+    "updated",
+]
+
+RESULT_DETAIL_COLUMNS = [
+    "result_root",
+    "progress",
+    "detection_score",
+    "localization_f1",
+    "rca_f1",
+    "localization_precision",
+    "rca_precision",
+    "tool_calls",
+    "tool_errors",
+    "detection_precision",
+    "detection_recall",
+    "detection_f1",
+    "detection_fpr",
+    "detection_fp",
+    "detection_fn",
+    "paired_baseline",
+    "paired_cases",
+    "paired_delta_detection",
+    "paired_delta_localization_f1",
+    "paired_delta_rca_f1",
+    "paired_wins",
+    "paired_losses",
+    "paired_ties",
+    "token_in",
+    "token_out",
+    "memory_reward",
+    "memory_advantage",
+    "memory_success",
+    "memory_added_tokens",
+    "memory_delta_tokens_step",
+    "memory_selector",
+    "memory_controller",
+    "draft_planned",
+    "draft_consumed",
+    "duration",
+    "modules",
+    "agent",
+    "model",
+    "updated",
+]
+
+RESULT_NUMERIC_COLUMNS = {
+    "detection_score",
+    "localization_f1",
+    "rca_f1",
+    "localization_precision",
+    "rca_precision",
+    "tool_calls",
+    "detection_precision",
+    "detection_recall",
+    "detection_f1",
+    "detection_fpr",
+    "paired_delta_detection",
+    "paired_delta_localization_f1",
+    "paired_delta_rca_f1",
+    "memory_reward",
+    "memory_advantage",
+    "memory_success",
+    "memory_delta_tokens_step",
+}
+
+RESULT_INTEGER_COLUMNS = {
+    "cases",
+    "finished",
+    "failed",
+    "submitted",
+    "tool_errors",
+    "detection_fp",
+    "detection_fn",
+    "paired_cases",
+    "paired_wins",
+    "paired_losses",
+    "paired_ties",
+    "token_in",
+    "token_out",
+    "total_tokens",
+    "memory_added_tokens",
+    "draft_planned",
+    "draft_consumed",
+}
+
+
+def _result_display_value(column: str, value: object) -> object:
+    if value is None or value == "" or value == "-":
+        return None
+    number = _float(value)
+    if column in RESULT_INTEGER_COLUMNS:
+        return None if number is None else int(number)
+    if column in RESULT_NUMERIC_COLUMNS:
+        return number
+    return value
+
+
+def _result_completion(row: dict[str, object]) -> str:
+    finished = row.get("finished")
+    cases = row.get("cases")
+    return f"{finished}/{cases}" if cases not in {None, "", "-"} else "-"
+
+
+def _result_record(row: dict[str, object]) -> str:
+    wins = row.get("paired_wins")
+    losses = row.get("paired_losses")
+    ties = row.get("paired_ties")
+    if wins is None and losses is None and ties is None:
+        return "-"
+    return f"{wins or 0}/{losses or 0}/{ties or 0}"
+
+
+def _summary_result_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]:
+    summary: list[dict[str, object]] = []
+    for row in rows:
+        display_row = dict(row)
+        display_row["progress"] = _result_completion(row)
+        display_row["paired_record"] = _result_record(row)
+        token_in = _float(row.get("token_in"))
+        token_out = _float(row.get("token_out"))
+        if token_in is None and token_out is None:
+            display_row["total_tokens"] = None
+        else:
+            display_row["total_tokens"] = int((token_in or 0.0) + (token_out or 0.0))
+        summary.append(display_row)
+    return summary
+
+
+def _results_dataframe(rows: list[dict[str, object]], columns: list[str]):
+    import pandas as pd
+
+    display_rows = [
+        {
+            column: _result_display_value(column, row.get(column))
+            for column in columns
+        }
+        for row in rows
+    ]
+    return pd.DataFrame(display_rows, columns=columns)
+
+
+def _transposed_results_dataframe(rows: list[dict[str, object]], columns: list[str]):
+    frame = _results_dataframe(rows, columns)
+    if frame.empty:
+        return frame
+    result_names = [
+        str(value) if value is not None and value != "" else f"Result {index + 1}"
+        for index, value in enumerate(frame["result_root"].tolist())
+    ]
+    metric_columns = [column for column in columns if column != "result_root"]
+    transposed = frame[metric_columns].transpose()
+    transposed.columns = result_names
+    transposed.insert(0, "metric", transposed.index)
+    return transposed.reset_index(drop=True)
+
+
+def _result_column_config() -> dict[str, object]:
+    return {
+        "metric": st.column_config.TextColumn("Metric", width="medium"),
+        "result_root": st.column_config.TextColumn("Result", width="large"),
+        "modules": st.column_config.TextColumn("Modules", width="medium"),
+        "progress": st.column_config.TextColumn("Progress", width="small"),
+        "cases": st.column_config.NumberColumn("Cases", format="%d"),
+        "finished": st.column_config.NumberColumn("Finished", format="%d"),
+        "failed": st.column_config.NumberColumn("Failed", format="%d"),
+        "submitted": st.column_config.NumberColumn("Submitted", format="%d"),
+        "detection_score": st.column_config.NumberColumn(
+            "Detection", format="%.2f"
+        ),
+        "localization_f1": st.column_config.NumberColumn(
+            "Loc F1", format="%.2f"
+        ),
+        "rca_f1": st.column_config.NumberColumn("RCA F1", format="%.2f"),
+        "localization_precision": st.column_config.NumberColumn(
+            "Loc Prec", format="%.2f"
+        ),
+        "rca_precision": st.column_config.NumberColumn("RCA Prec", format="%.2f"),
+        "tool_calls": st.column_config.NumberColumn("Tool Calls", format="%.2f"),
+        "tool_errors": st.column_config.NumberColumn("Tool Errors", format="%d"),
+        "detection_precision": st.column_config.NumberColumn(
+            "Detect Prec", format="%.2f"
+        ),
+        "detection_recall": st.column_config.NumberColumn(
+            "Detect Recall", format="%.2f"
+        ),
+        "detection_f1": st.column_config.NumberColumn("Detect F1", format="%.2f"),
+        "detection_fpr": st.column_config.NumberColumn("Detect FPR", format="%.2f"),
+        "detection_fp": st.column_config.NumberColumn("FP", format="%d"),
+        "detection_fn": st.column_config.NumberColumn("FN", format="%d"),
+        "paired_baseline": st.column_config.TextColumn("Baseline", width="large"),
+        "paired_cases": st.column_config.NumberColumn("Paired", format="%d"),
+        "paired_delta_detection": st.column_config.NumberColumn(
+            "Δ Detect", format="%+.2f"
+        ),
+        "paired_delta_localization_f1": st.column_config.NumberColumn(
+            "Δ Loc F1", format="%+.2f"
+        ),
+        "paired_delta_rca_f1": st.column_config.NumberColumn(
+            "Δ RCA F1", format="%+.2f"
+        ),
+        "paired_record": st.column_config.TextColumn("W/L/T", width="small"),
+        "paired_wins": st.column_config.NumberColumn("Wins", format="%d"),
+        "paired_losses": st.column_config.NumberColumn("Losses", format="%d"),
+        "paired_ties": st.column_config.NumberColumn("Ties", format="%d"),
+        "token_in": st.column_config.NumberColumn("Token In", format="%d"),
+        "token_out": st.column_config.NumberColumn("Token Out", format="%d"),
+        "total_tokens": st.column_config.NumberColumn("Total Tokens", format="%d"),
+        "memory_reward": st.column_config.NumberColumn("Mem Reward", format="%.2f"),
+        "memory_advantage": st.column_config.NumberColumn("Mem Adv", format="%.2f"),
+        "memory_success": st.column_config.NumberColumn("Mem Success", format="%.2f"),
+        "memory_added_tokens": st.column_config.NumberColumn("Mem Tokens", format="%d"),
+        "memory_delta_tokens_step": st.column_config.NumberColumn(
+            "Mem Δ Tokens/Step", format="%.2f"
+        ),
+        "memory_selector": st.column_config.TextColumn("Mem Selector"),
+        "memory_controller": st.column_config.TextColumn("Mem Controller"),
+        "draft_planned": st.column_config.NumberColumn("DRAFT Planned", format="%d"),
+        "draft_consumed": st.column_config.NumberColumn("DRAFT Used", format="%d"),
+        "duration": st.column_config.TextColumn("Duration", width="small"),
+        "agent": st.column_config.TextColumn("Agent", width="small"),
+        "model": st.column_config.TextColumn("Model", width="medium"),
+        "updated": st.column_config.TextColumn("Updated", width="medium"),
+    }
+
+
 def _parse_duration(meta: dict) -> float | None:
     st = meta.get("start_time")
     et = meta.get("end_time")
@@ -1172,28 +1412,31 @@ with tab_logs:
 
 st.markdown('<div class="section-title" style="margin-top: 1.5rem;">Results</div>', unsafe_allow_html=True)
 
-# List and display all available experiment results automatically
 result_rows = _result_rows(benchmark_name=None)
-if not result_rows:
-    import pandas as pd
-    cols = [
-        "result_root", "cases", "finished", "failed", "submitted",
-        "detection_score", "detection_precision", "detection_recall",
-        "detection_f1", "detection_fpr", "detection_fp", "detection_fn",
-        "localization_f1", "rca_f1",
-        "localization_precision", "rca_precision", "tool_calls", "tool_errors",
-        "paired_baseline", "paired_cases", "paired_delta_detection",
-        "paired_delta_localization_f1", "paired_delta_rca_f1",
-        "paired_wins", "paired_losses", "paired_ties",
-        "token_in", "token_out", "memory_reward", "memory_advantage",
-        "memory_success", "memory_added_tokens", "memory_delta_tokens_step",
-        "memory_selector", "memory_controller", "draft_planned", "draft_consumed",
-        "duration", "modules", "agent", "model", "updated"
-    ]
-    df = pd.DataFrame(columns=cols)
-    st.dataframe(df, width="stretch", hide_index=True)
-else:
-    st.dataframe(result_rows, width="stretch", hide_index=True)
+summary_tab, detail_tab = st.tabs(["Summary", "Details"])
+column_config = _result_column_config()
+
+with summary_tab:
+    st.dataframe(
+        _transposed_results_dataframe(
+            _summary_result_rows(result_rows),
+            RESULT_SUMMARY_COLUMNS,
+        ),
+        width="stretch",
+        hide_index=True,
+        column_config=column_config,
+    )
+
+with detail_tab:
+    st.dataframe(
+        _transposed_results_dataframe(
+            _summary_result_rows(result_rows),
+            RESULT_DETAIL_COLUMNS,
+        ),
+        width="stretch",
+        hide_index=True,
+        column_config=column_config,
+    )
 
 if is_running:
     time.sleep(2)

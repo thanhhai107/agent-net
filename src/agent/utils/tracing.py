@@ -30,3 +30,15 @@ def langsmith_tracing_context(
     if not _env_enabled("LANGSMITH_TRACING", default=False):
         return nullcontext()
     return ls.tracing_context(project_name=project_name, metadata=metadata)
+
+
+def session_problem_label(session: Any) -> str:
+    """Return a stable problem label for tracing metadata."""
+    problem_names = getattr(session, "problem_names", None) or []
+    if problem_names:
+        return str(problem_names[0])
+
+    root_cause = getattr(session, "root_cause_name", "") or ""
+    if isinstance(root_cause, (list, tuple)):
+        return str(root_cause[0]) if root_cause else ""
+    return str(root_cause)

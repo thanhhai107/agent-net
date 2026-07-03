@@ -69,6 +69,7 @@ from agent.utils.template import (
     EVIDENCE_CONTRACT_PROMPT,
     OVERALL_DIAGNOSIS_PROMPT,
 )
+from agent.utils.tracing import session_problem_label
 from nika.cli.commands.agent import (
     SUPPORTED_AGENT_TYPES,
     SUPPORTED_LLM_BACKENDS,
@@ -99,6 +100,19 @@ def _agent_run_config(
 
 
 class WorkflowModelTest(unittest.TestCase):
+    def test_session_problem_label_uses_problem_name_when_present(self) -> None:
+        session = SimpleNamespace(
+            problem_names=["link_down"],
+            root_cause_name="no_fault",
+        )
+
+        self.assertEqual(session_problem_label(session), "link_down")
+
+    def test_session_problem_label_handles_no_fault_controls(self) -> None:
+        session = SimpleNamespace(problem_names=[], root_cause_name="no_fault")
+
+        self.assertEqual(session_problem_label(session), "no_fault")
+
     def test_evidence_contract_is_shared_by_diagnosis_prompts(self) -> None:
         contract_anchor = "guidance only; they are not evidence"
         prompts = [
