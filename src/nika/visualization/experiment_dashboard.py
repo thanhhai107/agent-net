@@ -515,7 +515,11 @@ def _transposed_results_dataframe(rows: list[dict[str, object]], columns: list[s
     transposed = frame[metric_columns].transpose()
     transposed.columns = result_names
     transposed.insert(0, "metric", transposed.index)
-    return transposed.reset_index(drop=True)
+    # After transposition each result column mixes metric types: floats, ints,
+    # strings such as "8233s", and nulls. Streamlit serializes dataframes via
+    # Arrow, which requires one stable type per column. Keep normal result
+    # tables numeric, but render transposed comparison tables as text.
+    return transposed.reset_index(drop=True).fillna("-").astype(str)
 
 
 def _result_column_config() -> dict[str, object]:
@@ -1577,7 +1581,7 @@ column_config = _result_column_config()
 
 with summary_tab:
     st.dataframe(
-        _transposed_results_dataframe(
+        _results_dataframe(
             _summary_result_rows(result_rows),
             RESULT_SUMMARY_COLUMNS,
         ),
@@ -1588,7 +1592,7 @@ with summary_tab:
 
 with detail_tab:
     st.dataframe(
-        _transposed_results_dataframe(
+        _results_dataframe(
             _summary_result_rows(result_rows),
             RESULT_DETAIL_COLUMNS,
         ),
