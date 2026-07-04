@@ -10,6 +10,8 @@ import textwrap
 import time
 from pathlib import Path
 
+from langgraph.errors import GraphRecursionError
+
 from agent.composition import (
     AgentRunConfig,
     MemoryConfig,
@@ -446,19 +448,26 @@ def run_single_benchmark(
         )
 
     try:
-        start_agent(
-            AgentRunConfig(
-                agent_type=agent_type,
-                llm_backend=llm_backend,
-                model=model,
-                max_steps=max_steps,
-                max_attempts=max_attempts,
-                stream_output=False,
-                tool_evolution=tool_evolution,
-                memory=memory,
-            ),
-            session_id=session_id,
-        )
+        try:
+            start_agent(
+                AgentRunConfig(
+                    agent_type=agent_type,
+                    llm_backend=llm_backend,
+                    model=model,
+                    max_steps=max_steps,
+                    max_attempts=max_attempts,
+                    stream_output=False,
+                    tool_evolution=tool_evolution,
+                    memory=memory,
+                ),
+                session_id=session_id,
+            )
+        except GraphRecursionError:
+            log_event(
+                "agent_max_recursion",
+                f"Agent reached max recursion limit for session {session_id}; evaluating as missing submission.",
+                session_id=session_id,
+            )
         eval_results(
             session_id=session_id,
             run_judge=run_judge,

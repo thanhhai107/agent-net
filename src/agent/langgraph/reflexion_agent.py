@@ -328,24 +328,48 @@ class ReflexionAgent:
             },
         ):
             try:
-                return await self.graph.ainvoke(
-                    {
+                try:
+                    return await self.graph.ainvoke(
+                        {
+                            "task_description": task_description,
+                            "attempt_count": 0,
+                            "attempt_report": "",
+                            "attempt_error": "",
+                            "attempt_trace": [],
+                            "diagnosis_report": "",
+                            "is_max_steps_reached": False,
+                            "best_score": -1.0,
+                            "evaluation_failed": False,
+                            "memories": [],
+                        },
+                        config={
+                            **callback_config(self.langfuse_callbacks),
+                            "recursion_limit": self.max_attempts * 4 + 4,
+                        },
+                    )
+                except GraphRecursionError:
+                    self._callback("workflow")._log(
+                        "max_recursion_reached",
+                        {
+                            "message": (
+                                "Reflexion workflow reached max recursion limit "
+                                "before producing a submission."
+                            )
+                        },
+                    )
+                    return {
                         "task_description": task_description,
-                        "attempt_count": 0,
-                        "attempt_report": "",
-                        "attempt_error": "",
-                        "attempt_trace": [],
-                        "diagnosis_report": "",
-                        "is_max_steps_reached": False,
-                        "best_score": -1.0,
-                        "evaluation_failed": False,
-                        "memories": [],
-                    },
-                    config={
-                        **callback_config(self.langfuse_callbacks),
-                        "recursion_limit": self.max_attempts * 4 + 4,
-                    },
-                )
+                        "diagnosis_report": "ERROR_MAX_STEPS_REACHED",
+                        "is_max_steps_reached": True,
+                        "attempt_error": "ERROR_MAX_STEPS_REACHED",
+                        "messages": [
+                            HumanMessage(
+                                content=(
+                                    "Error: reflexion did not finish within max steps."
+                                )
+                            )
+                        ],
+                    }
             finally:
                 write_tool_evolution_session(
                     self.tool_evolution_runtime,

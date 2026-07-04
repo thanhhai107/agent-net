@@ -1325,6 +1325,29 @@ class PlanExecuteBehaviorTest(unittest.IsolatedAsyncioTestCase):
             "end",
         )
 
+    async def test_workflow_recursion_returns_missing_submission_state(self) -> None:
+        self.agent.session = SimpleNamespace(
+            scenario_name="simple_bgp",
+            problem_names=["link_down"],
+            root_cause_name="link_down",
+            scenario_topo_size="",
+            model="model",
+        )
+        self.agent.langfuse_callbacks = []
+        self.agent.tool_evolution_runtime = None
+        self.agent.graph = AsyncMock()
+        self.agent.graph.ainvoke.side_effect = GraphRecursionError()
+
+        with patch(
+            "agent.langgraph.plan_execute_agent.write_tool_evolution_session"
+        ) as write_session:
+            result = await self.agent.run("Diagnose")
+
+        self.assertTrue(result["is_max_steps_reached"])
+        self.assertEqual(result["diagnosis_report"], "ERROR_MAX_STEPS_REACHED")
+        self.assertIn("did not finish within max steps", result["messages"][0].content)
+        write_session.assert_called_once_with(None, self.tmp.name)
+
     async def test_empty_report_skips_submission(self) -> None:
         self.agent.submission_agent = AsyncMock()
 
@@ -1461,6 +1484,30 @@ class ReflexionBehaviorTest(unittest.IsolatedAsyncioTestCase):
             self.agent._route_after_evaluation(update),
             "end",
         )
+
+    async def test_workflow_recursion_returns_missing_submission_state(self) -> None:
+        self.agent.session = SimpleNamespace(
+            scenario_name="simple_bgp",
+            problem_names=["link_down"],
+            root_cause_name="link_down",
+            scenario_topo_size="",
+            model="model",
+        )
+        self.agent.langfuse_callbacks = []
+        self.agent.tool_evolution_runtime = None
+        self.agent.graph = AsyncMock()
+        self.agent.graph.ainvoke.side_effect = GraphRecursionError()
+
+        with patch(
+            "agent.langgraph.reflexion_agent.write_tool_evolution_session"
+        ) as write_session:
+            result = await self.agent.run("Diagnose")
+
+        self.assertTrue(result["is_max_steps_reached"])
+        self.assertEqual(result["diagnosis_report"], "ERROR_MAX_STEPS_REACHED")
+        self.assertEqual(result["attempt_error"], "ERROR_MAX_STEPS_REACHED")
+        self.assertIn("did not finish within max steps", result["messages"][0].content)
+        write_session.assert_called_once_with(None, self.tmp.name)
 
     async def test_attempt_non_recursion_failure_is_preserved_for_evaluation(self) -> None:
         self.agent.actor = AsyncMock()

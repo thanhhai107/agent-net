@@ -280,22 +280,46 @@ class PlanExecuteAgent:
             },
         ):
             try:
-                return await self.graph.ainvoke(
-                    {
+                try:
+                    return await self.graph.ainvoke(
+                        {
+                            "task_description": task_description,
+                            "plan": [],
+                            "completed_steps": [],
+                            "executed_steps": 0,
+                            "diagnosis_report": "",
+                            "planning_failed": False,
+                            "is_max_steps_reached": False,
+                            "messages": [HumanMessage(content=task_description)],
+                        },
+                        config={
+                            **callback_config(self.langfuse_callbacks),
+                            "recursion_limit": self.max_steps * 3 + 10,
+                        },
+                    )
+                except GraphRecursionError:
+                    self._callback("workflow")._log(
+                        "max_recursion_reached",
+                        {
+                            "message": (
+                                "Plan-and-execute workflow reached max recursion "
+                                "limit before producing a submission."
+                            )
+                        },
+                    )
+                    return {
                         "task_description": task_description,
-                        "plan": [],
-                        "completed_steps": [],
-                        "executed_steps": 0,
-                        "diagnosis_report": "",
-                        "planning_failed": False,
-                        "is_max_steps_reached": False,
-                        "messages": [HumanMessage(content=task_description)],
-                    },
-                    config={
-                        **callback_config(self.langfuse_callbacks),
-                        "recursion_limit": self.max_steps * 3 + 10,
-                    },
-                )
+                        "diagnosis_report": "ERROR_MAX_STEPS_REACHED",
+                        "is_max_steps_reached": True,
+                        "messages": [
+                            HumanMessage(
+                                content=(
+                                    "Error: plan-and-execute did not finish within "
+                                    "max steps."
+                                )
+                            )
+                        ],
+                    }
             finally:
                 write_tool_evolution_session(
                     self.tool_evolution_runtime,

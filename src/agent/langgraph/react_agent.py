@@ -352,24 +352,39 @@ class BasicReActAgent:
 
     async def submission_agent_builder(self, state: AgentState):
         diag_text = state["diagnosis_report"]
-        result = await self.submission_agent.ainvoke(
-            {
+        try:
+            result = await self.submission_agent.ainvoke(
+                {
+                    "messages": [
+                        HumanMessage(
+                            content=f"Based on the diagnosis report: {diag_text}, please provide the submission. Do not submit if no report available."
+                        ),
+                    ]
+                },
+                config={
+                    "callbacks": [
+                        AgentCallbackLogger(
+                            agent=SUBMISSION, session_dir=self.session_dir
+                        )
+                    ],
+                    "recursion_limit": self.max_steps,
+                },
+                debug=True,
+            )
+            return {
+                "messages": result["messages"],
+            }
+        except GraphRecursionError:
+            AgentCallbackLogger(
+                agent=SUBMISSION, session_dir=self.session_dir
+            )._log(
+                "max_recursion_reached",
+                {"message": "Submission phase reached max recursion limit."},
+            )
+            return {
                 "messages": [
                     HumanMessage(
-                        content=f"Based on the diagnosis report: {diag_text}, please provide the submission. Do not submit if no report available."
-                    ),
-                ]
-            },
-            config={
-                "callbacks": [
-                    AgentCallbackLogger(
-                        agent=SUBMISSION, session_dir=self.session_dir
+                        content="Submission was not produced before the max step limit."
                     )
                 ],
-                "recursion_limit": self.max_steps,
-            },
-            debug=True,
-        )
-        return {
-            "messages": result["messages"],
-        }
+            }
