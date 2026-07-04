@@ -244,6 +244,11 @@ def benchmark_run(
         hidden=True,
         help="Internal zero-based YAML case index for timeline reporting.",
     ),
+    resume: bool = typer.Option(
+        False,
+        "--resume",
+        help="Resume a YAML batch by skipping completed benchmark indices in --result-root.",
+    ),
 ) -> None:
     """Run one benchmark case from YAML, or a single case when SCENARIO and --problem are set."""
     if not run_judge and (judge_backend is not None or judge_model is not None):
@@ -299,6 +304,8 @@ def benchmark_run(
     single_mode = scenario is not None
 
     if single_mode:
+        if resume:
+            raise typer.BadParameter("--resume applies to YAML batch mode only.")
         if not problem:
             raise typer.BadParameter("--problem is required when SCENARIO is given.")
         if scenario_requires_topo_tier(scenario) and not tier:
@@ -361,4 +368,5 @@ def benchmark_run(
         judge_model=judge_model,
         tool_evolution=tool_config,
         result_root=result_root,
+        resume=resume,
     )

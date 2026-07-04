@@ -108,6 +108,8 @@ def _benchmark_command(config: dict[str, Any]) -> list[str]:
     )
     if config.get("result_root"):
         command.extend(["--result-root", str(config["result_root"])])
+    if config.get("resume"):
+        command.append("--resume")
     return command
 
 
@@ -134,7 +136,10 @@ def experiment_label(config: dict[str, Any]) -> str:
     labels = [AGENT_LABELS.get(agent_type(config), agent_type(config))]
     ordered = ["tool_evolution", "memory_evolution"]
     labels.extend(MODULE_LABELS[item] for item in ordered if item in modules)
-    return " + ".join(labels)
+    label = " + ".join(labels)
+    if config.get("resume"):
+        label = f"{label} Resume"
+    return label
 
 
 def build_experiment_command(config: dict[str, Any]) -> list[str]:
@@ -234,6 +239,31 @@ def prepare_experiment_config(config: dict[str, Any]) -> dict[str, Any]:
     return prepared
 
 
+def prepare_resume_config(
+    source_spec: dict[str, Any],
+    *,
+    resume_run_id: str | None = None,
+) -> dict[str, Any]:
+    config = dict(source_spec.get("config") or {})
+    if not config:
+        raise ValueError("Selected run does not have a resumable config.")
+    source_run_id = str(source_spec.get("run_id") or config.get("experiment_id") or "").strip()
+    if not source_run_id:
+        raise ValueError("Selected run does not have a source run id.")
+
+    if not str(config.get("result_root") or "").strip():
+        config["result_root"] = str(RESULTS_DIR / source_run_id)
+    modules = selected_modules(config)
+    if "tool_evolution" in modules and not str(config.get("tool_library_id") or "").strip():
+        config["tool_library_id"] = source_run_id
+    if "memory_evolution" in modules and not str(config.get("memory_bank") or "").strip():
+        config["memory_bank"] = source_run_id
+
+    config["experiment_id"] = resume_run_id or source_run_id
+    config["resume"] = True
+    return prepare_experiment_config(config)
+
+
 def create_run(config: dict[str, Any]) -> Path:
     RUNS_DIR.mkdir(parents=True, exist_ok=True)
     config = prepare_experiment_config(config)
@@ -288,6 +318,84 @@ def create_run(config: dict[str, Any]) -> Path:
         }
         (run_dir / META_FILENAME).write_text(json.dumps(meta, indent=2), encoding="utf-8")
 
+    return run_dir
+
+
+def resume_run(run_dir: Path) -> Path:
+    """Resume a stopped/failed Studio run in-place using the same run directory."""
+    RUNS_DIR.mkdir(parents=True, exist_ok=True)
+    run_dir = Path(run_dir)
+    spec = read_run_spec(run_dir)
+    source_run_id = str(spec.get("run_id") or run_dir.name)
+    current_status = run_status(run_dir).get("status")
+    if current_status in {"running", "queued"}:
+        raise ValueError(f"Run {source_run_id} is already {current_status}.")
+
+    config = prepare_resume_config(spec, resume_run_id=source_run_id)
+    plan = build_command_plan(config)
+    updated_spec = {
+        **spec,
+        "run_id": source_run_id,
+        "created_at": spec.get("created_at") or datetime.now(timezone.utc).isoformat(),
+        "resumed_at": datetime.now(timezone.utc).isoformat(),
+        "config": config,
+        "commands": [asdict(item) for item in plan],
+    }
+    (run_dir / SPEC_FILENAME).write_text(json.dumps(updated_spec, indent=2), encoding="utf-8")
+    log_path = run_dir / LOG_FILENAME
+    resume_payload = {
+        "run_id": source_run_id,
+        "result_root": str(config.get("result_root") or ""),
+    }
+    _clean_resume_log(run_dir)
+
+    is_busy = any(
+        path != run_dir and run_status(path).get("status") == "running"
+        for path in list_runs()
+    )
+    if is_busy:
+        meta = {
+            **_read_json(run_dir / META_FILENAME),
+            "run_id": source_run_id,
+            "pid": 0,
+            "status": "queued",
+            "resumed_at": datetime.now(timezone.utc).isoformat(),
+            "log_path": str(log_path),
+            "spec_path": str(run_dir / SPEC_FILENAME),
+        }
+        _write_run_meta(run_dir, meta)
+        _append_run_log(
+            run_dir,
+            "ui_run_resumed "
+            + json.dumps({**resume_payload, "queued": True}, ensure_ascii=False),
+        )
+        return run_dir
+
+    _append_run_log(
+        run_dir,
+        "ui_run_resumed " + json.dumps(resume_payload, ensure_ascii=False),
+    )
+    log_handle = log_path.open("a", encoding="utf-8")
+    proc = subprocess.Popen(
+        [sys.executable, "-u", "-m", "nika.visualization.experiment_runner", str(run_dir / SPEC_FILENAME)],
+        cwd=_REPO_ROOT,
+        stdout=log_handle,
+        stderr=subprocess.STDOUT,
+        text=True,
+        start_new_session=True,
+    )
+    log_handle.close()
+    meta = {
+        **_read_json(run_dir / META_FILENAME),
+        "run_id": source_run_id,
+        "pid": proc.pid,
+        "status": "running",
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "resumed_at": datetime.now(timezone.utc).isoformat(),
+        "log_path": str(log_path),
+        "spec_path": str(run_dir / SPEC_FILENAME),
+    }
+    _write_run_meta(run_dir, meta)
     return run_dir
 
 
@@ -362,8 +470,13 @@ def run_status(run_dir: Path) -> dict[str, Any]:
         return {**meta, "status": "queued", "exit_code": None}
     if meta.get("status") == "stopped":
         return {**meta, "status": "stopped", "exit_code": None}
-    log_text = read_run_log(run_dir)
-    done = [line for line in log_text.splitlines() if line.startswith("ui_run_done ")]
+    log_lines = read_run_log(run_dir).splitlines()
+    last_resume = -1
+    for index, line in enumerate(log_lines):
+        if line.startswith("ui_run_resumed "):
+            last_resume = index
+    current_lines = log_lines[last_resume + 1 :]
+    done = [line for line in current_lines if line.startswith("ui_run_done ")]
     if done:
         payload = _parse_json_suffix(done[-1], "ui_run_done ")
         code = _int(payload.get("exit_code"), 1)
@@ -412,6 +525,24 @@ def _write_run_meta(run_dir: Path, meta: dict[str, Any]) -> None:
 def _append_run_log(run_dir: Path, message: str) -> None:
     with (run_dir / LOG_FILENAME).open("a", encoding="utf-8") as handle:
         handle.write(message.rstrip() + "\n")
+
+
+def _clean_resume_log(run_dir: Path) -> None:
+    """Remove stale UI terminal markers before resuming a run in place."""
+    log_path = run_dir / LOG_FILENAME
+    if not log_path.exists():
+        return
+    terminal_prefixes = (
+        "ui_step_done ",
+        "ui_run_done ",
+        "ui_run_stopped ",
+    )
+    lines = [
+        line
+        for line in log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+        if not line.startswith(terminal_prefixes)
+    ]
+    log_path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
 
 
 def stop_run(run_dir: Path) -> None:
@@ -471,9 +602,11 @@ def parse_progress_events(log_text: str) -> list[dict[str, str]]:
     prefixes = (
         "ui_step_start ",
         "ui_step_done ",
+        "ui_run_resumed ",
         "ui_run_stopped ",
         "ui_run_done ",
         "benchmark_start ",
+        "benchmark_skip ",
         "benchmark_progress ",
         "benchmark_done ",
         "benchmark_failed ",

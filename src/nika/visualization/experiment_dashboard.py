@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import html
 import re
 import shlex
 import time
@@ -22,6 +23,7 @@ from nika.visualization.experiment_runner import (
     prepare_experiment_config,
     read_run_log,
     read_run_spec,
+    resume_run,
     run_status,
     stop_run,
 )
@@ -149,7 +151,8 @@ st.markdown(
         font-weight: 800;
         transition: all 0.2s ease;
       }
-      /* Run button styling (Green) - matches primary buttons by default */
+      /* Stable action colors. Target explicit widget keys, not column order. */
+      div.st-key-studio_run_button button,
       div.stButton button[data-testid="baseButton-primary"] {
         border: 1px solid #16a34a !important;
         background: linear-gradient(135deg, #22c55e, #16a34a) !important;
@@ -158,6 +161,7 @@ st.markdown(
         font-weight: 800 !important;
         transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1) !important;
       }
+      div.st-key-studio_run_button button:hover,
       div.stButton button[data-testid="baseButton-primary"]:hover {
         border-color: #15803d !important;
         background: linear-gradient(135deg, #4ade80, #22c55e) !important;
@@ -165,29 +169,11 @@ st.markdown(
         transform: translateY(-1.5px) !important;
         box-shadow: 0 6px 20px rgba(34, 197, 94, 0.35) !important;
       }
+      div.st-key-studio_run_button button:active,
       div.stButton button[data-testid="baseButton-primary"]:active {
         transform: translateY(0.5px) !important;
       }
 
-      /* Stop Current button styling (Red) - matches primary buttons in the second column of a horizontal block row */
-      div[data-testid="stHorizontalBlock"] div[data-testid="column"]:nth-of-type(2) div.stButton button[data-testid="baseButton-primary"] {
-        border: 1px solid #dc2626 !important;
-        background: linear-gradient(135deg, #ef4444, #dc2626) !important;
-        color: #ffffff !important;
-        border-radius: 11px !important;
-        font-weight: 800 !important;
-        transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1) !important;
-      }
-      div[data-testid="stHorizontalBlock"] div[data-testid="column"]:nth-of-type(2) div.stButton button[data-testid="baseButton-primary"]:hover {
-        border-color: #b91c1c !important;
-        background: linear-gradient(135deg, #f87171, #ef4444) !important;
-        color: #ffffff !important;
-        transform: translateY(-1.5px) !important;
-        box-shadow: 0 6px 20px rgba(239, 68, 68, 0.35) !important;
-      }
-      div[data-testid="stHorizontalBlock"] div[data-testid="column"]:nth-of-type(2) div.stButton button[data-testid="baseButton-primary"]:active {
-        transform: translateY(0.5px) !important;
-      }
       /* Secondary button styling */
       button[data-testid="baseButton-secondary"], .stDownloadButton > button {
         border: 1px solid rgba(14, 165, 233, .28) !important;
@@ -204,6 +190,39 @@ st.markdown(
       }
       button[data-testid="baseButton-secondary"]:active, .stDownloadButton > button:active {
         transform: translateY(0.5px);
+      }
+      div.st-key-studio_queue_button button {
+        border: 1px solid #2563eb !important;
+        background: linear-gradient(135deg, #3b82f6, #2563eb) !important;
+        color: #ffffff !important;
+      }
+      div.st-key-studio_queue_button button:hover {
+        border-color: #1d4ed8 !important;
+        background: linear-gradient(135deg, #60a5fa, #3b82f6) !important;
+        color: #ffffff !important;
+        box-shadow: 0 6px 20px rgba(37, 99, 235, 0.24) !important;
+      }
+      div.st-key-studio_resume_button button {
+        border: 1px solid rgba(217, 119, 6, .38) !important;
+        background: rgba(251, 191, 36, .18) !important;
+        color: #b45309 !important;
+      }
+      div.st-key-studio_resume_button button:hover {
+        border-color: #d97706 !important;
+        background: rgba(251, 191, 36, .28) !important;
+        color: #92400e !important;
+        box-shadow: 0 6px 20px rgba(217, 119, 6, 0.18) !important;
+      }
+      div.st-key-studio_stop_button button {
+        border: 1px solid rgba(220, 38, 38, .38) !important;
+        background: rgba(239, 68, 68, .12) !important;
+        color: #dc2626 !important;
+      }
+      div.st-key-studio_stop_button button:hover {
+        border-color: #b91c1c !important;
+        background: rgba(239, 68, 68, .22) !important;
+        color: #b91c1c !important;
+        box-shadow: 0 6px 20px rgba(239, 68, 68, 0.18) !important;
       }
 
       div[data-testid="stCodeBlock"] {
@@ -334,12 +353,9 @@ def _fmt_delta(value: float | None) -> str:
 RESULT_SUMMARY_COLUMNS = [
     "result_root",
     "modules",
-    "progress",
     "detection_score",
     "localization_f1",
     "rca_f1",
-    "localization_precision",
-    "rca_precision",
     "tool_calls",
     "tool_errors",
     "total_tokens",
@@ -895,11 +911,82 @@ def _result_rows(*, benchmark_name: str | None = None) -> list[dict[str, object]
     return rows
 
 
+def _event_int(value: object) -> int | None:
+    try:
+        return int(str(value))
+    except (TypeError, ValueError):
+        return None
+
+
+def _index_progress(value: object) -> tuple[int | None, int | None]:
+    raw = str(value or "")
+    if "/" not in raw:
+        return None, None
+    left, right = raw.split("/", 1)
+    return _event_int(left), _event_int(right)
+
+
+def _benchmark_progress_state(events: list[dict[str, str]]) -> tuple[int, int, str] | None:
+    completed: int | None = None
+    total: int | None = None
+    failed = 0
+    summary_seen = False
+
+    for event in events:
+        kind = event.get("event")
+        if kind not in {
+            "benchmark_start",
+            "benchmark_skip",
+            "benchmark_progress",
+            "benchmark_failed",
+            "benchmark_summary",
+        }:
+            continue
+
+        index_value, index_total = _index_progress(event.get("index"))
+        if index_total is not None:
+            total = index_total
+
+        event_total = _event_int(event.get("total"))
+        if event_total is not None:
+            total = event_total
+
+        event_completed = _event_int(event.get("completed"))
+        if event_completed is not None:
+            completed = event_completed
+        elif kind == "benchmark_start" and completed is None and index_value is not None:
+            completed = max(0, index_value - 1)
+
+        event_failed = _event_int(event.get("failed"))
+        if event_failed is not None:
+            failed = event_failed
+
+        if kind == "benchmark_summary":
+            summary_seen = True
+
+    if completed is None or total is None:
+        return None
+    completed = max(0, min(completed, total))
+    suffix = f"{completed}/{total} completed"
+    if failed:
+        suffix += f" ({failed} failed)"
+    if summary_seen and completed >= total and not failed:
+        suffix = "Completed"
+    return completed, total, suffix
+
+
 def _progress_fraction(events: list[dict[str, str]], command_count: int) -> tuple[float, str]:
     if not events:
         return 0.0, "Waiting"
+
+    benchmark_state = _benchmark_progress_state(events)
+    if benchmark_state is not None:
+        completed, total, label = benchmark_state
+        return completed / max(1, total), label
+
     if events[-1]["event"] == "ui_run_done":
-        return 1.0, "Done"
+        exit_code = events[-1].get("exit_code", "1")
+        return (1.0, "Done") if str(exit_code) == "0" else (0.0, "Failed")
 
     step_index = 1
     step_total = max(1, command_count)
@@ -911,32 +998,55 @@ def _progress_fraction(events: list[dict[str, str]], command_count: int) -> tupl
             except ValueError:
                 pass
 
-    within_step = 0.0
-    
     # Only show Step prefix if there are multiple steps in the plan
     prefix = f"Step {step_index}/{step_total}" if step_total > 1 else ""
-    label = prefix
+    label = prefix if prefix else "Running"
 
-    for event in reversed(events):
-        if event["event"] == "benchmark_progress":
-            completed = event.get("completed", "0")
-            total = event.get("total") or "30"
-            try:
-                within_step = int(completed) / max(1, int(total))
-                suffix = f"{completed}/{total} completed"
-            except (ValueError, TypeError):
-                suffix = f"{completed} completed"
-            label = f"{prefix}: {suffix}" if prefix else suffix
-            break
-        if event["event"] == "benchmark_summary":
-            within_step = 1.0
-            label = f"{prefix}: Completed" if prefix else "Completed"
-            break
-    if not label:
-        label = prefix if prefix else "Running"
-
-    fraction = (max(0, step_index - 1) + within_step) / step_total
+    fraction = max(0, step_index - 1) / step_total
     return max(0.0, min(1.0, fraction)), label
+
+
+def _event_case_summary(ev: dict) -> str:
+    scenario = ev.get("scenario") or "?"
+    topo_size = ev.get("topo_size") or ev.get("topo") or "-"
+    problem = ev.get("problem") or "?"
+    return (
+        f"scenario={html.escape(str(scenario))} "
+        f"topo_size={html.escape(str(topo_size))} "
+        f"problem={html.escape(str(problem))}"
+    )
+
+
+def _event_inject_summary(ev: dict) -> str:
+    items = []
+    for key, value in sorted(ev.items()):
+        if key.startswith("inject_"):
+            items.append(
+                f"{html.escape(key.removeprefix('inject_'))}="
+                f"{html.escape(str(value))}"
+            )
+    return ", ".join(items) if items else "none"
+
+
+def _case_event_html(
+    ev: dict,
+    *,
+    style: str,
+    verb: str,
+    color: str,
+) -> str:
+    index = html.escape(str(ev.get("index") or "?"))
+    case_summary = _event_case_summary(ev)
+    inject_summary = _event_inject_summary(ev)
+    return (
+        f"<div style='{style}; color: {color};'>"
+        f"<b>[Case {index}]</b> {verb}: "
+        f"<code style='font-size: 0.75rem; background: #f1f5f9; "
+        f"padding: 2px 4px; border-radius: 4px;'>{case_summary}</code>"
+        f"<div style='margin-top: 2px; color: #64748b;'>inject: "
+        f"<code style='font-size: 0.75rem;'>{inject_summary}</code></div>"
+        f"</div>"
+    )
 
 
 st.markdown('<div class="eyebrow">Experimentation & Benchmarking Suite</div>', unsafe_allow_html=True)
@@ -1239,30 +1349,34 @@ for item in plan:
     st.code(format_command_multiline(item.command), language="bash")
 
 
-# Run / Stop Button
 all_runs = list_runs()
-running_run = None
-for r in all_runs[:3]:
-    if run_status(r).get("status") == "running":
-        running_run = r
-        break
+run_statuses = {path: run_status(path) for path in all_runs}
+has_running_run = any(
+    status.get("status") == "running" for status in run_statuses.values()
+)
+has_active_queue = any(
+    status.get("status") in {"running", "queued"} for status in run_statuses.values()
+)
 
-is_running = running_run is not None
-
-if is_running:
-    col1, col2 = st.columns(2, gap="medium")
-    with col1:
-        if st.button("Add Queue", type="secondary", disabled=row_count is None, width="stretch"):
-            run_dir = create_run(prepared_config)
-            st.session_state["active_run_dir"] = str(run_dir)
-            st.rerun()
-    with col2:
-        if st.button("Stop Current", type="primary", width="stretch"):
-            with st.spinner("Stopping run and wiping Kathara containers..."):
-                stop_run(running_run)
-            st.rerun()
+if has_active_queue:
+    if st.button(
+        "Add Queue",
+        key="studio_queue_button",
+        type="secondary",
+        disabled=row_count is None,
+        width="stretch",
+    ):
+        run_dir = create_run(prepared_config)
+        st.session_state["active_run_dir"] = str(run_dir)
+        st.rerun()
 else:
-    if st.button("Run", type="primary", disabled=row_count is None, width="stretch"):
+    if st.button(
+        "Run",
+        key="studio_run_button",
+        type="primary",
+        disabled=row_count is None,
+        width="stretch",
+    ):
         run_dir = create_run(prepared_config)
         st.session_state["active_run_dir"] = str(run_dir)
         st.rerun()
@@ -1270,26 +1384,39 @@ if row_count is None:
     st.error("Benchmark YAML not found.")
 
 runs = list_runs()
+run_statuses = {path: run_status(path) for path in runs}
+has_running_run = any(
+    status.get("status") == "running" for status in run_statuses.values()
+)
+has_active_queue = any(
+    status.get("status") in {"running", "queued"} for status in run_statuses.values()
+)
 selected = _selected_run_dir()
 if runs:
     run_labels = []
     run_map = {}
     for path in runs:
-        status_val = run_status(path).get("status") or "unknown"
+        status_val = run_statuses.get(path, {}).get("status") or "unknown"
         label = f"{path.name} ({status_val})"
         run_labels.append(label)
         run_map[label] = path
 
     selected_label = None
     if selected is not None:
-        selected_status = run_status(selected).get("status") or "unknown"
+        selected_status = run_statuses.get(selected, run_status(selected)).get("status") or "unknown"
         selected_label = f"{selected.name} ({selected_status})"
 
-    selected_label = st.selectbox(
-        "Run history",
-        options=run_labels,
-        index=run_labels.index(selected_label) if selected_label in run_labels else 0,
+    history_col, resume_col, stop_col = st.columns(
+        [3, 1, 1],
+        gap="medium",
+        vertical_alignment="bottom",
     )
+    with history_col:
+        selected_label = st.selectbox(
+            "Run history",
+            options=run_labels,
+            index=run_labels.index(selected_label) if selected_label in run_labels else 0,
+        )
     selected = run_map[selected_label]
     st.session_state["active_run_dir"] = str(selected)
 else:
@@ -1302,14 +1429,47 @@ if selected is not None:
     events = parse_progress_events(log_text)
     fraction, progress_label = _progress_fraction(events, len(spec.get("commands") or []))
     log_key = f"log-{selected.name}"
-    is_running = (status.get("status") == "running")
 else:
     status = {}
     log_text = ""
     events = []
     fraction, progress_label = 0.0, "No active run"
     log_key = "log-none"
-    is_running = False
+
+if selected is not None:
+    selected_status = str(status.get("status") or "unknown")
+    can_resume = (
+        selected_status not in {"running", "queued"}
+        and not has_active_queue
+        and bool(spec.get("config"))
+    )
+    can_stop = selected_status == "running"
+    with resume_col:
+        if st.button(
+            "Resume Selected",
+            key="studio_resume_button",
+            type="secondary",
+            disabled=not can_resume,
+            width="stretch",
+        ):
+            try:
+                run_dir = resume_run(selected)
+            except ValueError as exc:
+                st.error(str(exc))
+            else:
+                st.session_state["active_run_dir"] = str(run_dir)
+                st.rerun()
+    with stop_col:
+        if st.button(
+            "Stop Selected",
+            key="studio_stop_button",
+            type="secondary",
+            disabled=not can_stop,
+            width="stretch",
+        ):
+            with st.spinner("Stopping selected run and wiping Kathara containers..."):
+                stop_run(selected)
+            st.rerun()
 
 
 
@@ -1341,26 +1501,25 @@ def format_event_message_html(ev: dict) -> str | None:
     elif event == "ui_run_done":
         code = ev.get("exit_code", "0")
         return f"<div style='{style}; font-weight: bold; color: #1e293b;'>Run Finished (Exit: <code>{code}</code>)</div>"
+    elif event == "ui_run_resumed":
+        return f"<div style='{style}; color: #2563eb;'><b>Run Resumed</b> in-place with existing results.</div>"
     elif event == "ui_run_stopped":
         return f"<div style='{style}; color: #d97706;'><b>Run Stopped</b> by user. Starting next queued run if available.</div>"
     elif event == "benchmark_start":
-        index = ev.get("index") or "?"
-        scenario = ev.get("scenario") or "?"
-        problem = ev.get("problem") or "?"
-        return f"<div style='{style}'><b>[Scenario {index}]</b> Starting: <code style='font-size: 0.75rem; background: #f1f5f9; padding: 2px 4px; border-radius: 4px;'>{scenario} / {problem}</code></div>"
+        return _case_event_html(ev, style=style, verb="Starting", color="#334155")
+    elif event == "benchmark_skip":
+        return _case_event_html(
+            ev,
+            style=style,
+            verb="Skipped existing result",
+            color="#64748b",
+        )
     elif event == "benchmark_progress":
-        completed = ev.get("completed", "0")
-        failed = ev.get("failed", "0")
-        total = ev.get("total") or "30"
-        return f"<div style='{style}; color: #2563eb;'><b>Benchmark Progress</b>: {completed}/{total} completed (Failed: <span style='color: #dc2626;'>{failed}</span>)</div>"
+        return None
     elif event == "benchmark_done":
-        scenario = ev.get("scenario") or "?"
-        problem = ev.get("problem") or "?"
-        return f"<div style='{style}; color: #16a34a;'><b>[Scenario]</b> Finished: <code>{scenario} / {problem}</code></div>"
+        return _case_event_html(ev, style=style, verb="Finished", color="#16a34a")
     elif event == "benchmark_failed":
-        scenario = ev.get("scenario") or "?"
-        problem = ev.get("problem") or "?"
-        return f"<div style='{style}; color: #dc2626;'><b>[Scenario]</b> Failed: <code>{scenario} / {problem}</code></div>"
+        return _case_event_html(ev, style=style, verb="Failed", color="#dc2626")
     return None
  
 st.markdown('<div class="section-title" style="margin-top: 1.5rem;">Tracking</div>', unsafe_allow_html=True)
@@ -1438,6 +1597,6 @@ with detail_tab:
         column_config=column_config,
     )
 
-if is_running:
+if has_running_run:
     time.sleep(2)
     st.rerun()

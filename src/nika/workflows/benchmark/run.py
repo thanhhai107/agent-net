@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import subprocess
 import sys
 import textwrap
@@ -31,6 +32,7 @@ from nika.workflows.session.close import close_session
 _BENCHMARK_DONE_PREFIX = "benchmark_done "
 _BENCHMARK_FAILED_PREFIX = "benchmark_failed "
 _BENCHMARK_PROGRESS_PREFIX = "benchmark_progress "
+_BENCHMARK_SKIP_PREFIX = "benchmark_skip "
 _BENCHMARK_START_PREFIX = "benchmark_start "
 _BENCHMARK_SUMMARY_PREFIX = "benchmark_summary "
 
@@ -250,12 +252,49 @@ def _run_benchmark_row_subprocess(
     return None
 
 
+def _event_token(value: object) -> str:
+    text = str(value if value is not None else "-").strip() or "-"
+    return "_".join(text.split())
+
+
+def _inject_event_tokens(inject: object) -> list[str]:
+    if isinstance(inject, dict):
+        return [
+            f"inject_{_event_token(key)}={_event_token(value)}"
+            for key, value in sorted(inject.items())
+        ]
+    return []
+
+
 def _progress_row_label(row: dict) -> str:
-    topo = row.get("topo_size") or "-"
-    return (
-        f"scenario={row.get('scenario', '?')} problem={row.get('problem', '?')} "
-        f"topo={topo}"
-    )
+    parts = [
+        f"scenario={_event_token(row.get('scenario', '?'))}",
+        f"topo_size={_event_token(row.get('topo_size') or '-')}",
+        f"problem={_event_token(row.get('problem', '?'))}",
+    ]
+    parts.extend(_inject_event_tokens(row.get("inject") or {}))
+    return " ".join(parts)
+
+
+def _completed_benchmark_indices(result_root: Path) -> set[int]:
+    """Return YAML benchmark indices that already have completed session outputs."""
+    completed: set[int] = set()
+    if not result_root.exists():
+        return completed
+    for run_file in result_root.glob("*/run.json"):
+        try:
+            run_meta = json.loads(run_file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if run_meta.get("status") != "finished":
+            continue
+        if not (run_file.parent / "eval_metrics.json").exists():
+            continue
+        try:
+            completed.add(int(run_meta["benchmark_index"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return completed
 
 
 def _no_fault_ground_truth() -> dict[str, object]:
@@ -382,6 +421,7 @@ def run_single_benchmark(
     if benchmark_index is not None:
         session.update_session("benchmark_index", benchmark_index)
 
+    actual_inject_params: dict[str, str] = {}
     if is_no_fault_problem(problem):
         if inject_params:
             raise ValueError("No-fault benchmark cases do not accept inject parameters.")
@@ -394,6 +434,7 @@ def run_single_benchmark(
         params = dict(
             inject_params or resolve_inject_params(problem, scenario, topo_size or "")
         )
+        actual_inject_params = params
         inject_failure(
             problem_names=[problem],
             session_id=session_id,
@@ -431,10 +472,15 @@ def run_single_benchmark(
             pass
         raise
 
-    print(
-        f"{_BENCHMARK_DONE_PREFIX}session_id={session_id} scenario={scenario} "
-        f"problem={problem} session_dir={session_dir}"
-    )
+    done_parts = [
+        f"{_BENCHMARK_DONE_PREFIX}session_id={session_id}",
+        f"scenario={_event_token(scenario)}",
+        f"problem={_event_token(problem)}",
+        f"session_dir={session_dir}",
+        f"topo_size={_event_token(topo_size or '-')}",
+        *_inject_event_tokens(actual_inject_params),
+    ]
+    print(" ".join(done_parts))
     return session_id
 
 
@@ -452,6 +498,7 @@ def run_benchmark_from_yaml(
     judge_model: str | None = None,
     tool_evolution: ToolEvolutionConfig | None = None,
     result_root: str | Path | None = None,
+    resume: bool = False,
 ) -> None:
     """
     Run benchmark cases defined in a YAML file.
@@ -519,16 +566,31 @@ def run_benchmark_from_yaml(
         if not row.get("fault_seed"):
             row["fault_seed"] = _stable_fault_seed(benchmark_name, row)
         prepared_rows.append(row)
-    completed = 0
+    valid_indices = {int(row["benchmark_index"]) for row in prepared_rows}
+    completed_indices = (
+        _completed_benchmark_indices(benchmark_root) & valid_indices if resume else set()
+    )
+    skipped = len(completed_indices)
+    completed = skipped
     failed = 0
     batch_started_at = time.monotonic()
     print(
-        f"{_BENCHMARK_PROGRESS_PREFIX}total={total} completed=0 failed=0 "
-        f"yaml={benchmark_file} result_root={benchmark_root}",
+        f"{_BENCHMARK_PROGRESS_PREFIX}total={total} completed={completed} "
+        f"failed=0 skipped={skipped} yaml={benchmark_file} "
+        f"result_root={benchmark_root}",
         flush=True,
     )
 
     for index, row in enumerate(prepared_rows):
+        row_index = int(row["benchmark_index"])
+        if row_index in completed_indices:
+            print(
+                f"{_BENCHMARK_SKIP_PREFIX}index={index + 1}/{total} "
+                f"completed={completed} failed={failed} skipped={skipped} "
+                f"{_progress_row_label(row)}",
+                flush=True,
+            )
+            continue
         case_started_at = time.monotonic()
         print(
             f"{_BENCHMARK_START_PREFIX}index={index + 1}/{total} "
@@ -599,6 +661,6 @@ def run_benchmark_from_yaml(
     total_elapsed = time.monotonic() - batch_started_at
     print(
         f"{_BENCHMARK_SUMMARY_PREFIX}total={total} completed={completed} "
-        f"failed={failed} elapsed_sec={total_elapsed:.1f}",
+        f"failed={failed} skipped={skipped} elapsed_sec={total_elapsed:.1f}",
         flush=True,
     )

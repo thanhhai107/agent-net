@@ -10,6 +10,8 @@ from nika.visualization.experiment_runner import (
     build_command_plan,
     parse_progress_events,
     prepare_experiment_config,
+    resume_run,
+    run_status,
 )
 
 
@@ -157,12 +159,114 @@ def test_prepare_experiment_config_uses_one_sequential_name_for_outputs(
     assert command[command.index("--memory") + 1] == "benchmark_test-0007"
 
 
+def test_resume_command_uses_existing_result_root() -> None:
+    command = build_experiment_command(
+        _config(
+            experiment_id="benchmark_evaluate-0001",
+            result_root="/tmp/results/benchmark_evaluate-0001",
+            resume=True,
+        )
+    )
+
+    assert command[command.index("--result-root") + 1] == "/tmp/results/benchmark_evaluate-0001"
+    assert "--resume" in command
+
+
+def test_resume_run_reuses_selected_run_directory(monkeypatch, tmp_path) -> None:
+    runs_dir = tmp_path / "runs"
+    run_dir = runs_dir / "benchmark_evaluate-0001"
+    run_dir.mkdir(parents=True)
+    result_root = tmp_path / "results" / "benchmark_evaluate-0001"
+    spec = {
+        "run_id": "benchmark_evaluate-0001",
+        "created_at": "2026-07-03T22:18:00+00:00",
+        "config": _config(
+            experiment_id="benchmark_evaluate-0001",
+            result_root=str(result_root),
+        ),
+        "commands": [],
+    }
+    (run_dir / "spec.json").write_text(experiment_runner.json.dumps(spec), encoding="utf-8")
+    (run_dir / "meta.json").write_text(
+        experiment_runner.json.dumps({"run_id": "benchmark_evaluate-0001", "status": "running", "pid": 1}),
+        encoding="utf-8",
+    )
+    (run_dir / "run.log").write_text(
+        "\n".join(
+            [
+                'ui_step_start {"index": 1, "name": "ReAct"}',
+                'ui_step_done {"index": 1, "returncode": 1}',
+                'ui_run_stopped {"reason": "user_stop"}',
+                'ui_run_done {"exit_code": 1}',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    class FakeProc:
+        pid = 4242
+
+    popen_calls: list[list[str]] = []
+
+    def fake_popen(command, **kwargs):
+        popen_calls.append(command)
+        return FakeProc()
+
+    monkeypatch.setattr(experiment_runner, "RUNS_DIR", runs_dir)
+    monkeypatch.setattr(experiment_runner.subprocess, "Popen", fake_popen)
+
+    resumed = resume_run(run_dir)
+
+    assert resumed == run_dir
+    assert not (runs_dir / "benchmark_evaluate-0001-resume").exists()
+    updated_spec = experiment_runner.read_run_spec(run_dir)
+    command = updated_spec["commands"][0]["command"]
+    assert updated_spec["run_id"] == "benchmark_evaluate-0001"
+    assert updated_spec["config"]["experiment_id"] == "benchmark_evaluate-0001"
+    assert updated_spec["config"]["result_root"] == str(result_root)
+    assert "--resume" in command
+    assert command[command.index("--result-root") + 1] == str(result_root)
+    assert popen_calls
+    log_text = (run_dir / "run.log").read_text(encoding="utf-8")
+    assert "ui_run_resumed" in log_text
+    assert "ui_step_done" not in log_text
+    assert "ui_run_stopped" not in log_text
+    assert "ui_run_done" not in log_text
+
+
+def test_run_status_ignores_old_done_after_resume_marker(monkeypatch, tmp_path) -> None:
+    run_dir = tmp_path / "runs" / "benchmark_evaluate-0001"
+    run_dir.mkdir(parents=True)
+    (run_dir / "meta.json").write_text(
+        experiment_runner.json.dumps({"run_id": "benchmark_evaluate-0001", "status": "running", "pid": 4242}),
+        encoding="utf-8",
+    )
+    (run_dir / "run.log").write_text(
+        'ui_run_done {"exit_code": 1}\nui_run_resumed {"run_id": "benchmark_evaluate-0001"}\n',
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(experiment_runner, "_pid_running", lambda pid: pid == 4242)
+
+    assert run_status(run_dir)["status"] == "running"
+
+    with (run_dir / "run.log").open("a", encoding="utf-8") as handle:
+        handle.write('ui_run_done {"exit_code": 0}\n')
+
+    status = run_status(run_dir)
+    assert status["status"] == "finished"
+    assert status["exit_code"] == 0
+
+
 def test_parse_progress_events_reads_benchmark_and_ui_events() -> None:
     rows = parse_progress_events(
         '\n'.join(
             [
                 'ui_step_start {"index": 1, "name": "Baseline"}',
+                'ui_run_resumed {"run_id": "benchmark_test-0001"}',
                 "benchmark_progress index=1/30 completed=1 failed=0 session_id=s1",
+                "benchmark_skip index=2/30 completed=2 failed=0 skipped=1",
                 'ui_run_stopped {"reason": "user_stop"}',
                 'ui_run_done {"exit_code": 0}',
             ]
@@ -171,10 +275,13 @@ def test_parse_progress_events_reads_benchmark_and_ui_events() -> None:
 
     assert [row["event"] for row in rows] == [
         "ui_step_start",
+        "ui_run_resumed",
         "benchmark_progress",
+        "benchmark_skip",
         "ui_run_stopped",
         "ui_run_done",
     ]
-    assert rows[1]["completed"] == "1"
-    assert rows[2]["reason"] == "user_stop"
-    assert rows[3]["exit_code"] == "0"
+    assert rows[2]["completed"] == "1"
+    assert rows[3]["skipped"] == "1"
+    assert rows[4]["reason"] == "user_stop"
+    assert rows[5]["exit_code"] == "0"
