@@ -1,6 +1,5 @@
 \documentclass[oneside]{report}
 \usepackage[utf8]{inputenc}
-% \usepackage[T5]{fontenc}
 \usepackage{lmodern}
 \usepackage{graphicx}
 \usepackage{nameref}
@@ -14,74 +13,28 @@
 }
 \newenvironment{myfont}{\fontfamily{inconsolata}\selectfont}{\par}
 \DeclareTextFontCommand{\textmyfont}{\myfont}
-
-% custom packages
 \usepackage[table]{xcolor}
 \usepackage{amsmath}
 \DeclareMathOperator*{\argmax}{arg\,max}
-
-% set font, font size and spacing
 \usepackage{times}
 \renewcommand{\baselinestretch}{1.3}
-% section spacing
 \usepackage{titlesec}
 \titlespacing*{\section}{0pt}{0.5\baselineskip}{0.2\baselineskip}
 \titlespacing*{\subsection}{0pt}{0.4\baselineskip}{0.2\baselineskip}
-
-% setup page layout
 \usepackage[a4paper,left=30mm,top=20mm,bottom=25mm,right=20mm,]{geometry}
-
-
-% % prevent text overflow
-% \usepackage{babel}
-% \newcommand\fh{\babelhyphen{hard}}
-
-% Change indent
-% \usepackage{indentfirst} % indent also after section titles
 \setlength{\parindent}{1cm}
 \usepackage{enumitem}
 \setlist{leftmargin=1cm}
-
-% paragraph spacing
 \setlength{\parskip}{0.5em}
-
-% Customs
-% Page numbering at the center top of page
-% \usepackage{fancyhdr} % Custom headers and footers
-% \pagestyle{fancyplain} % Makes all pages in the document conform to the custom headers and footers
-% \fancyhead[L]{}% Empty left header
-% \fancyhead[C]{\thepage} % Page numbering for center header  
-% \fancyhead[R]{}% Empty right header
-% \fancyfoot[L]{}% Empty left footer
-% \fancyfoot[C]{}% Empty center footer
-% \fancyfoot[R]{}% Empty left footer
-
-%%% Package for Japanese
-% \usepackage{xeCJK}
-% \setCJKmainfont{IPAMincho}
-% \setCJKsansfont{IPAGothic}
-% \setCJKmonofont{IPAGothic}
-
-% \usepackage{CJKutf8}
-
-% natbib
-% if use natbib, please comment out the cite
 \usepackage[sort,numbers]{natbib}
-% Citation
-% \usepackage{cite}
-
-% Math equation
 \usepackage{amssymb}
 
 \usepackage{algorithm}
 \usepackage{algorithmic}
-
 \usepackage{etoolbox}
 \usepackage{caption}
 \usepackage{mdframed}
-
 \usepackage{ragged2e}
-
 \definecolor{yellow}{RGB}{255,242,204}
 \definecolor{red}{RGB}{248,206,204}
 \definecolor{blue}{RGB}{218,232,252}
@@ -170,13 +123,10 @@
 %--------------------------------------------- 
 % References
 %---------------------------------------------
-% Uncomment this block after adding entries to references.bib and citing them
-% in the report. Leaving BibTeX enabled with an empty bibliography produces
-% "I found no \citation commands" diagnostics.
-% \bibliographystyle{IEEEtranSN}
-% \renewcommand\bibname{Tài liệu tham khảo}
-% \addcontentsline{toc}{chapter}{Tài liệu tham khảo}
-% \bibliography{references} % Path to your references.bib file
+\bibliographystyle{IEEEtranSN}
+\renewcommand\bibname{Tài liệu tham khảo}
+\addcontentsline{toc}{chapter}{Tài liệu tham khảo}
+\bibliography{references} % Path to your references.bib file
 
 \appendix
 

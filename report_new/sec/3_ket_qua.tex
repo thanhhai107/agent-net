@@ -1,0 +1,52 @@
+\section{KẾT QUẢ THỰC HIỆN}
+
+\subsection{Sản phẩm đạt được}
+
+Sản phẩm của đề tài là một hệ thống agent chẩn đoán sự cố mạng có khả năng tự cải thiện qua nhiều episode. Hệ thống không chỉ chạy một agent LLM gọi công cụ, mà còn bổ sung lớp học kinh nghiệm sau khi agent hoàn thành nhiệm vụ. Các thành phần đã hoàn thiện gồm:
+\begin{itemize}
+  \item Workflow chẩn đoán ReAct tích hợp MCP tools, có pha diagnosis và pha submission tách biệt để hạn chế agent gửi kết quả khi chưa đủ bằng chứng.
+  \item Procedural Memory Store, SkillToolRuntime và cơ chế tiến hóa kỹ năng sau episode, cho phép kỹ năng chẩn đoán được truy xuất, kích hoạt, cập nhật và nghỉ hưu theo chất lượng sử dụng.
+  \item Tool Refinement Store, ToolEvolutionRuntime và pipeline Explorer--Analyzer--Rewriter, cho phép tài liệu công cụ tự cải thiện dựa trên trace gọi công cụ thực tế.
+  \item Bộ script benchmark tuần tự để chạy baseline và evolved agent trên cùng tập incident, lưu log, tính metric và so sánh hiệu quả.
+\end{itemize}
+
+Ở mức triển khai, sản phẩm có ba đặc điểm quan trọng. Thứ nhất, trạng thái học được lưu ngoài phiên chạy nên có thể tái sử dụng giữa các incident thay vì chỉ tồn tại trong context tạm thời của LLM. Thứ hai, mọi cập nhật đều dựa trên trace có thể kiểm tra lại, gồm lời gọi công cụ, tham số, kết quả trả về và điểm đánh giá cuối. Thứ ba, các mô-đun tiến hóa được thiết kế như phần mở rộng quanh agent hiện có, do đó có thể bật/tắt để so sánh công bằng với baseline và để phân tích chi phí của từng cơ chế.
+
+\subsection{Benchmark và phạm vi thử nghiệm}
+
+Hai lần chạy thực nghiệm đầy đủ tương ứng với baseline và evolved agent, mỗi lần có 125 case được ghi nhận đầy đủ metric. Các case này bao phủ nhiều biến thể topology và 6 nhóm nguyên nhân gốc rễ trên 8 kịch bản mạng. Ngoài các sự cố có lỗi, benchmark còn có các case \code{no\_fault} để kiểm tra khả năng không báo động sai của agent.
+
+Bộ benchmark có ý nghĩa vì nó buộc agent phải kết hợp nhiều nguồn bằng chứng. Một case BGP có thể yêu cầu kiểm tra neighbor, ASN, route advertisement và reachability; một case host có thể cần đối chiếu IP, gateway, DNS và subnet; còn một case P4/BMv2 có thể cần đọc bảng luồng hoặc counter thay vì chỉ ping. Nhờ vậy, kết quả không chỉ phản ánh khả năng trả lời ngôn ngữ tự nhiên, mà còn phản ánh năng lực lập kế hoạch sử dụng công cụ và RCA trong môi trường mô phỏng gần với vận hành mạng.
+
+\begin{table*}[t]
+\centering
+\small
+\caption{Tóm tắt phạm vi benchmark trong hai lần chạy}
+\begin{tabularx}{\textwidth}{@{}p{3.4cm}Yp{2.2cm}@{}}
+\toprule
+\textbf{Nhóm sự cố} & \textbf{Ví dụ} & \textbf{Số lượng} \\
+\midrule
+Link Failures & \code{link\_down}, \code{link\_flap}, packet corruption & 12 \\
+End-Host Failures & thiếu IP, sai gateway, sai DNS, IP conflict & 16 \\
+Misconfigurations & sai ASN BGP, thiếu route, sai OSPF area, flow rule loop, P4 table misconfig & 27 \\
+Resource Contention & quá tải sender/receiver, incast, load balancer overload & 13 \\
+Network Node Errors & FRR down, BMv2 switch down, SDN controller crash, MPLS label limit & 20 \\
+Network Under Attack & BGP hijacking, DHCP spoofing, ARP poisoning, ACL block, web DoS & 12 \\
+\code{no\_fault} & mạng bình thường, không tiêm lỗi & 25 \\
+\bottomrule
+\end{tabularx}
+\end{table*}
+
+\subsection{Tính năng nổi bật và điểm mới}
+
+Điểm mới quan trọng nhất là hệ thống tiến hóa ở hai tầng bổ trợ nhau. Ở tầng chiến lược, Procedural Memory giúp agent nhớ quy trình chẩn đoán có điều kiện kích hoạt rõ ràng, ví dụ ưu tiên kiểm tra cấu hình IP/gateway khi gặp host mất kết nối hoặc kiểm tra BGP neighbor và route table khi có dấu hiệu route leak. Ở tầng thao tác, Tool Refinement giúp agent hiểu cách gọi công cụ chính xác hơn, đặc biệt với các công cụ có ràng buộc tham số hoặc đầu ra khó diễn giải.
+
+Sinh viên trực tiếp hiện thực các module lưu trữ trạng thái JSON, cơ chế truy xuất kỹ năng, runtime gắn hướng dẫn kỹ năng vào quá trình gọi tool, pipeline tinh chỉnh tài liệu công cụ và quy trình benchmark/evaluation. Các kết quả này tạo thành một prototype hoàn chỉnh có thể chạy lặp qua nhiều incident và tích lũy tri thức thay vì chỉ xử lý từng case rời rạc.
+
+Một điểm đáng chú ý là các cải tiến không yêu cầu huấn luyện lại mô hình nền. Toàn bộ quá trình học diễn ra ở lớp hệ thống: tổ chức lại tri thức thủ tục, tăng chất lượng mô tả công cụ và chọn lọc kinh nghiệm dựa trên reward. Cách làm này phù hợp với môi trường nghiên cứu có tài nguyên hạn chế, đồng thời dễ kiểm soát hơn so với fine-tuning trực tiếp một LLM lớn. Khi cần triển khai thử nghiệm với mô hình khác, các file \code{skills.json} và \code{state.json} vẫn có thể được tái sử dụng như tri thức hệ thống.
+
+\subsection{Minh chứng từ hệ thống chạy thực tế}
+
+Trong quá trình benchmark, trace của agent cho thấy lỗi phổ biến của baseline không chỉ nằm ở suy luận cuối cùng mà còn ở cách thu thập bằng chứng. Baseline đôi khi gọi công cụ đúng loại nhưng sai thiết bị, kiểm tra reachability trước khi xác định topology liên quan, hoặc đọc kết quả route table nhưng không liên hệ với nguyên nhân gốc rễ. Sau khi Tool Refinement cập nhật tài liệu công cụ, các ghi chú về tiền điều kiện, tham số hợp lệ và cách diễn giải lỗi giúp giảm các lần gọi công cụ kém giá trị. Sau khi Procedural Memory tích lũy kinh nghiệm, agent có xu hướng đi theo quy trình ổn định hơn: xác nhận triệu chứng, khoanh vùng thiết bị, kiểm tra cấu hình liên quan, rồi mới kết luận RCA.
+
+\notebox{\textit{Ghi chú. Mã nguồn, cấu hình chạy và kết quả thực nghiệm được đính kèm trong repository dự án. Các thành phần chính nằm trong \code{src/nika}, dữ liệu học của Procedural Memory nằm tại \code{runtime/memory}, còn trạng thái Tool Refinement nằm tại \code{runtime/tool\_evolution}.}}
