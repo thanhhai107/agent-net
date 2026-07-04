@@ -136,7 +136,48 @@ def test_ensure_kathara_clean_removes_containers_attached_to_kathara_networks(
     ensure_kathara_clean(context="test")
 
     assert ["docker", "rm", "-f", "orphan123"] in calls
+    assert ["docker", "network", "disconnect", "-f", "net123", "orphan"] in calls
     assert wipe_attempts == 2
+
+
+def test_ensure_kathara_clean_disconnects_active_endpoints_before_network_rm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[list[str]] = []
+    network_removed = False
+
+    def fake_run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        nonlocal network_removed
+        calls.append(command)
+        if command[:3] == ["docker", "network", "ls"] and command[4] == "name=kathara_":
+            if network_removed:
+                return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+            return subprocess.CompletedProcess(command, 0, stdout="net123 kathara_stale\n", stderr="")
+        if command[:3] == ["docker", "network", "inspect"]:
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout='{"abc123": {"Name": "kathara_leaf_router_3_3"}}\n',
+                stderr="",
+            )
+        if command[:3] == ["docker", "network", "rm"]:
+            network_removed = True
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    ensure_kathara_clean(context="test")
+
+    assert [
+        "docker",
+        "network",
+        "disconnect",
+        "-f",
+        "net123",
+        "kathara_leaf_router_3_3",
+    ] in calls
+    assert ["docker", "network", "rm", "net123"] in calls
 
 
 def test_ensure_kathara_clean_tolerates_empty_stale_network_endpoint(

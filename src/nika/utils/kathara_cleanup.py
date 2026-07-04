@@ -133,6 +133,22 @@ def _network_attached_container_ids(network_id: str, *, context: str) -> list[st
     return sorted(containers)
 
 
+def _disconnect_network_endpoints(network_id: str, *, context: str) -> None:
+    containers = _network_containers(network_id, context=context)
+    if not containers:
+        return
+    for container_id, meta in containers.items():
+        endpoint = container_id
+        if isinstance(meta, dict):
+            name = meta.get("Name")
+            if isinstance(name, str) and name:
+                endpoint = name
+        _run_checked(
+            ["docker", "network", "disconnect", "-f", network_id, endpoint],
+            step=f"{context}: docker network endpoint disconnect",
+        )
+
+
 def _network_has_visible_containers(network_id: str, *, context: str) -> bool:
     containers = _network_containers(network_id, context=context)
     return True if containers is None else bool(containers)
@@ -152,6 +168,8 @@ def _remove_kathara_networks(*, context: str) -> None:
     if not rows:
         return
     network_ids = [row.split(maxsplit=1)[0] for row in rows]
+    for network_id in network_ids:
+        _disconnect_network_endpoints(network_id, context=context)
     _run_checked(
         ["docker", "network", "rm", *network_ids],
         step=f"{context}: docker network cleanup",
