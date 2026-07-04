@@ -3,6 +3,9 @@
 This document is the compact source of truth for agent-side learning modules and
 agent baselines in the current NIKA checkout.
 
+For fresh GCP VM installation and Studio smoke tests, see
+[GCP VM Setup Runbook](gcp_vm_setup.md).
+
 ## Boundary
 
 NIKA is the benchmark and orchestration platform. It owns scenarios, sessions,
