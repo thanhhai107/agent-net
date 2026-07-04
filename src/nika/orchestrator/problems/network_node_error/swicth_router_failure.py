@@ -19,6 +19,25 @@ class Bmv2SwitchDownParams(BaseModel):
     host_name: str = Field(description="Target BMv2 switch name.")
 
 
+def _simple_switch_has_live_process(ps_output: str, pgrep_output: str = "") -> bool:
+    """Return True only when simple_switch has a non-zombie process."""
+    for line in ps_output.splitlines():
+        if "simple_switch" not in line:
+            continue
+        parts = line.split(maxsplit=3)
+        if len(parts) < 2:
+            continue
+        state = parts[1] if parts[0].isdigit() else parts[0]
+        if state.upper().startswith("Z") or "<defunct>" in line:
+            continue
+        return True
+
+    fallback = pgrep_output.strip()
+    if not fallback or fallback == "NONE" or "simple_switch" not in fallback:
+        return False
+    return "<defunct>" not in fallback
+
+
 class Bmv2SwitchDownBase:
     root_cause_category = RootCauseCategory.LINK_FAILURE
     root_cause_name = "bmv2_switch_down"
@@ -42,12 +61,20 @@ class Bmv2SwitchDownBase:
         """Verify simple_switch process is NOT running on the BMv2 switch."""
         host = params.host_name
         pgrep_output = self.kathara_api.exec_cmd(host, "pgrep -a simple_switch 2>/dev/null || echo NONE").strip()
-        verified = pgrep_output == "NONE" or "simple_switch" not in pgrep_output
+        ps_output = self.kathara_api.exec_cmd(
+            host,
+            "ps -eo pid=,stat=,comm=,args= 2>/dev/null | grep '[s]imple_switch' || true",
+        ).strip()
+        verified = not _simple_switch_has_live_process(ps_output, pgrep_output)
         return build_verify_result(
             root_cause_name=self.root_cause_name,
             faulty_devices=self.faulty_devices,
             verified=verified,
-            details={"host": host, "pgrep_output": pgrep_output},
+            details={
+                "host": host,
+                "pgrep_output": pgrep_output,
+                "ps_output": ps_output,
+            },
         )
 
 

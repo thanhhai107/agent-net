@@ -82,7 +82,20 @@ class FaultInjectorBase:
 
     def inject_bmv2_down(self, host_name: str):
         """Inject a fault by stopping the bmv2 service on a host."""
-        self.kathara_api.exec_cmd(host_name, "pkill simple_switch")
+        self.kathara_api.exec_cmd(
+            host_name,
+            (
+                "pkill -TERM -f simple_switch 2>/dev/null || true; "
+                "sleep 0.3; "
+                "pkill -KILL -f simple_switch 2>/dev/null || true; "
+                "for i in 1 2 3 4 5; do "
+                "  if ! ps -eo stat=,comm=,args= 2>/dev/null | grep '[s]imple_switch' | grep -vq '^[[:space:]]*Z'; then "
+                "    break; "
+                "  fi; "
+                "  sleep 0.2; "
+                "done"
+            ),
+        )
         self.logger.info(f"Injected bmv2 down fault on {host_name}.")
 
     def recover_bmv2_down(self, host_name: str):
