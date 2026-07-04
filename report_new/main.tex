@@ -38,19 +38,14 @@
 
 \newcolumntype{Y}{>{\raggedright\arraybackslash}X}
 \newcommand{\code}[1]{\texttt{\small #1}}
-\newcommand{\notebox}[1]{%
-  \noindent\colorbox{yellow!35}{%
-    \parbox{\dimexpr\linewidth-2\fboxsep\relax}{\small #1}%
-  }%
-}
-
 \title{XÂY DỰNG HỆ THỐNG SELF-EVOLVING AI AGENTS TRONG XỬ LÝ SỰ CỐ MẠNG VIỄN THÔNG}
 
 \author{
 \begin{tabular}{c}
 Nguyễn Thanh Hải\\
-{\tt\small optimus1072005@gmail.com}\\[1.0em]
-\begin{tabular}{c@{\hspace{3.0em}}c@{\hspace{3.0em}}c}
+{\tt\small optimus1072005@gmail.com}\\
+{\small Lĩnh vực Data Science \& AI Engineering - Chương trình Viettel Digital Talent 2026}\\[1.0em]
+\begin{tabular}{>{\centering\arraybackslash}p{0.28\textwidth}@{\hspace{0.8em}}>{\centering\arraybackslash}p{0.28\textwidth}@{\hspace{0.8em}}>{\centering\arraybackslash}p{0.28\textwidth}}
 Nguyễn Duy Hưng\textsuperscript{1} &
 Nguyễn Duy Anh\textsuperscript{1} &
 Bùi Quang Hưng\textsuperscript{1}\\
@@ -58,14 +53,12 @@ Bùi Quang Hưng\textsuperscript{1}\\
 {\tt\small nguyenduyanh821998@gmail.com} &
 {\tt\small contact.hung.bq@gmail.com}
 \end{tabular}\\[0.65em]
-{\small \textsuperscript{1}Mentor, Trung tâm Chuyển đổi số, Tổng công ty Mạng lưới Viettel}
+{\small \textsuperscript{1}Phòng Giải pháp di động - Trung tâm Nghiên cứu Công nghệ \& Chuyển đổi số - Tổng công ty Mạng lưới Viettel}
 \end{tabular}
 }
 
 \begin{document}
 \maketitle
-
-\notebox{\textbf{Lưu ý.} Báo cáo được trình bày súc tích theo template đề tài nghiên cứu dành cho sinh viên báo cáo với mentor, tập trung làm nổi bật đóng góp trực tiếp của sinh viên, tính mới, tính sáng tạo và hiệu quả thực nghiệm. Tổng nội dung báo cáo được kiểm soát không vượt quá 6 trang.}
 
 \input{sec/1_gioi_thieu}
 \input{sec/2_noi_dung_phuong_phap}
@@ -76,7 +69,7 @@ Bùi Quang Hưng\textsuperscript{1}\\
 {
     \small
     \renewcommand{\refname}{TÀI LIỆU THAM KHẢO}
-    \bibliographystyle{ieeenat_fullname}
+    \bibliographystyle{unsrtnat}
     \bibliography{main}
 }
 

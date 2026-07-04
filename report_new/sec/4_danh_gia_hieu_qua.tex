@@ -17,7 +17,7 @@ Hai cấu hình được so sánh trên cùng tập incident:
 \begin{table*}[t]
 \centering
 \small
-\caption{So sánh baseline và evolved agent trên 125 case chung}
+\caption{Kết quả chung của ReAct + GPT-OSS-120B trên 125 case chung}
 \begin{tabularx}{\textwidth}{@{}Yccc@{}}
 \toprule
 \textbf{Chỉ số} & \textbf{Baseline} & \textbf{Evolved} & \textbf{Thay đổi} \\
@@ -40,11 +40,91 @@ Tổng thời gian chạy & 207.7 phút & 222.6 phút & +7.2\% \\
 \end{tabularx}
 \end{table*}
 
-Kết quả cho thấy agent tự tiến hóa cải thiện rõ nhất ở RCA và incident success rate. RCA F1 tăng từ 0.304 lên 0.387, còn số incident giải quyết đúng hoàn toàn tăng từ 26/125 lên 35/125. Đây là chỉ dấu quan trọng vì mục tiêu của xử lý sự cố mạng không chỉ là phát hiện bất thường, mà còn phải chỉ ra đúng thiết bị và nguyên nhân để kỹ sư có thể hành động.
+Kết quả cho thấy agent tự tiến hóa cải thiện rõ nhất ở RCA và incident success rate: RCA F1 tăng từ 0.304 lên 0.387, số incident giải quyết đúng hoàn toàn tăng từ 26/125 lên 35/125. Evolved Agent cũng giảm số bước 16.7\%, giảm tool calls 18.5\% và đưa tool error rate về 0.00\%. Đổi lại, tổng token tăng 12.4\% và tổng thời gian chạy tăng 7.2\%, chủ yếu do prompt phải nạp thêm kỹ năng và tài liệu công cụ đã tinh chỉnh.
 
-Về hiệu năng, Evolved Agent giảm số bước trung bình 16.7\% và số lần gọi công cụ 18.5\%. Tool error rate cũng giảm từ 11/1700 tool calls xuống 0/1386 tool calls, cho thấy Tool Refinement giúp agent gọi công cụ ổn định hơn và ít sai tham số hơn. Đổi lại, tổng token tăng từ 16.641M lên 18.699M (+12.4\%), chủ yếu do input tokens tăng khi hệ thống nạp thêm kỹ năng và tài liệu công cụ đã tinh chỉnh vào prompt. Tổng thời gian chạy tăng từ 207.7 lên 222.6 phút (+7.2\%), vẫn nhỏ hơn mức tăng token nhờ số bước và số tool calls giảm.
+\begin{table}[t]
+\centering
+\scriptsize
+\caption{Placeholder: xu hướng RCA/Localization theo số case tăng dần. Số liệu minh họa, chưa dùng làm kết quả chính thức.}
+\label{tab:placeholder_case_curve}
+\begin{tabularx}{\columnwidth}{@{}c c c Y@{}}
+\toprule
+\textbf{Phạm vi case} & \textbf{RCA F1} & \textbf{Loc. F1} & \textbf{Diễn giải}\\
+\midrule
+1--25 & .43 & .55 & Tăng nhanh nhờ nhiều case liên quan.\\
+1--50 & .42 & .53 & Hiệu quả còn rõ nhưng tốc độ tăng chậm hơn.\\
+1--75 & .40 & .49 & Bắt đầu gặp topology và tín hiệu lỗi xa hơn.\\
+1--125 & .39 & .46 & Metric hội tụ thấp hơn so với giai đoạn đầu.\\
+\bottomrule
+\end{tabularx}
+\vspace{0.15em}
+\begin{minipage}{\columnwidth}
+\footnotesize\textit{Phân tích.} Metric tăng mạnh ở giai đoạn đầu vì Procedural Memory tái sử dụng được quy trình từ các case liên quan; lợi ích giảm khi gặp topology hoặc nhóm lỗi xa hơn.
+\end{minipage}
+\end{table}
 
-Nếu xét theo giá trị vận hành, mức tăng 34.6\% ở incident success rate là kết quả quan trọng nhất. Trong một hệ thống hỗ trợ kỹ sư, mỗi incident được giải quyết đúng hoàn toàn có thể giảm thời gian đọc log thủ công, giảm số hướng điều tra sai và tạo ra một bản ghi kinh nghiệm cho các lần sau. Mức giảm tool calls cũng có ý nghĩa vì nhiều công cụ chẩn đoán mạng có thể tốn thời gian hoặc tạo tải phụ lên môi trường kiểm thử. Điểm cần cân nhắc là token tăng, do đó khi mở rộng lên hệ thống thật cần cơ chế nén kỹ năng, chọn top-k tài liệu công cụ và giới hạn context theo loại sự cố.
+\begin{table}[t]
+\centering
+\scriptsize
+\caption{Placeholder: độ ổn định của ReAct + GPT-OSS-120B qua 3 lần chạy. Số liệu minh họa, chưa dùng làm kết quả chính thức.}
+\label{tab:placeholder_stability}
+\begin{tabularx}{\columnwidth}{@{}c cc cc Y@{}}
+\toprule
+\textbf{Run} & \multicolumn{2}{c}{\textbf{Success rate}} & \multicolumn{2}{c}{\textbf{RCA F1}} & \textbf{Nhận xét}\\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}
+ & \textbf{Base} & \textbf{Evol.} & \textbf{Base} & \textbf{Evol.} & \\
+\midrule
+1 & 20.8 & 28.0 & .304 & .387 & Run chính thức.\\
+2 & 19.6 & 27.2 & .296 & .381 & Khoảng cách vẫn dương.\\
+3 & 21.6 & 29.6 & .311 & .395 & Không đảo chiều kết luận.\\
+\bottomrule
+\end{tabularx}
+\vspace{0.15em}
+\begin{minipage}{\columnwidth}
+\footnotesize\textit{Phân tích.} Evolved Agent được kỳ vọng ổn định hơn baseline nếu độ lệch giữa các run nhỏ nhưng vẫn giữ khoảng cách hiệu năng dương; bảng chính thức sẽ thay bằng trung bình và độ lệch chuẩn.
+\end{minipage}
+\end{table}
+
+\begin{table}[t]
+\centering
+\scriptsize
+\caption{Placeholder: so sánh chiến lược agent trên GPT-OSS-120B. Số liệu minh họa, chưa dùng làm kết quả chính thức.}
+\label{tab:placeholder_strategy}
+\begin{tabularx}{\columnwidth}{@{}l c c c Y@{}}
+\toprule
+\textbf{Agent} & \textbf{Success} & \textbf{RCA F1} & \textbf{Calls} & \textbf{Diễn giải}\\
+\midrule
+ReAct & 28.0\% & .387 & 11.09 & Vòng lặp quan sát--hành động ngắn.\\
+Plan\&Execute & 25.6\% & .361 & 12.74 & Có cấu trúc nhưng dễ lệch khi quan sát thay đổi.\\
+Reflexion & 26.4\% & .374 & 13.28 & Phản tư thêm nhưng tốn bước và token hơn.\\
+\bottomrule
+\end{tabularx}
+\vspace{0.15em}
+\begin{minipage}{\columnwidth}
+\footnotesize\textit{Phân tích.} Placeholder này kiểm tra luận điểm ReAct phù hợp hơn với benchmark hiện tại do có vòng lặp quan sát--hành động ngắn; Plan\&Execute và Reflexion có thêm chi phí lập kế hoạch hoặc phản tư.
+\end{minipage}
+\end{table}
+
+\begin{table}[t]
+\centering
+\scriptsize
+\caption{Placeholder: so sánh ReAct trên GPT-OSS-120B và Qwen3.5-122B-A10B-FP8. Số liệu minh họa, chưa dùng làm kết quả chính thức.}
+\label{tab:placeholder_model}
+\begin{tabularx}{\columnwidth}{@{}l cc cc Y@{}}
+\toprule
+\textbf{Model} & \multicolumn{2}{c}{\textbf{Baseline}} & \multicolumn{2}{c}{\textbf{Evolved}} & \textbf{Nhận xét}\\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}
+ & \textbf{Success} & \textbf{RCA} & \textbf{Success} & \textbf{RCA} & \\
+\midrule
+GPT-OSS & 20.8 & .304 & 28.0 & .387 & Model chính.\\
+Qwen3.5 & 18.4 & .286 & 25.6 & .365 & Backbone đối chứng.\\
+\bottomrule
+\end{tabularx}
+\vspace{0.15em}
+\begin{minipage}{\columnwidth}
+\footnotesize\textit{Phân tích.} So sánh model giúp tách ảnh hưởng của mô hình nền khỏi lợi ích của Procedural Memory và Tool Refinement; nếu cả hai model đều tăng khi bật evolved mode, đóng góp hệ thống thuyết phục hơn.
+\end{minipage}
+\end{table}
 
 \subsection{Phân tích theo nhóm lỗi}
 
