@@ -33,6 +33,11 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 
 
+_DIAGNOSIS_MESSAGE_BUDGET_CHARS = 120_000
+_DIAGNOSIS_MESSAGE_CONTENT_LIMIT_CHARS = 8_000
+_DIAGNOSIS_RECENT_MESSAGES = 40
+
+
 class AgentState(TypedDict):
     """The state of the agent."""
 
@@ -147,6 +152,58 @@ class BasicReActAgent:
             "tool outputs can support the final diagnosis."
             f"{suffix}"
         )
+
+    @staticmethod
+    def _message_content_text(message: Any) -> str:
+        content = getattr(message, "content", "")
+        if isinstance(content, str):
+            return content
+        return str(content)
+
+    @classmethod
+    def _clip_message_content(cls, message: Any) -> Any:
+        content = cls._message_content_text(message)
+        if len(content) <= _DIAGNOSIS_MESSAGE_CONTENT_LIMIT_CHARS:
+            return message
+        clipped = (
+            content[: _DIAGNOSIS_MESSAGE_CONTENT_LIMIT_CHARS]
+            + "\n...[truncated previous observation to keep diagnosis context bounded]"
+        )
+        if hasattr(message, "model_copy"):
+            return message.model_copy(update={"content": clipped})
+        if hasattr(message, "copy"):
+            return message.copy(update={"content": clipped})
+        return HumanMessage(content=clipped)
+
+    @classmethod
+    def _bounded_messages(cls, messages: list[Any]) -> list[Any]:
+        """Keep ReAct context below model limits while preserving recent evidence."""
+        if not messages:
+            return []
+        first = cls._clip_message_content(messages[0])
+        recent = [
+            cls._clip_message_content(message)
+            for message in messages[1:][-_DIAGNOSIS_RECENT_MESSAGES:]
+        ]
+        kept: list[Any] = []
+        total = len(cls._message_content_text(first))
+        for message in reversed(recent):
+            size = len(cls._message_content_text(message))
+            if kept and total + size > _DIAGNOSIS_MESSAGE_BUDGET_CHARS:
+                break
+            kept.append(message)
+            total += size
+        kept.reverse()
+        if len(kept) < len(messages) - 1:
+            omitted = len(messages) - 1 - len(kept)
+            marker = HumanMessage(
+                content=(
+                    f"[Context bounded: omitted {omitted} older diagnosis messages. "
+                    "Use the remaining recent tool observations as current evidence.]"
+                )
+            )
+            return [first, marker, *kept]
+        return [first, *kept]
 
     @staticmethod
     def _resolve_evidence_gate_retries(default: int) -> int:
@@ -264,6 +321,7 @@ class BasicReActAgent:
             learning_context = self._learning_prompt_suffix()
             if learning_context:
                 messages.append(HumanMessage(content=learning_context))
+            messages = self._bounded_messages(messages)
             diagnosis_report = await self.diagnosis_agent.ainvoke(
                 {"messages": messages},
                 config={
@@ -298,6 +356,7 @@ class BasicReActAgent:
                     *report_messages,
                     HumanMessage(content=gate.prompt),
                 ]
+                retry_messages = self._bounded_messages(retry_messages)
                 diagnosis_report = await self.diagnosis_agent.ainvoke(
                     {"messages": retry_messages},
                     config={

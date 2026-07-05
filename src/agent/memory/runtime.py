@@ -259,7 +259,7 @@ class SkillToolRuntime:
             )
         if context:
             sections.append("\nSkill pool candidates:\n" + context)
-        suffix = "\n".join(sections)
+        suffix = _short_text("\n".join(sections), limit=6000)
         added_tokens = self._record_added_tokens("prompt", suffix)
         self._log(
             "skill_prompt_context",

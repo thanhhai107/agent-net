@@ -20,6 +20,7 @@ from nika.utils.kathara_cleanup import ensure_kathara_clean
 from nika.workflows.benchmark.run import default_benchmark_yaml_path
 
 RUNS_DIR = RUNTIME_DIR / "streamlit_runs"
+DOCKER_CONFIG_DIR = RUNTIME_DIR / "docker_config"
 LOG_FILENAME = "run.log"
 SPEC_FILENAME = "spec.json"
 META_FILENAME = "meta.json"
@@ -58,6 +59,15 @@ def _int(value: Any, default: int) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _safe_docker_config_dir() -> str:
+    """Return a Docker config directory that does not call host credential helpers."""
+    DOCKER_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    config_path = DOCKER_CONFIG_DIR / "config.json"
+    if not config_path.exists():
+        config_path.write_text("{}", encoding="utf-8")
+    return str(DOCKER_CONFIG_DIR)
 
 
 def _common_agent_args(
@@ -652,6 +662,7 @@ def run_spec_file(spec_path: str | Path) -> int:
             import os
             sub_env = os.environ.copy()
             sub_env["PYTHONUNBUFFERED"] = "1"
+            sub_env["DOCKER_CONFIG"] = _safe_docker_config_dir()
             proc = subprocess.Popen(
                 command,
                 cwd=_REPO_ROOT,

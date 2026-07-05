@@ -270,7 +270,7 @@ class ToolEvolutionRuntime:
                 f"{self._refined_description(doc, max_chars=220, diagnosis_only=diagnosis_only)}"
                 f"{suffix}"
             )
-        return (
+        suffix = (
             "\n\nDRAFT tool documentation memory:\n"
             "The primitive tool surface is fixed. Use the following refined docs "
             "to choose valid arguments, avoid known failure modes, and follow "
@@ -280,7 +280,7 @@ class ToolEvolutionRuntime:
             "hypotheses; do not transfer faulty-device or root-cause labels from "
             "past trials.\n"
             + (
-                f"{state.library_usage_description}\n"
+                f"{_clip(state.library_usage_description, limit=1200)}\n"
                 if state.library_usage_description and not tool_filter
                 else ""
             )
@@ -295,6 +295,7 @@ class ToolEvolutionRuntime:
             )
             + "\n".join(snippets)
         )
+        return _clip(suffix, limit=4500)
 
     def tool_runtime_guidance(self, tool_name: str, *, max_chars: int = 500) -> str:
         """Return DRAFT guidance for one primitive tool."""

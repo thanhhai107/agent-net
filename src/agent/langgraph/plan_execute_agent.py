@@ -39,6 +39,27 @@ from nika.utils.session import Session
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
 
+_PROMPT_BUDGET_CHARS = 120_000
+_EVIDENCE_BUDGET_CHARS = 60_000
+_REPORT_BUDGET_CHARS = 40_000
+
+
+def _clip_text(value: Any, *, limit: int) -> str:
+    text = str(value or "")
+    if len(text) <= limit:
+        return text
+    return (
+        text[:limit]
+        + "\n...[truncated to keep Plan&Execute context bounded]"
+    )
+
+
+def _bounded_json(value: Any, *, limit: int) -> str:
+    return _clip_text(
+        json.dumps(value, ensure_ascii=False, default=str),
+        limit=limit,
+    )
+
 PLANNER_PROMPT = """\
 You are a network troubleshooting planner. Create a concise, ordered investigation
 plan for the task. Each step must be independently executable with network
@@ -184,12 +205,13 @@ class PlanExecuteAgent:
         suffix = self._diagnosis_phase.prompt_suffix(activate_skill=activate_skill)
         if not suffix:
             return ""
-        return (
+        return _clip_text(
             "\n\nIntegrated learning context for this workflow:\n"
             "Use the following Skill-Pro/DRAFT guidance to choose and sequence "
             "diagnostic checks. It is not evidence; only current tool outputs "
             "can support the final diagnosis."
-            f"{suffix}"
+            f"{suffix}",
+            limit=8_000,
         )
 
     def install_memory_runtime(
@@ -332,10 +354,18 @@ class PlanExecuteAgent:
             raw_plan = await self.planner.ainvoke(
                 [
                     SystemMessage(
-                        content=PLANNER_PROMPT
-                        + self._learning_prompt_suffix(activate_skill=False)
+                        content=_clip_text(
+                            PLANNER_PROMPT
+                            + self._learning_prompt_suffix(activate_skill=False),
+                            limit=12_000,
+                        )
                     ),
-                    HumanMessage(content=state["task_description"]),
+                    HumanMessage(
+                        content=_clip_text(
+                            state["task_description"],
+                            limit=_PROMPT_BUDGET_CHARS,
+                        )
+                    ),
                 ],
                 config={"callbacks": [callback]},
             )
@@ -370,7 +400,7 @@ class PlanExecuteAgent:
             f"Action: {step.action}\n"
             f"Expected evidence: {step.expected_evidence}\n"
             f"Evidence from completed steps: "
-            f"{json.dumps(prior_evidence, ensure_ascii=False)}"
+            f"{_bounded_json(prior_evidence, limit=_EVIDENCE_BUDGET_CHARS)}"
         )
         learning_context = self._learning_prompt_suffix(activate_skill=True)
         if learning_context:
@@ -378,6 +408,7 @@ class PlanExecuteAgent:
                 "\n\nCurrent integrated learning context for this execution step:"
                 f"{learning_context}"
             )
+        prompt = _clip_text(prompt, limit=_PROMPT_BUDGET_CHARS)
         try:
             result = await self.executor.ainvoke(
                 {"messages": [HumanMessage(content=prompt)]},
@@ -423,21 +454,24 @@ class PlanExecuteAgent:
         callback = self._callback("replanner")
         evidence = [item.model_dump() for item in state.get("completed_steps", [])]
         remaining = [item.model_dump() for item in state.get("plan", [])]
-        prompt = json.dumps(
+        prompt = _bounded_json(
             {
                 "objective": state["objective"],
                 "task": state["task_description"],
                 "completed_evidence": evidence,
                 "remaining_plan": remaining,
             },
-            ensure_ascii=False,
+            limit=_PROMPT_BUDGET_CHARS,
         )
         try:
             raw_decision = await self.replanner.ainvoke(
                 [
                     SystemMessage(
-                        content=REPLANNER_PROMPT
-                        + self._learning_prompt_suffix(activate_skill=False)
+                        content=_clip_text(
+                            REPLANNER_PROMPT
+                            + self._learning_prompt_suffix(activate_skill=False),
+                            limit=12_000,
+                        )
                     ),
                     HumanMessage(content=prompt),
                 ],
@@ -505,7 +539,8 @@ class PlanExecuteAgent:
                     "messages": [
                         HumanMessage(
                             content=(
-                                f"Based on the diagnosis report: {report}, please provide "
+                                "Based on the diagnosis report: "
+                                f"{_clip_text(report, limit=_REPORT_BUDGET_CHARS)}, please provide "
                                 "the submission. Do not submit if no report is available."
                             )
                         )

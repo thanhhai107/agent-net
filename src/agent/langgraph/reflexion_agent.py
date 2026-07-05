@@ -33,6 +33,26 @@ from nika.utils.session import Session
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
 
+_PROMPT_BUDGET_CHARS = 120_000
+_PAYLOAD_BUDGET_CHARS = 80_000
+_TRACE_ITEM_BUDGET_CHARS = 1_800
+_REPORT_BUDGET_CHARS = 40_000
+_MEMORY_LIMIT = 3
+
+
+def _clip_text(value: Any, *, limit: int) -> str:
+    text = str(value or "")
+    if len(text) <= limit:
+        return text
+    return text[:limit] + "\n...[truncated to keep Reflexion context bounded]"
+
+
+def _bounded_json(value: Any, *, limit: int) -> str:
+    return _clip_text(
+        json.dumps(value, ensure_ascii=False, default=str),
+        limit=limit,
+    )
+
 ACTOR_PROMPT = """\
 You are a network troubleshooting expert operating inside an iterative Reflexion
 workflow. Perform a fresh evidence-driven investigation using the available tools.
@@ -196,12 +216,13 @@ class ReflexionAgent:
         suffix = self._diagnosis_phase.prompt_suffix()
         if not suffix:
             return ""
-        return (
+        return _clip_text(
             "\n\nIntegrated learning context for this Reflexion attempt:\n"
             "Use the following Skill-Pro/DRAFT guidance to choose diagnostic "
             "checks and avoid repeating completed options. It is not evidence; "
             "only current tool outputs can support the final diagnosis."
-            f"{suffix}"
+            f"{suffix}",
+            limit=8_000,
         )
 
     def install_memory_runtime(
@@ -304,7 +325,7 @@ class ReflexionAgent:
             )
             entry: dict[str, Any] = {
                 "type": message.__class__.__name__,
-                "content": content[:2500],
+                "content": _clip_text(content, limit=_TRACE_ITEM_BUDGET_CHARS),
             }
             name = getattr(message, "name", None)
             if name:
@@ -382,27 +403,29 @@ class ReflexionAgent:
         attempt_count = state.get("attempt_count", 0) + 1
         callback = self._callback(f"attempt_{attempt_count}")
         task_description = state.get("task_description", "")
-        prompt = json.dumps(
+        memories = [
+            memory.model_dump()
+            for memory in state.get("memories", [])[-_MEMORY_LIMIT:]
+        ]
+        prompt = _bounded_json(
             {
                 "task": task_description,
                 "attempt": attempt_count,
                 "max_attempts": self.max_attempts,
                 "tool_step_limit": self.max_steps,
-                "episodic_memory": [
-                    memory.model_dump() for memory in state.get("memories", [])
-                ],
+                "episodic_memory": memories,
                 "instruction": (
                     "Run a fresh investigation. Use the episodic memory to avoid "
                     "repeating failed strategies, verify every hypothesis with tools, "
                     "and return a complete report before the step limit."
                 ),
             },
-            ensure_ascii=False,
-            default=str,
+            limit=_PAYLOAD_BUDGET_CHARS,
         )
         learning_context = self._learning_prompt_suffix()
         if learning_context:
             prompt += learning_context
+        prompt = _clip_text(prompt, limit=_PROMPT_BUDGET_CHARS)
         try:
             result = await self.actor.ainvoke(
                 {"messages": [HumanMessage(content=prompt)]},
@@ -460,16 +483,21 @@ class ReflexionAgent:
         attempt_count = state.get("attempt_count", 0)
         callback = self._callback(f"evaluator_{attempt_count}")
         task_description = state.get("task_description", "")
-        payload = json.dumps(
+        payload = _bounded_json(
             {
                 "task": task_description,
                 "attempt": attempt_count,
-                "attempt_report": state.get("attempt_report", ""),
-                "attempt_error": state.get("attempt_error", ""),
+                "attempt_report": _clip_text(
+                    state.get("attempt_report", ""),
+                    limit=_REPORT_BUDGET_CHARS,
+                ),
+                "attempt_error": _clip_text(
+                    state.get("attempt_error", ""),
+                    limit=8_000,
+                ),
                 "tool_trajectory": state.get("attempt_trace", []),
             },
-            ensure_ascii=False,
-            default=str,
+            limit=_PAYLOAD_BUDGET_CHARS,
         )
         try:
             raw_evaluation = await self.evaluator.ainvoke(
@@ -533,20 +561,27 @@ class ReflexionAgent:
         callback = self._callback(f"reflexion_{attempt_count}")
         evaluation = state.get("evaluation")
         task_description = state.get("task_description", "")
-        payload = json.dumps(
+        existing_memory = [
+            memory.model_dump()
+            for memory in state.get("memories", [])[-_MEMORY_LIMIT:]
+        ]
+        payload = _bounded_json(
             {
                 "task": task_description,
                 "attempt": attempt_count,
-                "attempt_report": state.get("attempt_report", ""),
-                "attempt_error": state.get("attempt_error", ""),
+                "attempt_report": _clip_text(
+                    state.get("attempt_report", ""),
+                    limit=_REPORT_BUDGET_CHARS,
+                ),
+                "attempt_error": _clip_text(
+                    state.get("attempt_error", ""),
+                    limit=8_000,
+                ),
                 "tool_trajectory": state.get("attempt_trace", []),
                 "evaluation": evaluation.model_dump() if evaluation else None,
-                "existing_memory": [
-                    memory.model_dump() for memory in state.get("memories", [])
-                ],
+                "existing_memory": existing_memory,
             },
-            ensure_ascii=False,
-            default=str,
+            limit=_PAYLOAD_BUDGET_CHARS,
         )
         try:
             raw_memory = await self.reflector.ainvoke(
@@ -586,7 +621,8 @@ class ReflexionAgent:
                     "messages": [
                         HumanMessage(
                             content=(
-                                f"Based on the diagnosis report: {report}, please provide "
+                                "Based on the diagnosis report: "
+                                f"{_clip_text(report, limit=_REPORT_BUDGET_CHARS)}, please provide "
                                 "the submission. Do not submit if no report is available."
                             )
                         )
