@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from nika.net_env.net_env_pool import get_net_env_instance, list_all_net_envs
 from nika.orchestrator.problems.prob_pool import list_avail_problem_instances
+from nika.utils.kathara_cleanup import wait_for_docker_daemon
 
 _DEVICE_KEYS = ("host_name", "host_name_2", "attacker_device")
 
@@ -100,6 +101,7 @@ def _scenario_device_defaults(scenario: str, net_env) -> dict[str, str]:
 
 def resolve_inject_params(problem: str, scenario: str, topo_size: str = "") -> dict[str, str]:
     """Return inject params for one benchmark row."""
+    wait_for_docker_daemon(context="inject defaults")
     kwargs: dict = {}
     if topo_size:
         kwargs["topo_size"] = topo_size

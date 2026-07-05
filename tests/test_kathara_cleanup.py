@@ -5,8 +5,13 @@ import subprocess
 import pytest
 
 from nika.workflows.benchmark import run as benchmark_run
+from nika.workflows.benchmark import inject_defaults
 from nika.workflows.session import close as session_close
-from nika.utils.kathara_cleanup import KatharaCleanupError, ensure_kathara_clean
+from nika.utils.kathara_cleanup import (
+    KatharaCleanupError,
+    ensure_kathara_clean,
+    wait_for_docker_daemon,
+)
 
 
 def test_ensure_kathara_clean_wipes_prunes_and_verifies(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -20,7 +25,7 @@ def test_ensure_kathara_clean_wipes_prunes_and_verifies(monkeypatch: pytest.Monk
 
     ensure_kathara_clean(context="test")
 
-    assert calls[0] == ["kathara", "wipe", "-f"]
+    assert calls[:2] == [["docker", "info"], ["kathara", "wipe", "-f"]]
     assert [
         "docker",
         "ps",
@@ -52,6 +57,8 @@ def test_ensure_kathara_clean_wipes_prunes_and_verifies(monkeypatch: pytest.Monk
 
 def test_ensure_kathara_clean_fails_on_wipe_error(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        if command == ["docker", "info"]:
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
         if command[:3] == ["docker", "ps", "-aq"]:
             return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
         return subprocess.CompletedProcess(
@@ -65,6 +72,57 @@ def test_ensure_kathara_clean_fails_on_wipe_error(monkeypatch: pytest.MonkeyPatc
 
     with pytest.raises(KatharaCleanupError, match="kathara wipe"):
         ensure_kathara_clean(context="test")
+
+
+def test_wait_for_docker_daemon_retries_transient_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempts = 0
+
+    def fake_run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        nonlocal attempts
+        assert command == ["docker", "info"]
+        attempts += 1
+        if attempts == 1:
+            return subprocess.CompletedProcess(command, 1, stdout="", stderr="no socket")
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr("nika.utils.kathara_cleanup.time.sleep", lambda *_: None)
+
+    wait_for_docker_daemon(context="test")
+
+    assert attempts == 2
+
+
+def test_resolve_inject_params_waits_for_docker_before_net_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    class FakeNetEnv:
+        hosts = ["pc1"]
+        routers = []
+        servers = {}
+        bmv2_switches = []
+        sdn_controllers = []
+
+        def load_machines(self) -> None:
+            calls.append("load_machines")
+
+    def fake_wait(*, context: str) -> None:
+        calls.append(f"wait:{context}")
+
+    def fake_get_net_env_instance(*_: object, **__: object) -> FakeNetEnv:
+        calls.append("get_net_env")
+        return FakeNetEnv()
+
+    monkeypatch.setattr(inject_defaults, "wait_for_docker_daemon", fake_wait)
+    monkeypatch.setattr(inject_defaults, "get_net_env_instance", fake_get_net_env_instance)
+
+    inject_defaults.resolve_inject_params("link_down", "simple_bgp")
+
+    assert calls[:2] == ["wait:inject defaults", "get_net_env"]
 
 
 def test_ensure_kathara_clean_removes_stale_kathara_containers_before_retry(
@@ -208,6 +266,77 @@ def test_ensure_kathara_clean_tolerates_empty_stale_network_endpoint(
 
     assert ["docker", "network", "inspect", "net123", "--format", "{{json .Containers}}"] in calls
     assert ["docker", "network", "prune", "-f", "--filter", "label=app=kathara"] in calls
+
+
+def test_ensure_kathara_clean_tolerates_empty_stale_network_rm_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        calls.append(command)
+        if command[:3] == ["docker", "ps", "-aq"]:
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        if command[:3] == ["docker", "network", "ls"] and command[4] == "name=kathara_":
+            return subprocess.CompletedProcess(command, 0, stdout="net123 kathara_stale\n", stderr="")
+        if command[:3] == ["docker", "network", "ls"]:
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        if command[:3] == ["docker", "network", "inspect"]:
+            return subprocess.CompletedProcess(command, 0, stdout="{}\n", stderr="")
+        if command[:3] == ["docker", "network", "rm"]:
+            return subprocess.CompletedProcess(
+                command,
+                1,
+                stdout="",
+                stderr='network kathara_stale has active endpoints (name:"gone" id:"dead")',
+            )
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    ensure_kathara_clean(context="test")
+
+    assert ["docker", "network", "rm", "net123"] in calls
+
+
+def test_ensure_kathara_clean_disconnects_endpoint_reported_by_network_rm_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[list[str]] = []
+    rm_attempts = 0
+
+    def fake_run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+        nonlocal rm_attempts
+        calls.append(command)
+        if command[:3] == ["docker", "ps", "-aq"]:
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        if command[:3] == ["docker", "network", "ls"] and command[4] == "name=kathara_":
+            return subprocess.CompletedProcess(command, 0, stdout="net123 kathara_stale\n", stderr="")
+        if command[:3] == ["docker", "network", "ls"]:
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        if command[:3] == ["docker", "network", "inspect"]:
+            return subprocess.CompletedProcess(command, 0, stdout="{}\n", stderr="")
+        if command[:3] == ["docker", "network", "rm"]:
+            rm_attempts += 1
+            if rm_attempts == 1:
+                return subprocess.CompletedProcess(
+                    command,
+                    1,
+                    stdout="",
+                    stderr=(
+                        "Error response from daemon: error while removing network: "
+                        'network kathara_stale has active endpoints (name:"kathara_leaf_1" id:"abc")'
+                    ),
+                )
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    ensure_kathara_clean(context="test")
+
+    assert ["docker", "network", "disconnect", "-f", "kathara_stale", "kathara_leaf_1"] in calls
+    assert calls.count(["docker", "network", "rm", "net123"]) == 2
 
 
 def test_ensure_kathara_clean_fails_when_kathara_resources_remain(

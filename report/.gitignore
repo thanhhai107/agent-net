@@ -1,20 +1,19 @@
-# LaTeX auxiliary and temporary build files
+# LaTeX build artifacts
 *.aux
+*.bbl
+*.bcf
+*.blg
+*.brf
 *.fdb_latexmk
 *.fls
-*.lof
 *.log
-*.lot
 *.out
-*.toc
+*.run.xml
 *.synctex.gz
-*.bbl
-*.blg
-*.acn
-*.ist
-*.alg
-*.acr
-*.glg
-*.glo
-*.gls
-*.pdfsync
+*.toc
+
+# Generated PDFs
+*.pdf
+
+# Windows alternate data stream metadata
+*:Zone.Identifier

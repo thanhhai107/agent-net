@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import time
 from collections.abc import Sequence
@@ -10,6 +11,13 @@ from collections.abc import Sequence
 
 class KatharaCleanupError(RuntimeError):
     """Raised when the workspace cannot be made clean for a Kathara run."""
+
+
+_ACTIVE_ENDPOINT_RE = re.compile(
+    r"network\s+(?P<network>\S+)\s+has\s+active\s+endpoints\s+"
+    r'\(name:"(?P<endpoint>[^"]+)"',
+    re.MULTILINE,
+)
 
 
 def _format_output(proc: subprocess.CompletedProcess[str]) -> str:
@@ -133,6 +141,28 @@ def _network_attached_container_ids(network_id: str, *, context: str) -> list[st
     return sorted(containers)
 
 
+def _active_endpoint_pairs(error_text: str) -> list[tuple[str, str]]:
+    return [
+        (match.group("network"), match.group("endpoint"))
+        for match in _ACTIVE_ENDPOINT_RE.finditer(error_text)
+    ]
+
+
+def _try_disconnect_endpoint(network: str, endpoint: str, *, context: str) -> None:
+    try:
+        _run_checked(
+            ["docker", "network", "disconnect", "-f", network, endpoint],
+            step=f"{context}: docker network endpoint disconnect",
+        )
+    except KatharaCleanupError:
+        pass
+
+
+def _disconnect_reported_active_endpoints(error_text: str, *, context: str) -> None:
+    for network, endpoint in _active_endpoint_pairs(error_text):
+        _try_disconnect_endpoint(network, endpoint, context=context)
+
+
 def _disconnect_network_endpoints(network_id: str, *, context: str) -> None:
     containers = _network_containers(network_id, context=context)
     if not containers:
@@ -143,10 +173,7 @@ def _disconnect_network_endpoints(network_id: str, *, context: str) -> None:
             name = meta.get("Name")
             if isinstance(name, str) and name:
                 endpoint = name
-        _run_checked(
-            ["docker", "network", "disconnect", "-f", network_id, endpoint],
-            step=f"{context}: docker network endpoint disconnect",
-        )
+        _try_disconnect_endpoint(network_id, endpoint, context=context)
 
 
 def _network_has_visible_containers(network_id: str, *, context: str) -> bool:
@@ -167,13 +194,31 @@ def _remove_kathara_networks(*, context: str) -> None:
     rows = _kathara_network_rows(context=context)
     if not rows:
         return
-    network_ids = [row.split(maxsplit=1)[0] for row in rows]
-    for network_id in network_ids:
+    for row in rows:
+        network_id = row.split(maxsplit=1)[0]
         _disconnect_network_endpoints(network_id, context=context)
-    _run_checked(
-        ["docker", "network", "rm", *network_ids],
-        step=f"{context}: docker network cleanup",
-    )
+        try:
+            _run_checked(
+                ["docker", "network", "rm", network_id],
+                step=f"{context}: docker network cleanup",
+            )
+        except KatharaCleanupError as exc:
+            if "has active endpoints" in str(exc):
+                _disconnect_reported_active_endpoints(str(exc), context=context)
+                try:
+                    _run_checked(
+                        ["docker", "network", "rm", network_id],
+                        step=f"{context}: docker network cleanup",
+                    )
+                    continue
+                except KatharaCleanupError as retry_exc:
+                    exc = retry_exc
+            if "has active endpoints" in str(exc) and not _network_has_visible_containers(
+                network_id,
+                context=context,
+            ):
+                continue
+            raise
 
 
 def _retry_cleanup_step(
@@ -194,6 +239,7 @@ def _retry_cleanup_step(
             except KatharaCleanupError:
                 pass
             if "has active endpoints" in str(exc):
+                _disconnect_reported_active_endpoints(str(exc), context=context)
                 try:
                     has_blocking_networks = bool(_blocking_kathara_networks(context=context))
                 except KatharaCleanupError:
@@ -211,9 +257,26 @@ def _retry_cleanup_step(
     raise last_error
 
 
+def wait_for_docker_daemon(*, context: str = "run", attempts: int = 5) -> None:
+    """Wait briefly for Docker before code paths that instantiate Kathara."""
+
+    last_error: KatharaCleanupError | None = None
+    for attempt in range(attempts):
+        try:
+            _run_checked(["docker", "info"], step=f"{context}: docker daemon check")
+            return
+        except KatharaCleanupError as exc:
+            last_error = exc
+            if attempt + 1 < attempts:
+                time.sleep(1.0)
+    assert last_error is not None
+    raise last_error
+
+
 def ensure_kathara_clean(*, context: str = "run") -> None:
     """Wipe Kathara and fail if Docker still reports Kathara resources."""
 
+    wait_for_docker_daemon(context=context)
     _retry_cleanup_step(
         ["kathara", "wipe", "-f"],
         step=f"{context}: kathara wipe",

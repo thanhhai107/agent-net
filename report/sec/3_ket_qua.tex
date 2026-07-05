@@ -1,0 +1,98 @@
+\section{THỰC NGHIỆM}
+
+\subsection{Thiết lập thực nghiệm}
+
+Toàn bộ thực nghiệm được chạy trên máy CPU 12 cores, 16 GB RAM. Các mô hình ngôn ngữ lớn không được triển khai cục bộ mà được gọi qua Netmind API, gồm GPT-OSS-120B và Qwen3.5-122B-A10B-FP8. Cấu hình chính dùng để báo cáo kết quả là ReAct + GPT-OSS-120B; các workflow Plan\&Execute và Reflexion được dùng thêm để so sánh ảnh hưởng của cách tổ chức suy luận. Các thí nghiệm gồm hai chế độ: \textbf{Baseline Agent} không nạp kinh nghiệm từ các episode trước, còn \textbf{Evolved Agent} bổ sung Procedural Memory và Tool Refinement. Procedural Memory dùng \code{top\_k=5}, memory 1500 tokens, \code{skill\_max\_age=4}, \code{skill\_pool=32}, LCB selector với \code{selector\_minlcb=-0.05}, heuristic controller với \code{PPO\_epsilon=0.05}, \code{nominee\_k=3} và 3 evolution samples. Tool Refinement dùng \code{num\_docs=6}, \code{num\_scoped\_docs=4}, \code{doc\_chars=500}, \code{planned\_check=4}, \code{next\_checks=2} và ngưỡng hội tụ 0.75.
+
+\subsection{Kết quả thực nghiệm}
+
+Tập benchmark con gồm 125 case, trong đó 100 case được lấy từ bản full và 25 case là no-fault. Các case bao phủ nhiều nhóm lỗi như link failures, end-host failures, misconfigurations, resource contention, network node errors và network under attack. Nhóm metric cơ bản gồm detection, localization, RCA, số token, số lần gọi công cụ, số lần gọi công cụ lỗi và runtime. Với phần tiến hóa, hệ thống ghi nhận thêm các tín hiệu vận hành của memory/tool evolution như kỹ năng được truy xuất, ứng viên kỹ năng được sinh, tài liệu công cụ được cập nhật và trạng thái hội tụ của tài liệu.
+
+\begin{table*}[t]
+\centering
+\small
+\caption{Tóm tắt phạm vi benchmark trong thực nghiệm}
+\begin{tabularx}{\textwidth}{@{}p{3.4cm}Yp{2.2cm}@{}}
+\toprule
+\textbf{Nhóm sự cố} & \textbf{Ví dụ} & \textbf{Số lượng} \\
+\midrule
+Link Failures & \code{link\_down}, \code{link\_flap}, packet corruption & 12 \\
+End-Host Failures & thiếu IP, sai gateway, sai DNS, IP conflict & 16 \\
+Misconfigurations & sai ASN BGP, thiếu route, sai OSPF area, flow rule loop, P4 table misconfig & 27 \\
+Resource Contention & quá tải sender/receiver, incast, load balancer overload & 13 \\
+Network Node Errors & FRR down, BMv2 switch down, SDN controller crash, MPLS label limit & 20 \\
+Network Under Attack & BGP hijacking, DHCP spoofing, ARP poisoning, ACL block, web DoS & 12 \\
+no-fault & mạng bình thường, không tiêm lỗi & 25 \\
+\bottomrule
+\end{tabularx}
+\end{table*}
+
+\begin{table*}[t]
+\centering
+\scriptsize
+\caption{Kết quả chung của ReAct trên Baseline và Evolved với GPT-OSS-120B và Qwen3.5-122B-A10B-FP8}
+\label{tab:main_react_results}
+\setlength{\tabcolsep}{2pt}
+\begin{tabularx}{\textwidth}{@{}p{3.0cm}*{4}{>{\centering\arraybackslash}X}@{}}
+\toprule
+\textbf{Metric} & \textbf{GPT-OSS Baseline} & \textbf{GPT-OSS Evolved} & \textbf{Qwen Baseline} & \textbf{Qwen Evolved} \\
+\midrule
+Detection & -- & -- & -- & -- \\
+Localization Acc. & -- & -- & -- & -- \\
+Localization F1 & -- & -- & -- & -- \\
+RCA Acc. & -- & -- & -- & -- \\
+RCA F1 & -- & -- & -- & -- \\
+Incident Success & -- & -- & -- & -- \\
+Avg. Steps & -- & -- & -- & -- \\
+Avg. Tool Calls & -- & -- & -- & -- \\
+Tool Error Rate & -- & -- & -- & -- \\
+Input Tokens & -- & -- & -- & -- \\
+Output Tokens & -- & -- & -- & -- \\
+Total Tokens & -- & -- & -- & -- \\
+Runtime & -- & -- & -- & -- \\
+\bottomrule
+\end{tabularx}
+\end{table*}
+
+\begin{figure*}[t]
+\centering
+\fbox{\begin{minipage}[c][0.24\textheight][c]{0.92\textwidth}
+\centering
+\textbf{Placeholder figure:} curve Detection, Localization và RCA theo từng batch 25 case.\\
+Cấu hình: ReAct Evolved trên GPT-OSS-120B và Qwen3.5-122B-A10B-FP8.
+\end{minipage}}
+\caption{Diễn biến metric theo từng batch 25 case của ReAct Evolved trên hai mô hình nền.}
+\label{fig:batch_metric_curve}
+\end{figure*}
+
+\begin{table}[t]
+\centering
+\scriptsize
+\caption{Ablation study trên Evolved Agent khi thay đổi workflow}
+\label{tab:workflow_ablation}
+\begin{tabularx}{\columnwidth}{@{}Y c c c@{}}
+\toprule
+\textbf{Metric} & \textbf{ReAct} & \textbf{Plan\&Execute} & \textbf{Reflexion} \\
+\midrule
+Detection & -- & -- & -- \\
+Localization & -- & -- & -- \\
+RCA & -- & -- & -- \\
+Input Token & -- & -- & -- \\
+Output Token & -- & -- & -- \\
+Runtime & -- & -- & -- \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{figure*}[t]
+\centering
+\fbox{\begin{minipage}[c][0.22\textheight][c]{0.92\textwidth}
+\centering
+\textbf{Placeholder figure:} độ ổn định qua 3 lần chạy.\\
+Cấu hình: ReAct trên Baseline và Evolved với GPT-OSS-120B.
+\end{minipage}}
+\caption{So sánh độ ổn định qua ba lần chạy của ReAct Baseline và ReAct Evolved trên GPT-OSS-120B.}
+\label{fig:react_stability}
+\end{figure*}
+
+Kết quả thực nghiệm được tổng hợp từ log chạy agent, trace gọi công cụ, kết quả nộp cuối cùng và bộ chấm điểm của benchmark. Các bảng và phân tích ở phần tiếp theo trình bày ý nghĩa của kết quả theo hai góc nhìn: hiệu quả chẩn đoán cơ bản và hiệu quả của cơ chế tự tiến hóa.

@@ -1,133 +1,77 @@
-\documentclass[oneside]{report}
+% CVPR-style research report
+
+\documentclass[10pt,twocolumn,letterpaper]{article}
+
+% Paper type: keep CVPR formatting while showing page numbers for mentor review.
+\usepackage[pagenumbers]{cvpr}
+
 \usepackage[utf8]{inputenc}
-\usepackage{lmodern}
-\usepackage{graphicx}
-\usepackage{nameref}
-\usepackage{multicol}
-\usepackage{listings}
-\usepackage{array}
-\usepackage{tabularx}
-\usepackage{inconsolata}
-\lstset{
-  basicstyle=\ttfamily,
-}
-\newenvironment{myfont}{\fontfamily{inconsolata}\selectfont}{\par}
-\DeclareTextFontCommand{\textmyfont}{\myfont}
-\usepackage[table]{xcolor}
-\usepackage{amsmath}
-\DeclareMathOperator*{\argmax}{arg\,max}
-\usepackage{times}
-\renewcommand{\baselinestretch}{1.3}
-\usepackage{titlesec}
-\titlespacing*{\section}{0pt}{0.5\baselineskip}{0.2\baselineskip}
-\titlespacing*{\subsection}{0pt}{0.4\baselineskip}{0.2\baselineskip}
-\usepackage[a4paper,left=30mm,top=20mm,bottom=25mm,right=20mm,]{geometry}
-\setlength{\parindent}{1cm}
-\usepackage{enumitem}
-\setlist{leftmargin=1cm}
-\setlength{\parskip}{0.5em}
-\usepackage[sort,numbers]{natbib}
-\usepackage{amssymb}
-
-\usepackage{algorithm}
-\usepackage{algorithmic}
-\usepackage{etoolbox}
-\usepackage{caption}
-\usepackage{mdframed}
-\usepackage{ragged2e}
-\definecolor{yellow}{RGB}{255,242,204}
-\definecolor{red}{RGB}{248,206,204}
-\definecolor{blue}{RGB}{218,232,252}
-\definecolor{green}{RGB}{213,232,212}
-\definecolor{orange}{RGB}{255,230,204}
-% Table
-\usepackage{multirow}
-\usepackage{longtable}
-\usepackage{bigstrut}
+\usepackage[T5]{fontenc}
 \usepackage[vietnamese]{babel}
-\usepackage{scrextend}
-\changefontsizes{13pt}
-
-% Cover
-\usepackage{pdfpages}
-
-% pstricks fig
-\usepackage{epsfig}
-
-% Table of Contents
-\usepackage[hidelinks]{hyperref}
-% Uncomment if you want leading dot for chapter
-\usepackage{tocloft}
-\renewcommand{\cftpartleader}{\cftdotfill{\cftdotsep}} % for parts
-\renewcommand{\cftchapleader}{\cftdotfill{\cftdotsep}} % for chapters
-
-% table fixed width column
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage[table]{xcolor}
+\usepackage{booktabs}
+\usepackage{tabularx}
 \usepackage{array}
-\newcolumntype{L}[1]{>{\raggedright\let\newline\\\arraybackslash\hspace{0pt}}m{#1}}
-\newcolumntype{C}[1]{>{\centering\let\newline\\\arraybackslash\hspace{0pt}}m{#1}}
-\newcolumntype{R}[1]{>{\raggedleft\let\newline\\\arraybackslash\hspace{0pt}}m{#1}}
+\usepackage{enumitem}
+\usepackage{float}
 
-\hyphenation{Nan-yang}
+\input{preamble}
 
-\title{Xây dựng Self-Evolving AI Agents trong xử lý sự cố mạng viễn thông}
-\author{Nguyễn Thanh Hải}
-\date{Tháng 06 năm 2026}
+\definecolor{cvprblue}{rgb}{0.21,0.49,0.74}
+\usepackage[pagebackref,breaklinks,colorlinks,allcolors=cvprblue]{hyperref}
+
+\def\paperID{NIKA-SEA}
+\def\confName{CVPR}
+\def\confYear{2026}
+
+% CVPR loads Times by default; Latin Modern has safer T5 coverage for Vietnamese.
+\renewcommand{\rmdefault}{lmr}
+\renewcommand{\sfdefault}{lmss}
+\renewcommand{\ttdefault}{lmtt}
+\def\elvbf{\normalfont\bfseries\fontsize{11}{13}\selectfont}
+\def\tenbf{\normalfont\bfseries\fontsize{10}{12}\selectfont}
+
+\setlist[itemize]{leftmargin=1.05em,itemsep=0.08em,topsep=0.15em}
+\setlist[enumerate]{leftmargin=1.2em,itemsep=0.08em,topsep=0.15em}
+\renewcommand{\arraystretch}{1.05}
+
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+\newcommand{\code}[1]{\texttt{\small #1}}
+\title{XÂY DỰNG HỆ THỐNG SELF-EVOLVING AI AGENTS TRONG XỬ LÝ SỰ CỐ MẠNG VIỄN THÔNG}
+
+\author{
+\begin{tabular}{c}
+Nguyễn Thanh Hải\\
+{\tt\small optimus1072005@gmail.com}\\
+{\small Lĩnh vực Data Science \& AI Engineering - Chương trình Viettel Digital Talent 2026}\\[1.0em]
+\begin{tabular}{>{\centering\arraybackslash}p{0.28\textwidth}@{\hspace{0.8em}}>{\centering\arraybackslash}p{0.28\textwidth}@{\hspace{0.8em}}>{\centering\arraybackslash}p{0.28\textwidth}}
+Nguyễn Duy Hưng\textsuperscript{1} &
+Nguyễn Duy Anh\textsuperscript{1} &
+Bùi Quang Hưng\textsuperscript{1}\\
+{\tt\small hungnd1235@gmail.com} &
+{\tt\small nguyenduyanh821998@gmail.com} &
+{\tt\small contact.hung.bq@gmail.com}
+\end{tabular}\\[0.65em]
+{\small \textsuperscript{1}Phòng Giải pháp di động - Trung tâm Nghiên cứu Công nghệ \& Chuyển đổi số - Tổng công ty Mạng lưới Viettel}
+\end{tabular}
+}
 
 \begin{document}
+\maketitle
 
-%---------------------------------------------
-% Front Matter
-%---------------------------------------------
-\hypersetup{pageanchor=false}
-\includepdf[pages=-]{FrontMatter/VDT26_cover_final.pdf}
-\pagenumbering{roman}
-\hypersetup{pageanchor=true}
-\setcounter{page}{3}
-\include{FrontMatter/Abstract_vn}
-\include{FrontMatter/Acknowledgements}
-\include{FrontMatter/Declaration}
+\input{sec/1_gioi_thieu}
+\input{sec/2_noi_dung_phuong_phap}
+\input{sec/3_ket_qua}
+\input{sec/4_danh_gia_hieu_qua}
+\input{sec/5_ket_luan}
 
-% Show ToC and change title to Table of Contents
-\setcounter{secnumdepth}{3}
-\renewcommand{\contentsname}{Mục lục}
-\addcontentsline{toc}{chapter}{Mục lục}
-\tableofcontents
-
-% Show Acronyms and add it to ToC. Enable this block after adding acronym
-% entries to FrontMatter/Acronyms.tex.
-% \printglossary[title={Thuật ngữ và viết tắt},type=acronym,style=long]
-% \clearpage
-
-% Show list of 
-\addcontentsline{toc}{chapter}{Danh mục hình ảnh}
-\listoffigures
-\clearpage
-% \addcontentsline{toc}{chapter}{Danh mục bảng}
-% \listoftables
-% \clearpage
-
-
-%--------------------------------------------- 
-% Main content
-%---------------------------------------------
-\pagenumbering{arabic}
-\setcounter{page}{1}
-\include{Chapter1/chapter1}
-\include{Chapter2/chapter2}
-\include{Chapter3/chapter3}
-\include{Chapter4/chapter4}
-\include{Chapter5/chapter5}
-
-
-
-%--------------------------------------------- 
-% References
-%---------------------------------------------
-\bibliographystyle{IEEEtranSN}
-\renewcommand\bibname{Tài liệu tham khảo}
-\addcontentsline{toc}{chapter}{Tài liệu tham khảo}
-\bibliography{references} % Path to your references.bib file
-
-\appendix
+{
+    \small
+    \renewcommand{\refname}{TÀI LIỆU THAM KHẢO}
+    \bibliographystyle{unsrtnat}
+    \bibliography{main}
+}
 
 \end{document}
