@@ -449,10 +449,22 @@ class DraftToolEvolutionTest(unittest.TestCase):
 
             prompt = runtime.prompt_suffix(tool_names=["ping_pair"])
             queue = runtime.planned_explorations(diagnosis_only=True)
+            tool_learning_prompt = runtime.prompt_suffix(
+                tool_names=["ping_pair"],
+                diagnosis_only=False,
+            )
+            tool_learning_queue = runtime.planned_explorations(
+                diagnosis_only=False,
+            )
 
-        self.assertEqual([item["intent"] for item in queue], ["diagnosis_check"])
-        self.assertIn("DRAFT active exploration queue", prompt)
-        self.assertIn("localization/RCA", prompt)
+        self.assertEqual(queue, [])
+        self.assertEqual(
+            [item["intent"] for item in tool_learning_queue],
+            ["diagnosis_check"],
+        )
+        self.assertNotIn("DRAFT active exploration queue", prompt)
+        self.assertIn("DRAFT active exploration queue", tool_learning_prompt)
+        self.assertIn("localization/RCA", tool_learning_prompt)
 
     def test_planned_exploration_is_consumed_by_matching_trial(self) -> None:
         def ping(host_a: str, host_b: str) -> str:
@@ -872,7 +884,7 @@ class DraftToolEvolutionTest(unittest.TestCase):
             restored_description = restored[0].description
 
         self.assertIn("DRAFT refined guidance", enriched_description)
-        self.assertIn("DRAFT planned active checks", enriched_description)
+        self.assertNotIn("DRAFT planned active checks", enriched_description)
         self.assertEqual(restored_description, "Ping a host.")
 
     def test_prompt_suffix_filters_global_library_description_when_scoped(self) -> None:
@@ -982,14 +994,23 @@ class DraftToolEvolutionTest(unittest.TestCase):
             diagnosis_queue = runtime.planned_explorations(
                 diagnosis_only=True,
             )
+            tool_learning_prompt = runtime.prompt_suffix(
+                tool_names=["ping_pair"],
+                diagnosis_only=False,
+            )
+            tool_learning_checks = runtime.next_checks(
+                "ping_pair",
+                limit=5,
+                diagnosis_only=False,
+            )
             snapshot_queue = runtime.planned_explorations()
 
-        self.assertIn("Ping pc_0_0", prompt)
-        self.assertIn("Ping pc_0_0", " ".join(checks))
-        self.assertEqual(
-            [item["exploration_id"] for item in diagnosis_queue],
-            ["explore_ping_pc"],
-        )
+        self.assertNotIn("Ping pc_0_0", prompt)
+        self.assertEqual(checks, [])
+        self.assertEqual(diagnosis_queue, [])
+        self.assertIn("Ping pc_0_0", tool_learning_prompt)
+        self.assertIn("Ping pc_0_0", " ".join(tool_learning_checks))
+        self.assertIn("minimal valid call", tool_learning_prompt)
         self.assertEqual(len(snapshot_queue), 2)
         self.assertNotIn("minimal valid call", prompt)
         self.assertNotIn(">20 hosts", prompt)
@@ -1090,12 +1111,22 @@ class DraftToolEvolutionTest(unittest.TestCase):
 
             prompt = runtime.prompt_suffix(tool_names=["get_host_net_config"])
             diagnosis_queue = runtime.planned_explorations(diagnosis_only=True)
+            tool_learning_prompt = runtime.prompt_suffix(
+                tool_names=["get_host_net_config"],
+                diagnosis_only=False,
+            )
+            tool_learning_queue = runtime.planned_explorations(
+                diagnosis_only=False,
+            )
 
-        self.assertIn("host-1", prompt)
+        self.assertNotIn("host-1", prompt)
         self.assertNotIn("host-3", prompt)
+        self.assertEqual(diagnosis_queue, [])
+        self.assertIn("host-1", tool_learning_prompt)
+        self.assertIn("host-3", tool_learning_prompt)
         self.assertEqual(
-            [item["exploration_id"] for item in diagnosis_queue],
-            ["explore_host_1"],
+            {item["exploration_id"] for item in tool_learning_queue},
+            {"explore_host_1", "explore_host_3"},
         )
 
     def test_runtime_filters_document_suggestions_by_current_topology(self) -> None:
@@ -1132,13 +1163,28 @@ class DraftToolEvolutionTest(unittest.TestCase):
 
             prompt = runtime.prompt_suffix(tool_names=["ping_pair"])
             checks = runtime.next_checks("ping_pair")
+            tool_learning_prompt = runtime.prompt_suffix(
+                tool_names=["ping_pair"],
+                diagnosis_only=False,
+            )
+            tool_learning_checks = runtime.next_checks(
+                "ping_pair",
+                limit=5,
+                diagnosis_only=False,
+            )
 
         joined_checks = " ".join(checks)
-        self.assertIn("pc1", prompt)
-        self.assertIn("pc1", joined_checks)
+        joined_tool_learning_checks = " ".join(tool_learning_checks)
+        self.assertNotIn("pc1", prompt)
+        self.assertNotIn("pc1", joined_checks)
         self.assertNotIn("pc3", prompt)
         self.assertNotIn("pc3", joined_checks)
         self.assertNotIn("invalid host", prompt)
+        self.assertIn("pc1", tool_learning_prompt)
+        self.assertIn("pc1", joined_tool_learning_checks)
+        self.assertIn("pc3", tool_learning_prompt)
+        self.assertIn("pc3", joined_tool_learning_checks)
+        self.assertIn("invalid host", tool_learning_prompt)
 
     def test_runtime_seeds_primitive_tool_documents(self) -> None:
         def ping(host: str) -> str:
@@ -1213,10 +1259,12 @@ class DraftToolEvolutionTest(unittest.TestCase):
             first = runtime.match_planned_exploration(
                 "ping_pair",
                 {"host": "pc1"},
+                diagnosis_only=False,
             )
             second = runtime.match_planned_exploration(
                 "ping_pair",
                 {"host": "pc1"},
+                diagnosis_only=False,
             )
             snapshot = runtime.snapshot()
             next_checks = runtime.next_checks("ping_pair")

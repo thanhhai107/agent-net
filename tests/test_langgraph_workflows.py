@@ -250,6 +250,63 @@ class EvidenceGateTest(unittest.TestCase):
             any("frr_show_bgp_summary" in item for item in result.suggested_steps)
         )
 
+    def test_gate_ignores_topology_catalog_when_report_claims_one_family(self) -> None:
+        result = evaluate_fault_family_evidence(
+            task_description=(
+                "Network Description: enterprise topology with DNS, DHCP, OSPF, "
+                "HTTP services, ACLs, and BGP edge connectivity."
+            ),
+            diagnosis_report=(
+                "Anomaly exists. The root cause is DNS resolver service failure."
+            ),
+            observations=[
+                ToolObservation(
+                    tool="ping_pair",
+                    summary="Affected host can ping the resolver address.",
+                )
+            ],
+            available_tools=[
+                "curl_web_test",
+                "cat_file",
+                "systemctl_ops",
+                "netstat",
+                "frr_get_ospf_conf",
+                "frr_show_bgp_summary",
+                "get_host_net_config",
+            ],
+        )
+
+        self.assertFalse(result.sufficient)
+        self.assertEqual(result.families, ("DNS/resolver",))
+        self.assertTrue(
+            all("BGP" not in item and "OSPF" not in item for item in result.suggested_steps)
+        )
+
+    def test_gate_does_not_turn_topology_only_task_into_protocol_sprawl(self) -> None:
+        result = evaluate_fault_family_evidence(
+            task_description=(
+                "Network Description: enterprise topology with DNS, DHCP, OSPF, "
+                "HTTP services, ACLs, and BGP edge connectivity."
+            ),
+            diagnosis_report="No anomaly is confirmed from the current evidence.",
+            observations=[
+                ToolObservation(
+                    tool="get_reachability",
+                    summary="All tested host pairs are reachable.",
+                )
+            ],
+            available_tools=[
+                "curl_web_test",
+                "get_host_net_config",
+                "frr_get_ospf_conf",
+                "frr_show_bgp_summary",
+            ],
+        )
+
+        self.assertTrue(result.sufficient)
+        self.assertEqual(result.families, ())
+        self.assertEqual(result.suggested_steps, ())
+
 
 class WorkflowRegistrationTest(unittest.TestCase):
     def test_langfuse_auth_errors_disable_tracing_without_failing(self) -> None:

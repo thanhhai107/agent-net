@@ -447,7 +447,7 @@ FINAL_CLAIM_RE = re.compile(
 
 
 def infer_fault_families(*texts: str) -> tuple[FaultFamily, ...]:
-    """Infer broad fault families from visible task/report text."""
+    """Infer broad fault families from visible claim/evidence text."""
 
     haystack = "\n".join(str(text or "") for text in texts).lower()
     families: list[FaultFamily] = []
@@ -455,6 +455,55 @@ def infer_fault_families(*texts: str) -> tuple[FaultFamily, ...]:
         if any(re.search(pattern, haystack, re.I) for pattern in family.trigger_patterns):
             families.append(family)
     return tuple(families)
+
+
+def _select_gate_families(
+    *,
+    task_description: str,
+    diagnosis_report: str,
+    observation_text: str,
+) -> tuple[FaultFamily, ...]:
+    """Choose only families claimed by the report or current evidence.
+
+    Task descriptions often contain the whole topology and service catalog. Using
+    that text as a primary trigger makes the gate ask for unrelated DNS, DHCP,
+    OSPF, HTTP, and BGP probes at once. The gate should instead validate the
+    family the diagnosis is claiming, with current observations as a fallback
+    when the report is terse.
+    """
+
+    report_families = infer_fault_families(diagnosis_report)
+    if report_families:
+        return report_families
+    observed_families = infer_fault_families(observation_text)
+    if observed_families:
+        return observed_families
+    task_text = str(task_description or "")
+    if _task_has_direct_fault_intent(task_text):
+        return infer_fault_families(task_text)[:2]
+    return ()
+
+
+def _task_has_direct_fault_intent(task_description: str) -> bool:
+    text = str(task_description or "").lower()
+    intent_markers = (
+        "cannot ",
+        "can't ",
+        "unable ",
+        "fails ",
+        "failed ",
+        "failure ",
+        "not working",
+        "missing ",
+        "down",
+        "blocked",
+        "incorrect",
+        "misconfig",
+        "no route",
+        "packet loss",
+        "high latency",
+    )
+    return any(marker in text for marker in intent_markers)
 
 
 def observations_from_runtime_snapshot(snapshot: dict[str, Any] | None) -> list[ToolObservation]:
@@ -530,7 +579,11 @@ def evaluate_fault_family_evidence(
         )
         for obs in observations
     )
-    families = infer_fault_families(task_description, diagnosis_report)
+    families = _select_gate_families(
+        task_description=task_description,
+        diagnosis_report=diagnosis_report,
+        observation_text=observation_text,
+    )
     missing: list[str] = []
     suggested_steps: list[str] = []
 

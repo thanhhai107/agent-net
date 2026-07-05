@@ -47,6 +47,17 @@ DEFAULT_POOL_SIZE = 32
 EXPERIENCE_POOL_SIZE = 1000
 GOLDEN_POOL_SIZE = 20
 PPO_EPSILON = 0.2
+
+GENERIC_SEED_SKILL_IDS = frozenset(
+    {
+        "seed_structured_cot",
+        "seed_react_decision",
+        "seed_hypothesis_elimination",
+        "seed_self_consistency_check",
+        "seed_explore_exploit",
+        "seed_strategic_planning",
+    }
+)
 BASELINE_EMA_ALPHA = 0.1
 
 
@@ -73,6 +84,13 @@ def _safe_skill_promotion(metrics: dict[str, Any]) -> bool:
     )
 
 
+def _partial_outcome(metrics: dict[str, Any]) -> bool:
+    detection = float(metrics.get("detection_score") or 0.0)
+    localization = _component_reward(metrics, "localization")
+    rca = _component_reward(metrics, "rca")
+    return detection >= 1.0 and (localization < 0.6 or rca < 0.6)
+
+
 def _component_reward(metrics: dict[str, Any], prefix: str) -> float:
     accuracy = float(metrics.get(f"{prefix}_accuracy") or 0.0)
     precision = float(metrics.get(f"{prefix}_precision") or 0.0)
@@ -94,6 +112,31 @@ def _evidence_score(evidence: EvaluationEvidence) -> float:
     step_penalty = min(evidence.steps or 0, 100) / 250.0
     tool_penalty = min(evidence.tool_calls or 0, 200) / 500.0
     return max(0.0, accuracy - step_penalty - tool_penalty)
+
+
+def _skill_stat_reward(evidence: EvaluationEvidence, reward: float, baseline: float) -> tuple[float, float]:
+    """Return reward/baseline used for online Skill-Pro score maintenance.
+
+    Skill-Pro's online score should preserve reusable gains, not merely credit a
+    skill for detecting that something is wrong. Episodes with incomplete
+    localization/RCA become negative evidence for any reused skill.
+    """
+
+    if _safe_skill_promotion(evidence.metrics):
+        return reward, baseline
+    penalty = 0.08 if _partial_outcome(evidence.metrics) else 0.12
+    return min(reward, baseline - penalty), baseline
+
+
+def _evidence_signature_text(attrs: Any, tool_steps: list[SkillStep]) -> str:
+    labels = attrs.protocols[:2] + attrs.services[:2] + attrs.symptoms[:3]
+    tools = [step.tool_name for step in tool_steps if step.tool_name][:4]
+    pieces: list[str] = []
+    if labels:
+        pieces.append("evidence labels: " + ", ".join(labels))
+    if tools:
+        pieces.append("observed tools: " + ", ".join(tools))
+    return "; ".join(pieces) or "matching current observations"
 
 
 def _trim_text(value: Any, *, limit: int = 360) -> str:
@@ -177,6 +220,194 @@ def _skill_base_id(skill_id: str) -> str:
 
 def _is_seed_skill(skill: ProceduralSkill) -> bool:
     return skill.skill_id.startswith("seed_")
+
+
+def _uses_generic_seed_policy(skill: ProceduralSkill | None) -> bool:
+    return bool(skill and _skill_base_id(skill.skill_id) in GENERIC_SEED_SKILL_IDS)
+
+
+def _has_name_resolution_signal(text: str) -> bool:
+    return any(
+        re.search(pattern, text)
+        for pattern in (
+            r"\bdns\b",
+            r"\bresolv(?:e|er|ing|ution)\b",
+            r"\bname[-_ ]?lookup\b",
+            r"\bnameserver\b",
+            r"\bnslookup\b",
+            r"\bdig\b",
+            r"\bservfail\b",
+            r"\bnxdomain\b",
+            r"\bport\s+53\b",
+        )
+    )
+
+
+def _has_host_addressing_signal(text: str) -> bool:
+    return any(
+        re.search(pattern, text)
+        for pattern in (
+            r"\bdhcp\b",
+            r"\blease\b",
+            r"\bdefault\s+(?:via|route|gateway)\b",
+            r"\bgateway\b",
+            r"\bmissing\s+ip\b",
+            r"\bno\s+(?:ip|inet)\b",
+            r"\bip_route\s+is\s+empty\b",
+            r"\bget_host_net_config\(",
+            r"\bdhclient\b",
+        )
+    )
+
+
+def _has_routing_adjacency_signal(text: str) -> bool:
+    return any(
+        re.search(pattern, text)
+        for pattern in (
+            r"\bospf\b",
+            r"\bfrr_get_ospf_conf\(",
+            r"\bshow\s+ip\s+ospf\b",
+            r"\brouting\s+adjacency\b",
+            r"\bneighbor\s+(?:down|state|full|init|exstart|2-way)\b",
+            r"\broute\s+missing\b",
+            r"\bmissing\s+route\b",
+            r"\bno\s+route\b",
+            r"\bfrr_show_ip_route\(",
+        )
+    )
+
+
+def _seed_activation_blocked(skill: ProceduralSkill, query_text: str) -> bool:
+    text = str(query_text or "").lower()
+    if skill.skill_id == "seed_name_resolution_ladder":
+        return not _has_name_resolution_signal(text)
+    if skill.skill_id == "seed_host_addressing_ladder":
+        return not _has_host_addressing_signal(text)
+    if skill.skill_id == "seed_routing_adjacency_ladder":
+        bgp_only = "bgp" in text and not any(
+            marker in text for marker in ("ospf", "frr_get_ospf_conf", "show ip ospf")
+        )
+        return bgp_only or not _has_routing_adjacency_signal(text)
+    if skill.skill_id != "seed_bgp_config_disambiguation":
+        return False
+    endpoint_checked = any(
+        marker in text
+        for marker in (
+            "get_host_net_config(",
+            "ethtool(",
+            "ip_addr_statistics(",
+            '"ip_addr"',
+            '"ifconfig"',
+            "link detected:",
+            "endpoint host link checked",
+            "endpoint checks",
+            "host link checked",
+        )
+    )
+    bgp_observation_context = any(
+        marker in text
+        for marker in (
+            "neighbor",
+            "state/pfxrcd",
+            "frr_show_bgp_summary(",
+            "frr_show_ip_route(",
+            "frr_get_bgp_conf(",
+            "frr_show_running_config(",
+        )
+    )
+    bgp_state_abnormal = bool(re.search(r"\b(idle|active|connect)\b", text)) and (
+        bgp_observation_context
+    )
+    route_or_config_abnormal = any(
+        marker in text
+        for marker in (
+            "remote-as",
+            "as mismatch",
+            "missing route",
+            "no route",
+            "network is unreachable",
+            "not advertised",
+            "prefixes received 0",
+            "pfxrcd 0",
+            "rib-failure",
+        )
+    ) and bgp_observation_context
+    bgp_abnormal = bgp_state_abnormal or route_or_config_abnormal
+    return not (endpoint_checked and bgp_abnormal)
+
+
+def _activation_similarity(skill: ProceduralSkill, query: MemoryQuery) -> float:
+    state_text = " ".join(
+        [
+            query.text,
+            " ".join(query.protocols),
+            " ".join(query.services),
+            " ".join(query.symptoms),
+        ]
+    )
+    activation = skill.activation_condition
+    lexical = _jaccard(state_text, activation)
+    query_tokens = _tokens(state_text)
+    activation_tokens = _tokens(activation)
+    scope_tokens = set(skill.protocols) | set(skill.services) | set(skill.symptoms)
+    scope_hits = len(query_tokens & scope_tokens) / max(len(scope_tokens), 1) if scope_tokens else 0.0
+    discriminators = {
+        token
+        for token in activation_tokens
+        if len(token) >= 5 and token not in {"current", "evidence", "diagnosis", "symptoms"}
+    }
+    discriminator_hits = (
+        len(query_tokens & discriminators) / max(len(discriminators), 1)
+        if discriminators
+        else 0.0
+    )
+    return _clamp((0.55 * lexical) + (0.3 * scope_hits) + (0.15 * discriminator_hits), 0.0, 1.0)
+
+
+def _signature_activation(signature: str) -> str:
+    return (
+        "Use when the current observation history matches this "
+        f"evidence signature: {signature}. Do not activate from "
+        "scenario name or tool catalog alone."
+    )
+
+
+def _experience_signature(exp: SkillExperience) -> tuple[frozenset[str], frozenset[str], frozenset[str]]:
+    tools = [step.tool_name for step in exp.transitions if step.tool_name]
+    text = " ".join(
+        [
+            exp.trajectory,
+            " ".join(
+                " ".join(
+                    str(item or "")
+                    for item in (
+                        step.action,
+                        step.tool_name,
+                        _dump_for_alignment(step.arguments_hint),
+                        step.observation_summary,
+                    )
+                )
+                for step in exp.transitions
+            ),
+        ]
+    )
+    attrs = infer_memory_attributes(text, scenario=exp.scenario, tools=tools)
+    return (
+        frozenset(attrs.protocols),
+        frozenset(attrs.services),
+        frozenset(attrs.symptoms),
+    )
+
+
+def _compatible_experience_signature(
+    left: tuple[frozenset[str], frozenset[str], frozenset[str]],
+    right: tuple[frozenset[str], frozenset[str], frozenset[str]],
+) -> bool:
+    left_protocols, left_services, left_symptoms = left
+    right_protocols, right_services, right_symptoms = right
+    if left_protocols and right_protocols:
+        return bool(left_protocols & right_protocols)
+    return bool((left_services & right_services) or (left_symptoms & right_symptoms))
 
 
 def _episode_attribute_text(
@@ -318,7 +549,7 @@ class ProceduralMemoryModule:
                 "Stop after creating the initial diagnostic plan.",
             ),
         ]
-        return [
+        skills = [
             ProceduralSkill(
                 skill_id=skill_id,
                 title=title,
@@ -333,6 +564,223 @@ class ProceduralMemoryModule:
             )
             for skill_id, title, activation, policy, termination in seed_specs
         ]
+        skills.extend(
+            [
+                ProceduralSkill(
+                    skill_id="seed_name_resolution_ladder",
+                    title="NameResolutionEvidenceLadder",
+                    activation_condition=(
+                        "When the current claim or observations involve DNS, "
+                        "resolver, name lookup, nameserver, or port 53 symptoms."
+                    ),
+                    execution_steps=[
+                        SkillStep(
+                            order=1,
+                            action=(
+                                "Confirm the user-visible lookup symptom with a "
+                                "direct resolution or HTTP timing check from an "
+                                "affected endpoint."
+                            ),
+                            tool_name="curl_web_test",
+                        ),
+                        SkillStep(
+                            order=2,
+                            action=(
+                                "Inspect resolver configuration or the queried "
+                                "nameserver before blaming downstream HTTP, ACL, "
+                                "or routing components."
+                            ),
+                            tool_name="cat_file",
+                        ),
+                        SkillStep(
+                            order=3,
+                            action=(
+                                "Verify the name service process and listener "
+                                "state on the suspected server."
+                            ),
+                            tool_name="systemctl_ops",
+                        ),
+                    ],
+                    termination_condition=(
+                        "Stop when direct lookup/config/service evidence either "
+                        "supports a name-resolution RCA or rules it out."
+                    ),
+                    protocols=["dns"],
+                    services=["name_resolution"],
+                    symptoms=["lookup_failure", "service_unreachable", "latency"],
+                    tools=[
+                        "curl_web_test",
+                        "cat_file",
+                        "systemctl_ops",
+                        "netstat",
+                        "exec_shell",
+                    ],
+                    status="validated",
+                    score=0.16,
+                ),
+                ProceduralSkill(
+                    skill_id="seed_host_addressing_ladder",
+                    title="HostAddressingEvidenceLadder",
+                    activation_condition=(
+                        "When the current claim or observations involve DHCP, "
+                        "lease, host IP, default route, gateway, or address "
+                        "configuration symptoms."
+                    ),
+                    execution_steps=[
+                        SkillStep(
+                            order=1,
+                            action=(
+                                "Inspect the affected endpoint's IP address, "
+                                "default route, and resolver state."
+                            ),
+                            tool_name="get_host_net_config",
+                        ),
+                        SkillStep(
+                            order=2,
+                            action=(
+                                "Compare against a healthy endpoint or expected "
+                                "subnet before blaming routers or dynamic routing."
+                            ),
+                            tool_name="get_host_net_config",
+                        ),
+                        SkillStep(
+                            order=3,
+                            action=(
+                                "If host addressing is abnormal, inspect DHCP "
+                                "service/config/lease evidence on the provider."
+                            ),
+                            tool_name="systemctl_ops",
+                        ),
+                    ],
+                    termination_condition=(
+                        "Stop when current host addressing and DHCP evidence "
+                        "supports one addressing RCA or rules the layer out."
+                    ),
+                    protocols=["dhcp"],
+                    services=["addressing"],
+                    symptoms=["missing_ip", "bad_gateway", "lease_failure"],
+                    tools=[
+                        "get_host_net_config",
+                        "systemctl_ops",
+                        "cat_file",
+                        "exec_shell",
+                    ],
+                    status="validated",
+                    score=0.16,
+                ),
+                ProceduralSkill(
+                    skill_id="seed_routing_adjacency_ladder",
+                    title="RoutingAdjacencyEvidenceLadder",
+                    activation_condition=(
+                        "When the current claim or observations involve IGP "
+                        "routing adjacency, route propagation, OSPF, or FRR "
+                        "route symptoms after endpoint checks."
+                    ),
+                    execution_steps=[
+                        SkillStep(
+                            order=1,
+                            action=(
+                                "Confirm the missing or wrong route on the "
+                                "affected router."
+                            ),
+                            tool_name="frr_show_ip_route",
+                        ),
+                        SkillStep(
+                            order=2,
+                            action=(
+                                "Inspect routing neighbor state on the affected "
+                                "router and a directly connected peer."
+                            ),
+                            tool_name="frr_exec",
+                        ),
+                        SkillStep(
+                            order=3,
+                            action=(
+                                "Inspect routing configuration only after route "
+                                "or adjacency evidence points to the control plane."
+                            ),
+                            tool_name="frr_get_ospf_conf",
+                        ),
+                    ],
+                    termination_condition=(
+                        "Stop when route, adjacency, and config evidence support "
+                        "one routing-control-plane RCA or rule it out."
+                    ),
+                    protocols=["ospf"],
+                    services=["routing"],
+                    symptoms=["missing_route", "neighbor_down", "control_plane"],
+                    tools=[
+                        "frr_show_ip_route",
+                        "frr_exec",
+                        "frr_get_ospf_conf",
+                        "systemctl_ops",
+                    ],
+                    status="validated",
+                    score=0.16,
+                ),
+                ProceduralSkill(
+                    skill_id="seed_bgp_config_disambiguation",
+                    title="BGPConfigDisambiguation",
+                    activation_condition=(
+                        "When endpoint host/link state has been checked and current "
+                        "BGP evidence still shows neighbor Idle, Active, Connect, "
+                        "remote-as mismatch, or missing route/control-plane symptoms."
+                    ),
+                    execution_steps=[
+                        SkillStep(
+                            order=1,
+                            action=(
+                                "Confirm the abnormal BGP neighbor or route symptom "
+                                "with frr_show_bgp_summary or frr_show_ip_route."
+                            ),
+                            tool_name="frr_show_bgp_summary",
+                        ),
+                        SkillStep(
+                            order=2,
+                            action=(
+                                "Inspect the running BGP configuration on the affected "
+                                "router."
+                            ),
+                            tool_name="frr_get_bgp_conf",
+                        ),
+                        SkillStep(
+                            order=3,
+                            action=(
+                                "Inspect the directly connected peer's BGP "
+                                "configuration and compare neighbor, remote-as, and "
+                                "network advertisement statements."
+                            ),
+                            tool_name="frr_show_running_config",
+                        ),
+                        SkillStep(
+                            order=4,
+                            action=(
+                                "Commit to service-down, missing-advertisement, or "
+                                "AS/configuration RCA only after the current config "
+                                "evidence supports it."
+                            ),
+                        ),
+                    ],
+                    termination_condition=(
+                        "Stop when current BGP configuration evidence supports one "
+                        "remaining control-plane/configuration hypothesis, or when "
+                        "new endpoint evidence contradicts the activation condition."
+                    ),
+                    protocols=["bgp"],
+                    services=["routing"],
+                    symptoms=["missing_route", "neighbor_down", "control_plane"],
+                    tools=[
+                        "frr_show_bgp_summary",
+                        "frr_show_ip_route",
+                        "frr_get_bgp_conf",
+                        "frr_show_running_config",
+                    ],
+                    status="validated",
+                    score=0.18,
+                ),
+            ]
+        )
+        return skills
 
     def retrieve(self, *, query: MemoryQuery, session_id: str = "") -> list[SkillRetrieval]:
         state = self.store.load()
@@ -351,6 +799,8 @@ class ProceduralMemoryModule:
         for skill in state.skills.values():
             if skill.status == "retired":
                 continue
+            if _seed_activation_blocked(skill, query.text):
+                continue
             reasons: list[str] = []
             score = self._skill_effective_score(skill)
             scope_delta, scope_reasons, scope_blocked = self._transfer_scope_adjustment(
@@ -361,6 +811,14 @@ class ProceduralMemoryModule:
                 continue
             score += scope_delta
             reasons.extend(scope_reasons)
+            activation_fit = _activation_similarity(skill, query)
+            if not _is_seed_skill(skill) and activation_fit < 0.03 and (
+                skill.protocols or skill.services or skill.symptoms
+            ):
+                continue
+            score += 0.35 * activation_fit
+            if activation_fit > 0:
+                reasons.append(f"activation_fit:{activation_fit:.2f}")
             if query.scenario and skill.scenarios:
                 if query.scenario in skill.scenarios:
                     score += 0.2
@@ -449,8 +907,10 @@ class ProceduralMemoryModule:
         if _is_seed_skill(skill):
             return 0.0, [], False
         reasons: list[str] = []
+        delta = 0.0
         if query.scenario and skill.scenarios and query.scenario not in skill.scenarios:
-            return 0.0, [], True
+            delta -= 0.12
+            reasons.append("scenario_mismatch_metadata")
 
         query_scope = {
             "protocol": set(query.protocols),
@@ -467,7 +927,6 @@ class ProceduralMemoryModule:
         if discriminating_skill_labels and not discriminating_query_labels:
             return -0.45, ["needs_current_evidence_signature"], True
 
-        delta = 0.0
         overlap_count = 0
         mismatch_count = 0
         for label, skill_values in skill_scope.items():
@@ -707,6 +1166,7 @@ class ProceduralMemoryModule:
             tools=[step.tool_name for step in tool_steps if step.tool_name],
         )
         topic = _skill_topic(evidence, attrs.protocols, attrs.services, attrs.symptoms)
+        signature = _evidence_signature_text(attrs, tool_steps)
         critique = (
             critique.model_copy(deep=True)
             if critique is not None
@@ -714,18 +1174,15 @@ class ProceduralMemoryModule:
         )
         if parent is None:
             skill_id = _stable_id(
-                evidence.scenario,
                 attrs.protocols,
                 attrs.services,
                 attrs.symptoms,
                 attrs.tools,
+                [step.tool_name for step in tool_steps if step.tool_name],
                 prefix="skill",
             )
             title = f"Procedure for {topic}"
-            activation = (
-                f"Use when task resembles {evidence.scenario or 'the current scenario'} "
-                f"with symptoms: {', '.join(attrs.symptoms) or evidence.task_description[:120]}."
-            )
+            activation = _signature_activation(signature)
             steps = tool_steps[:10]
             termination = (
                 "Stop when anomaly status, faulty devices, and root-cause class are supported "
@@ -754,7 +1211,11 @@ class ProceduralMemoryModule:
             ).hexdigest()[:6]
             skill_id = f"{base}_v{version}_{revision}"
             title = parent.title
-            activation = critique.component_update.initiation or parent.activation_condition
+            activation = critique.component_update.initiation or (
+                _signature_activation(signature)
+                if _uses_generic_seed_policy(parent)
+                else parent.activation_condition
+            )
             update_steps = [
                 SkillStep(order=i + 1, action=step, rationale="Skill-Pro semantic update.")
                 for i, step in enumerate(critique.component_update.policy)
@@ -830,17 +1291,60 @@ class ProceduralMemoryModule:
                 is_related=True,
             )
         else:
-            critique = (
-                "Failed trajectory: revise initiation or policy to require stronger "
-                "evidence before localization/RCA."
-            )
-            update = "Store only as candidate unless PPO gate beats the existing/default policy."
+            detection = float(evidence.metrics.get("detection_score") or 0.0)
+            localization = _component_reward(evidence.metrics, "localization")
+            rca = _component_reward(evidence.metrics, "rca")
+            high_tool_budget = (evidence.tool_calls or len(tool_steps)) >= 10
+            if detection >= 1.0 and (localization < 0.6 or rca < 0.6):
+                critique = (
+                    "Failed Skill-Pro outcome: anomaly detection succeeded but "
+                    "localization/RCA was not supported. Treat this as premature "
+                    "termination or an overly broad initiation condition, not as "
+                    "a reusable success."
+                )
+                update = (
+                    "Narrow initiation to states with matching current evidence "
+                    "signature and require discriminating localization/RCA evidence "
+                    "before final diagnosis."
+                )
+                termination = (
+                    "Terminate only after current observations support detection, "
+                    "localization, and RCA; detection-only evidence must continue "
+                    "to a discriminating check."
+                )
+            elif high_tool_budget:
+                critique = (
+                    "Failed Skill-Pro outcome: the procedure consumed too many "
+                    "tool calls without converging. The termination condition is "
+                    "too weak or the policy lacks a short evidence ladder."
+                )
+                update = (
+                    "Add a bounded ladder and terminate or switch skills when the "
+                    "latest observations no longer satisfy initiation."
+                )
+                termination = (
+                    "Terminate or switch after the ladder's discriminating checks "
+                    "are exhausted, or when observations contradict initiation."
+                )
+            else:
+                critique = (
+                    "Failed trajectory: revise initiation or policy to require stronger "
+                    "evidence before localization/RCA."
+                )
+                update = "Store only as candidate unless PPO gate beats the existing/default policy."
+                termination = "Do not terminate until diagnosis has at least two independent observations."
             component = SkillComponentGradient(
+                initiation=(
+                    "Use only when the current observation history matches the "
+                    "skill's evidence signature; do not activate from scenario "
+                    "or tool catalog alone."
+                ),
                 policy=[
-                    "Collect broad anomaly evidence before narrowing the faulty device.",
+                    "Identify the active evidence family from current observations.",
+                    "Collect the most specific discriminating check for localization.",
                     "Verify the suspected root cause with an independent command.",
                 ],
-                termination="Do not terminate until diagnosis has at least two independent observations.",
+                termination=termination,
                 is_related=bool(tool_steps),
             )
         if not tool_steps:
@@ -982,19 +1486,23 @@ class ProceduralMemoryModule:
         j_score = replay["j_score"]
         margin = 0.03
         promotion_safe = _safe_skill_promotion(evidence.metrics)
+        trust_region_safe = j_score > -margin and (
+            baseline is None or replay["candidate_alignment"] >= replay["baseline_alignment"] - margin
+        )
         accepted = promotion_safe and (
             (
                 evidence.success
                 and baseline is None
                 and candidate_score > 0
+                and trust_region_safe
             ) or (
                 candidate_score >= baseline_score + margin
-                and j_score > -margin
+                and trust_region_safe
             ) or (
                 evidence.success
                 and baseline is not None
                 and current_reward >= baseline_score + margin
-                and j_score > -margin
+                and trust_region_safe
             )
         )
         reason = (
@@ -1094,19 +1602,24 @@ class ProceduralMemoryModule:
         state.iteration += 1
         for skill in state.skills.values():
             skill.increment_maturity()
+        stat_reward, stat_baseline = _skill_stat_reward(
+            evidence,
+            reward,
+            baseline_value,
+        )
         if runtime_skill_counts:
             total_calls = sum(runtime_skill_counts.values())
             for skill_id, count in runtime_skill_counts.items():
                 state.skills[skill_id].update_stats(
-                    reward=reward,
-                    baseline=baseline_value,
+                    reward=stat_reward,
+                    baseline=stat_baseline,
                     total_skill_calls=total_calls,
                     skill_call_count=count,
                 )
         elif parent is not None and parent.skill_id in state.skills:
             state.skills[parent.skill_id].update_stats(
-                reward=reward,
-                baseline=baseline_value,
+                reward=stat_reward,
+                baseline=stat_baseline,
                 total_skill_calls=1,
                 skill_call_count=1,
             )
@@ -1176,7 +1689,7 @@ class ProceduralMemoryModule:
                 "method": "Skill-Pro",
             }
 
-        samples = self._evolution_batch(state, parent)
+        samples = self._evolution_batch(state, parent, current=experience)
         if len(samples) < self.evolution_threshold:
             self._maintain(state)
             state.evolution_log.append(
@@ -1446,6 +1959,8 @@ class ProceduralMemoryModule:
         self,
         state,
         parent: ProceduralSkill | None,
+        *,
+        current: SkillExperience | None = None,
     ) -> list[SkillExperience]:
         if parent is None:
             pool = [
@@ -1465,11 +1980,25 @@ class ProceduralMemoryModule:
                     if exp.experience_id not in {item.experience_id for item in pool}
                     and not exp.used_for_evolution
                 ]
+        if current is not None and _uses_generic_seed_policy(parent):
+            current_signature = _experience_signature(current)
+            if any(current_signature):
+                clustered = [
+                    exp
+                    for exp in pool
+                    if exp.experience_id == current.experience_id
+                    or _compatible_experience_signature(
+                        current_signature,
+                        _experience_signature(exp),
+                    )
+                ]
+                pool = clustered
         if len(pool) <= self.evolution_threshold:
             return list(pool)
         ordered = sorted(pool, key=lambda exp: exp.reward)
-        half = max(1, self.evolution_threshold // 2)
-        batch = ordered[:half] + ordered[-half:]
+        low_count = max(1, self.evolution_threshold // 2)
+        high_count = max(1, self.evolution_threshold - low_count)
+        batch = ordered[:low_count] + ordered[-high_count:]
         seen: dict[str, SkillExperience] = {}
         for exp in batch:
             seen[exp.experience_id] = exp

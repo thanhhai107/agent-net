@@ -228,7 +228,7 @@ class SkillToolRuntime:
                 ),
                 "- After each tool result, decide whether the active skill should continue, terminate, or switch.",
                 "- Skill termination only controls switching skills; it is not a final diagnosis stop condition.",
-                "- Treat DRAFT tool docs and next-check suggestions as tool-use guidance, not as evidence.",
+                "- Treat stable DRAFT tool docs as tool-use guidance, not as evidence.",
                 "- Reuse a learned skill only when the current evidence signature matches its activation condition; if observations diverge, abandon the skill.",
                 "- Skills may suggest checks, but must not transfer a faulty device or root-cause label from a prior episode.",
                 "- Final diagnosis must cite current tool observations; memory and docs cannot replace evidence.",
@@ -240,7 +240,7 @@ class SkillToolRuntime:
                 "- Treat retrieved skills as candidate Skill-MDP options for planning only.",
                 "- Do not treat a candidate as activated or reused until an execution step or tool call selects it.",
                 "- Plan checks whose observations can test a skill initiation, advance a policy step, or verify termination.",
-                "- Treat DRAFT tool docs and next-check suggestions as tool-use guidance, not as evidence.",
+                "- Treat stable DRAFT tool docs as tool-use guidance, not as evidence.",
                 "- Use retrieved skills to choose discriminating checks, not to predict the answer.",
                 "- Final diagnosis must cite current tool observations; memory and docs cannot replace evidence.",
             ]
@@ -1066,13 +1066,21 @@ class SkillToolRuntime:
                 " ".join(self.recent_observations[-3:]),
             ]
         ).lower()
-        recent_text = " ".join(self.recent_observations[-3:]).lower()
+        recent_text = " ".join(self.recent_observations[-6:]).lower()
         candidates: set[str] = set()
 
         def add(*names: str) -> None:
             candidates.update(name for name in names if name in known)
 
         add("get_reachability", "ping_pair", "get_host_net_config")
+        if self._name_resolution_signal(text) or self._name_resolution_signal(recent_text):
+            add("curl_web_test", "cat_file", "systemctl_ops", "netstat", "exec_shell")
+        if self._host_addressing_signal(text) or self._host_addressing_signal(recent_text):
+            add("get_host_net_config", "systemctl_ops", "cat_file", "exec_shell")
+        if self._routing_adjacency_signal(text) or self._routing_adjacency_signal(
+            recent_text
+        ):
+            add("frr_show_ip_route", "frr_exec", "frr_get_ospf_conf", "systemctl_ops")
         if any(
             marker in text
             for marker in (
@@ -1088,15 +1096,20 @@ class SkillToolRuntime:
             add("ethtool", "ip_addr_statistics")
         if self._host_link_or_reachability_symptom(recent_text):
             add("ethtool", "ip_addr_statistics")
-            return candidates
+            if self._endpoint_state_checked(recent_text) and self._bgp_or_route_symptom(
+                recent_text
+            ):
+                add("frr_show_bgp_summary", "frr_show_ip_route")
+                if self._deep_bgp_symptom(recent_text):
+                    add("frr_get_bgp_conf", "frr_show_running_config")
+            else:
+                return candidates
         if self._bgp_or_route_symptom(recent_text):
             add("frr_show_bgp_summary", "frr_show_ip_route")
             if self._deep_bgp_symptom(recent_text):
                 add("frr_get_bgp_conf")
         elif not candidates:
             add("frr_show_bgp_summary", "frr_show_ip_route")
-        if "ospf" in text:
-            add("frr_get_ospf_conf", "frr_exec")
         if any(
             marker in text
             for marker in ("latency", "loss", "bandwidth", "packet", "throughput")
@@ -1224,16 +1237,18 @@ class SkillToolRuntime:
         )
 
     @staticmethod
+    def _bgp_session_problem(text: str) -> bool:
+        lower = str(text or "").lower()
+        return bool(re.search(r"\b(idle|active|connect)\b", lower))
+
+    @staticmethod
     def _bgp_or_route_symptom(text: str) -> bool:
         lower = str(text or "").lower()
-        return any(
+        return SkillToolRuntime._bgp_session_problem(lower) or any(
             marker in lower
             for marker in (
                 "neighbor",
                 "state/pfxrcd",
-                "idle",
-                "active",
-                "connect",
                 "no route",
                 "network is unreachable",
                 "rib-failure",
@@ -1243,17 +1258,89 @@ class SkillToolRuntime:
     @staticmethod
     def _deep_bgp_symptom(text: str) -> bool:
         lower = str(text or "").lower()
-        return any(
+        return SkillToolRuntime._bgp_session_problem(lower) or any(
             marker in lower
             for marker in (
-                "idle",
-                "active",
-                "connect",
-                "establish",
                 "configuration",
                 "remote-as",
                 "as mismatch",
                 "neighbor down",
+                "missing route",
+                "no route",
+                "not advertised",
+                "prefixes received 0",
+                "pfxrcd 0",
+            )
+        )
+
+    @staticmethod
+    def _endpoint_state_checked(text: str) -> bool:
+        lower = str(text or "").lower()
+        return any(
+            marker in lower
+            for marker in (
+                "get_host_net_config(",
+                "ethtool(",
+                "ip_addr_statistics(",
+                '"ip_addr"',
+                '"ifconfig"',
+                "link detected:",
+            )
+        )
+
+    @staticmethod
+    def _name_resolution_signal(text: str) -> bool:
+        lower = str(text or "").lower()
+        return any(
+            re.search(pattern, lower)
+            for pattern in (
+                r"\bdns\b",
+                r"\bresolv(?:e|er|ing|ution)\b",
+                r"\bname[-_ ]?lookup\b",
+                r"\bnameserver\b",
+                r"\bnslookup\b",
+                r"\bdig\b",
+                r"\bservfail\b",
+                r"\bnxdomain\b",
+                r"\bport\s+53\b",
+            )
+        )
+
+    @staticmethod
+    def _host_addressing_signal(text: str) -> bool:
+        lower = str(text or "").lower()
+        return any(
+            re.search(pattern, lower)
+            for pattern in (
+                r"\bdhcp\b",
+                r"\blease\b",
+                r"\bdefault\s+(?:via|route|gateway)\b",
+                r"\bgateway\b",
+                r"\bmissing\s+ip\b",
+                r"\bno\s+(?:ip|inet)\b",
+                r"\bip_route\s+is\s+empty\b",
+                r"\bget_host_net_config\(",
+                r"\bdhclient\b",
+            )
+        )
+
+    @staticmethod
+    def _routing_adjacency_signal(text: str) -> bool:
+        lower = str(text or "").lower()
+        if "bgp" in lower and "ospf" not in lower and "show ip ospf" not in lower:
+            return False
+        return any(
+            re.search(pattern, lower)
+            for pattern in (
+                r"\bospf\b",
+                r"\bfrr_get_ospf_conf\(",
+                r"\bshow\s+ip\s+ospf\b",
+                r"\brouting\s+adjacency\b",
+                r"\bneighbor\s+(?:down|state|full|init|exstart|2-way)\b",
+                r"\broute\s+missing\b",
+                r"\bmissing\s+route\b",
+                r"\bno\s+route\b",
+                r"\bfrr_show_ip_route\(",
             )
         )
 
@@ -1261,6 +1348,7 @@ class SkillToolRuntime:
         text = "\n".join(self.recent_observations[-6:])
         lower = text.lower()
         down_hosts = self._host_link_down_devices(text)
+        endpoint_checked = self._endpoint_state_checked(lower)
         if down_hosts:
             devices = ", ".join(down_hosts)
             return (
@@ -1280,9 +1368,51 @@ class SkillToolRuntime:
                 "`get_host_net_config` and `ethtool` for the endpoint devices "
                 "named in the failed reachability result."
             )
+        if tool_name == "get_reachability" and self._name_resolution_signal(
+            self.task_description + "\n" + lower
+        ):
+            return (
+                "Reachability alone does not verify name-resolution behavior. "
+                "Use the name-resolution evidence ladder next: direct lookup or "
+                "HTTP timing from an affected endpoint, then resolver config, "
+                "service state, and listener evidence if lookup is abnormal."
+            )
+        if tool_name == "get_host_net_config" and self._host_addressing_signal(lower):
+            return (
+                "Current evidence is in the host-addressing layer. Compare the "
+                "affected endpoint's IP/default route/resolver state with a "
+                "healthy endpoint or expected subnet before blaming routers or "
+                "dynamic routing."
+            )
+        if tool_name in {"curl_web_test", "exec_shell"} and self._name_resolution_signal(
+            lower
+        ):
+            return (
+                "Current evidence is in the name-resolution layer. If lookup "
+                "timing/status is abnormal, inspect resolver configuration plus "
+                "name-service process/listener evidence before switching to "
+                "HTTP backend, ACL, or routing hypotheses."
+            )
+        if tool_name.startswith("frr_") and self._routing_adjacency_signal(lower):
+            return (
+                "Current evidence is in the routing-adjacency layer. Compare "
+                "route table, neighbor state, and routing configuration on the "
+                "affected router and a directly connected peer before committing "
+                "to a control-plane RCA."
+            )
         if tool_name.startswith("frr_") and self._host_link_or_reachability_symptom(
             lower
         ):
+            if endpoint_checked:
+                if tool_name == "frr_show_bgp_summary" and self._deep_bgp_symptom(
+                    lower
+                ):
+                    return self._bgp_config_disambiguation_guidance()
+                return (
+                    "Endpoint host/link state has already been checked. Continue "
+                    "with routing or control-plane evidence instead of repeating "
+                    "endpoint checks."
+                )
             return (
                 "Do not treat route or BGP prefix asymmetry as the root cause "
                 "until endpoint host/link state has been checked. Prefer "
@@ -1290,6 +1420,25 @@ class SkillToolRuntime:
                 "devices next."
             )
         return ""
+
+    def _bgp_config_disambiguation_guidance(self) -> str:
+        state = self.memory.store.load()
+        skill = state.skills.get("seed_bgp_config_disambiguation")
+        if skill is None:
+            return (
+                "BGP neighbor state is abnormal after endpoint checks. Compare "
+                "the running BGP configuration on the affected router and one "
+                "directly connected peer before choosing a service-down, "
+                "missing-advertisement, or AS/configuration root cause."
+            )
+        policy = "; ".join(
+            step.action for step in skill.execution_steps[1:3] if step.action
+        )
+        return (
+            "Current evidence matches the "
+            f"{redact_oracle_markers(skill.skill_id)} Skill-MDP option. "
+            f"{redact_oracle_markers(policy)}"
+        )
 
     @staticmethod
     def _host_link_down_devices(text: str) -> list[str]:

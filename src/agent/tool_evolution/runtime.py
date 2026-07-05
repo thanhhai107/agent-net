@@ -93,7 +93,14 @@ def _normalize_check_text(text: Any) -> str:
 
 def _diagnosis_relevant_check(text: Any) -> bool:
     """Return whether a DRAFT exploration should guide live diagnosis."""
-    return bool(_normalize_check_text(text))
+    normalized = _normalize_check_text(text)
+    if not normalized:
+        return False
+    if any(marker in normalized for marker in _TOOL_LEARNING_SUGGESTION_MARKERS):
+        return False
+    if any(marker in normalized for marker in _DIAGNOSIS_SUGGESTION_MARKERS):
+        return True
+    return bool(_extract_topology_hosts(normalized))
 
 
 def _diagnosis_relevant_doc_suggestion_text(text: Any) -> bool:
@@ -232,9 +239,13 @@ class ToolEvolutionRuntime:
             if not active_docs:
                 return ""
         state = self.store.load()
-        planned_queue = self.planned_explorations(
-            limit=self.planned_checks,
-            diagnosis_only=diagnosis_only,
+        planned_queue = (
+            []
+            if diagnosis_only
+            else self.planned_explorations(
+                limit=self.planned_checks,
+                diagnosis_only=diagnosis_only,
+            )
         )
         if tool_filter:
             planned_queue = [
@@ -270,15 +281,29 @@ class ToolEvolutionRuntime:
                 f"{self._refined_description(doc, max_chars=220, diagnosis_only=diagnosis_only)}"
                 f"{suffix}"
             )
+        if diagnosis_only:
+            header = (
+                "\n\nDRAFT tool documentation memory:\n"
+                "The primitive tool surface is fixed. Use the following refined docs "
+                "to choose valid arguments and avoid known failure modes. Live "
+                "diagnosis receives stable tool semantics only; DRAFT next-check "
+                "exploration queues are reserved for tool-learning mode. Treat DRAFT "
+                "guidance as tool-use guidance, not as evidence by itself, and do "
+                "not transfer faulty-device or root-cause labels from past trials.\n"
+            )
+        else:
+            header = (
+                "\n\nDRAFT tool documentation memory:\n"
+                "The primitive tool surface is fixed. Use the following refined docs "
+                "to choose valid arguments, avoid known failure modes, and follow "
+                "DRAFT Explorer/Analyzer/Rewriter next-check suggestions when more "
+                "evidence is needed. Treat DRAFT guidance as tool-use guidance, not "
+                "as evidence by itself. Use DRAFT checks to distinguish competing "
+                "hypotheses; do not transfer faulty-device or root-cause labels from "
+                "past trials.\n"
+            )
         suffix = (
-            "\n\nDRAFT tool documentation memory:\n"
-            "The primitive tool surface is fixed. Use the following refined docs "
-            "to choose valid arguments, avoid known failure modes, and follow "
-            "DRAFT Explorer/Analyzer/Rewriter next-check suggestions when more "
-            "evidence is needed. Treat DRAFT guidance as tool-use guidance, not "
-            "as evidence by itself. Use DRAFT checks to distinguish competing "
-            "hypotheses; do not transfer faulty-device or root-cause labels from "
-            "past trials.\n"
+            header
             + (
                 f"{_clip(state.library_usage_description, limit=1200)}\n"
                 if state.library_usage_description and not tool_filter
@@ -311,10 +336,14 @@ class ToolEvolutionRuntime:
         doc = self._docs.get(tool_name)
         if doc is None:
             return ""
-        planned = self.next_checks(
-            tool_name,
-            limit=self.next_checks_limit,
-            diagnosis_only=diagnosis_only,
+        planned = (
+            []
+            if diagnosis_only
+            else self.next_checks(
+                tool_name,
+                limit=self.next_checks_limit,
+                diagnosis_only=diagnosis_only,
+            )
         )
         if planned:
             planned_text = (
@@ -347,16 +376,11 @@ class ToolEvolutionRuntime:
     ) -> str:
         if not diagnosis_only:
             return doc.refined_description(max_chars=max_chars)
-        suggestions = [
-            item
-            for item in doc.exploration_suggestions
-            if self._diagnosis_relevant_doc_suggestion(
-                tool_name=doc.name,
-                text=item,
-            )
-        ]
-        if len(suggestions) != len(doc.exploration_suggestions):
-            doc = doc.model_copy(update={"exploration_suggestions": suggestions})
+        # Live diagnosis should receive stable tool semantics only. DRAFT
+        # next-check suggestions are episode-local hypotheses and can overfit
+        # subsequent benchmark cases, so keep them for tool-learning prompts.
+        if doc.exploration_suggestions:
+            doc = doc.model_copy(update={"exploration_suggestions": []})
         return doc.refined_description(max_chars=max_chars)
 
     def _diagnosis_relevant_exploration(
@@ -448,6 +472,8 @@ class ToolEvolutionRuntime:
         """Return active DRAFT exploration directions for one tool."""
         if limit <= 0:
             return []
+        if diagnosis_only:
+            return []
         doc = self._docs.get(tool_name)
         if doc is None:
             return []
@@ -498,6 +524,8 @@ class ToolEvolutionRuntime:
         diagnosis_only: bool = True,
     ) -> dict[str, Any] | None:
         """Return the planned DRAFT Explorer check a tool call is trying."""
+        if diagnosis_only:
+            return None
         arguments = tool_arguments or {}
         state = self.store.load()
         fallback: dict[str, Any] | None = None
@@ -542,6 +570,8 @@ class ToolEvolutionRuntime:
     ) -> list[dict[str, Any]]:
         """Return structured DRAFT Explorer checks waiting to be tried."""
         if limit <= 0:
+            return []
+        if diagnosis_only:
             return []
         state = self.store.load()
         rows: list[dict[str, Any]] = []

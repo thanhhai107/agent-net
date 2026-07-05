@@ -340,6 +340,76 @@ class SkillProMemoryTest(unittest.TestCase):
 
         self.assertNotIn("missing_ip_skill", [item.skill.skill_id for item in retrieved])
 
+    def test_retrieval_prefers_activation_fit_over_tool_catalog_overlap(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            module = ProceduralMemoryModule(
+                bank_id="skill",
+                store_path=Path(tmp) / "skills.json",
+            )
+            state = module.store.load()
+            state.skills["dns_policy"] = ProceduralSkill(
+                skill_id="dns_policy",
+                title="Name lookup policy",
+                activation_condition=(
+                    "Use when current observations show DNS resolver, name lookup, "
+                    "nameserver, SERVFAIL, or port 53 symptoms."
+                ),
+                execution_steps=[
+                    SkillStep(
+                        order=1,
+                        action="Run direct lookup timing.",
+                        tool_name="curl_web_test",
+                    )
+                ],
+                termination_condition="Stop after lookup/config/service evidence.",
+                protocols=["dns"],
+                services=["name_resolution"],
+                symptoms=["lookup_failure"],
+                tools=["curl_web_test", "systemctl_ops"],
+                status="validated",
+                score=0.4,
+            )
+            state.skills["bgp_tool_overlap"] = ProceduralSkill(
+                skill_id="bgp_tool_overlap",
+                title="BGP tool overlap",
+                activation_condition=(
+                    "Use when current observations show BGP neighbor or route symptoms."
+                ),
+                execution_steps=[
+                    SkillStep(
+                        order=1,
+                        action="Check BGP neighbors.",
+                        tool_name="frr_show_bgp_summary",
+                    )
+                ],
+                termination_condition="Stop after BGP neighbor and route evidence.",
+                protocols=["bgp"],
+                services=["routing"],
+                symptoms=["missing_route"],
+                tools=["curl_web_test", "systemctl_ops"],
+                status="validated",
+                score=0.9,
+            )
+            module.store.save(state)
+
+            retrieved = module.retrieve(
+                query=MemoryQuery(
+                    text=(
+                        "curl_web_test shows DNS name lookup SERVFAIL from "
+                        "the configured resolver."
+                    ),
+                    protocols=["dns"],
+                    services=["name_resolution"],
+                    symptoms=["lookup_failure"],
+                    tools=["curl_web_test", "systemctl_ops"],
+                    top_k=2,
+                )
+            )
+
+        self.assertTrue(retrieved)
+        self.assertEqual(retrieved[0].skill.skill_id, "dns_policy")
+        self.assertNotIn("bgp_tool_overlap", [item.skill.skill_id for item in retrieved])
+
     def test_partial_rca_episode_is_not_promoted_to_reusable_skill(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             module = ProceduralMemoryModule(
@@ -378,6 +448,152 @@ class SkillProMemoryTest(unittest.TestCase):
         self.assertEqual(report["status"], "rejected")
         self.assertIn("unsafe", report["reason"])
         self.assertEqual(after, before)
+
+    def test_partial_episode_penalizes_reused_skill_online_score(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            module = ProceduralMemoryModule(
+                bank_id="skill",
+                store_path=Path(tmp) / "skills.json",
+                evolution_threshold=1,
+            )
+            state = module.store.load()
+            state.skills["active_bad_skill"] = ProceduralSkill(
+                skill_id="active_bad_skill",
+                title="Over-broad reachability policy",
+                activation_condition="Use when current evidence shows host reachability failure.",
+                execution_steps=[
+                    SkillStep(
+                        order=1,
+                        action="Check broad reachability.",
+                        tool_name="get_reachability",
+                    )
+                ],
+                termination_condition="Stop after detecting an anomaly.",
+                services=["routing"],
+                symptoms=["reachability_loss"],
+                tools=["get_reachability"],
+                status="validated",
+                score=0.6,
+            )
+            module.store.save(state)
+
+            report = module.learn_from_episode(
+                evidence=EvaluationEvidence(
+                    session_id="partial-reuse",
+                    task_description="Host reachability failure.",
+                    scenario="enterprise",
+                    metrics={
+                        "detection_score": 1.0,
+                        "localization_accuracy": 1.0,
+                        "rca_accuracy": 0.0,
+                    },
+                    steps=8,
+                    tool_calls=5,
+                    success=False,
+                ),
+                tool_steps=[
+                    SkillStep(
+                        order=1,
+                        action="Check broad reachability.",
+                        skill_id="active_bad_skill",
+                        tool_name="get_reachability",
+                        observation_summary="Reachability is unknown.",
+                    )
+                ],
+            )
+            skill = module.store.load().skills["active_bad_skill"]
+
+        self.assertEqual(report["status"], "rejected")
+        self.assertLess(skill.avg_gain, 0.0)
+        self.assertEqual(skill.failure_count, 1)
+
+    def test_deterministic_semantic_gradient_updates_components_for_partial_outcome(self) -> None:
+        module = ProceduralMemoryModule(bank_id="skill")
+        gradient = module.semantic_gradient(
+            evidence=EvaluationEvidence(
+                session_id="partial-gradient",
+                task_description="Host reachability failure.",
+                metrics={
+                    "detection_score": 1.0,
+                    "localization_accuracy": 1.0,
+                    "rca_accuracy": 0.0,
+                },
+                success=False,
+                steps=6,
+                tool_calls=4,
+            ),
+            tool_steps=[
+                SkillStep(
+                    order=1,
+                    action="Check reachability.",
+                    tool_name="get_reachability",
+                )
+            ],
+        )
+
+        self.assertIn("localization/RCA", gradient.critique)
+        self.assertIn("current observation history", gradient.component_update.initiation)
+        self.assertIn("detection-only", gradient.component_update.termination)
+
+    def test_proposed_skill_activation_uses_evidence_signature_not_scenario(self) -> None:
+        module = ProceduralMemoryModule(bank_id="skill")
+        skill = module.propose_skill(
+            evidence=EvaluationEvidence(
+                session_id="general-skill",
+                task_description="Diagnose missing route.",
+                scenario="benchmark_specific_scenario",
+                metrics={
+                    "detection_score": 1.0,
+                    "localization_accuracy": 1.0,
+                    "rca_accuracy": 1.0,
+                },
+                success=True,
+            ),
+            tool_steps=[
+                SkillStep(
+                    order=1,
+                    action="Check route table.",
+                    tool_name="frr_show_ip_route",
+                    observation_summary="Route is missing.",
+                )
+            ],
+        )
+
+        self.assertIn("evidence signature", skill.activation_condition)
+        self.assertIn("observed tools", skill.activation_condition)
+        self.assertNotIn("benchmark_specific_scenario", skill.activation_condition)
+        self.assertNotIn("benchmark_specific_scenario", skill.skill_id)
+
+    def test_refining_generic_seed_uses_evidence_signature_activation(self) -> None:
+        module = ProceduralMemoryModule(bank_id="skill")
+        parent = module.store.load().skills["seed_explore_exploit"]
+
+        skill = module.propose_skill(
+            evidence=EvaluationEvidence(
+                session_id="refine-generic",
+                task_description="BGP route is missing.",
+                scenario="dc_clos_bgp",
+                metrics={
+                    "detection_score": 1.0,
+                    "localization_accuracy": 1.0,
+                    "rca_accuracy": 1.0,
+                },
+                success=True,
+            ),
+            tool_steps=[
+                SkillStep(
+                    order=1,
+                    action="Inspect BGP route state.",
+                    tool_name="frr_show_bgp_summary",
+                    observation_summary="BGP route is missing.",
+                )
+            ],
+            parent=parent,
+        )
+
+        self.assertIn("evidence signature", skill.activation_condition)
+        self.assertIn("bgp", skill.activation_condition.lower())
+        self.assertNotIn("deciding between broad exploration", skill.activation_condition)
 
     def test_runtime_context_does_not_label_candidate_as_active_without_active_skill(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -551,6 +767,133 @@ class SkillProMemoryTest(unittest.TestCase):
             {exp.experience_id for exp in used},
         )
 
+    def test_evolution_batch_returns_full_odd_threshold_when_pool_is_large(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            module = ProceduralMemoryModule(
+                bank_id="skill",
+                store_path=Path(tmp) / "skills.json",
+                evolution_threshold=3,
+            )
+            state = module.store.load()
+            parent = state.skills["seed_explore_exploit"]
+            for index, reward in enumerate([0.1, 0.3, 0.5, 0.7, 0.9], start=1):
+                state.experiences.append(
+                    SkillExperience(
+                        experience_id=f"exp-{index}",
+                        session_id=f"s{index}",
+                        reward=reward,
+                        baseline=0.0,
+                        advantage=reward,
+                        skill_ids=[parent.skill_id],
+                        transitions=[
+                            SkillTransition(
+                                state="BGP route missing",
+                                action="Inspect BGP routes.",
+                                tool_name="frr_show_bgp_summary",
+                                observation_summary="Route evidence collected.",
+                                status="success",
+                                done=True,
+                            )
+                        ],
+                        success=True,
+                    )
+                )
+
+            batch = module._evolution_batch(state, parent)
+
+        self.assertEqual(len(batch), 3)
+        self.assertEqual(
+            {experience.experience_id for experience in batch},
+            {"exp-1", "exp-4", "exp-5"},
+        )
+
+    def test_generic_seed_evolution_batch_clusters_by_evidence_signature(self) -> None:
+        def experience(
+            exp_id: str,
+            reward: float,
+            *,
+            action: str,
+            tool_name: str,
+            observation: str,
+        ) -> SkillExperience:
+            return SkillExperience(
+                experience_id=exp_id,
+                session_id=exp_id,
+                reward=reward,
+                baseline=0.0,
+                advantage=reward,
+                skill_ids=["seed_explore_exploit"],
+                trajectory=action,
+                transitions=[
+                    SkillTransition(
+                        state=action,
+                        action=action,
+                        tool_name=tool_name,
+                        observation_summary=observation,
+                        status="success",
+                        done=True,
+                    )
+                ],
+                success=True,
+            )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            module = ProceduralMemoryModule(
+                bank_id="skill",
+                store_path=Path(tmp) / "skills.json",
+                evolution_threshold=3,
+            )
+            state = module.store.load()
+            parent = state.skills["seed_explore_exploit"]
+            current = experience(
+                "bgp-current",
+                0.9,
+                action="Inspect BGP route advertisement.",
+                tool_name="frr_show_bgp_summary",
+                observation="BGP route is missing.",
+            )
+            state.experiences.extend(
+                [
+                    experience(
+                        "bgp-low",
+                        0.2,
+                        action="Check BGP neighbor state.",
+                        tool_name="frr_show_bgp_summary",
+                        observation="BGP neighbor and route evidence collected.",
+                    ),
+                    experience(
+                        "ospf-high",
+                        0.8,
+                        action="Check OSPF neighbor state.",
+                        tool_name="frr_get_ospf_conf",
+                        observation="OSPF neighbor missing.",
+                    ),
+                    experience(
+                        "p4-high",
+                        0.7,
+                        action="Inspect P4 table.",
+                        tool_name="bmv2_table_dump",
+                        observation="P4 table entry missing.",
+                    ),
+                    current,
+                    experience(
+                        "bgp-mid",
+                        0.6,
+                        action="Inspect BGP route table.",
+                        tool_name="frr_show_ip_route",
+                        observation="BGP missing route evidence.",
+                    ),
+                ]
+            )
+
+            batch = module._evolution_batch(state, parent, current=current)
+
+        self.assertEqual(len(batch), 3)
+        self.assertEqual(
+            {item.experience_id for item in batch},
+            {"bgp-low", "bgp-current", "bgp-mid"},
+        )
+
     def test_seed_skill_pool_is_available_in_fresh_bank(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             module = ProceduralMemoryModule(
@@ -570,10 +913,223 @@ class SkillProMemoryTest(unittest.TestCase):
 
         self.assertGreaterEqual(
             len([skill_id for skill_id in state.skills if skill_id.startswith("seed_")]),
-            6,
+            10,
         )
+        self.assertIn("seed_bgp_config_disambiguation", state.skills)
+        self.assertIn("seed_name_resolution_ladder", state.skills)
+        self.assertIn("seed_host_addressing_ladder", state.skills)
+        self.assertIn("seed_routing_adjacency_ladder", state.skills)
         self.assertTrue(any(item.skill.skill_id.startswith("seed_") for item in retrieved))
         self.assertIn("Skill-MDP", context)
+
+    def test_generic_ladder_seeds_require_claim_or_evidence_signal(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            module = ProceduralMemoryModule(
+                bank_id="skill",
+                store_path=Path(tmp) / "skills.json",
+                evolution_threshold=1,
+            )
+
+            retrieved = module.retrieve(
+                query=MemoryQuery(
+                    text=(
+                        "Network Description: enterprise topology includes "
+                        "routing, name service, addressing, and application "
+                        "components. Begin diagnosis with little evidence."
+                    ),
+                    scenario="enterprise_network",
+                    protocols=["dns", "dhcp", "ospf"],
+                    services=["routing", "addressing", "name_resolution"],
+                    top_k=10,
+                )
+            )
+
+        seed_ids = {item.skill.skill_id for item in retrieved}
+        self.assertNotIn("seed_name_resolution_ladder", seed_ids)
+        self.assertNotIn("seed_host_addressing_ladder", seed_ids)
+        self.assertNotIn("seed_routing_adjacency_ladder", seed_ids)
+
+    def test_generic_ladder_seeds_retrieve_from_evidence_signals(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            module = ProceduralMemoryModule(
+                bank_id="skill",
+                store_path=Path(tmp) / "skills.json",
+                evolution_threshold=1,
+            )
+
+            dns_retrieved = module.retrieve(
+                query=MemoryQuery(
+                    text="curl_web_test shows DNS name_lookup delay and SERVFAIL.",
+                    protocols=["dns"],
+                    services=["name_resolution"],
+                    tools=["curl_web_test", "systemctl_ops", "netstat"],
+                    top_k=3,
+                )
+            )
+            dhcp_retrieved = module.retrieve(
+                query=MemoryQuery(
+                    text=(
+                        "get_host_net_config shows no inet address and "
+                        "ip_route is empty after DHCP lease failure."
+                    ),
+                    protocols=["dhcp"],
+                    services=["addressing"],
+                    tools=["get_host_net_config", "systemctl_ops"],
+                    top_k=3,
+                )
+            )
+            ospf_retrieved = module.retrieve(
+                query=MemoryQuery(
+                    text=(
+                        "frr_exec show ip ospf neighbor reports neighbor down "
+                        "and frr_show_ip_route shows missing route."
+                    ),
+                    protocols=["ospf"],
+                    services=["routing"],
+                    tools=["frr_exec", "frr_get_ospf_conf", "frr_show_ip_route"],
+                    top_k=3,
+                )
+            )
+
+        self.assertEqual(
+            dns_retrieved[0].skill.skill_id,
+            "seed_name_resolution_ladder",
+        )
+        self.assertEqual(
+            dhcp_retrieved[0].skill.skill_id,
+            "seed_host_addressing_ladder",
+        )
+        self.assertEqual(
+            ospf_retrieved[0].skill.skill_id,
+            "seed_routing_adjacency_ladder",
+        )
+
+    def test_bgp_config_disambiguation_seed_is_retrieved_for_matching_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            module = ProceduralMemoryModule(
+                bank_id="skill",
+                store_path=Path(tmp) / "skills.json",
+                evolution_threshold=1,
+            )
+
+            retrieved = module.retrieve(
+                query=MemoryQuery(
+                    text=(
+                        "endpoint host link checked ok; frr_show_bgp_summary "
+                        "shows neighbor Idle and missing route"
+                    ),
+                    scenario="dc_clos_bgp",
+                    protocols=["bgp"],
+                    services=["routing"],
+                    symptoms=["missing_route", "neighbor_down"],
+                    tools=[
+                        "frr_show_bgp_summary",
+                        "frr_get_bgp_conf",
+                        "frr_show_running_config",
+                    ],
+                    top_k=3,
+                )
+            )
+
+        self.assertTrue(retrieved)
+        self.assertEqual(
+            retrieved[0].skill.skill_id,
+            "seed_bgp_config_disambiguation",
+        )
+
+    def test_bgp_config_disambiguation_seed_requires_endpoint_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            module = ProceduralMemoryModule(
+                bank_id="skill",
+                store_path=Path(tmp) / "skills.json",
+                evolution_threshold=1,
+            )
+
+            retrieved = module.retrieve(
+                query=MemoryQuery(
+                    text=(
+                        "Network Description: EBGP Clos. Begin diagnosis with "
+                        "little evidence."
+                    ),
+                    scenario="dc_clos_bgp",
+                    protocols=["bgp"],
+                    services=["routing"],
+                    tools=[
+                        "frr_show_bgp_summary",
+                        "frr_get_bgp_conf",
+                        "frr_show_running_config",
+                    ],
+                    top_k=8,
+                )
+            )
+
+        self.assertNotIn(
+            "seed_bgp_config_disambiguation",
+            [item.skill.skill_id for item in retrieved],
+        )
+
+    def test_bgp_config_disambiguation_seed_rejects_normal_established_summary(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            module = ProceduralMemoryModule(
+                bank_id="skill",
+                store_path=Path(tmp) / "skills.json",
+                evolution_threshold=1,
+            )
+
+            retrieved = module.retrieve(
+                query=MemoryQuery(
+                    text=(
+                        "endpoint host link checked ok; frr_show_bgp_summary "
+                        "shows neighbor Established with prefixes received 12"
+                    ),
+                    scenario="dc_clos_bgp",
+                    protocols=["bgp"],
+                    services=["routing"],
+                    tools=[
+                        "frr_show_bgp_summary",
+                        "frr_get_bgp_conf",
+                        "frr_show_running_config",
+                    ],
+                    top_k=8,
+                )
+            )
+
+        self.assertNotIn(
+            "seed_bgp_config_disambiguation",
+            [item.skill.skill_id for item in retrieved],
+        )
+
+    def test_bgp_config_disambiguation_seed_ignores_tool_catalog_without_bgp_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            module = ProceduralMemoryModule(
+                bank_id="skill",
+                store_path=Path(tmp) / "skills.json",
+                evolution_threshold=1,
+            )
+
+            retrieved = module.retrieve(
+                query=MemoryQuery(
+                    text=(
+                        'get_host_net_config({"host_name":"pc_0_0"}) -> '
+                        '{"ip_addr":"eth0 state UP","ip_route":"network is unreachable"}'
+                    ),
+                    scenario="dc_clos_bgp",
+                    protocols=["bgp"],
+                    services=["routing"],
+                    symptoms=["missing_route"],
+                    tools=[
+                        "frr_show_bgp_summary",
+                        "frr_get_bgp_conf",
+                        "frr_show_running_config",
+                    ],
+                    top_k=8,
+                )
+            )
+
+        self.assertNotIn(
+            "seed_bgp_config_disambiguation",
+            [item.skill.skill_id for item in retrieved],
+        )
 
     def test_failed_domain_specific_skill_does_not_dominate_other_domains(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2040,8 +2596,9 @@ class SkillProMemoryTest(unittest.TestCase):
         self.assertIn("Active skill-tool links", prompt)
         self.assertIn("ping_host", prompt)
         self.assertIn("DRAFT tool documentation memory", prompt)
-        self.assertIn("DRAFT checks", prompt)
-        self.assertIn("DRAFT active exploration queue", selector.prompts[-1])
+        self.assertIn("stable tool semantics only", prompt)
+        self.assertNotIn("DRAFT checks", prompt)
+        self.assertNotIn("DRAFT active exploration queue", selector.prompts[-1])
         self.assertIn("ping_host", selector.prompts[-1])
 
     def test_skill_runtime_logs_planned_draft_exploration_with_tool_call(self) -> None:
@@ -2100,6 +2657,9 @@ class SkillProMemoryTest(unittest.TestCase):
             )
 
             output = runtime.wrap_tools([tool])[0].invoke({"host": "pc1"})
+            tool_learning_queue = draft_runtime.planned_explorations(
+                diagnosis_only=False,
+            )
             rows = [
                 json.loads(line)
                 for line in (Path(tmp) / "messages.jsonl").read_text(
@@ -2111,9 +2671,12 @@ class SkillProMemoryTest(unittest.TestCase):
         transitions = [
             row for row in rows if row.get("event") == "skill_transition"
         ]
-        self.assertIn("DRAFT planned exploration advanced", output)
-        self.assertEqual(transitions[-1]["draft_exploration_id"], "explore_ping_pc1")
-        self.assertIn("Ping pc1", transitions[-1]["draft_next_exploration"])
+        self.assertNotIn("DRAFT planned exploration advanced", output)
+        self.assertEqual(transitions[-1].get("draft_exploration_id", ""), "")
+        self.assertEqual(
+            [item["exploration_id"] for item in tool_learning_queue],
+            ["explore_ping_pc1"],
+        )
 
     def test_skill_tool_wrapper_does_not_duplicate_existing_draft_guidance(self) -> None:
         def ping_host(host: str) -> str:
@@ -2171,7 +2734,7 @@ class SkillProMemoryTest(unittest.TestCase):
             wrapped = runtime.wrap_tools(draft_tools)[0]
 
         self.assertEqual(wrapped.description.count("DRAFT refined guidance:"), 1)
-        self.assertEqual(wrapped.description.count("DRAFT planned active checks"), 1)
+        self.assertEqual(wrapped.description.count("DRAFT planned active checks"), 0)
         self.assertNotIn("DRAFT tool guidance:", wrapped.description)
         self.assertNotIn("DRAFT active checks already reflected above", wrapped.description)
 
@@ -2332,6 +2895,230 @@ class SkillProMemoryTest(unittest.TestCase):
         self.assertNotIn("frr_show_bgp_summary", after_reachability_candidates)
         self.assertNotIn("frr_get_bgp_conf", after_reachability_candidates)
 
+    def test_skill_runtime_allows_bgp_config_candidates_after_endpoint_checks(self) -> None:
+        def make_echo_tool(name: str) -> StructuredTool:
+            def echo(value: str = "") -> str:
+                return value
+
+            echo.__name__ = name
+            return StructuredTool.from_function(
+                echo,
+                name=name,
+                description=f"{name} base.",
+            )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tools = [
+                make_echo_tool("get_reachability"),
+                make_echo_tool("ping_pair"),
+                make_echo_tool("get_host_net_config"),
+                make_echo_tool("ethtool"),
+                make_echo_tool("ip_addr_statistics"),
+                make_echo_tool("frr_show_bgp_summary"),
+                make_echo_tool("frr_show_ip_route"),
+                make_echo_tool("frr_get_bgp_conf"),
+                make_echo_tool("frr_show_running_config"),
+            ]
+            session = SimpleNamespace(
+                session_id="s2",
+                scenario_name="dc_clos_bgp",
+                scenario_topo_size="s",
+                task_description="Network Description: EBGP Clos.",
+            )
+            module = ProceduralMemoryModule(
+                bank_id="skill",
+                store_path=Path(tmp) / "skills.json",
+            )
+            runtime = SkillToolRuntime(
+                memory=module,
+                memory_mode="read",
+                session=session,
+                task_description=session.task_description,
+                tools=tools,
+                session_dir=tmp,
+            )
+            runtime.recent_observations.extend(
+                [
+                    'get_reachability({}) -> {"results":[{"src":"pc_0_0",'
+                    '"dst":"pc_0_1","status":"unknown"}]}',
+                    'get_host_net_config({"host_name":"pc_0_0"}) -> '
+                    '{"ip_addr":"eth0 state UP","ip_route":"default via 10.0.0.1"}',
+                    'ethtool({"host_name":"pc_0_0","interface":"eth0"}) -> '
+                    "Link detected: yes",
+                    'frr_show_bgp_summary({"router_name":"leaf_router_0_0"}) -> '
+                    "Neighbor 172.16.0.1 Idle, prefixes received 0",
+                ]
+            )
+
+            candidates = runtime._fallback_tool_candidates()
+
+        self.assertIn("frr_show_bgp_summary", candidates)
+        self.assertIn("frr_get_bgp_conf", candidates)
+        self.assertIn("frr_show_running_config", candidates)
+
+    def test_skill_runtime_uses_generic_ladder_candidates_without_bgp_sprawl(self) -> None:
+        def make_echo_tool(name: str) -> StructuredTool:
+            def echo(value: str = "") -> str:
+                return value
+
+            echo.__name__ = name
+            return StructuredTool.from_function(
+                echo,
+                name=name,
+                description=f"{name} base.",
+            )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tools = [
+                make_echo_tool("get_reachability"),
+                make_echo_tool("ping_pair"),
+                make_echo_tool("get_host_net_config"),
+                make_echo_tool("curl_web_test"),
+                make_echo_tool("cat_file"),
+                make_echo_tool("systemctl_ops"),
+                make_echo_tool("netstat"),
+                make_echo_tool("exec_shell"),
+                make_echo_tool("frr_show_ip_route"),
+                make_echo_tool("frr_exec"),
+                make_echo_tool("frr_get_ospf_conf"),
+                make_echo_tool("frr_show_bgp_summary"),
+                make_echo_tool("frr_get_bgp_conf"),
+                make_echo_tool("frr_show_running_config"),
+            ]
+            module = ProceduralMemoryModule(
+                bank_id="skill",
+                store_path=Path(tmp) / "skills.json",
+            )
+            dns_runtime = SkillToolRuntime(
+                memory=module,
+                memory_mode="read",
+                session=SimpleNamespace(
+                    session_id="dns",
+                    scenario_name="enterprise",
+                    scenario_topo_size="s",
+                    task_description="Users cannot resolve internal names.",
+                ),
+                task_description="Users cannot resolve internal names.",
+                tools=tools,
+                session_dir=tmp,
+            )
+            dhcp_runtime = SkillToolRuntime(
+                memory=module,
+                memory_mode="read",
+                session=SimpleNamespace(
+                    session_id="dhcp",
+                    scenario_name="enterprise",
+                    scenario_topo_size="s",
+                    task_description="A host has no IP address from DHCP.",
+                ),
+                task_description="A host has no IP address from DHCP.",
+                tools=tools,
+                session_dir=tmp,
+            )
+            ospf_runtime = SkillToolRuntime(
+                memory=module,
+                memory_mode="read",
+                session=SimpleNamespace(
+                    session_id="ospf",
+                    scenario_name="enterprise",
+                    scenario_topo_size="s",
+                    task_description="OSPF route missing between subnets.",
+                ),
+                task_description="OSPF route missing between subnets.",
+                tools=tools,
+                session_dir=tmp,
+            )
+
+            dns_candidates = dns_runtime._fallback_tool_candidates()
+            dhcp_candidates = dhcp_runtime._fallback_tool_candidates()
+            ospf_candidates = ospf_runtime._fallback_tool_candidates()
+
+        self.assertIn("curl_web_test", dns_candidates)
+        self.assertIn("netstat", dns_candidates)
+        self.assertNotIn("frr_get_bgp_conf", dns_candidates)
+        self.assertIn("get_host_net_config", dhcp_candidates)
+        self.assertIn("systemctl_ops", dhcp_candidates)
+        self.assertNotIn("frr_get_bgp_conf", dhcp_candidates)
+        self.assertIn("frr_get_ospf_conf", ospf_candidates)
+        self.assertIn("frr_show_ip_route", ospf_candidates)
+        self.assertNotIn("frr_get_bgp_conf", ospf_candidates)
+
+    def test_skill_runtime_bgp_state_detection_avoids_normal_words(self) -> None:
+        self.assertFalse(
+            SkillToolRuntime._deep_bgp_symptom(
+                "Neighbor 172.16.0.1 Established, prefixes received 12"
+            )
+        )
+        self.assertFalse(
+            SkillToolRuntime._deep_bgp_symptom(
+                "C>* 10.0.0.0/24 is directly connected, eth0"
+            )
+        )
+        self.assertTrue(
+            SkillToolRuntime._deep_bgp_symptom(
+                "Neighbor 172.16.0.1 Connect, prefixes received 0"
+            )
+        )
+
+    def test_skill_runtime_does_not_deep_dive_on_normal_established_bgp(self) -> None:
+        def make_echo_tool(name: str) -> StructuredTool:
+            def echo(value: str = "") -> str:
+                return value
+
+            echo.__name__ = name
+            return StructuredTool.from_function(
+                echo,
+                name=name,
+                description=f"{name} base.",
+            )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tools = [
+                make_echo_tool("get_reachability"),
+                make_echo_tool("ping_pair"),
+                make_echo_tool("get_host_net_config"),
+                make_echo_tool("ethtool"),
+                make_echo_tool("ip_addr_statistics"),
+                make_echo_tool("frr_show_bgp_summary"),
+                make_echo_tool("frr_show_ip_route"),
+                make_echo_tool("frr_get_bgp_conf"),
+                make_echo_tool("frr_show_running_config"),
+            ]
+            session = SimpleNamespace(
+                session_id="s2",
+                scenario_name="dc_clos_bgp",
+                scenario_topo_size="s",
+                task_description="Network Description: EBGP Clos.",
+            )
+            module = ProceduralMemoryModule(
+                bank_id="skill",
+                store_path=Path(tmp) / "skills.json",
+            )
+            runtime = SkillToolRuntime(
+                memory=module,
+                memory_mode="read",
+                session=session,
+                task_description=session.task_description,
+                tools=tools,
+                session_dir=tmp,
+            )
+            runtime.recent_observations.extend(
+                [
+                    'get_host_net_config({"host_name":"pc_0_0"}) -> '
+                    '{"ip_addr":"eth0 state UP","ip_route":"default via 10.0.0.1"}',
+                    'ethtool({"host_name":"pc_0_0","interface":"eth0"}) -> '
+                    "Link detected: yes",
+                    'frr_show_bgp_summary({"router_name":"leaf_router_0_0"}) -> '
+                    "Neighbor 172.16.0.1 Established, prefixes received 12",
+                ]
+            )
+
+            candidates = runtime._fallback_tool_candidates()
+
+        self.assertIn("frr_show_bgp_summary", candidates)
+        self.assertNotIn("frr_get_bgp_conf", candidates)
+        self.assertNotIn("frr_show_running_config", candidates)
+
     def test_skill_runtime_followup_checks_endpoint_link_after_unknown_reachability(self) -> None:
         def reachability() -> str:
             return "unknown"
@@ -2374,6 +3161,76 @@ class SkillProMemoryTest(unittest.TestCase):
         self.assertIn("get_host_net_config", output)
         self.assertIn("ethtool", output)
         self.assertIn("Before deeper BGP", output)
+
+    def test_skill_runtime_followup_compares_bgp_config_after_endpoint_checks(self) -> None:
+        def make_echo_tool(name: str) -> StructuredTool:
+            def echo(value: str = "") -> str:
+                return value
+
+            echo.__name__ = name
+            return StructuredTool.from_function(
+                echo,
+                name=name,
+                description=f"{name} base.",
+            )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tools = [
+                make_echo_tool("get_reachability"),
+                make_echo_tool("get_host_net_config"),
+                make_echo_tool("ethtool"),
+                make_echo_tool("frr_show_bgp_summary"),
+            ]
+            session = SimpleNamespace(
+                session_id="s2",
+                scenario_name="dc_clos_bgp",
+                scenario_topo_size="s",
+                task_description="Check Clos host reachability.",
+            )
+            module = ProceduralMemoryModule(
+                bank_id="skill",
+                store_path=Path(tmp) / "skills.json",
+            )
+            runtime = SkillToolRuntime(
+                memory=module,
+                memory_mode="read",
+                session=session,
+                task_description=session.task_description,
+                tools=tools,
+                session_dir=tmp,
+            )
+
+            runtime.after_tool(
+                tool_name="get_reachability",
+                tool_input={},
+                result=(
+                    '{"results":[{"src":"pc_0_0","dst":"pc_0_1",'
+                    '"status":"unknown"}]}'
+                ),
+            )
+            runtime.after_tool(
+                tool_name="get_host_net_config",
+                tool_input={"host_name": "pc_0_0"},
+                result=(
+                    '{"host_name":"pc_0_0","ip_addr":"eth0 state UP",'
+                    '"ip_route":"default via 10.0.0.1 dev eth0"}'
+                ),
+            )
+            runtime.after_tool(
+                tool_name="ethtool",
+                tool_input={"host_name": "pc_0_0", "interface": "eth0"},
+                result="Link detected: yes",
+            )
+            output = runtime.after_tool(
+                tool_name="frr_show_bgp_summary",
+                tool_input={"router_name": "leaf_router_0_0"},
+                result="Neighbor 172.16.0.1 Idle, prefixes received 0",
+            )
+
+        self.assertIn("seed_bgp_config_disambiguation", output)
+        self.assertIn("Skill-MDP option", output)
+        self.assertIn("Inspect the running BGP configuration", output)
+        self.assertNotIn("Prefer `get_host_net_config`", output)
 
     def test_skill_runtime_followup_stops_after_host_link_down_evidence(self) -> None:
         def host_config(host_name: str) -> str:
