@@ -42,6 +42,15 @@ NO_FAULT_PROBLEM = "no_fault"
 _NO_FAULT_ALIASES = frozenset({NO_FAULT_PROBLEM, "clean", "normal", "none", "healthy"})
 
 
+def _is_context_window_error(exc: Exception) -> bool:
+    text = f"{type(exc).__name__}: {exc}".lower()
+    return (
+        "contextwindowexceeded" in text
+        or "maximum context length" in text
+        or ("input length" in text and "context length" in text)
+    )
+
+
 def is_no_fault_problem(problem: str | None) -> bool:
     """Return True for benchmark rows that intentionally inject no failure."""
     return str(problem or "").strip().lower() in _NO_FAULT_ALIASES
@@ -467,6 +476,18 @@ def run_single_benchmark(
                 "agent_max_recursion",
                 f"Agent reached max recursion limit for session {session_id}; evaluating as missing submission.",
                 session_id=session_id,
+            )
+        except Exception as exc:
+            if not _is_context_window_error(exc):
+                raise
+            log_event(
+                "agent_context_window_exceeded",
+                (
+                    f"Agent exceeded the model context window for session {session_id}; "
+                    "evaluating as missing submission."
+                ),
+                session_id=session_id,
+                error=str(exc)[:500],
             )
         eval_results(
             session_id=session_id,

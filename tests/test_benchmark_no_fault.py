@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from langgraph.errors import GraphRecursionError
 
 from nika.workflows.benchmark import run as benchmark_run
@@ -81,9 +82,21 @@ def test_no_fault_benchmark_skips_injection_and_writes_clean_gt(
     ) in calls
 
 
-def test_single_benchmark_evaluates_agent_recursion_as_missing_submission(
+@pytest.mark.parametrize(
+    ("agent_error", "expected_session_id"),
+    [
+        (GraphRecursionError("recursion limit"), "session-recursion"),
+        (
+            RuntimeError("ContextWindowExceededError: maximum context length exceeded"),
+            "session-context",
+        ),
+    ],
+)
+def test_single_benchmark_evaluates_agent_budget_stop_as_missing_submission(
     monkeypatch,
     tmp_path: Path,
+    agent_error: Exception,
+    expected_session_id: str,
 ) -> None:
     calls: list[str] = []
 
@@ -109,15 +122,15 @@ def test_single_benchmark_evaluates_agent_recursion_as_missing_submission(
 
     def fake_start_net_env(*_: object, **__: object) -> str:
         session = FakeSession()
-        session.session_id = "session-recursion"
-        session.session_dir = str(tmp_path / "session-recursion")
+        session.session_id = expected_session_id
+        session.session_dir = str(tmp_path / expected_session_id)
         session.lab_name = "clean-lab"
         FakeSession.sessions[session.session_id] = session
         return session.session_id
 
     def fake_start_agent(*_: object, **__: object) -> None:
         calls.append("start_agent")
-        raise GraphRecursionError("recursion limit")
+        raise agent_error
 
     def fake_eval_results(**_: object) -> None:
         calls.append("eval_results")
@@ -147,5 +160,5 @@ def test_single_benchmark_evaluates_agent_recursion_as_missing_submission(
         inject_params={},
     )
 
-    assert session_id == "session-recursion"
+    assert session_id == expected_session_id
     assert calls == ["start_agent", "eval_results"]

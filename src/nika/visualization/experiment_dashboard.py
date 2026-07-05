@@ -791,9 +791,10 @@ def _result_rows(*, benchmark_name: str | None = None) -> list[dict[str, object]
             metrics = _read_json(session_dir / "eval_metrics.json")
             if meta.get("status") == "finished":
                 finished += 1
+            has_eval = (session_dir / "eval_metrics.json").exists()
             if (session_dir / "submission.json").exists():
                 submitted += 1
-            elif meta.get("status") != "running":
+            elif meta.get("status") != "running" and not has_eval:
                 failed += 1
 
             for key, target in (
