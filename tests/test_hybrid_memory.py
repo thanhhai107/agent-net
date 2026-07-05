@@ -27,7 +27,7 @@ from agent.memory.models import (
 )
 from agent.memory.adapter import MemoryAugmentedAgent
 from agent.memory.runtime import SkillToolRuntime
-from agent.memory.service import ProceduralMemoryModule, _evidence_score
+from agent.memory.service import ProceduralMemoryModule, _evidence_score, _metric_success
 from agent.memory.workflow import evolve_session_memory, extract_skill_steps
 from agent.tool_evolution.curator import rewrite_documentation
 from agent.tool_evolution.models import DraftExploration, ToolDocumentation
@@ -448,6 +448,150 @@ class SkillProMemoryTest(unittest.TestCase):
         self.assertEqual(report["status"], "rejected")
         self.assertIn("unsafe", report["reason"])
         self.assertEqual(after, before)
+
+    def test_partial_localization_episode_is_not_promoted_to_reusable_skill(self) -> None:
+        metrics = {
+            "detection_score": 1.0,
+            "localization_accuracy": 0.0,
+            "localization_precision": 1.0,
+            "localization_recall": 0.5,
+            "localization_f1": 0.6667,
+            "rca_accuracy": 1.0,
+            "rca_f1": 1.0,
+        }
+        self.assertFalse(_metric_success(metrics))
+        with tempfile.TemporaryDirectory() as tmp:
+            module = ProceduralMemoryModule(
+                bank_id="skill",
+                store_path=Path(tmp) / "skills.json",
+                evolution_threshold=1,
+            )
+            before = set(module.store.load().skills)
+            report = module.learn_from_episode(
+                evidence=EvaluationEvidence(
+                    session_id="partial-localization",
+                    task_description="Enterprise reachability failure.",
+                    scenario="ospf_enterprise_dhcp",
+                    metrics=metrics,
+                    steps=7,
+                    tool_calls=5,
+                    success=True,
+                ),
+                tool_steps=[
+                    SkillStep(
+                        order=1,
+                        action="Check host and route evidence.",
+                        tool_name="get_host_net_config",
+                        observation_summary="Only one affected component was localized.",
+                    )
+                ],
+            )
+            state = module.store.load()
+            after = set(state.skills)
+            experience = state.experiences[-1]
+
+        self.assertEqual(report["status"], "rejected")
+        self.assertIn("unsafe", report["reason"])
+        self.assertFalse(report["episode_success"])
+        self.assertFalse(experience.success)
+        self.assertLess(experience.reward, 0.0)
+        self.assertGreater(report["episode_reward"], experience.reward)
+        self.assertEqual(len(state.golden_experiences), 0)
+        self.assertAlmostEqual(
+            state.baselines["ospf_enterprise_dhcp"],
+            experience.reward,
+        )
+        self.assertEqual(after, before)
+
+    def test_legacy_partial_experience_is_repaired_before_new_learning(self) -> None:
+        partial_metrics = {
+            "detection_score": 1.0,
+            "localization_accuracy": 0.0,
+            "localization_precision": 1.0,
+            "localization_recall": 0.5,
+            "localization_f1": 0.6667,
+            "rca_accuracy": 1.0,
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            module = ProceduralMemoryModule(
+                bank_id="skill",
+                store_path=Path(tmp) / "skills.json",
+            )
+            state = module.store.load()
+            state.episodes.append(
+                EvaluationEvidence(
+                    session_id="legacy-partial",
+                    task_description="Legacy partial run.",
+                    scenario="enterprise",
+                    metrics=partial_metrics,
+                    steps=7,
+                    tool_calls=5,
+                    success=True,
+                )
+            )
+            legacy = SkillExperience(
+                experience_id="exp-legacy-partial",
+                session_id="legacy-partial",
+                reward=0.75,
+                baseline=0.0,
+                advantage=0.75,
+                transitions=[
+                    SkillTransition(
+                        state="Legacy partial run.",
+                        action="Check broad evidence.",
+                        tool_name="get_host_net_config",
+                        observation_summary="Only partial localization was available.",
+                        status="success",
+                        done=True,
+                    )
+                ],
+                success=True,
+            )
+            state.experiences.append(legacy)
+            state.golden_experiences.append(legacy.model_copy(deep=True))
+            module.store.save(state)
+
+            module.learn_from_episode(
+                evidence=EvaluationEvidence(
+                    session_id="new-safe",
+                    task_description="BGP route is missing.",
+                    scenario="enterprise",
+                    metrics={
+                        "detection_score": 1.0,
+                        "localization_accuracy": 1.0,
+                        "rca_accuracy": 1.0,
+                    },
+                    steps=5,
+                    tool_calls=3,
+                    success=True,
+                ),
+                tool_steps=[
+                    SkillStep(
+                        order=1,
+                        action="Inspect current BGP evidence.",
+                        tool_name="frr_show_bgp_summary",
+                    )
+                ],
+            )
+            state = module.store.load()
+            repaired = next(
+                item
+                for item in state.experiences
+                if item.experience_id == "exp-legacy-partial"
+            )
+
+        self.assertFalse(repaired.success)
+        self.assertLess(repaired.reward, 0.0)
+        self.assertNotIn(
+            "exp-legacy-partial",
+            {item.experience_id for item in state.golden_experiences},
+        )
+        self.assertTrue(
+            any(
+                entry.get("stage") == "normalize unsafe experience"
+                for entry in state.maintenance_log
+            )
+        )
 
     def test_partial_episode_penalizes_reused_skill_online_score(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1176,6 +1320,138 @@ class SkillProMemoryTest(unittest.TestCase):
         self.assertTrue(retrieved)
         self.assertNotEqual(retrieved[0].skill.skill_id, "overfit_ospf")
 
+    def test_unstable_seed_child_is_filtered_and_not_used_as_parent(self) -> None:
+        bad_skill_id = "seed_react_decision_v1_badbad"
+        with tempfile.TemporaryDirectory() as tmp:
+            module = ProceduralMemoryModule(
+                bank_id="skill",
+                store_path=Path(tmp) / "skills.json",
+                evolution_threshold=1,
+            )
+            state = module.store.load()
+            state.skills[bad_skill_id] = ProceduralSkill(
+                skill_id=bad_skill_id,
+                title="Contaminated reachability child",
+                activation_condition=(
+                    "Observed ping from host to server returned Network is unreachable."
+                ),
+                execution_steps=[
+                    SkillStep(
+                        order=1,
+                        action="Check DHCP, DNS, and OSPF before localizing.",
+                        tool_name="ping_pair",
+                    )
+                ],
+                termination_condition="Stop after broad enterprise checks.",
+                parent_id="seed_react_decision",
+                version=1,
+                protocols=["bgp", "ospf", "dhcp", "dns", "http", "icmp"],
+                services=["routing", "name_resolution", "addressing"],
+                symptoms=["unreachable"],
+                tools=["ping_pair", "get_host_net_config"],
+                status="validated",
+                score=0.95,
+                frequency=179,
+                success_count=20,
+                failure_count=57,
+                avg_gain=0.02,
+                maturity=10,
+            )
+            module.store.save(state)
+
+            retrieved = module.retrieve(
+                query=MemoryQuery(
+                    text=(
+                        "Observed ping from host to server returned Network is "
+                        "unreachable while checking DHCP."
+                    ),
+                    protocols=["dhcp"],
+                    services=["addressing"],
+                    symptoms=["unreachable"],
+                    tools=["ping_pair", "get_host_net_config"],
+                    top_k=10,
+                )
+            )
+            parent = module._runtime_parent_from_steps(
+                module.store.load(),
+                [
+                    SkillStep(
+                        order=1,
+                        action="Follow contaminated policy.",
+                        skill_id=bad_skill_id,
+                        tool_name="ping_pair",
+                        observation_summary="Network is unreachable.",
+                    )
+                ],
+            )
+
+        self.assertNotIn(bad_skill_id, [item.skill.skill_id for item in retrieved])
+        self.assertIsNone(parent)
+
+    def test_clean_episode_with_unstable_runtime_skill_learns_new_skill(self) -> None:
+        bad_skill_id = "seed_react_decision_v1_badbad"
+        with tempfile.TemporaryDirectory() as tmp:
+            module = ProceduralMemoryModule(
+                bank_id="skill",
+                store_path=Path(tmp) / "skills.json",
+                evolution_threshold=1,
+            )
+            state = module.store.load()
+            state.skills[bad_skill_id] = ProceduralSkill(
+                skill_id=bad_skill_id,
+                title="Contaminated reachability child",
+                activation_condition="Observed ping returned Network is unreachable.",
+                execution_steps=[
+                    SkillStep(order=1, action="Check too many unrelated systems.")
+                ],
+                termination_condition="Stop after broad checks.",
+                parent_id="seed_react_decision",
+                version=1,
+                protocols=["ospf", "dhcp", "dns"],
+                services=["routing", "name_resolution", "addressing"],
+                symptoms=["unreachable"],
+                tools=["ping_pair"],
+                status="validated",
+                score=0.95,
+                frequency=179,
+                success_count=20,
+                failure_count=57,
+                avg_gain=0.02,
+                maturity=10,
+            )
+            module.store.save(state)
+
+            report = module.learn_from_episode(
+                evidence=EvaluationEvidence(
+                    session_id="clean-after-bad-parent",
+                    task_description="BGP route is missing after endpoint checks.",
+                    scenario="dc_clos_bgp",
+                    metrics={
+                        "detection_score": 1.0,
+                        "localization_accuracy": 1.0,
+                        "rca_accuracy": 1.0,
+                    },
+                    steps=5,
+                    tool_calls=3,
+                    success=True,
+                ),
+                tool_steps=[
+                    SkillStep(
+                        order=1,
+                        action="Inspect BGP route state.",
+                        skill_id=bad_skill_id,
+                        tool_name="frr_show_bgp_summary",
+                        observation_summary="BGP route is missing.",
+                    )
+                ],
+            )
+            state = module.store.load()
+            learned = state.skills[report["skill_id"]]
+
+        self.assertEqual(report["status"], "accepted")
+        self.assertNotEqual(learned.parent_id, bad_skill_id)
+        self.assertEqual(state.skills[bad_skill_id].status, "retired")
+
     def test_ppo_gate_rejects_weaker_duplicate(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             module = ProceduralMemoryModule(
@@ -1684,6 +1960,55 @@ class SkillProMemoryTest(unittest.TestCase):
         self.assertEqual(state.skills["strong_ping"].reuse_count, 1)
         self.assertTrue(selector.prompts)
 
+    def test_runtime_prompt_query_does_not_use_full_tool_catalog_by_default(self) -> None:
+        def ping_host(host: str) -> str:
+            return f"{host} reachable"
+
+        def show_route(router: str) -> str:
+            return f"{router} routes"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            ping_tool = StructuredTool.from_function(
+                ping_host,
+                name="ping_host",
+                description="Ping one host.",
+            )
+            route_tool = StructuredTool.from_function(
+                show_route,
+                name="show_route",
+                description="Show route table.",
+            )
+            module = ProceduralMemoryModule(
+                bank_id="skill",
+                store_path=Path(tmp) / "skills.json",
+            )
+            runtime = SkillToolRuntime(
+                memory=module,
+                memory_mode="read",
+                session=SimpleNamespace(
+                    session_id="s2",
+                    scenario_name="simple_bgp",
+                    scenario_topo_size="small",
+                ),
+                task_description="Host reachability failure",
+                tools=[ping_tool, route_tool],
+                session_dir=tmp,
+            )
+
+            initial = runtime._query(extra_text="decision prompt before next action")
+            runtime.recent_transitions.append(
+                {
+                    "tool": "ping_host",
+                    "status": "success",
+                    "observation_summary": "pc1 reachable",
+                }
+            )
+            observed = runtime._query(extra_text="decision prompt before next action")
+
+        self.assertEqual(initial.tools, [])
+        self.assertEqual(observed.tools, ["ping_host"])
+        self.assertNotIn("show_route", observed.tools)
+
     def test_runtime_snapshot_tracks_learning_prompt_overhead(self) -> None:
         def ping_host(host: str) -> str:
             return f"{host} reachable"
@@ -2149,7 +2474,7 @@ class SkillProMemoryTest(unittest.TestCase):
         self.assertEqual(state.skills["prompt_ping"].reuse_count, 0)
         self.assertFalse(log_path.exists())
 
-    def test_skill_runtime_refreshes_option_in_tool_output_after_termination(self) -> None:
+    def test_skill_runtime_does_not_reselect_cooldown_option_after_termination(self) -> None:
         def ping_host(host: str) -> str:
             return f"{host} reachable"
 
@@ -2222,10 +2547,10 @@ class SkillProMemoryTest(unittest.TestCase):
             "termination_condition_satisfied",
         )
         self.assertTrue(post_tool_activations)
-        self.assertEqual(snapshot["post_tool_selection_count"], 1)
+        self.assertNotEqual(post_tool_activations[-1]["active_skill_id"], "one_step_ping")
+        self.assertNotEqual(snapshot["active_skill_id"], "one_step_ping")
         self.assertEqual(snapshot["skill_age"], 0)
-        self.assertIn("Active Skill-MDP option", output)
-        self.assertIn("Use current tool output as evidence", output)
+        self.assertNotIn("one_step_ping", output)
 
     def test_skill_runtime_refreshes_once_after_parallel_tool_batch(self) -> None:
         def ping_host(host: str) -> str:
@@ -3517,6 +3842,36 @@ class SkillProMemoryTest(unittest.TestCase):
         self.assertEqual(len(state.golden_experiences), 1)
         self.assertEqual(stats["experiences"], 1)
         self.assertEqual(stats["golden_experiences"], 1)
+
+    def test_store_does_not_add_failed_experience_to_golden_pool(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            module = ProceduralMemoryModule(
+                bank_id="skill",
+                store_path=Path(tmp) / "skills.json",
+            )
+            module.store.record_experience(
+                SkillExperience(
+                    experience_id="exp-failed",
+                    session_id="failed",
+                    reward=-0.1,
+                    baseline=0.0,
+                    advantage=-0.1,
+                    transitions=[
+                        SkillTransition(
+                            state="Failed diagnosis.",
+                            action="Check broad evidence.",
+                            tool_name="get_reachability",
+                            status="success",
+                            done=True,
+                        )
+                    ],
+                    success=False,
+                )
+            )
+            state = module.store.load()
+
+        self.assertEqual(len(state.experiences), 1)
+        self.assertEqual(len(state.golden_experiences), 0)
 
     def test_parent_skill_refines_to_versioned_candidate(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -78,7 +78,7 @@ class SkillMemoryStore:
         if not any(item.experience_id == experience.experience_id for item in state.experiences):
             state.experiences.append(experience)
             state.experiences = state.experiences[-max_experiences:]
-        if experience.transitions:
+        if experience.transitions and experience.success:
             gold = {
                 item.experience_id: item
                 for item in state.golden_experiences

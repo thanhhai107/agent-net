@@ -598,7 +598,7 @@ class SkillToolRuntime:
         top_k: int | None = None,
         token_budget: int | None = None,
     ) -> MemoryQuery:
-        query_tools = tools or self.tool_names
+        query_tools = list(tools) if tools is not None else self._recent_tool_scope()
         text = " ".join(
             item
             for item in [
@@ -628,11 +628,22 @@ class SkillToolRuntime:
             token_budget=token_budget or self.token_budget,
         )
 
+    def _recent_tool_scope(self, *, limit: int = 6) -> list[str]:
+        names: list[str] = []
+        known_tools = set(self.tool_names)
+        for transition in self.recent_transitions[-limit:]:
+            name = str(transition.get("tool") or "")
+            if name and name in known_tools and name not in names:
+                names.append(name)
+        return names
+
     def _draft_selection_context(self, *, tools: list[str]) -> str:
         if self.tool_evolution_runtime is None:
             return ""
         pieces: list[str] = []
         tool_filter = {tool for tool in tools if tool}
+        if not tool_filter:
+            return ""
         planned = self.tool_evolution_runtime.planned_explorations(
             limit=self.tool_evolution_runtime.planned_checks,
             diagnosis_only=True,
@@ -848,7 +859,7 @@ class SkillToolRuntime:
                 nominee_k=self.selector_nominee_k,
                 min_lcb=self.selector_min_lcb,
                 exclude_skill_ids=self.skill_cooldowns,
-                allow_excluded_fallback=True,
+                allow_excluded_fallback=False,
             )
         else:
             self.active_skill = self.memory.select_skill(
@@ -857,7 +868,7 @@ class SkillToolRuntime:
                 top_k=max(3, self.top_k),
                 min_lcb=self.selector_min_lcb,
                 exclude_skill_ids=self.skill_cooldowns,
-                allow_excluded_fallback=True,
+                allow_excluded_fallback=False,
             )
         self.skill_age = 0
         if source == "prompt" and self.active_skill is not None:
