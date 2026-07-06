@@ -11,28 +11,35 @@ Thực nghiệm được tiến hành trên hai cấu hình: \textbf{Baseline} v
 \small
 \caption{Tóm tắt phạm vi benchmark trong thực nghiệm}
 \label{tab:benchmark_scope}
-\begin{tabularx}{\columnwidth}{@{}Yc@{}}
+\begin{tabularx}{\columnwidth}{@{}Yccc@{}}
 \toprule
-\textbf{Nhóm sự cố} & \textbf{Số lượng} \\
+\textbf{Nhóm sự cố} & \textbf{Gốc} & \textbf{Tiến hóa} & \textbf{Tổng} \\
 \midrule
-Link Failures        & 12 \\
-End-Host Failures    & 16 \\
-Misconfigurations    & 27 \\
-Resource Contention  & 13 \\
-Network Node Errors  & 20 \\
-Network Under Attack & 12 \\
-No-fault             & 25 \\
+Link Failures        & 7  & 5  & 12 \\
+End-Host Failures    & 9  & 7  & 16 \\
+Misconfigurations    & 14 & 13 & 27 \\
+Resource Contention  & 8  & 5  & 13 \\
+Network Node Errors  & 12 & 8  & 20 \\
+Network Under Attack & 6  & 6  & 12 \\
+No-fault             & 0  & 0  & 25 \\
 \midrule
-\textbf{Tổng}        & \textbf{125} \\
+\textbf{Tổng}        & \textbf{56} & \textbf{44} & \textbf{125} \\
 \bottomrule
 \end{tabularx}
 \end{table}
 
-Tập benchmark con gồm 125 case được thiết kế theo dạng curriculum-evaluation: 100 case lỗi (gồm 44 biến thể tiến hóa và 56 case đại diện cho từng nguyên nhân gốc rễ) được sắp xếp có chủ đích để đánh giá sự tiến bộ của agent; 25 case no-fault được xen kẽ tất định để kiểm chứng khả năng phân biệt mạng bình thường.
+Tập benchmark con gồm 125 case được thiết kế theo dạng curriculum-evaluation: 100 case lỗi được sắp xếp theo trình tự tăng dần độ phức tạp để đánh giá sự tiến bộ của agent (gồm 44 biến thể tiến hóa chạy trước nhằm tích lũy kinh nghiệm, tiếp sau là 56 case gốc đại diện cho từng nguyên nhân sự cố); xen kẽ với đó là 25 case no-fault được phân bổ tất định để kiểm chứng khả năng nhận biết mạng bình thường.
+
+\begin{figure}[tbp]
+\centering
+\includegraphics[width=0.98\columnwidth]{figs/react_stability.png}
+\caption{So sánh độ ổn định chỉ số Incident Success qua ba lần chạy của ReAct Baseline và ReAct Evolved trên GPT-OSS-120B.}
+\label{fig:react_stability}
+\end{figure}
 
 \subsection{Kết quả thực nghiệm}
 
-Bảng~\ref{tab:main_react_results} tổng hợp kết quả chạy ReAct trên cả hai mô hình ở chế độ Baseline và Evolved, bao gồm toàn bộ metric chẩn đoán và chi phí vận hành trên 125 case.
+Bảng~\ref{tab:main_react_results} tổng hợp hiệu năng của workflow ReAct (chế độ Baseline và Evolved) trên hai backbone GPT-OSS-120B và Qwen3.5-122B-A10B-FP8. Hình~\ref{fig:batch_metric_curve} minh họa tiến trình học tập của backbone GPT-OSS-120B thông qua biến động chỉ số Localization F1 và RCA F1 theo từng batch 25 episode. Ngoài ra, Bảng~\ref{tab:workflow_ablation} so sánh các workflow ReAct, Plan\&Execute và Reflexion trên cấu hình Evolved sử dụng backbone GPT-OSS-120B. Bên cạnh đó, Hình~\ref{fig:evolution_trends} theo dõi các chỉ số vận hành tiến hóa gồm mức độ hội tụ tài liệu, tần suất sửa đổi công cụ và trạng thái kích hoạt kỹ năng. Cuối cùng, Hình~\ref{fig:react_stability} thể hiện độ ổn định chỉ số Incident Success của cấu hình Evolved và Baseline qua ba lần chạy độc lập với backbone GPT-OSS-120B.
 
 \newcommand{\impr}[1]{{\color{green!60!black}\scriptsize(#1\%)}}
 \newcommand{\degr}[1]{{\color{red!70!black}\scriptsize(#1\%)}}
@@ -47,64 +54,53 @@ Bảng~\ref{tab:main_react_results} tổng hợp kết quả chạy ReAct trên 
 \toprule
 \textbf{Metric} & \textbf{GPT-OSS Baseline} & \textbf{GPT-OSS Evolved} & \textbf{Qwen Baseline} & \textbf{Qwen Evolved} \\
 \midrule
-Detection         & 0.840 & 0.872 \impr{+3.8}   & 0.653 & 0.780 \impr{+19.4}  \\
-Localization Acc. & 0.368 & 0.384 \impr{+4.3}   & 0.388 & 0.508 \impr{+30.9}  \\
-Localization F1   & 0.411 & 0.459 \impr{+11.7}  & 0.466 & 0.599 \impr{+28.5}  \\
-RCA Acc.          & 0.304 & 0.376 \impr{+23.7}  & 0.327 & 0.525 \impr{+60.6}  \\
-RCA F1            & 0.304 & 0.387 \impr{+27.3}  & 0.340 & 0.537 \impr{+57.9}  \\
-Incident Success  & 0.208 & 0.280 \impr{+34.6}  & 0.367 & 0.407 \impr{+10.9}  \\
-Avg. Steps        & 15.29 & 12.74 \impr{-16.7}  & 27.14 & 24.17 \impr{-11.0} \\
-Avg. Tool Calls   & 13.60 & 11.09 \impr{-18.5}  & 42.10 & 40.20 \impr{-4.5}  \\
-Tool Error Rate   & 0.0041 & 0.0000 \impr{-100} & 0.0004 & 0.0000 \impr{-100}  \\
-Input Tokens      & 127.5k & 143.9k \degr{+12.9} & 586.3k & 538.8k \impr{-8.1} \\
-Output Tokens     & 5.6k   & 5.7k \degr{+1.8}   & 5.9k   & 6.1k \degr{+3.4}   \\
-Total Tokens      & 133.1k & 149.6k \degr{+12.4} & 592.2k & 544.9k \impr{-8.0} \\
-Runtime (s)       & 99.68  & 106.83 \degr{+7.2}  & 205.20 & 204.94 \impr{-0.1} \\
+Detection         & 0.840 & 0.872 \impr{+3.8}   & 0.616 & 0.720 \impr{+16.9}  \\
+Localization Acc. & 0.368 & 0.384 \impr{+4.3}   & 0.368 & 0.448 \impr{+21.7}  \\
+Localization F1   & 0.411 & 0.459 \impr{+11.7}  & 0.444 & 0.522 \impr{+17.6}  \\
+RCA Acc.          & 0.304 & 0.376 \impr{+23.7}  & 0.328 & 0.408 \impr{+24.4}  \\
+RCA F1            & 0.304 & 0.387 \impr{+27.3}  & 0.333 & 0.423 \impr{+27.0}  \\
+Incident Success  & 0.208 & 0.280 \impr{+34.6}  & 0.368 & 0.439 \impr{+19.3}  \\
+Avg. Steps        & 15.29 & 12.74 \impr{-16.7}  & 25.32 & 23.39 \impr{-7.6}  \\
+Avg. Tool Calls   & 13.60 & 11.09 \impr{-18.5}  & 41.98 & 37.55 \impr{-10.6} \\
+Tool Error Rate   & 0.41\% & 0.00\% \impr{-100} & 0.32\% & 0.00\% \impr{-100}  \\
+Input Tokens      & 15.30 M & 17.27 M \degr{+12.9} & 60.99 M & 57.90 M \impr{-5.1} \\
+Output Tokens     & 0.70 M  & 0.71 M \degr{+1.8}  & 0.69 M  & 0.67 M \impr{-2.9}   \\
+Total Tokens      & 16.00 M & 17.98 M \degr{+12.4} & 61.68 M & 58.56 M \impr{-5.1}  \\
+Runtime           & 3.89 h & 4.17 h \degr{+7.2} & 5.71 h & 6.29 h \degr{+10.2} \\
 \bottomrule
 \end{tabularx}
 \end{table*}
 
 \begin{figure}[h]
 \centering
-\fbox{\begin{minipage}[c][0.22\columnwidth][c]{0.88\columnwidth}
-\centering
-\textbf{Placeholder figure:} curve Detection, Localization và RCA theo từng batch 25 case.\\
-Cấu hình: ReAct Evolved trên GPT-OSS-120B và Qwen3.5-122B-A10B-FP8.
-\end{minipage}}
-\caption{Diễn biến metric theo từng batch 25 case của ReAct Evolved trên hai mô hình nền.}
+\includegraphics[width=0.98\columnwidth]{figs/batch_metric_curve.png}
+\caption{Diễn biến Localization F1 và RCA F1 theo từng batch của GPT-OSS-120B ở hai chế độ Baseline và Evolved.}
 \label{fig:batch_metric_curve}
 \end{figure}
 
-Hình~\ref{fig:batch_metric_curve} theo dõi diễn biến metric qua từng batch 25 case để quan sát xu hướng cải thiện của Evolved Agent theo thời gian. Bảng~\ref{tab:workflow_ablation} so sánh ba workflow ReAct, Plan\&Execute và Reflexion trên cùng cấu hình Evolved để tách biệt ảnh hưởng của cách tổ chức suy luận.
+\begin{figure*}[t]
+\centering
+\includegraphics[width=0.84\textwidth]{figs/evolution_trends.png}
+\caption{Xu hướng tiến hóa của hai mô-đun trong quá trình thực nghiệm: (a) Độ hội tụ tài liệu công cụ và tần suất sửa đổi mô tả của Tool Refinement; (b) Tần suất gọi kỹ năng và kích thước skill pool của Procedural Memory theo thời gian.}
+\label{fig:evolution_trends}
+\end{figure*}
 
 \begin{table}[h]
 \centering
-\small
-\caption{Ablation study trên Evolved Agent khi thay đổi workflow}
+\footnotesize
+\caption{So sánh hiệu năng và chi phí vận hành giữa các cấu trúc workflow trên cấu hình tiến hóa}
 \label{tab:workflow_ablation}
 \begin{tabularx}{\columnwidth}{@{}Y c c c@{}}
 \toprule
 \textbf{Metric} & \textbf{ReAct} & \textbf{Plan\&Execute} & \textbf{Reflexion} \\
 \midrule
-Detection      & 0.816 & -- & -- \\
-Localization   & 0.399 & -- & -- \\
-RCA            & 0.369 & -- & -- \\
-Input Token    & 263.8k & -- & -- \\
-Output Token   & 5.8k  & -- & -- \\
-Runtime (s)    & 133.96 & -- & -- \\
+Detection      & 0.872 & 0.890 & 0.901 \\
+Localization   & 0.459 & 0.410 & 0.485 \\
+RCA            & 0.387 & 0.330 & 0.410 \\
+Incident Success & 0.280 & 0.245 & 0.312 \\
+Input Tokens   & 17.27 M & 13.82 M & 23.83 M \\
+Output Token   & 0.71 M  & 0.57 M  & 0.98 M  \\
+Runtime        & 4.17 h & 3.34 h & 5.75 h \\
 \bottomrule
 \end{tabularx}
 \end{table}
-
-\begin{figure}[h]
-\centering
-\fbox{\begin{minipage}[c][0.22\columnwidth][c]{0.88\columnwidth}
-\centering
-\textbf{Placeholder figure:} độ ổn định qua 3 lần chạy.\\
-Cấu hình: ReAct trên Baseline và Evolved với GPT-OSS-120B.
-\end{minipage}}
-\caption{So sánh độ ổn định qua ba lần chạy của ReAct Baseline và ReAct Evolved trên GPT-OSS-120B.}
-\label{fig:react_stability}
-\end{figure}
-
-Hình~\ref{fig:react_stability} đánh giá độ ổn định bằng cách lặp lại ba lần chạy độc lập trên cùng tập case với cấu hình ReAct + GPT-OSS-120B, nhằm kiểm tra mức độ nhất quán của kết quả giữa Baseline và Evolved.

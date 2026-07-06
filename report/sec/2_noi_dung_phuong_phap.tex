@@ -16,7 +16,7 @@ Hệ thống được xây dựng quanh một agent chẩn đoán có khả năn
 
 \subsubsection{Công cụ và công nghệ sử dụng}
 
-Hệ thống sử dụng NIKA làm benchmark chính để tạo các incident mạng và chấm điểm kết quả chẩn đoán. Kathará~\citep{kathara2019} được dùng để ảo hóa topology bằng container, giúp khởi động lab, tiêm lỗi và tái lập môi trường một cách nhất quán. MCP/FastMCP~\citep{mcp2024} đóng vai trò lớp giao tiếp giữa agent và môi trường mạng: các thao tác như kiểm tra kết nối, đọc cấu hình, truy vấn telemetry hoặc nộp kết quả đều được chuẩn hóa thành công cụ. LangGraph/LangChain~\citep{langgraph2024} được dùng để điều phối workflow agent, trong đó các chiến lược chính gồm ReAct~\citep{react2023}, Plan \& Execute và Reflexion~\citep{reflexion2023}.
+Hệ thống sử dụng NIKA làm benchmark chính để tạo các incident mạng và chấm điểm kết quả chẩn đoán. Kathará~\citep{kathara2019} được dùng để ảo hóa topology bằng container, giúp khởi động lab, tiêm lỗi và tái lập môi trường một cách nhất quán. MCP/FastMCP đóng vai trò lớp giao tiếp giữa agent và môi trường mạng: các thao tác như kiểm tra kết nối, đọc cấu hình, truy vấn telemetry hoặc nộp kết quả đều được chuẩn hóa thành công cụ. LangGraph/LangChain~\citep{langgraph2024} được dùng để điều phối workflow agent, trong đó các chiến lược chính gồm ReAct~\citep{react2023}, Plan \& Execute và Reflexion~\citep{reflexion2023}.
 
 Ở tầng dữ liệu và mạng, hệ thống dùng InfluxDB để lưu telemetry, FRRouting~\citep{frr2021} cho các kịch bản định tuyến và P4/BMv2~\citep{p4lang2014} cho các kịch bản data-plane lập trình được. Phần triển khai được viết bằng Python 3.12 và quản lý môi trường bằng \code{uv}. Các nhóm công cụ MCP chính gồm Kathará Base, FRR, BMv2/P4, Telemetry, Task Management và Tool Evolution; mỗi nhóm tương ứng với một phần quan sát hoặc điều khiển cần thiết trong quá trình agent xử lý sự cố.
 
@@ -32,7 +32,7 @@ Luồng xử lý trong mỗi episode được tách thành hai pha. Trong \textb
 
 \begin{figure*}[t]
 \centering
-\includegraphics[width=0.8\textwidth]{figs/skillpro.png}
+\includegraphics[width=0.68\textwidth]{figs/skillpro.png}
 \caption{Quy trình học kỹ năng tái sử dụng cho mô-đun \textbf{Procedural Memory}.}
 \label{fig:skillpro_overview}
 \end{figure*}
@@ -80,6 +80,6 @@ Output & Tập tài liệu đã tinh chỉnh $\widetilde{\mathcal{D}}$.\\
 \end{minipage}
 \end{table}
 
-Quy trình học được mô tả trong Bảng~\ref{alg:draft_learning}. Explorer đóng vai trò tiên phong tạo các tình huống sử dụng công cụ từ tài liệu hiện tại và lịch sử khám phá. Để đảm bảo độ bao phủ rộng, Explorer áp dụng ràng buộc tương đồng $\phi$: nếu một tình huống mới quá giống lịch sử, hệ thống yêu cầu sinh lại truy vấn khác, ghi nhận toàn bộ tham số, kết quả thực thi và lỗi phát sinh làm nguồn dữ liệu huấn luyện phong phú.
+Quy trình học được mô tả trong Bảng~\ref{alg:draft_learning}. Explorer đóng vai trò tạo các tình huống sử dụng công cụ từ tài liệu hiện tại và lịch sử khám phá. Để đảm bảo độ bao phủ rộng, Explorer áp dụng ràng buộc tương đồng $\phi$: nếu một tình huống mới quá giống lịch sử, hệ thống yêu cầu sinh lại truy vấn khác, ghi nhận toàn bộ tham số, kết quả thực thi và lỗi phát sinh làm nguồn dữ liệu huấn luyện phong phú. Việc đa dạng hóa các kịch bản này giúp mô hình phát hiện ra các trường hợp biên (edge cases) dễ gây lỗi cho hệ thống mạng thực tế.
 
 Analyzer sau đó đối chiếu kết quả thực thi để phát hiện khoảng cách giữa hành vi thực tế và tài liệu, từ đó sinh các đề xuất chỉnh sửa cụ thể. Rewriter kết hợp các đề xuất này để viết lại tài liệu mới và định hướng Explorer ở vòng tiếp theo cho đến khi tài liệu đạt trạng thái hội tụ $\tau$. Cách thiết kế này đảm bảo cải thiện hiệu quả chẩn đoán nhưng vẫn giữ ranh giới an toàn tuyệt đối cho hệ thống mạng.
