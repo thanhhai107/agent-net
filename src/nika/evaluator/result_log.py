@@ -67,8 +67,10 @@ def _session_duration_seconds(start_time, end_time) -> float | None:
         return round((end_dt - start_dt).total_seconds(), 2)
 
 
-def default_summary_csv_path() -> str:
-    return os.path.join(RESULTS_DIR, "0_summary", "evaluation_summary.csv")
+def default_summary_csv_path(result_dir=None) -> str:
+    if result_dir is None:
+        result_dir = RESULTS_DIR
+    return os.path.join(result_dir, "0_summary", "evaluation_summary.csv")
 
 
 def missing_summary_artifacts(session_dir: Path) -> list[str]:

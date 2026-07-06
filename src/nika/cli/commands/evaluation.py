@@ -2,6 +2,7 @@
 
 import typer
 
+from nika.config import ENV_RESULT_DIR
 from nika.utils.agent_config import ENV_JUDGE_MODEL, ENV_JUDGE_PROVIDER
 
 eval_app = typer.Typer(help="Evaluate a completed agent session.")
@@ -93,6 +94,12 @@ def eval_summary(
         "--model",
         help="Include only sessions run with this model id (repeatable).",
     ),
+    result_dir: str | None = typer.Option(
+        None,
+        "--result_dir",
+        envvar=ENV_RESULT_DIR,
+        help="Results parent directory (default: results/). Session output goes to {result_dir}/{session_id}.",
+    ),
 ) -> None:
     """Aggregate finished sessions under results/ into one CSV file."""
     from nika.workflows.eval.summary import run_eval_summary
@@ -106,6 +113,7 @@ def eval_summary(
             session_ids=session_id,
             agent_types=agent,
             models=model,
+            results_dir=result_dir
         )
     except (FileNotFoundError, ValueError) as exc:
         raise typer.BadParameter(str(exc)) from exc
