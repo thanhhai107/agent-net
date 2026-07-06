@@ -4,15 +4,16 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import shutil
 from pathlib import Path
 
 from nika.utils.session_index import SessionIndex
 from nika.utils.session_store import SessionStore
+from nika.workflows.eval.session import run_eval_metrics
 
 SCENARIO = "simple_bgp"
 PROBLEM = "link_down"
+LINK_INJECT_PARAMS = {"host_name": "pc1", "intf_name": "eth0"}
 
 
 def load_test_env() -> None:
@@ -73,26 +74,6 @@ def codex_sdk_available() -> bool:
     return codex_sdk_local_auth_available()
 
 
-def claude_sdk_available() -> bool:
-    try:
-        import claude_agent_sdk  # noqa: F401
-    except ImportError:
-        return False
-    from agent.sdk.claude_sdk.config import claude_sdk_credentials_available
-
-    return claude_sdk_credentials_available()
-
-
-def codex_sdk_available() -> bool:
-    try:
-        import openai_codex  # noqa: F401
-    except ImportError:
-        return False
-    from agent.sdk.codex_sdk.config import codex_sdk_local_auth_available
-
-    return codex_sdk_local_auth_available()
-
-
 def tool_text_list(result: object) -> list[str]:
     if isinstance(result, str):
         try:
@@ -108,27 +89,12 @@ class CommonPipelineSteps:
     """Mixin with shared step helpers for ordered pipeline test cases."""
 
     def _step_start_env(self) -> None:
-        out = self._invoke_ok(["env", "run", SCENARIO])  # type: ignore[attr-defined]
-        match = re.search(r"session_id=(\S+)", out.strip())
-        self.assertIsNotNone(match, f"session_id missing from env run output:\n{out}")  # type: ignore[attr-defined]
-        type(self).session_id = match.group(1)
+        type(self).session_id = self._start_env(SCENARIO)  # type: ignore[attr-defined]
         self._assert_session_ready(self.session_id, SCENARIO)  # type: ignore[attr-defined]
 
     def _step_inject_failure(self) -> None:
         self.assertIsNotNone(self.session_id)  # type: ignore[attr-defined]
-        self._invoke_ok(  # type: ignore[attr-defined]
-            [
-                "failure",
-                "inject",
-                PROBLEM,
-                "--session_id",
-                self.session_id,
-                "--set",
-                "host_name=pc1",
-                "--set",
-                "intf_name=eth0",
-            ]
-        )
+        self._inject_failure(PROBLEM, LINK_INJECT_PARAMS)  # type: ignore[attr-defined]
         row = SessionStore().get_session(self.session_id)
         self.assertIn(PROBLEM, row.get("problem_names", []))  # type: ignore[attr-defined]
         self.assertIn("task_description", row)  # type: ignore[attr-defined]
@@ -139,7 +105,7 @@ class CommonPipelineSteps:
 
     def _step_close_and_verify(self, expected_agent_type: str) -> None:
         self.assertIsNotNone(self.session_id)  # type: ignore[attr-defined]
-        self._invoke_ok(["session", "close", "--session_id", self.session_id, "-y"])  # type: ignore[attr-defined]
+        self._close_session(self.session_id)  # type: ignore[attr-defined]
         type(self).env_destroyed = True
         run = self._load_json("run.json")  # type: ignore[attr-defined]
         self.assertEqual(run["status"], "finished")  # type: ignore[attr-defined]
@@ -147,7 +113,7 @@ class CommonPipelineSteps:
 
     def _step_eval_metrics(self, min_tool_calls: int = 1) -> None:
         self.assertIsNotNone(self.session_id)  # type: ignore[attr-defined]
-        self._invoke_ok(["eval", "metrics", "--session_id", self.session_id])  # type: ignore[attr-defined]
+        run_eval_metrics(session_id=self.session_id)  # type: ignore[attr-defined]
         metrics = self._load_json("eval_metrics.json")  # type: ignore[attr-defined]
         for field in ("detection_score", "localization_accuracy", "rca_accuracy", "tool_calls"):
             self.assertIn(field, metrics)  # type: ignore[attr-defined]

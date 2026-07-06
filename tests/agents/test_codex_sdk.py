@@ -8,7 +8,6 @@ import unittest.mock
 
 from agent.local_cli.codex_cli.codex_worker import _build_mcp_toml
 from agent.sdk.codex_sdk.config import codex_sdk_local_auth_available, validate_reasoning_effort
-from nika.cli.main import app
 from nika.utils.agent_config import ENV_CODEX_SDK_MODEL, ENV_CODEX_MODEL, resolve_agent_model
 from nika.utils.session_store import SessionStore
 from tests.agents._assertions import assert_phase_messages, assert_submission_fields
@@ -80,14 +79,6 @@ class CodexSdkMcpTest(unittest.TestCase):
 class CodexSdkAgentPipelineTest(CommonPipelineSteps, OrderedPipelineTestCase):
     """Full pipeline with the sdk.codex_sdk agent."""
 
-    @classmethod
-    def tearDownClass(cls) -> None:
-        if cls.session_id and not cls.env_destroyed:
-            try:
-                cls.runner.invoke(app, ["session", "close", "--session_id", cls.session_id, "-y"])
-            except Exception:
-                pass
-
     def test_step_01_start_env(self) -> None:
         self._step_start_env()
 
@@ -96,27 +87,7 @@ class CodexSdkAgentPipelineTest(CommonPipelineSteps, OrderedPipelineTestCase):
 
     def test_step_03_run_codex_sdk_agent(self) -> None:
         self.assertIsNotNone(self.session_id)
-        result = self.runner.invoke(
-            app,
-            [
-                "agent",
-                "run",
-                "--agent",
-                "sdk.codex_sdk",
-                "--model",
-                CODEX_MODEL,
-                "--max-steps",
-                "20",
-                "--session_id",
-                self.session_id,
-            ],
-        )
-        self.assertEqual(
-            result.exit_code,
-            0,
-            f"agent run exited {result.exit_code}:\n{result.output}"
-            + (f"\nException: {result.exception}" if result.exception else ""),
-        )
+        self._run_agent(agent_type="sdk.codex_sdk", model=CODEX_MODEL, max_steps=20)
         row = SessionStore().get_session(self.session_id)
         self.assertEqual(row.get("agent_type"), "sdk.codex_sdk")
 

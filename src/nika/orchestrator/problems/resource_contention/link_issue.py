@@ -1,15 +1,13 @@
 import logging
 
+from nika.orchestrator.problems.context import init_problem
 from pydantic import BaseModel, Field
 
-from nika.generator.fault.injector_tc import FaultInjectorTC
 from nika.generator.traffic.od_flows import ODFLowGenerator
-from nika.net_env.net_env_pool import get_net_env_instance
 from nika.orchestrator.problems.problem_base import ProblemMeta, RootCauseCategory, TaskDescription, TaskLevel, build_verify_result
 from nika.orchestrator.tasks.detection import DetectionTask
 from nika.orchestrator.tasks.localization import LocalizationTask
 from nika.orchestrator.tasks.rca import RCATask
-from nika.service.kathara import KatharaAPIALL
 from nika.utils.logger import system_logger
 
 # ==================================================================
@@ -33,26 +31,21 @@ class LinkHighPacketCorruptionBase:
 
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()
-        self.net_env = get_net_env_instance(scenario_name, **kwargs)
-        self.kathara_api = KatharaAPIALL(lab_name=self.net_env.lab.name)
-        self.injector = FaultInjectorTC(lab_name=self.net_env.lab.name)
+        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
         self.faulty_devices: list[str] = []
 
     def inject_fault(self, params: LinkHighPacketCorruptionParams):
         host = params.host_name
         self.faulty_devices = [host]
-        intf_name = self.kathara_api.get_host_interfaces(host)[-1]
-        self.injector.inject_packet_corruption(
-            host_name=host,
-            intf_name=intf_name,
-            corruption_percentage=params.corruption_percentage,
+        intf_name = self.runtime.get_host_interfaces(host)[-1]
+        self.runtime.tc_set_netem(host, intf_name, corrupt=params.corruption_percentage,
         )
 
     def verify_fault(self, params: LinkHighPacketCorruptionParams) -> dict:
         """Verify tc qdisc on the host's last interface has corruption configured."""
         host = params.host_name
-        intf = self.kathara_api.get_host_interfaces(host)[-1]
-        tc_output = self.kathara_api.exec_cmd(host, f"tc qdisc show dev {intf}").strip()
+        intf = self.runtime.get_host_interfaces(host)[-1]
+        tc_output = self.runtime.exec(host, f"tc qdisc show dev {intf}").strip()
         verified = "corrupt" in tc_output
         return build_verify_result(
             root_cause_name=self.root_cause_name,
@@ -112,22 +105,15 @@ class LinkBandwidthThrottlingBase:
 
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()
-        self.net_env = get_net_env_instance(scenario_name, **kwargs)
-        self.kathara_api = KatharaAPIALL(lab_name=self.net_env.lab.name)
-        self.injector = FaultInjectorTC(lab_name=self.net_env.lab.name)
+        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
         self.faulty_devices: list[str] = []
         self.scenario_name = scenario_name
 
     def inject_fault(self, params: LinkBandwidthThrottlingParams):
         host = params.host_name
         self.faulty_devices = [host]
-        intf_name = self.kathara_api.get_host_interfaces(host)[0]
-        self.injector.inject_bandwidth_limit(
-            host_name=host,
-            intf_name=intf_name,
-            rate=params.rate,
-            burst=params.burst,
-            limit=params.limit,
+        intf_name = self.runtime.get_host_interfaces(host)[0]
+        self.runtime.tc_set_tbf(host, intf_name, rate=params.rate, burst=params.burst, limit=params.limit,
         )
         generator = ODFLowGenerator(lab_name=self.net_env.lab.name)
         od_dict = {}
@@ -142,8 +128,8 @@ class LinkBandwidthThrottlingBase:
     def verify_fault(self, params: LinkBandwidthThrottlingParams) -> dict:
         """Verify tc qdisc on the host's first interface has TBF (token bucket filter) configured."""
         host = params.host_name
-        intf = self.kathara_api.get_host_interfaces(host)[0]
-        tc_output = self.kathara_api.exec_cmd(host, f"tc qdisc show dev {intf}").strip()
+        intf = self.runtime.get_host_interfaces(host)[0]
+        tc_output = self.runtime.exec(host, f"tc qdisc show dev {intf}").strip()
         verified = "tbf" in tc_output
         return build_verify_result(
             root_cause_name=self.root_cause_name,
@@ -205,16 +191,14 @@ class IncastTrafficNetworkLimitationBase:
     def __init__(self, scenario_name: str = "dc_clos_service", **kwargs):
         super().__init__()
         self.scenario_name = scenario_name
-        self.net_env = get_net_env_instance(scenario_name, **kwargs)
-        self.kathara_api = KatharaAPIALL(lab_name=self.net_env.lab.name)
-        self.injector = FaultInjectorTC(lab_name=self.net_env.lab.name)
+        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
         self.faulty_devices: list[str] = []
 
     def inject_fault(self, params: IncastTrafficNetworkLimitationParams):
         host = params.host_name
         self.faulty_devices = [host]
-        self.kathara_api.tc_set_netem(host_name=host, intf_name="eth0", delay_ms=params.delay_ms, handle="1")
-        self.kathara_api.tc_set_tbf(
+        self.runtime.tc_set_netem(host_name=host, intf_name="eth0", delay_ms=params.delay_ms, handle="1")
+        self.runtime.tc_set_tbf(
             host_name=host,
             intf_name="eth0",
             rate=params.rate,
@@ -237,7 +221,7 @@ class IncastTrafficNetworkLimitationBase:
     def verify_fault(self, params: IncastTrafficNetworkLimitationParams) -> dict:
         """Verify tc qdisc on eth0 has netem or tbf (incast network limitation)."""
         host = params.host_name
-        tc_output = self.kathara_api.exec_cmd(host, "tc qdisc show dev eth0").strip()
+        tc_output = self.runtime.exec(host, "tc qdisc show dev eth0").strip()
         verified = "netem" in tc_output or "tbf" in tc_output
         return build_verify_result(
             root_cause_name=self.root_cause_name,

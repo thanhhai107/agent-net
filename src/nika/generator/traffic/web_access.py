@@ -3,7 +3,7 @@ import random
 from typing import Iterable, Optional
 
 from nika.net_env.base import NetworkEnvBase
-from nika.net_env.intradomain_routing.ospf_enterprise.lab_static import OSPFEnterpriseStatic
+from nika.net_env.kathara.intradomain_routing.ospf_enterprise.lab_static import OSPFEnterpriseStatic
 from nika.net_env.net_env_pool import get_net_env_instance
 from nika.service.kathara import KatharaAPIALL
 

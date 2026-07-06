@@ -120,7 +120,7 @@ Each `nika env run` creates a **session** (printed as `session_id=…`). Session
    nika session inspect -c                    # also list lab containers (docker-ps style)
    nika session containers [--session_id ID]  # list containers in the session lab
    nika session close [--session_id ID]       # undeploy lab and clear runtime state
-   nika session wipe -y                       # close every running session and wipe Kathara
+   nika session wipe -y                       # close every running session and wipe Kathara/Containerlab
    ```
 
 3. **List problems and inject faults**
@@ -189,7 +189,8 @@ uv run --with pytest pytest
 uv run --with pytest pytest -v
 
 # run only selected test files
-uv run --with pytest pytest tests/test_session.py -v
+uv run --with pytest pytest tests/runtime/ -v
+uv run python -m unittest tests.benchmark.test_resume -v
 ```
 
 <h1 id="🛠️usage">🛠️ Usage</h1>
@@ -406,7 +407,10 @@ When multiple sessions are running, pass `--session_id <id>` to `failure inject`
 
 ## Network Scenarios
 
-Registered scenarios (see `nika env list`) live under `src/nika/net_env/`:
+Registered scenarios (see `nika env list`) live under `src/nika/net_env/`, organized by backend:
+
+- `kathara/` — Kathara-based scenarios (topology generators, startup files, network configs)
+- `containerlab/` — Containerlab-based scenarios
 
 | Scenario ID | Scalable | Description |
 | ----------- | -------- | ----------- |
@@ -422,8 +426,10 @@ Registered scenarios (see `nika env list`) live under `src/nika/net_env/`:
 | `p4_bloom_filter` | -- | P4 bloom-filter data-plane validation testbed. |
 | `p4_counter` | -- | P4 counter pipeline testbed. |
 | `p4_mpls` | -- | P4 MPLS data-plane testbed. |
-| `k8s_lab` | -- | Fat-tree BGP fabric with k3s cluster, MetalLB, NGINX Ingress, and sample microservices. See [k8s_lab README](src/nika/net_env/kubernetes/k8s_lab/README.md). |
-| `llmd_lab` | -- | Star topology with k3s cluster running llm-d disaggregated Prefill/Decode inference (simulated, no GPU). See [llmd_lab README](src/nika/net_env/kubernetes/llmd_lab/README.md). |
+| `k8s_lab` | -- | Fat-tree BGP fabric with k3s cluster, MetalLB, NGINX Ingress, and sample microservices. See [k8s_lab README](src/nika/net_env/kathara/kubernetes/k8s_lab/README.md). |
+| `llmd_lab` | -- | Star topology with k3s cluster running llm-d disaggregated Prefill/Decode inference (simulated, no GPU). See [llmd_lab README](src/nika/net_env/kathara/kubernetes/llmd_lab/README.md). |
+| `min5clos` | -- | 5-stage CLOS fabric with Nokia SR Linux ([Containerlab min 5clos](https://containerlab.dev/lab-examples/min-5clos/#description)). |
+| `srlceos01` | -- | Nokia SR Linux and Arista cEOS interconnect ([Containerlab srlceos01](https://containerlab.dev/lab-examples/srl-ceos/)). |
 
 Each scenario is defined in a Kathará `lab.py` file, which specifies the network topology, devices, and initial configurations. See **[Creating Benchmark Tasks](docs/creating-benchmark-tasks.md)** for the NIKA extension workflow, and check [Kathará API Docs](https://github.com/KatharaFramework/Kathara/wiki/Kathara-API-Docs) for Kathará details.
 

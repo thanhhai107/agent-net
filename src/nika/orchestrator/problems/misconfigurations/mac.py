@@ -1,12 +1,10 @@
+from nika.orchestrator.problems.context import init_problem
 from pydantic import BaseModel, Field
 
-from nika.generator.fault.injector_host import FaultInjectorHost
-from nika.net_env.net_env_pool import get_net_env_instance
 from nika.orchestrator.problems.problem_base import ProblemMeta, RootCauseCategory, TaskDescription, TaskLevel, build_verify_result
 from nika.orchestrator.tasks.detection import DetectionTask
 from nika.orchestrator.tasks.localization import LocalizationTask
 from nika.orchestrator.tasks.rca import RCATask
-from nika.service.kathara import KatharaAPIALL
 from nika.utils.logger import system_logger
 
 # ==================================================================
@@ -31,18 +29,15 @@ class MacAddressConflictBase:
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()
         self.logger = system_logger
-
-        self.net_env = get_net_env_instance(scenario_name, **kwargs)
-        self.kathara_api = KatharaAPIALL(lab_name=self.net_env.lab.name)
-        self.injector = FaultInjectorHost(lab_name=self.net_env.lab.name)
+        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
         self.faulty_devices: list[str] = []
 
     def inject_fault(self, params: MacAddressConflictParams):
         device_0 = params.host_name
         device_1 = params.host_name_2
         self.faulty_devices = [device_0, device_1]
-        target_mac = self.kathara_api.get_host_mac_address(device_1, "eth0")
-        self.kathara_api.exec_cmd(host_name=device_0, command=f"ip link set dev eth0 address {target_mac}")
+        target_mac = self.runtime.get_host_mac_address(device_1, "eth0")
+        self.runtime.exec(device_0, f"ip link set dev eth0 address {target_mac}")
         self.logger.info(f"Injected MAC address conflict on {device_0} with MAC {target_mac} of {device_1}")
 
     def verify_fault(self, params: MacAddressConflictParams) -> dict:
@@ -50,8 +45,8 @@ class MacAddressConflictBase:
         device_0 = params.host_name
         device_1 = params.host_name_2
         self.faulty_devices = [device_0, device_1]
-        mac_0 = self.kathara_api.get_host_mac_address(device_0, "eth0")
-        mac_1 = self.kathara_api.get_host_mac_address(device_1, "eth0")
+        mac_0 = self.runtime.get_host_mac_address(device_0, "eth0")
+        mac_1 = self.runtime.get_host_mac_address(device_1, "eth0")
         verified = bool(mac_0) and mac_0.lower() == mac_1.lower()
         return build_verify_result(
             root_cause_name=self.root_cause_name,

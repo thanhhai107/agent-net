@@ -29,7 +29,7 @@ For benchmark automation, `nika benchmark run` performs env deploy, fault inject
 
 Network environments are Kathara labs wrapped by `NetworkEnvBase`.
 
-1. Add the lab under `src/nika/net_env/<domain>/<scenario>/`.
+1. Add the lab under `src/nika/net_env/kathara/<domain>/<scenario>/` (Kathara) or `src/nika/net_env/containerlab/<scenario>/` (Containerlab).
 2. Implement a class that sets `LAB_NAME`, builds `self.lab`, sets `self.name`, `self.desc`, and declares useful host lists through `load_machines()`.
 3. If the scenario has sizes, expose `TOPO_SIZE = ["s", "m", "l"]` and accept `topo_size` in `__init__`.
 4. Register the class in `src/nika/net_env/net_env_pool.py`.
@@ -91,8 +91,7 @@ Use a shared base class for the fault logic, then expose three task classes.
 ```python
 from pydantic import BaseModel, Field
 
-from nika.generator.fault.injector_base import FaultInjectorBase
-from nika.net_env.net_env_pool import get_net_env_instance
+from nika.orchestrator.problems.context import init_problem
 from nika.orchestrator.problems.problem_base import (
     ProblemMeta,
     RootCauseCategory,
@@ -120,20 +119,20 @@ class MyFaultBase:
 
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()
-        self.net_env = get_net_env_instance(scenario_name, **kwargs)
-        self.injector = FaultInjectorBase(lab_name=self.net_env.lab.name)
+        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
         self.faulty_devices: list[str] = []
 
     def inject_fault(self, params: MyFaultParams):
         self.faulty_devices = [params.host_name]
-        self.injector.inject_intf_down(params.host_name, params.intf_name)
+        self.runtime.set_interface_state(params.host_name, params.intf_name, "down")
 
     def verify_fault(self, params: MyFaultParams) -> dict:
+        operstate = self.runtime.get_interface_operstate(params.host_name, params.intf_name)
         return build_verify_result(
             root_cause_name=self.root_cause_name,
             faulty_devices=self.faulty_devices,
-            verified=True,
-            details={"host": params.host_name, "intf": params.intf_name},
+            verified=operstate == "down",
+            details={"host": params.host_name, "intf": params.intf_name, "operstate": operstate},
         )
 
 

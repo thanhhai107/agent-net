@@ -11,7 +11,7 @@ from nika.utils.agent_config import (
     resolve_max_steps,
     resolve_reasoning_effort,
 )
-from nika.utils.logger import bind_session_dir, log_event
+from nika.utils.logger import bind_session_dir, log_error_event, log_event
 from nika.utils.session import Session
 
 logging.basicConfig(level=logging.INFO)
@@ -69,7 +69,19 @@ def start_agent(
         reasoning_effort=reasoning_effort,
         stream_output=stream_output,
     )
-    asyncio.run(agent.run(task_description=session.task_description))
+    try:
+        asyncio.run(agent.run(task_description=session.task_description))
+    except Exception as exc:
+        log_error_event(
+            "agent_error",
+            f"Agent run failed for session {session.session_id}: {exc}",
+            session_id=session.session_id,
+            agent_type=agent_type,
+            model=model,
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
+        raise
 
     session.end_session()
     log_event(

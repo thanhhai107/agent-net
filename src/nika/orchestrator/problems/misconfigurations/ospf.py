@@ -1,14 +1,12 @@
 import re
 
+from nika.orchestrator.problems.context import init_problem
 from pydantic import BaseModel, Field
 
-from nika.generator.fault.injector_base import FaultInjectorBase
-from nika.net_env.net_env_pool import get_net_env_instance
 from nika.orchestrator.problems.problem_base import ProblemMeta, RootCauseCategory, TaskDescription, TaskLevel, build_verify_result
 from nika.orchestrator.tasks.detection import DetectionTask
 from nika.orchestrator.tasks.localization import LocalizationTask
 from nika.orchestrator.tasks.rca import RCATask
-from nika.service.kathara import KatharaFRRAPI
 from nika.utils.logger import system_logger
 
 # ==================================================================
@@ -32,23 +30,21 @@ class OSPFAreaMisconfigBase:
 
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()
-        self.net_env = get_net_env_instance(scenario_name, **kwargs)
-        self.kathara_api = KatharaFRRAPI(lab_name=self.net_env.lab.name)
-        self.injector = FaultInjectorBase(lab_name=self.net_env.lab.name)
+        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
         self.logger = system_logger
         self.faulty_devices: list[str] = []
 
     def inject_fault(self, params: OSPFAreaMisconfigParams):
         host = params.host_name
         self.faulty_devices = [host]
-        running_cfg = self.kathara_api.exec_cmd(host, "vtysh -c 'show running-config'")
+        running_cfg = self.runtime.exec(host, "vtysh -c 'show running-config'")
         pattern = re.compile(r"^\s*network\s+\S+\s+area\s+(\S+)", re.MULTILINE)
         m = pattern.search(running_cfg)
         if not m:
             self.logger.error(f"Could not find OSPF area on {host}")
         correct_area = m.group(1)
         wrong_area = "66" if correct_area != "66" else "99"
-        self.kathara_api.exec_cmd(
+        self.runtime.exec(
             host,
             f"sed -i.bak -E 's/(area ){correct_area}$/\\1{wrong_area}/g' /etc/frr/frr.conf && service frr restart 2>/dev/null || true",
         )
@@ -58,15 +54,15 @@ class OSPFAreaMisconfigBase:
         """Verify the OSPF area in frr.conf and in the running daemon was changed."""
         host = params.host_name
         self.faulty_devices = [host]
-        file_areas_raw = self.kathara_api.exec_cmd(
+        file_areas_raw = self.runtime.exec(
             host,
             "grep -E '^[[:space:]]*network .* area ' /etc/frr/frr.conf 2>/dev/null | awk '{print $NF}' | sort -u",
         ).strip()
-        orig_areas_raw = self.kathara_api.exec_cmd(
+        orig_areas_raw = self.runtime.exec(
             host,
             "grep -E '^[[:space:]]*network .* area ' /etc/frr/frr.conf.bak 2>/dev/null | awk '{print $NF}' | sort -u",
         ).strip()
-        running_areas_raw = self.kathara_api.exec_cmd(
+        running_areas_raw = self.runtime.exec(
             host,
             "vtysh -c 'show running-config' 2>/dev/null | grep -E '^[[:space:]]*network .* area ' | awk '{print $NF}' | sort -u",
         ).strip()
@@ -137,9 +133,7 @@ class OSPFNeighborMissingBase:
 
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()
-        self.net_env = get_net_env_instance(scenario_name, **kwargs)
-        self.kathara_api = KatharaFRRAPI(lab_name=self.net_env.lab.name)
-        self.injector = FaultInjectorBase(lab_name=self.net_env.lab.name)
+        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
         self.logger = system_logger
         self.faulty_devices: list[str] = []
 
@@ -151,15 +145,15 @@ class OSPFNeighborMissingBase:
             "'s|^([[:space:]]*)network([[:space:]])|\\1# network\\2|' "
             "/etc/frr/frr.conf"
         )
-        self.kathara_api.exec_cmd(host, cmd)
-        self.kathara_api.exec_cmd(host, "service frr restart 2>/dev/null || true")
+        self.runtime.exec(host, cmd)
+        self.runtime.exec(host, "service frr restart 2>/dev/null || true")
         self.logger.info(f"Injected OSPF neighbor missing on {host}.")
 
     def verify_fault(self, params: OSPFNeighborMissingParams) -> dict:
         """Verify network lines are commented in frr.conf and removed from the running daemon."""
         host = params.host_name
         self.faulty_devices = [host]
-        commented_count_raw = self.kathara_api.exec_cmd(
+        commented_count_raw = self.runtime.exec(
             host,
             "grep -c '^[[:space:]]*# network' /etc/frr/frr.conf 2>/dev/null || echo 0",
         ).strip()
@@ -167,7 +161,7 @@ class OSPFNeighborMissingBase:
             commented_count = int(commented_count_raw)
         except ValueError:
             commented_count = 0
-        running_network_count_raw = self.kathara_api.exec_cmd(
+        running_network_count_raw = self.runtime.exec(
             host,
             "vtysh -c 'show running-config' 2>/dev/null | grep -c '^[[:space:]]*network' || echo 0",
         ).strip()

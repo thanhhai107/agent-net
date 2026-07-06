@@ -1,14 +1,12 @@
 import ipaddress
 
+from nika.orchestrator.problems.context import init_problem
 from pydantic import BaseModel, Field
 
-from nika.generator.fault.injector_service import FaultInjectorService
-from nika.net_env.net_env_pool import get_net_env_instance
 from nika.orchestrator.problems.problem_base import ProblemMeta, RootCauseCategory, TaskDescription, TaskLevel, build_verify_result
 from nika.orchestrator.tasks.detection import DetectionTask
 from nika.orchestrator.tasks.localization import LocalizationTask
 from nika.orchestrator.tasks.rca import RCATask
-from nika.service.kathara import KatharaBaseAPI
 from nika.utils.logger import system_logger
 
 # ==================================================================
@@ -33,9 +31,7 @@ class DHCPMissingSubnetBase:
 
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()
-        self.net_env = get_net_env_instance(scenario_name, **kwargs)
-        self.kathara_api = KatharaBaseAPI(lab_name=self.net_env.lab.name)
-        self.injector = FaultInjectorService(lab_name=self.net_env.lab.name)
+        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
         self.faulty_devices: list[str] = []
 
     def inject_fault(self, params: DHCPMissingSubnetParams):
@@ -45,10 +41,11 @@ class DHCPMissingSubnetBase:
         system_logger.info(f"Injecting DHCP missing subnet fault: DHCP server {dhcp_server}, affected host {client_host}")
         subnet = str(
             ipaddress.ip_network(
-                self.kathara_api.get_host_ip(client_host, with_prefix=True), strict=False
+                self.runtime.get_host_ip(client_host, with_prefix=True), strict=False
             ).network_address
         )
-        self.injector.inject_delete_subnet(dhcp_server=dhcp_server, subnet=subnet)
+        self.runtime.dhcp_delete_subnet(dhcp_server, subnet)
+        self.runtime.renew_dhcp_leases(self.runtime.list_dhcp_client_nodes())
         self._injected_subnet = subnet
 
     def verify_fault(self, params: DHCPMissingSubnetParams) -> dict:
@@ -60,10 +57,10 @@ class DHCPMissingSubnetBase:
         if subnet is None:
             subnet = str(
                 ipaddress.ip_network(
-                    self.kathara_api.get_host_ip(client_host, with_prefix=True), strict=False
+                    self.runtime.get_host_ip(client_host, with_prefix=True), strict=False
                 ).network_address
             )
-        grep_result = self.kathara_api.exec_cmd(
+        grep_result = self.runtime.exec(
             dhcp_server,
             f"grep 'subnet {subnet} netmask' /etc/dhcp/dhcpd.conf && echo found || echo absent",
         ).strip()

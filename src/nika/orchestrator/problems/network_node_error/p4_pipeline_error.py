@@ -2,15 +2,13 @@ import logging
 import re
 from typing import Optional
 
+from nika.orchestrator.problems.context import init_problem
 from pydantic import BaseModel, Field
 
-from nika.generator.fault.injector_base import FaultInjectorBase
-from nika.net_env.net_env_pool import get_net_env_instance
 from nika.orchestrator.problems.problem_base import ProblemMeta, RootCauseCategory, TaskDescription, TaskLevel, build_verify_result
 from nika.orchestrator.tasks.detection import DetectionTask
 from nika.orchestrator.tasks.localization import LocalizationTask
 from nika.orchestrator.tasks.rca import RCATask
-from nika.service.kathara import KatharaAPIALL
 from nika.utils.logger import system_logger
 
 logger = system_logger
@@ -19,12 +17,12 @@ _MISCONFIG_PORT = "99"
 _MISCONFIG_MAC = "ff:ff:ff:ff:ff:ff"
 
 
-def _cli_run(kathara_api: KatharaAPIALL, host: str, command: str) -> str:
-    return kathara_api.exec_cmd(host, f"simple_switch_CLI <<< '{command}' 2>/dev/null")
+def _cli_run(runtime, host: str, command: str) -> str:
+    return runtime.exec(host, f"simple_switch_CLI <<< '{command}' 2>/dev/null")
 
 
-def _cli_show_match_tables(kathara_api: KatharaAPIALL, host: str) -> list[str]:
-    output = _cli_run(kathara_api, host, "show_tables")
+def _cli_show_match_tables(runtime, host: str) -> list[str]:
+    output = _cli_run(runtime, host, "show_tables")
     tables: list[str] = []
     for line in output.splitlines():
         line = line.strip()
@@ -39,8 +37,8 @@ def _cli_show_match_tables(kathara_api: KatharaAPIALL, host: str) -> list[str]:
     return tables
 
 
-def _cli_table_has_match_entries(kathara_api: KatharaAPIALL, host: str, table_name: str) -> bool:
-    dump = _cli_run(kathara_api, host, f"table_dump {table_name}")
+def _cli_table_has_match_entries(runtime, host: str, table_name: str) -> bool:
+    dump = _cli_run(runtime, host, f"table_dump {table_name}")
     return "Dumping entry" in dump
 
 
@@ -60,12 +58,12 @@ def _table_selection_score(table_name: str, action_params: list[str]) -> int:
     return score
 
 
-def _list_populated_match_tables(kathara_api: KatharaAPIALL, host: str) -> list[tuple[str, list[str]]]:
+def _list_populated_match_tables(runtime, host: str) -> list[tuple[str, list[str]]]:
     populated: list[tuple[str, list[str]]] = []
-    for table_name in _cli_show_match_tables(kathara_api, host):
-        if not _cli_table_has_match_entries(kathara_api, host, table_name):
+    for table_name in _cli_show_match_tables(runtime, host):
+        if not _cli_table_has_match_entries(runtime, host, table_name):
             continue
-        dump = _cli_run(kathara_api, host, f"table_dump_entry {table_name} 0")
+        dump = _cli_run(runtime, host, f"table_dump_entry {table_name} 0")
         try:
             _, action_params = _parse_action_from_dump_entry(dump)
         except RuntimeError:
@@ -74,8 +72,8 @@ def _list_populated_match_tables(kathara_api: KatharaAPIALL, host: str) -> list[
     return populated
 
 
-def _find_table_with_entries(kathara_api: KatharaAPIALL, host: str, *, require_action_params: bool = False) -> str:
-    populated = _list_populated_match_tables(kathara_api, host)
+def _find_table_with_entries(runtime, host: str, *, require_action_params: bool = False) -> str:
+    populated = _list_populated_match_tables(runtime, host)
     if require_action_params:
         populated = [(name, params) for name, params in populated if params]
     if not populated:
@@ -105,14 +103,14 @@ def _corrupt_action_param(param: str) -> str:
     return _MISCONFIG_PORT
 
 
-def _misconfigure_first_table_entry(kathara_api: KatharaAPIALL, host: str) -> dict:
-    table_name = _find_table_with_entries(kathara_api, host, require_action_params=True)
-    dump_before = _cli_run(kathara_api, host, f"table_dump_entry {table_name} 0")
+def _misconfigure_first_table_entry(runtime, host: str) -> dict:
+    table_name = _find_table_with_entries(runtime, host, require_action_params=True)
+    dump_before = _cli_run(runtime, host, f"table_dump_entry {table_name} 0")
     action_name, params = _parse_action_from_dump_entry(dump_before)
     corrupted_params = [_corrupt_action_param(param) for param in params] if params else [_MISCONFIG_PORT]
     modify_cmd = f"table_modify {table_name} {action_name} 0 " + " ".join(corrupted_params)
-    _cli_run(kathara_api, host, modify_cmd)
-    dump_after = _cli_run(kathara_api, host, f"table_dump_entry {table_name} 0")
+    _cli_run(runtime, host, modify_cmd)
+    dump_after = _cli_run(runtime, host, f"table_dump_entry {table_name} 0")
     _, expected_params = _parse_action_from_dump_entry(dump_after)
     return {
         "table_name": table_name,
@@ -127,9 +125,9 @@ def _entry_matches_misconfig(dump_output: str, expected: dict) -> bool:
     return action_name == expected["action_name"] and params == expected["expected_params"]
 
 
-def _detect_misconfigured_entry(kathara_api: KatharaAPIALL, host: str) -> tuple[bool, str | None]:
-    for table_name, _ in _list_populated_match_tables(kathara_api, host):
-        dump = _cli_run(kathara_api, host, f"table_dump_entry {table_name} 0")
+def _detect_misconfigured_entry(runtime, host: str) -> tuple[bool, str | None]:
+    for table_name, _ in _list_populated_match_tables(runtime, host):
+        dump = _cli_run(runtime, host, f"table_dump_entry {table_name} 0")
         if "ffffffffffff" in dump.lower():
             return True, table_name
         try:
@@ -162,18 +160,16 @@ class P4HeaderDefinitionErrorBase:
 
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()
-        self.net_env = get_net_env_instance(scenario_name, **kwargs)
-        self.kathara_api = KatharaAPIALL(lab_name=self.net_env.lab.name)
-        self.injector = FaultInjectorBase(lab_name=self.net_env.lab.name)
+        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
         self.faulty_devices: list[str] = []
 
     def inject_fault(self, params: P4HeaderDefinitionErrorParams):
         host = params.host_name
         self.faulty_devices = [host]
-        p4_name = params.p4_name if params.p4_name is not None else self.kathara_api.exec_cmd(
+        p4_name = params.p4_name if params.p4_name is not None else self.runtime.exec(
             host, "echo *.p4 | sed 's/\\.p4//'"
         )
-        self.kathara_api.exec_cmd(
+        self.runtime.exec(
             host,
             f"cp {p4_name}.p4 {p4_name}.p4.bak && "
             f"rm {p4_name}.json && "
@@ -182,19 +178,19 @@ class P4HeaderDefinitionErrorBase:
             f"-e 's/(bit<16>[[:space:]]+ether_type;)/\\1\\n    \\1/g' "
             f"{p4_name}.p4 ",
         )
-        self.kathara_api.exec_cmd(host, "pkill -f simple_switch")
-        self.kathara_api.exec_cmd(host, f"./hostlab/{host}.startup")
+        self.runtime.exec(host, "pkill -f simple_switch")
+        self.runtime.exec(host, f"./hostlab/{host}.startup")
 
     def verify_fault(self, params: P4HeaderDefinitionErrorParams) -> dict:
         """Verify the P4 JSON is missing (compilation failed) or switch is not running."""
         host = params.host_name
-        p4_name = params.p4_name if params.p4_name is not None else self.kathara_api.exec_cmd(
+        p4_name = params.p4_name if params.p4_name is not None else self.runtime.exec(
             host, "echo *.p4 | sed 's/\\.p4//'"
         )
-        json_check = self.kathara_api.exec_cmd(
+        json_check = self.runtime.exec(
             host, f"ls {p4_name}.json 2>/dev/null && echo exists || echo missing"
         ).strip()
-        switch_check = self.kathara_api.exec_cmd(
+        switch_check = self.runtime.exec(
             host, "pgrep -a simple_switch 2>/dev/null || echo NONE"
         ).strip()
         json_exists = "exists" in json_check
@@ -256,36 +252,34 @@ class P4CompilationErrorParserStateBase:
 
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()
-        self.net_env = get_net_env_instance(scenario_name, **kwargs)
-        self.kathara_api = KatharaAPIALL(lab_name=self.net_env.lab.name)
-        self.injector = FaultInjectorBase(lab_name=self.net_env.lab.name)
+        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
         self.faulty_devices: list[str] = []
 
     def inject_fault(self, params: P4CompilationErrorParserStateParams):
         host = params.host_name
         self.faulty_devices = [host]
-        p4_name = params.p4_name if params.p4_name is not None else self.kathara_api.exec_cmd(
+        p4_name = params.p4_name if params.p4_name is not None else self.runtime.exec(
             host, "echo *.p4 | sed 's/\\.p4//'"
         )
-        self.kathara_api.exec_cmd(
+        self.runtime.exec(
             host,
             f"cp {p4_name}.p4 {p4_name}.p4.bak && "
             f"rm {p4_name}.json && "
             f"sed -Ei 's/state /states /g' {p4_name}.p4 ",
         )
-        self.kathara_api.exec_cmd(host, "pkill -f simple_switch")
-        self.kathara_api.exec_cmd(host, f"./hostlab/{host}.startup")
+        self.runtime.exec(host, "pkill -f simple_switch")
+        self.runtime.exec(host, f"./hostlab/{host}.startup")
 
     def verify_fault(self, params: P4CompilationErrorParserStateParams) -> dict:
         """Verify the P4 JSON is missing (compilation failed) or switch is not running."""
         host = params.host_name
-        p4_name = params.p4_name if params.p4_name is not None else self.kathara_api.exec_cmd(
+        p4_name = params.p4_name if params.p4_name is not None else self.runtime.exec(
             host, "echo *.p4 | sed 's/\\.p4//'"
         )
-        json_check = self.kathara_api.exec_cmd(
+        json_check = self.runtime.exec(
             host, f"ls {p4_name}.json 2>/dev/null && echo exists || echo missing"
         ).strip()
-        switch_check = self.kathara_api.exec_cmd(
+        switch_check = self.runtime.exec(
             host, "pgrep -a simple_switch 2>/dev/null || echo NONE"
         ).strip()
         json_exists = "exists" in json_check
@@ -346,25 +340,23 @@ class P4TableEntryMissingBase:
 
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()
-        self.net_env = get_net_env_instance(scenario_name, **kwargs)
-        self.kathara_api = KatharaAPIALL(lab_name=self.net_env.lab.name)
-        self.injector = FaultInjectorBase(lab_name=self.net_env.lab.name)
+        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
         self.faulty_devices: list[str] = []
         self._cleared_table: str | None = None
 
     def inject_fault(self, params: P4TableEntryMissingParams):
         host = params.host_name
         self.faulty_devices = [host]
-        table_name = _find_table_with_entries(self.kathara_api, host)
-        _cli_run(self.kathara_api, host, f"table_clear {table_name}")
+        table_name = _find_table_with_entries(self.runtime, host)
+        _cli_run(self.runtime, host, f"table_clear {table_name}")
         self._cleared_table = table_name
         logger.info(f"Injected fault: Deleted table entries on {host} ({table_name})")
 
     def verify_fault(self, params: P4TableEntryMissingParams) -> dict:
         """Verify the forwarding table has no match entries."""
         host = params.host_name
-        table_name = self._cleared_table or _find_table_with_entries(self.kathara_api, host)
-        table_dump = _cli_run(self.kathara_api, host, f"table_dump {table_name}").strip()
+        table_name = self._cleared_table or _find_table_with_entries(self.runtime, host)
+        table_dump = _cli_run(self.runtime, host, f"table_dump {table_name}").strip()
         verified = "0 entries" in table_dump or table_dump == "" or "Dumping entry" not in table_dump
         return build_verify_result(
             root_cause_name=self.root_cause_name,
@@ -421,16 +413,14 @@ class P4TableEntryMisconfigBase:
 
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()
-        self.net_env = get_net_env_instance(scenario_name, **kwargs)
-        self.kathara_api = KatharaAPIALL(lab_name=self.net_env.lab.name)
-        self.injector = FaultInjectorBase(lab_name=self.net_env.lab.name)
+        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
         self.faulty_devices: list[str] = []
         self._misconfig_details: dict | None = None
 
     def inject_fault(self, params: P4TableEntryMisconfigParams):
         host = params.host_name
         self.faulty_devices = [host]
-        self._misconfig_details = _misconfigure_first_table_entry(self.kathara_api, host)
+        self._misconfig_details = _misconfigure_first_table_entry(self.runtime, host)
         logger.info(
             f"Injected fault: Misconfigured table entry on {host} "
             f"({self._misconfig_details['table_name']} handle {self._misconfig_details['entry_handle']})"
@@ -442,10 +432,10 @@ class P4TableEntryMisconfigBase:
         if self._misconfig_details:
             table_name = self._misconfig_details["table_name"]
             handle = self._misconfig_details["entry_handle"]
-            dump = _cli_run(self.kathara_api, host, f"table_dump_entry {table_name} {handle}")
+            dump = _cli_run(self.runtime, host, f"table_dump_entry {table_name} {handle}")
             verified = _entry_matches_misconfig(dump, self._misconfig_details)
         else:
-            verified, table_name = _detect_misconfigured_entry(self.kathara_api, host)
+            verified, table_name = _detect_misconfigured_entry(self.runtime, host)
         return build_verify_result(
             root_cause_name=self.root_cause_name,
             faulty_devices=self.faulty_devices,
@@ -506,33 +496,31 @@ class P4MPLSLabelLimitExceededBase:
 
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()
-        self.net_env = get_net_env_instance(scenario_name, **kwargs)
-        self.kathara_api = KatharaAPIALL(lab_name=self.net_env.lab.name)
-        self.injector = FaultInjectorBase(lab_name=self.net_env.lab.name)
+        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
         self.faulty_devices: list[str] = []
         self.logger = system_logger
 
     def inject_fault(self, params: P4MPLSLabelLimitExceededParams):
         host = params.host_name
         self.faulty_devices = [host]
-        self.kathara_api.exec_cmd(
+        self.runtime.exec(
             host,
             "cp mpls.p4 mpls.p4.bak && "
             "rm mpls.json && "
             "sed -Ei 's/#define[[:space:]]+CONST_MAX_LABELS[[:space:]]+10/#define CONST_MAX_LABELS 2/g' mpls.p4 ",
         )
-        self.kathara_api.exec_cmd(host, "pkill -f simple_switch")
-        self.kathara_api.exec_cmd(host, f"./hostlab/{host}.startup")
+        self.runtime.exec(host, "pkill -f simple_switch")
+        self.runtime.exec(host, f"./hostlab/{host}.startup")
         self.logger.info(f"Injected MPLS label limit exceeded fault on device: {host}")
 
     def verify_fault(self, params: P4MPLSLabelLimitExceededParams) -> dict:
         """Verify CONST_MAX_LABELS was changed to 2 and the JSON may be missing."""
         host = params.host_name
-        const_check = self.kathara_api.exec_cmd(
+        const_check = self.runtime.exec(
             host,
             "grep 'CONST_MAX_LABELS 2' mpls.p4 2>/dev/null && echo found || echo absent",
         ).strip()
-        json_check = self.kathara_api.exec_cmd(
+        json_check = self.runtime.exec(
             host, "ls mpls.json 2>/dev/null && echo exists || echo missing"
         ).strip()
         const_modified = "found" in const_check

@@ -6,7 +6,6 @@ import os
 import unittest
 import unittest.mock
 
-from nika.cli.main import app
 from nika.utils.agent_config import ENV_MCP_AGENT_MODEL, resolve_agent_model
 from nika.utils.session_store import SessionStore
 from tests.agents._assertions import assert_phase_messages, assert_submission_fields
@@ -49,27 +48,7 @@ class McpAgentPipelineTest(CommonPipelineSteps, OrderedPipelineTestCase):
 
     def test_step_03_run_mcp_agent(self) -> None:
         self.assertIsNotNone(self.session_id)
-        result = self.runner.invoke(
-            app,
-            [
-                "agent",
-                "run",
-                "--agent",
-                "byo.mcp_agent",
-                "--model",
-                MCP_AGENT_MODEL,
-                "--max-steps",
-                "20",
-                "--session_id",
-                self.session_id,
-            ],
-        )
-        self.assertEqual(
-            result.exit_code,
-            0,
-            f"agent run exited {result.exit_code}:\n{result.output}"
-            + (f"\nException: {result.exception}" if result.exception else ""),
-        )
+        self._run_agent(agent_type="byo.mcp_agent", model=MCP_AGENT_MODEL, max_steps=20)
         row = SessionStore().get_session(self.session_id)
         self.assertEqual(row.get("agent_type"), "byo.mcp_agent")
 

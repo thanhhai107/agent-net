@@ -1,14 +1,12 @@
 import logging
 
+from nika.orchestrator.problems.context import init_problem
 from pydantic import BaseModel, Field
 
-from nika.generator.fault.injector_base import FaultInjectorBase
-from nika.net_env.net_env_pool import get_net_env_instance
 from nika.orchestrator.problems.problem_base import ProblemMeta, RootCauseCategory, TaskDescription, TaskLevel, build_verify_result
 from nika.orchestrator.tasks.detection import DetectionTask
 from nika.orchestrator.tasks.localization import LocalizationTask
 from nika.orchestrator.tasks.rca import RCATask
-from nika.service.kathara import KatharaAPIALL, KatharaBaseAPI
 from nika.utils.logger import system_logger
 
 logger = system_logger
@@ -33,20 +31,18 @@ class Bmv2SwitchDownBase:
 
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()
-        self.net_env = get_net_env_instance(scenario_name, **kwargs)
-        self.kathara_api = KatharaAPIALL(lab_name=self.net_env.lab.name)
-        self.injector = FaultInjectorBase(lab_name=self.net_env.lab.name)
+        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
         self.faulty_devices: list[str] = []
 
     def inject_fault(self, params: Bmv2SwitchDownParams):
         host = params.host_name
         self.faulty_devices = [host]
-        self.injector.inject_bmv2_down(host_name=host)
+        self.runtime.exec(host, "pkill simple_switch")
 
     def verify_fault(self, params: Bmv2SwitchDownParams) -> dict:
         """Verify simple_switch process is NOT running on the BMv2 switch."""
         host = params.host_name
-        pgrep_output = self.kathara_api.exec_cmd(host, "pgrep -a simple_switch 2>/dev/null || echo NONE").strip()
+        pgrep_output = self.runtime.exec(host, "pgrep -a simple_switch 2>/dev/null || echo NONE").strip()
         verified = pgrep_output == "NONE" or "simple_switch" not in pgrep_output
         return build_verify_result(
             root_cause_name=self.root_cause_name,
@@ -108,9 +104,7 @@ class FrrDownBase:
 
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()
-        self.net_env = get_net_env_instance(scenario_name, **kwargs)
-        self.kathara_api = KatharaBaseAPI(lab_name=self.net_env.lab.name)
-        self.injector = FaultInjectorBase(lab_name=self.net_env.lab.name)
+        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
         self.faulty_devices: list[str] = []
 
     def inject_fault(self, params: FrrDownParams):
@@ -119,14 +113,14 @@ class FrrDownBase:
         # systemctl is a no-op in Kathara; kill FRR daemons directly with pkill.
         # watchfrr must be killed first so it does not restart the routing daemons.
         for daemon in ("watchfrr", "zebra", "mgmtd", "ospfd", "bgpd", "staticd", "ospf6d", "ripd"):
-            self.injector.inject_process_kill(host_name=host, process_name=daemon)
+            self.runtime.kill_process(host, daemon)
 
     def verify_fault(self, params: FrrDownParams) -> dict:
         """Verify FRR is down by checking zebra is not running and routing is unavailable."""
         host = params.host_name
-        zebra_output = self.kathara_api.exec_cmd(host, "pgrep -a zebra 2>/dev/null || echo NONE").strip()
+        zebra_output = self.runtime.exec(host, "pgrep -a zebra 2>/dev/null || echo NONE").strip()
         # show version still succeeds in FRR 9.x when zebra is down; use show ip route instead.
-        vtysh_output = self.kathara_api.exec_cmd(
+        vtysh_output = self.runtime.exec(
             host, "vtysh -c 'show ip route' 2>&1 | head -3"
         ).strip()
         zebra_down = zebra_output == "NONE" or "zebra" not in zebra_output

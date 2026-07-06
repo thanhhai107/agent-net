@@ -10,7 +10,7 @@ from pydantic import ValidationError
 
 from nika.orchestrator.problems.prob_pool import get_problem_instance, list_avail_problem_names
 from nika.orchestrator.problems.problem_base import TaskLevel
-from nika.utils.logger import bind_session_dir, log_event
+from nika.utils.logger import bind_session_dir, log_error_event, log_event
 from nika.utils.session import Session
 from nika.utils.session_store import SessionStore
 
@@ -86,7 +86,11 @@ def inject_failure(
         if problem_name not in list_avail_problem_names():
             raise ValueError(f"Unknown problem name: {problem_name}")
 
-    scenario_params = session.scenario_params if hasattr(session, "scenario_params") else {}
+    scenario_params = dict(session.scenario_params if hasattr(session, "scenario_params") else {})
+    from nika.runtime.factory import resolve_backend
+
+    session_meta = {k: v for k, v in session.__dict__.items() if k != "store"}
+    scenario_params.setdefault("backend", resolve_backend(session_meta))
     overrides = dict(param_overrides or {})
     if overrides and len(problem_names) != 1:
         raise ValueError("When using --set parameters, inject exactly one problem at a time.")
@@ -169,9 +173,43 @@ def inject_failure(
         failure_rows.append((failure_id, problem_names[0]))
 
     if ParamsClass is not None:
-        inject_problem.inject_fault(params=fault_params)
+        try:
+            inject_problem.inject_fault(params=fault_params)
+        except Exception as exc:
+            for failure_id, problem_name in failure_rows:
+                store.update_failure_injection(
+                    session.session_id,
+                    failure_id,
+                    {"status": "inject_failed", "error": str(exc)},
+                )
+            log_error_event(
+                "failure_inject_error",
+                f"Failure injection failed: session={session.session_id}, problems={problem_names}: {exc}",
+                session_id=session.session_id,
+                problems=problem_names,
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            raise
     else:
-        inject_problem.inject_fault()
+        try:
+            inject_problem.inject_fault()
+        except Exception as exc:
+            for failure_id, problem_name in failure_rows:
+                store.update_failure_injection(
+                    session.session_id,
+                    failure_id,
+                    {"status": "inject_failed", "error": str(exc)},
+                )
+            log_error_event(
+                "failure_inject_error",
+                f"Failure injection failed: session={session.session_id}, problems={problem_names}: {exc}",
+                session_id=session.session_id,
+                problems=problem_names,
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            raise
 
     _sync_attrs = (
         "faulty_devices",
@@ -206,7 +244,7 @@ def inject_failure(
                 failure_id,
                 {"status": "verify_failed", "verify_result": verify_payload},
             )
-        log_event(
+        log_error_event(
             "failure_verify_failed",
             f"Failure verification failed: session={session.session_id}, problems={problem_names}",
             session_id=session.session_id,

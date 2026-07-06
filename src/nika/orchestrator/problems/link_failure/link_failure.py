@@ -2,14 +2,13 @@ import shlex
 
 from pydantic import BaseModel, Field
 
-from nika.generator.fault.injector_base import FaultInjectorBase
-from nika.net_env.net_env_pool import get_net_env_instance
+from nika.orchestrator.problems.context import init_problem
 from nika.orchestrator.problems.problem_base import ProblemMeta, RootCauseCategory, TaskDescription, TaskLevel, build_verify_result
 from nika.orchestrator.tasks.detection import DetectionTask
 from nika.orchestrator.tasks.localization import LocalizationTask
 from nika.orchestrator.tasks.rca import RCATask
-from nika.service.kathara import KatharaBaseAPI
 from nika.utils.logger import system_logger
+
 
 # ==================================================================
 # Problem: Link failure by ip link down on host interface
@@ -34,9 +33,7 @@ class LinkFailureBase:
 
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()
-        self.net_env = get_net_env_instance(scenario_name, **kwargs)
-        self.kathara_api = KatharaBaseAPI(lab_name=self.net_env.lab.name)
-        self.injector = FaultInjectorBase(lab_name=self.net_env.lab.name)
+        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
         self.faulty_devices: list[str] = []
         self.faulty_intf = "eth0"
         self.down_time = 1
@@ -46,17 +43,13 @@ class LinkFailureBase:
         host = params.host_name
         self.faulty_devices = [host]
         self.faulty_intf = params.intf_name
-        self.injector.inject_intf_down(
-            host_name=host,
-            intf_name=params.intf_name,
-        )
+        self.runtime.set_interface_state(host, params.intf_name, "down")
 
     def verify_fault(self, params: LinkFailureParams) -> dict:
         """Verify the link-down fault is active by reading the interface operstate from the container."""
         host = params.host_name
         intf = params.intf_name
-        output = self.kathara_api.exec_cmd(host, f"cat /sys/class/net/{shlex.quote(intf)}/operstate")
-        operstate = output.strip().lower()
+        operstate = self.runtime.get_interface_operstate(host, intf)
         return build_verify_result(
             root_cause_name=self.root_cause_name,
             faulty_devices=self.faulty_devices,
@@ -117,8 +110,7 @@ class LinkFlapBase:
 
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()
-        self.net_env = get_net_env_instance(scenario_name, **kwargs)
-        self.kathara_api = KatharaBaseAPI(lab_name=self.net_env.lab.name)
+        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
         self.faulty_devices: list[str] = []
         self.faulty_intf = "eth0"
 
@@ -157,7 +149,7 @@ while true; do
 done
 """
         write_cmd = f"cat <<'EOF' > {shlex.quote(script_path)}\n{script}\nEOF\nchmod +x {shlex.quote(script_path)}"
-        self.kathara_api.exec_cmd(host, write_cmd)
+        self.runtime.exec(host, write_cmd)
 
         stop_previous_cmd = (
             f"if [ -f {shlex.quote(pid_path)} ]; then "
@@ -165,10 +157,10 @@ done
             f"rm -f {shlex.quote(pid_path)}; "
             "fi"
         )
-        self.kathara_api.exec_cmd(host, stop_previous_cmd)
+        self.runtime.exec(host, stop_previous_cmd)
 
         start_cmd = f"nohup {shlex.quote(script_path)} > {shlex.quote(log_path)} 2>&1 < /dev/null &"
-        self.kathara_api.exec_cmd(host, start_cmd)
+        self.runtime.exec(host, start_cmd)
         system_logger.info(f"Injected link flap on {host}:{intf_name} (down_time={down_time}, up_time={up_time})")
 
     def verify_fault(self, params: LinkFlapParams) -> dict:
@@ -180,7 +172,7 @@ done
             f"if [ -f {pid_path} ] && kill -0 $(cat {pid_path}) 2>/dev/null; "
             f"then echo running; else echo not_running; fi"
         )
-        output = self.kathara_api.exec_cmd(host, check_cmd).strip()
+        output = self.runtime.exec(host, check_cmd).strip()
         return build_verify_result(
             root_cause_name=self.root_cause_name,
             faulty_devices=self.faulty_devices,
@@ -239,8 +231,7 @@ class LinkDetachBase:
 
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()
-        self.net_env = get_net_env_instance(scenario_name, **kwargs)
-        self.kathara_api = KatharaBaseAPI(lab_name=self.net_env.lab.name)
+        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
         self.faulty_devices: list[str] = []
         self.faulty_intf = "eth0"
 
@@ -249,14 +240,14 @@ class LinkDetachBase:
         self.faulty_devices = [host]
         self.faulty_intf = params.intf_name
         intf_name = params.intf_name
-        self.kathara_api.exec_cmd(host, f"ip link del {intf_name}")
+        self.runtime.exec(host, f"ip link del {intf_name}")
         system_logger.info(f"Injected link detach on {host}:{intf_name}")
 
     def verify_fault(self, params: LinkDetachParams) -> dict:
         """Verify the link-detach fault is active by confirming the interface no longer exists in the container."""
         host = params.host_name
         intf = params.intf_name
-        output = self.kathara_api.exec_cmd(host, f"ip link show {shlex.quote(intf)} 2>&1")
+        output = self.runtime.exec(host, f"ip link show {shlex.quote(intf)} 2>&1")
         detached = "does not exist" in output.lower() or "no such device" in output.lower()
         return build_verify_result(
             root_cause_name=self.root_cause_name,
@@ -316,8 +307,7 @@ class LinkFragBase:
 
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()
-        self.net_env = get_net_env_instance(scenario_name, **kwargs)
-        self.kathara_api = KatharaBaseAPI(lab_name=self.net_env.lab.name)
+        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
         self.faulty_devices: list[str] = []
         self.mtu = 10
 
@@ -330,7 +320,7 @@ class LinkFragBase:
         self.faulty_devices = [host]
         mtu = params.mtu
         self.mtu = mtu
-        self.kathara_api.exec_cmd(
+        self.runtime.exec(
             host,
             f"iptables -A OUTPUT {self._frag_drop_rule_args(mtu)}",
         )
@@ -342,8 +332,8 @@ class LinkFragBase:
         mtu = params.mtu
         rule_args = self._frag_drop_rule_args(mtu)
         check_cmd = f"iptables -C OUTPUT {rule_args} >/dev/null 2>&1 && echo present || echo absent"
-        check_output = self.kathara_api.exec_cmd(host, check_cmd).strip()
-        iptables_output = self.kathara_api.exec_cmd(host, "iptables -S OUTPUT").strip()
+        check_output = self.runtime.exec(host, check_cmd).strip()
+        iptables_output = self.runtime.exec(host, "iptables -S OUTPUT").strip()
         expected_rule = f"-A OUTPUT {rule_args}"
         return build_verify_result(
             root_cause_name=self.root_cause_name,

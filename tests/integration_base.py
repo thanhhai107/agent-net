@@ -1,77 +1,135 @@
-"""Shared bases for Kathara integration tests."""
+"""Shared bases for integration tests."""
 
 from __future__ import annotations
 
 import json
 import os
-import re
 import unittest
 from pathlib import Path
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from typer.testing import CliRunner
 
 from nika.cli.main import app
 from nika.service.mcp_server.mcp_session_context import SESSION_ID_ENV, get_lab_name
 from nika.utils.session_store import SessionStore
+from nika.workflows.env.start import start_net_env
 from nika.workflows.eval.clean import remove_session_results
+from nika.workflows.failure.inject import inject_failure as inject_failure_workflow
+from nika.workflows.session.close import close_session
 
 
-class CliIntegrationTestCase(unittest.TestCase):
-    """Common CLI runner and env lifecycle helpers."""
+def _parse_env_run_args(extra_args: list[str] | None) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {}
+    args = list(extra_args or [])
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg in ("-s", "--size") and i + 1 < len(args):
+            kwargs["topo_size"] = args[i + 1]
+            i += 2
+        elif arg == "--backend" and i + 1 < len(args):
+            kwargs["backend"] = args[i + 1]
+            i += 2
+        elif arg == "--no-redeploy":
+            kwargs["redeploy"] = False
+            i += 1
+        elif arg == "--instance-tag" and i + 1 < len(args):
+            kwargs["instance_tag"] = args[i + 1]
+            i += 2
+        elif arg == "--result_dir" and i + 1 < len(args):
+            kwargs["result_dir"] = args[i + 1]
+            i += 2
+        else:
+            raise ValueError(f"Unsupported env run arg: {arg!r}")
+    return kwargs
 
-    runner: CliRunner
 
-    @classmethod
-    def setUpClass(cls) -> None:
-        cls.runner = CliRunner()
+def _parse_inject_args(extra_args: list[str]) -> dict[str, str]:
+    overrides: dict[str, str] = {}
+    i = 0
+    while i < len(extra_args):
+        if extra_args[i] == "--set" and i + 1 < len(extra_args):
+            key, _, value = extra_args[i + 1].partition("=")
+            overrides[key] = value
+            i += 2
+        else:
+            i += 1
+    return overrides
 
-    def _invoke_ok(self, args: list[str]) -> str:
-        result = self.runner.invoke(app, args)
-        self.assertEqual(result.exit_code, 0, result.output)
-        return result.output
 
-    @classmethod
-    def _invoke_ok_class(cls, runner: CliRunner, args: list[str]) -> str:
-        result = runner.invoke(app, args)
-        if result.exit_code != 0:
-            raise RuntimeError(f"`nika {' '.join(args)}` exited {result.exit_code}:\n{result.output}")
-        return result.output
+class IntegrationTestCase(unittest.TestCase):
+    """Workflow API helpers and shared session assertions."""
 
     def _start_env(self, scenario: str, extra_args: list[str] | None = None) -> str:
-        args = ["env", "run", scenario, *(extra_args or [])]
-        result = self.runner.invoke(app, args)
-        if result.exit_code != 0:
-            raise RuntimeError(f"nika env run failed:\n{result.output}")
-        match = re.search(r"session_id=(\S+)", result.output.strip())
-        if match is None:
-            raise RuntimeError(f"session_id not found in env run output:\n{result.output}")
-        return match.group(1)
+        kwargs = _parse_env_run_args(extra_args)
+        topo_size = kwargs.pop("topo_size", None)
+        return start_net_env(scenario, topo_size, **kwargs)
 
     @classmethod
     def _start_env_class(cls, scenario: str, extra_args: list[str] | None = None) -> str:
-        output = cls._invoke_ok_class(cls.runner, ["env", "run", scenario, *(extra_args or [])])
-        return cls._parse_session_id(output)
-
-    @staticmethod
-    def _parse_session_id(output: str) -> str:
-        match = re.search(r"session_id=(\S+)", output.strip())
-        if match is None:
-            raise RuntimeError(f"session_id not found in env run output:\n{output}")
-        return match.group(1)
+        kwargs = _parse_env_run_args(extra_args)
+        topo_size = kwargs.pop("topo_size", None)
+        return start_net_env(scenario, topo_size, **kwargs)
 
     def _close_session(self, session_id: str) -> None:
-        self.runner.invoke(app, ["session", "close", "--session_id", session_id, "-y"])
+        close_session(session_id=session_id)
         self._remove_session_results(session_id)
 
     @classmethod
     def _close_session_class(cls, session_id: str) -> None:
-        cls.runner.invoke(app, ["session", "close", "--session_id", session_id, "-y"])
+        try:
+            close_session(session_id=session_id)
+        except Exception:
+            pass
         cls._remove_session_results(session_id)
 
     @staticmethod
     def _remove_session_results(session_id: str) -> None:
         remove_session_results(session_id)
+
+    def _inject_failure(
+        self,
+        problem: str,
+        params: dict[str, str] | None = None,
+        *,
+        session_id: str | None = None,
+    ) -> None:
+        sid = session_id or getattr(self, "session_id", None)
+        if sid is None:
+            raise ValueError("session_id is required")
+        inject_params = dict(
+            params
+            if params is not None
+            else self._benchmark_inject_from_yaml(
+                self.SCENARIO,
+                problem,
+                self._topo_size_from_env_args(),
+            )
+        )
+        inject_failure_workflow([problem], session_id=sid, param_overrides=inject_params)
+
+    def _run_agent(
+        self,
+        *,
+        agent_type: str,
+        model: str | None = None,
+        llm_provider: str | None = None,
+        max_steps: int | None = None,
+        reasoning_effort: str | None = None,
+        session_id: str | None = None,
+    ) -> None:
+        from nika.workflows.agent.run import start_agent
+
+        start_agent(
+            agent_type,
+            llm_provider,
+            model,
+            max_steps,
+            session_id=session_id or getattr(self, "session_id", None),
+            reasoning_effort=reasoning_effort,
+            stream_output=False,
+        )
 
     def _session_row(self, session_id: str | None = None) -> dict:
         sid = session_id or getattr(self, "session_id", None)
@@ -120,53 +178,44 @@ class CliIntegrationTestCase(unittest.TestCase):
         problem: str,
         topo_size: str = "",
     ) -> dict[str, str]:
-        from nika.config import BENCHMARK_DIR
-        from nika.workflows.benchmark.load_config import load_benchmark_yaml
+        from tests.benchmark.helpers import inject_params_from_benchmark_yaml
 
-        normalized_topo = topo_size or ""
-        for yaml_name in ("benchmark_full.yaml", "benchmark_selected.yaml"):
-            path = BENCHMARK_DIR / yaml_name
-            if not path.is_file():
-                continue
-            for row in load_benchmark_yaml(path):
-                if (
-                    row["scenario"] == scenario
-                    and row["problem"] == problem
-                    and (row.get("topo_size") or "") == normalized_topo
-                ):
-                    return dict(row["inject"])
-        raise ValueError(
-            f"No benchmark inject entry for scenario={scenario!r}, problem={problem!r}, "
-            f"topo_size={topo_size!r}; pass explicit inject parameters."
-        )
+        return inject_params_from_benchmark_yaml(scenario, problem, topo_size)
 
-    def _inject_via_cli(self, problem: str, params: dict[str, str] | None = None) -> None:
-        inject_params = dict(
-            params
-            if params is not None
-            else self._benchmark_inject_from_yaml(
-                self.SCENARIO,
-                problem,
-                self._topo_size_from_env_args(),
-            )
-        )
-        args = ["failure", "inject", problem, "--session_id", self.session_id]
-        for key, value in inject_params.items():
-            args += ["--set", f"{key}={value}"]
-        self._invoke_ok(args)
-
-    def _assert_failure_injected(self, problem: str) -> None:
-        ps_output = self._invoke_ok(["failure", "ps", "--session_id", self.session_id])
-        self.assertIn(f"problem={problem}", ps_output)
-        self.assertIn("status=injected", ps_output)
-        failures = SessionStore().list_failure_injections(session_id=self.session_id)
+    def _assert_failure_injected(self, problem: str, session_id: str | None = None) -> None:
+        sid = session_id or getattr(self, "session_id", None)
+        if sid is None:
+            raise ValueError("session_id is required")
+        failures = SessionStore().list_failure_injections(session_id=sid)
         matching = [row for row in failures if row.get("problem_name") == problem]
         self.assertTrue(matching, f"No failure record for {problem}")
         self.assertEqual(matching[-1].get("status"), "injected")
 
 
-class PerTestEnvTestCase(CliIntegrationTestCase):
-    """Start a fresh Kathara lab per test; bind operations to NIKA_SESSION_ID."""
+class CliIntegrationTestCase(IntegrationTestCase):
+    """Typer CLI runner for tests that exercise command-line behavior."""
+
+    runner: CliRunner
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.runner = CliRunner()
+
+    def _invoke_ok(self, args: list[str]) -> str:
+        result = self.runner.invoke(app, args)
+        self.assertEqual(result.exit_code, 0, result.output)
+        return result.output
+
+    @classmethod
+    def _invoke_ok_class(cls, runner: CliRunner, args: list[str]) -> str:
+        result = runner.invoke(app, args)
+        if result.exit_code != 0:
+            raise RuntimeError(f"`nika {' '.join(args)}` exited {result.exit_code}:\n{result.output}")
+        return result.output
+
+
+class PerTestEnvTestCase(IntegrationTestCase):
+    """Start a fresh lab per test; bind operations to NIKA_SESSION_ID."""
 
     SCENARIO: ClassVar[str]
     ENV_RUN_ARGS: ClassVar[list[str]] = []
@@ -199,32 +248,29 @@ class PerTestEnvTestCase(CliIntegrationTestCase):
         return self._session_row(self.session_id)["lab_name"]
 
 
-class SharedSessionTestCase(CliIntegrationTestCase):
+class SharedSessionTestCase(IntegrationTestCase):
     """Start one lab for the whole test class; optionally inject a failure up front."""
 
     SCENARIO: ClassVar[str]
     ENV_RUN_ARGS: ClassVar[list[str]] = []
     INJECT_PROBLEM: ClassVar[str | None] = None
     INJECT_ARGS: ClassVar[list[str]] = []
+    INJECT_PARAMS: ClassVar[dict[str, str] | None] = None
 
     session_id: str
 
     @classmethod
     def setUpClass(cls) -> None:
-        super().setUpClass()
         cls.session_id = cls._start_env_class(cls.SCENARIO, cls.ENV_RUN_ARGS)
         if cls.INJECT_PROBLEM is not None:
-            inject_args = [
-                "failure",
-                "inject",
-                cls.INJECT_PROBLEM,
-                "--session_id",
-                cls.session_id,
-                *cls.INJECT_ARGS,
-            ]
+            params = dict(cls.INJECT_PARAMS) if cls.INJECT_PARAMS else _parse_inject_args(cls.INJECT_ARGS)
             try:
-                cls._invoke_ok_class(cls.runner, inject_args)
-            except RuntimeError as exc:
+                inject_failure_workflow(
+                    [cls.INJECT_PROBLEM],
+                    session_id=cls.session_id,
+                    param_overrides=params or None,
+                )
+            except Exception as exc:
                 cls._close_session_class(cls.session_id)
                 raise exc
 
@@ -233,7 +279,7 @@ class SharedSessionTestCase(CliIntegrationTestCase):
         cls._close_session_class(cls.session_id)
 
 
-class OrderedPipelineTestCase(CliIntegrationTestCase):
+class OrderedPipelineTestCase(IntegrationTestCase):
     """Ordered step tests that share session state across methods in one class."""
 
     session_id: str | None = None

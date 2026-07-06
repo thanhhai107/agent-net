@@ -227,7 +227,7 @@ def session_close(
 
     The Kathará lab is undeployed, all failure records are marked ended,
     and the runtime session file is removed. Use ``nika session wipe`` to
-    close every running session and remove leftover Kathara resources.
+    close every running session and remove leftover Kathara and Containerlab resources.
     """
     from nika.workflows.session.close import close_session
 
@@ -252,20 +252,22 @@ def session_close(
 def session_wipe(
     yes: bool = typer.Option(False, "-y", "--yes", help="Skip the confirmation prompt."),
 ) -> None:
-    """Close all running sessions and wipe leftover Kathara resources.
+    """Close all running sessions and wipe leftover lab resources.
 
     Every running session is closed (lab undeployed, failure records ended,
-    runtime session file removed). Also runs ``kathara wipe`` to remove
-    leftover containers and networks when session files are missing.
+    runtime session file removed). Also runs ``kathara wipe`` and
+    ``clab destroy --all`` to remove leftover containers and networks when
+    session files are missing.
     """
     from nika.utils.session_store import SessionStore
     from nika.workflows.session.close import close_session
 
     running = SessionStore().list_running_sessions()
+    leftover = "leftover Kathara and Containerlab resources"
     if running:
-        label = f"all {len(running)} running session(s) and leftover Kathara resources"
+        label = f"all {len(running)} running session(s) and {leftover}"
     else:
-        label = "leftover Kathara containers and networks"
+        label = leftover
     if not yes:
         confirmed = typer.confirm(f"Stop lab containers and wipe {label}?", default=False)
         if not confirmed:

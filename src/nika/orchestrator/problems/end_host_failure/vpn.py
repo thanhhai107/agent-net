@@ -1,12 +1,10 @@
 from pydantic import BaseModel, Field
 
-from nika.generator.fault.injector_host import FaultInjectorHost
-from nika.net_env.net_env_pool import get_net_env_instance
+from nika.orchestrator.problems.context import init_problem
 from nika.orchestrator.problems.problem_base import ProblemMeta, RootCauseCategory, TaskDescription, TaskLevel, build_verify_result
 from nika.orchestrator.tasks.detection import DetectionTask
 from nika.orchestrator.tasks.localization import LocalizationTask
 from nika.orchestrator.tasks.rca import RCATask
-from nika.service.kathara import KatharaBaseAPI
 from nika.utils.logger import system_logger
 
 # ==========================================
@@ -31,9 +29,7 @@ class VPNMembershipMissingBase:
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()
         self.logger = system_logger
-        self.net_env = get_net_env_instance(scenario_name, **kwargs)
-        self.kathara_api = KatharaBaseAPI(lab_name=self.net_env.lab.name)
-        self.injector = FaultInjectorHost(lab_name=self.net_env.lab.name)
+        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
         self.faulty_devices: list[str] = []
 
     def inject_fault(self, params: VPNMembershipMissingParams):
@@ -41,17 +37,17 @@ class VPNMembershipMissingBase:
         vpn_server = params.host_name_2
         self.faulty_devices = [target_host, vpn_server]
 
-        self.kathara_api.exec_cmd(
-            host_name=vpn_server,
-            command="cp /etc/wireguard/wg0.conf /etc/wireguard/wg0.conf.bak",
+        self.runtime.exec(
+            vpn_server,
+            "cp /etc/wireguard/wg0.conf /etc/wireguard/wg0.conf.bak",
         )
-        self.kathara_api.exec_cmd(
-            host_name=vpn_server,
-            command=f"sed -i '/# {target_host}/{{n; s/^/# /; n; s/^/# /; n; s/^/# /;}}' /etc/wireguard/wg0.conf",
+        self.runtime.exec(
+            vpn_server,
+            f"sed -i '/# {target_host}/{{n; s/^/# /; n; s/^/# /; n; s/^/# /;}}' /etc/wireguard/wg0.conf",
         )
-        self.kathara_api.exec_cmd(
-            host_name=vpn_server,
-            command="wg-quick down wg0 && wg-quick up wg0",
+        self.runtime.exec(
+            vpn_server,
+            "wg-quick down wg0 && wg-quick up wg0",
         )
         self.logger.info(f"Removed VPN membership of {target_host} on {vpn_server}.")
 
@@ -59,9 +55,9 @@ class VPNMembershipMissingBase:
         """Verify the VPN config for target_host has commented-out lines."""
         target_host = params.host_name
         vpn_server = params.host_name_2
-        wg_conf_snippet = self.kathara_api.exec_cmd(
-            host_name=vpn_server,
-            command=f"grep -A4 '# {target_host}' /etc/wireguard/wg0.conf 2>/dev/null || echo absent",
+        wg_conf_snippet = self.runtime.exec(
+            vpn_server,
+            f"grep -A4 '# {target_host}' /etc/wireguard/wg0.conf 2>/dev/null || echo absent",
         ).strip()
         lines = wg_conf_snippet.splitlines()
         commented_lines = [ln for ln in lines if ln.strip().startswith("#")]

@@ -5,7 +5,7 @@ import typer
 from nika.cli.utils import env_id_from_lab, fmt_table, human_age
 from nika.config import ENV_RESULT_DIR
 
-env_app = typer.Typer(help="Kathara lab scenarios.")
+env_app = typer.Typer(help="Network lab scenarios (Kathara and Containerlab).")
 
 
 @env_app.command("list")
@@ -13,8 +13,13 @@ def env_list() -> None:
     """Print scenario ids registered in the net env pool."""
     from nika.net_env.net_env_pool import list_all_net_envs
 
+    headers = ["SCENARIO", "BACKENDS"]
+    rows = []
     for name in sorted(list_all_net_envs()):
-        typer.echo(name)
+        cls = list_all_net_envs()[name]
+        backends = ", ".join(cls.SUPPORTED_BACKENDS)
+        rows.append([name, backends])
+    typer.echo(fmt_table(headers, rows))
 
 
 @env_app.command("run")
@@ -25,6 +30,11 @@ def env_run(
         "-s",
         "--size",
         help="Topology size s, m, or l (required only for scalable scenarios).",
+    ),
+    backend: str = typer.Option(
+        "kathara",
+        "--backend",
+        help="Lab backend: kathara or containerlab.",
     ),
     no_redeploy: bool = typer.Option(False, "--no-redeploy", help="If set, do not redeploy when the lab already exists."),
     instance_tag: str | None = typer.Option(
@@ -42,9 +52,13 @@ def env_run(
     """Deploy one scenario and start a new session."""
     from nika.workflows.env.start import start_net_env
 
+    if backend not in ("kathara", "containerlab"):
+        raise typer.BadParameter("backend must be 'kathara' or 'containerlab'.")
+
     session_id = start_net_env(
         name,
         size,
+        backend=backend,
         redeploy=not no_redeploy,
         instance_tag=instance_tag,
         result_dir=result_dir,
@@ -64,12 +78,14 @@ def env_ps() -> None:
     Columns
     -------
     ENV ID      scenario name plus instance suffix (e.g. simple_bgp_a1b2c3)
+    BACKEND     kathara or containerlab
     SIZE        topology size when applicable (s, m, l), — otherwise
     STATUS      running | finished
     AGE         time elapsed since the env was created
     SESSIONS    number of active sessions bound to this env
     ENDPOINT    service endpoint when available, — otherwise
     """
+    from nika.runtime.factory import resolve_backend
     from nika.utils.session_store import SessionStore
 
     sessions = SessionStore().list_running_sessions()
@@ -79,7 +95,7 @@ def env_ps() -> None:
 
     # Deduplicate by lab_name — one env row per distinct deployed lab.
     seen_labs: set[str] = set()
-    headers = ["ENV ID", "SIZE", "STATUS", "AGE", "SESSIONS", "ENDPOINT"]
+    headers = ["ENV ID", "BACKEND", "SIZE", "STATUS", "AGE", "SESSIONS", "ENDPOINT"]
     rows: list[list[str]] = []
 
     for item in sessions:
@@ -89,7 +105,7 @@ def env_ps() -> None:
         seen_labs.add(lab_name)
 
         env_id = env_id_from_lab(lab_name)
-
+        backend = resolve_backend(item)
         size = item.get("scenario_topo_size") or "—"
 
         status = item.get("status", "—")
@@ -104,6 +120,6 @@ def env_ps() -> None:
 
         endpoint = item.get("endpoint", "—")
 
-        rows.append([env_id, size, status, age, sessions_col, endpoint])
+        rows.append([env_id, backend, size, status, age, sessions_col, endpoint])
 
     typer.echo(fmt_table(headers, rows))

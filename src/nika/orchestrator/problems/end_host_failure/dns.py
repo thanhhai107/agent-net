@@ -1,15 +1,12 @@
-import logging
 from typing import Optional
 
 from pydantic import BaseModel, Field
 
-from nika.generator.fault.injector_base import FaultInjectorBase
-from nika.net_env.net_env_pool import get_net_env_instance
+from nika.orchestrator.problems.context import init_problem
 from nika.orchestrator.problems.problem_base import ProblemMeta, RootCauseCategory, TaskDescription, TaskLevel, build_verify_result
 from nika.orchestrator.tasks.detection import DetectionTask
 from nika.orchestrator.tasks.localization import LocalizationTask
 from nika.orchestrator.tasks.rca import RCATask
-from nika.service.kathara import KatharaBaseAPI
 from nika.utils.logger import system_logger
 
 logger = system_logger
@@ -39,9 +36,7 @@ class DNSRecordErrorBase:
 
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()
-        self.net_env = get_net_env_instance(scenario_name, **kwargs)
-        self.kathara_api = KatharaBaseAPI(lab_name=self.net_env.lab.name)
-        self.injector = FaultInjectorBase(lab_name=self.net_env.lab.name)
+        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
         self.faulty_devices: list[str] = []
         self._wrong_ip: str | None = None
 
@@ -50,18 +45,18 @@ class DNSRecordErrorBase:
         self.faulty_devices = [host]
         target_website = params.target_website
         target_domain = params.target_domain
-        wrong_ip = params.wrong_ip or self.kathara_api.get_host_ip(self.net_env.hosts[0])
+        wrong_ip = params.wrong_ip or self.runtime.get_host_ip(self.net_env.hosts[0])
         self._wrong_ip = wrong_ip
-        right_ip = self.kathara_api.get_host_ip(host)
+        right_ip = self.runtime.get_host_ip(host)
 
-        self.kathara_api.exec_cmd(
+        self.runtime.exec(
             host,
             f"cp /etc/bind/db.{target_domain} /etc/bind/db.{target_domain}.bak",
         )
         cmd = r"sed -i 's/^\({name}[[:space:]]\+IN[[:space:]]\+A[[:space:]]\+\)[0-9\.]\+/\1{new_ip}/' /etc/bind/db.{domain}"
         cmd = cmd.format(name=target_website, new_ip=wrong_ip, domain=target_domain)
-        self.kathara_api.exec_cmd(host, cmd)
-        self.kathara_api.exec_cmd(
+        self.runtime.exec(host, cmd)
+        self.runtime.exec(
             host,
             "rndc reload 2>/dev/null || service named restart 2>/dev/null || true",
         )
@@ -76,12 +71,12 @@ class DNSRecordErrorBase:
         target_website = params.target_website
         target_domain = params.target_domain
         wrong_ip = params.wrong_ip or self._wrong_ip
-        grep_result = self.kathara_api.exec_cmd(
+        grep_result = self.runtime.exec(
             host,
             f"grep '{target_website}.*{wrong_ip}' /etc/bind/db.{target_domain} 2>/dev/null && echo found || echo absent",
         ).strip()
         file_has_wrong_ip = "found" in grep_result
-        dig_result = self.kathara_api.exec_cmd(
+        dig_result = self.runtime.exec(
             host,
             f"dig +short {target_website}.{target_domain} @127.0.0.1 2>/dev/null || echo absent",
         ).strip()

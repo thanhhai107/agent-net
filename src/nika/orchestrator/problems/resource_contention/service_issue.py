@@ -1,13 +1,10 @@
+from nika.orchestrator.problems.context import init_problem
 from pydantic import BaseModel, Field
 
-from nika.generator.fault.injector_host import FaultInjectorHost
-from nika.generator.fault.injector_tc import FaultInjectorTC
-from nika.net_env.net_env_pool import get_net_env_instance
 from nika.orchestrator.problems.problem_base import ProblemMeta, RootCauseCategory, TaskDescription, TaskLevel, build_verify_result
 from nika.orchestrator.tasks.detection import DetectionTask
 from nika.orchestrator.tasks.localization import LocalizationTask
 from nika.orchestrator.tasks.rca import RCATask
-from nika.service.kathara import KatharaAPIALL
 
 # ==================================================================
 # Problem: Web service experiencing high DNS lookup latency causing performance degradation.
@@ -32,21 +29,19 @@ class DNSLookupLatencyBase:
 
     def __init__(self, scenario_name: str = "dc_clos_service", **kwargs):
         super().__init__()
-        self.net_env = get_net_env_instance(scenario_name, **kwargs)
-        self.kathara_api = KatharaAPIALL(lab_name=self.net_env.lab.name)
-        self.injector = FaultInjectorTC(lab_name=self.net_env.lab.name)
+        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
         self.faulty_devices: list[str] = []
 
     def inject_fault(self, params: DNSLookupLatencyParams):
         host = params.host_name
         self.faulty_devices = [host]
-        self.injector.inject_delay(host_name=host, intf_name=params.intf_name, delay_ms=params.delay_ms)
+        self.runtime.tc_set_netem(host, params.intf_name, delay_ms=params.delay_ms)
 
     def verify_fault(self, params: DNSLookupLatencyParams) -> dict:
         """Verify tc qdisc on DNS server interface has a delay configured."""
         host = params.host_name
         intf = params.intf_name
-        tc_output = self.kathara_api.exec_cmd(host, f"tc qdisc show dev {intf}").strip()
+        tc_output = self.runtime.exec(host, f"tc qdisc show dev {intf}").strip()
         verified = "delay" in tc_output
         return build_verify_result(
             root_cause_name=self.root_cause_name,
@@ -104,20 +99,18 @@ class LoadBalancerOverloadBase:
 
     def __init__(self, scenario_name: str = "load_balancer", **kwargs):
         super().__init__()
-        self.net_env = get_net_env_instance(scenario_name, **kwargs)
-        self.kathara_api = KatharaAPIALL(lab_name=self.net_env.lab.name)
-        self.injector = FaultInjectorHost(lab_name=self.net_env.lab.name)
+        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
         self.faulty_devices: list[str] = []
 
     def inject_fault(self, params: LoadBalancerOverloadParams):
         host = params.host_name
         self.faulty_devices = [host]
-        self.injector.inject_stress_all(host_name=host, duration=params.duration)
+        self.runtime.exec(host, f"nohup stress-ng --cpu 0 --cpu-load 100 --iomix 0 --sock 0 --hdd 2 --vm 0 --vm-bytes 75% --timeout {params.duration} </dev/null >/dev/null 2>&1 &")
 
     def verify_fault(self, params: LoadBalancerOverloadParams) -> dict:
         """Verify stress-ng is running on the load balancer."""
         host = params.host_name
-        pgrep_output = self.kathara_api.exec_cmd(host, "pgrep -a stress-ng 2>/dev/null || echo NONE").strip()
+        pgrep_output = self.runtime.exec(host, "pgrep -a stress-ng 2>/dev/null || echo NONE").strip()
         verified = "stress-ng" in pgrep_output and pgrep_output != "NONE"
         return build_verify_result(
             root_cause_name=self.root_cause_name,

@@ -24,7 +24,7 @@ import unittest
 
 import docker
 
-from nika.net_env.kubernetes.k8s_lab.lab import K8sFatTreeBGP
+from nika.net_env.kathara.kubernetes.k8s_lab.lab import K8sFatTreeBGP
 from nika.service.kathara.base_api import KatharaBaseAPI
 
 from tests.integration_base import SharedSessionTestCase

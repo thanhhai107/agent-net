@@ -24,12 +24,23 @@ class Session:
         scenario_topo_size: str | None,
         scenario_params: dict | None = None,
         result_dir: str | Path | None = None,
+        backend: str = "kathara",
+        topology_file: str | Path | None = None,
+        runtime_workdir: str | Path | None = None,
     ) -> None:
         self.session_id = session_id
         self.scenario_name = scenario_name
         self.lab_name = lab_name
         self.scenario_topo_size = scenario_topo_size
         self.scenario_params = scenario_params or {}
+        self.backend = backend
+        self.topology_file = str(topology_file) if topology_file is not None else None
+        self.runtime_workdir = str(runtime_workdir) if runtime_workdir is not None else None
+        self.scenario_params.setdefault("backend", backend)
+        if self.topology_file:
+            self.scenario_params.setdefault("topology_file", self.topology_file)
+        if self.runtime_workdir:
+            self.scenario_params.setdefault("runtime_workdir", self.runtime_workdir)
         results_root = resolve_results_root(result_dir)
         self.session_dir = os.path.join(str(results_root), session_id)
         os.makedirs(self.session_dir, exist_ok=True)
@@ -42,6 +53,9 @@ class Session:
                 "scenario_params": self.scenario_params,
                 "session_dir": self.session_dir,
                 "status": "running",
+                "backend": self.backend,
+                "topology_file": self.topology_file,
+                "runtime_workdir": self.runtime_workdir,
             }
         )
         self._write_run_json({k: v for k, v in self.__dict__.items() if k != "store"})

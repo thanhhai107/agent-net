@@ -1,14 +1,12 @@
 import ipaddress
 
+from nika.orchestrator.problems.context import init_problem
 from pydantic import BaseModel, Field
 
-from nika.generator.fault.injector_service import FaultInjectorService
-from nika.net_env.net_env_pool import get_net_env_instance
 from nika.orchestrator.problems.problem_base import ProblemMeta, RootCauseCategory, TaskDescription, TaskLevel, build_verify_result
 from nika.orchestrator.tasks.detection import DetectionTask
 from nika.orchestrator.tasks.localization import LocalizationTask
 from nika.orchestrator.tasks.rca import RCATask
-from nika.service.kathara import KatharaBaseAPI
 
 # ==================================================================
 # Problem: DHCP distributing spoofed gateway to hosts
@@ -32,15 +30,13 @@ class DHCPSpoofedGatewayBase:
 
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()
-        self.net_env = get_net_env_instance(scenario_name, **kwargs)
-        self.kathara_api = KatharaBaseAPI(lab_name=self.net_env.lab.name)
-        self.injector = FaultInjectorService(lab_name=self.net_env.lab.name)
+        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
         self.faulty_devices: list[str] = []
 
     def _client_subnet(self, client_host: str) -> str:
         return str(
             ipaddress.ip_network(
-                self.kathara_api.get_host_ip(client_host, with_prefix=True), strict=False
+                self.runtime.get_host_ip(client_host, with_prefix=True), strict=False
             ).network_address
         )
 
@@ -49,16 +45,14 @@ class DHCPSpoofedGatewayBase:
         client_host = params.host_name_2
         self.faulty_devices = [dhcp_server, client_host]
         subnet = self._client_subnet(client_host)
-        self.injector.inject_wrong_gateway(
-            dhcp_server=dhcp_server,
-            subnet=subnet,
-            wrong_gw=".".join(subnet.split(".")[:3] + ["254"]),
-        )
+        wrong_gw = ".".join(subnet.split(".")[:3] + ["254"])
+        self.runtime.dhcp_set_option_routers(dhcp_server, subnet, wrong_gw)
+        self.runtime.renew_dhcp_leases(self.runtime.list_dhcp_client_nodes())
 
     def verify_fault(self, params: DHCPSpoofedGatewayParams) -> dict:
         """Verify dhcpd.conf has spoofed gateway ending in .254."""
         dhcp_server = params.host_name
-        grep_result = self.kathara_api.exec_cmd(
+        grep_result = self.runtime.exec(
             dhcp_server,
             "grep 'option routers.*\\.254' /etc/dhcp/dhcpd.conf && echo found || echo absent",
         ).strip()
@@ -122,15 +116,13 @@ class DHCPSpoofedDNSBase:
 
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()
-        self.net_env = get_net_env_instance(scenario_name, **kwargs)
-        self.kathara_api = KatharaBaseAPI(lab_name=self.net_env.lab.name)
-        self.injector = FaultInjectorService(lab_name=self.net_env.lab.name)
+        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
         self.faulty_devices: list[str] = []
 
     def _client_subnet(self, client_host: str) -> str:
         return str(
             ipaddress.ip_network(
-                self.kathara_api.get_host_ip(client_host, with_prefix=True), strict=False
+                self.runtime.get_host_ip(client_host, with_prefix=True), strict=False
             ).network_address
         )
 
@@ -139,13 +131,14 @@ class DHCPSpoofedDNSBase:
         client_host = params.host_name_2
         self.faulty_devices = [dhcp_server, client_host]
         subnet = self._client_subnet(client_host)
-        self.injector.inject_wrong_dns(dhcp_server=dhcp_server, subnet=subnet, wrong_dns=params.wrong_dns)
+        self.runtime.dhcp_set_option_dns(dhcp_server, subnet, params.wrong_dns)
+        self.runtime.renew_dhcp_leases(self.runtime.list_dhcp_client_nodes())
 
     def verify_fault(self, params: DHCPSpoofedDNSParams) -> dict:
         """Verify dhcpd.conf has spoofed DNS server 8.8.8.8."""
         dhcp_server = params.host_name
         wrong_dns = params.wrong_dns
-        grep_result = self.kathara_api.exec_cmd(
+        grep_result = self.runtime.exec(
             dhcp_server,
             f"grep 'option domain-name-servers.*{wrong_dns}' /etc/dhcp/dhcpd.conf && echo found || echo absent",
         ).strip()
@@ -207,15 +200,13 @@ class DHCPSpoofedSubnetBase:
 
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()
-        self.net_env = get_net_env_instance(scenario_name, **kwargs)
-        self.kathara_api = KatharaBaseAPI(lab_name=self.net_env.lab.name)
-        self.injector = FaultInjectorService(lab_name=self.net_env.lab.name)
+        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
         self.faulty_devices: list[str] = []
 
     def _client_subnet(self, client_host: str) -> str:
         return str(
             ipaddress.ip_network(
-                self.kathara_api.get_host_ip(client_host, with_prefix=True), strict=False
+                self.runtime.get_host_ip(client_host, with_prefix=True), strict=False
             ).network_address
         )
 
@@ -225,18 +216,19 @@ class DHCPSpoofedSubnetBase:
         self.faulty_devices = [dhcp_server, client_host]
         subnet = self._client_subnet(client_host)
         self.deleted_subnet = subnet
-        self.injector.inject_delete_subnet(dhcp_server=dhcp_server, subnet=subnet)
+        self.runtime.dhcp_delete_subnet(dhcp_server, subnet)
+        self.runtime.renew_dhcp_leases(self.runtime.list_dhcp_client_nodes())
 
     def verify_fault(self, params: DHCPSpoofedSubnetParams) -> dict:
         """Verify the target subnet has been removed from dhcpd.conf."""
         dhcp_server = params.host_name
         subnet = getattr(self, "deleted_subnet", None) or self._client_subnet(params.host_name_2)
         sub_escaped = subnet.replace(".", "\\.")
-        match_output = self.kathara_api.exec_cmd(
+        match_output = self.runtime.exec(
             dhcp_server,
             f"grep 'subnet {sub_escaped} netmask' /etc/dhcp/dhcpd.conf | wc -l",
         ).strip()
-        count_output = self.kathara_api.exec_cmd(
+        count_output = self.runtime.exec(
             dhcp_server,
             "grep 'subnet.*netmask' /etc/dhcp/dhcpd.conf | wc -l",
         ).strip()

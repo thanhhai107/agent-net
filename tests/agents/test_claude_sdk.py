@@ -13,7 +13,6 @@ from agent.sdk.claude_sdk.config import (
     resolve_claude_sdk_model,
 )
 from agent.sdk.mcp import to_sdk_mcp_servers
-from nika.cli.main import app
 from nika.utils.agent_config import ENV_CLAUDE_SDK_MODEL, resolve_agent_model
 from nika.utils.session_store import SessionStore
 from tests.agents._assertions import assert_phase_messages, assert_submission_fields
@@ -98,14 +97,6 @@ class ClaudeSdkMcpTest(unittest.TestCase):
 class ClaudeSdkAgentPipelineTest(CommonPipelineSteps, OrderedPipelineTestCase):
     """Full pipeline with the sdk.claude_sdk agent."""
 
-    @classmethod
-    def tearDownClass(cls) -> None:
-        if cls.session_id and not cls.env_destroyed:
-            try:
-                cls.runner.invoke(app, ["session", "close", "--session_id", cls.session_id, "-y"])
-            except Exception:
-                pass
-
     def test_step_01_start_env(self) -> None:
         self._step_start_env()
 
@@ -114,25 +105,7 @@ class ClaudeSdkAgentPipelineTest(CommonPipelineSteps, OrderedPipelineTestCase):
 
     def test_step_03_run_claude_sdk_agent(self) -> None:
         self.assertIsNotNone(self.session_id)
-        result = self.runner.invoke(
-            app,
-            [
-                "agent",
-                "run",
-                "--agent",
-                "sdk.claude_sdk",
-                "--max-steps",
-                "20",
-                "--session_id",
-                self.session_id,
-            ],
-        )
-        self.assertEqual(
-            result.exit_code,
-            0,
-            f"agent run exited {result.exit_code}:\n{result.output}"
-            + (f"\nException: {result.exception}" if result.exception else ""),
-        )
+        self._run_agent(agent_type="sdk.claude_sdk", max_steps=20)
         row = SessionStore().get_session(self.session_id)
         self.assertEqual(row.get("agent_type"), "sdk.claude_sdk")
 

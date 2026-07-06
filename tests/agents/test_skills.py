@@ -19,7 +19,6 @@ from agent.utils.skills import (
     skills_enabled,
 )
 from agent.utils.template import OVERALL_DIAGNOSIS_PROMPT, SKILLS_PROMPT_SUFFIX
-from nika.cli.main import app
 from nika.utils.agent_config import ENV_CODEX_MODEL, ENV_CODEX_SDK_MODEL
 from nika.utils.session_store import SessionStore
 from tests.agents._assertions import (
@@ -176,31 +175,19 @@ class _SkillPipelineMixin:
     agent_model: str | None = None
     max_steps: str = "20"
 
-    def _agent_run_args(self) -> list[str]:
-        args = [
-            "agent",
-            "run",
-            "--agent",
-            self.agent_id,
-            "--max-steps",
-            self.max_steps,
-            "--session_id",
-            self.session_id,
-        ]
+    def _agent_run_kwargs(self) -> dict[str, object]:
+        kwargs: dict[str, object] = {
+            "agent_type": self.agent_id,
+            "max_steps": int(self.max_steps),
+        }
         if self.agent_model:
-            args.extend(["--model", self.agent_model])
-        return args
+            kwargs["model"] = self.agent_model
+        return kwargs
 
     def test_step_03_run_agent_with_skills(self) -> None:
         self.assertIsNotNone(self.session_id)
         with unittest.mock.patch.dict(os.environ, _skills_env_patch(), clear=False):
-            result = self.runner.invoke(app, self._agent_run_args())
-        self.assertEqual(
-            result.exit_code,
-            0,
-            f"agent run exited {result.exit_code}:\n{result.output}"
-            + (f"\nException: {result.exception}" if result.exception else ""),
-        )
+            self._run_agent(**self._agent_run_kwargs())  # type: ignore[arg-type]
         row = SessionStore().get_session(self.session_id)
         self.assertEqual(row.get("agent_type"), self.agent_id)
 
@@ -219,14 +206,6 @@ class _SkillPipelineMixin:
 class ClaudeSdkSkillPipelineTest(_SkillPipelineMixin, CommonPipelineSteps, OrderedPipelineTestCase):
     agent_id = "sdk.claude_sdk"
 
-    @classmethod
-    def tearDownClass(cls) -> None:
-        if cls.session_id and not cls.env_destroyed:
-            try:
-                cls.runner.invoke(app, ["session", "close", "--session_id", cls.session_id, "-y"])
-            except Exception:
-                pass
-
     def test_step_01_start_env(self) -> None:
         self._step_start_env()
 
@@ -240,14 +219,6 @@ class ClaudeSdkSkillPipelineTest(_SkillPipelineMixin, CommonPipelineSteps, Order
 @unittest.skipUnless(claude_cli_available(), "Claude CLI + ANTHROPIC credentials required")
 class ClaudeCliSkillPipelineTest(_SkillPipelineMixin, CommonPipelineSteps, OrderedPipelineTestCase):
     agent_id = "local_cli.claude_cli"
-
-    @classmethod
-    def tearDownClass(cls) -> None:
-        if cls.session_id and not cls.env_destroyed:
-            try:
-                cls.runner.invoke(app, ["session", "close", "--session_id", cls.session_id, "-y"])
-            except Exception:
-                pass
 
     def test_step_01_start_env(self) -> None:
         self._step_start_env()
@@ -264,14 +235,6 @@ class CodexCliSkillPipelineTest(_SkillPipelineMixin, CommonPipelineSteps, Ordere
     agent_id = "local_cli.codex_cli"
     agent_model = CODEX_MODEL
 
-    @classmethod
-    def tearDownClass(cls) -> None:
-        if cls.session_id and not cls.env_destroyed:
-            try:
-                cls.runner.invoke(app, ["session", "close", "--session_id", cls.session_id, "-y"])
-            except Exception:
-                pass
-
     def test_step_01_start_env(self) -> None:
         self._step_start_env()
 
@@ -286,14 +249,6 @@ class CodexCliSkillPipelineTest(_SkillPipelineMixin, CommonPipelineSteps, Ordere
 class CodexSdkSkillPipelineTest(_SkillPipelineMixin, CommonPipelineSteps, OrderedPipelineTestCase):
     agent_id = "sdk.codex_sdk"
     agent_model = CODEX_MODEL
-
-    @classmethod
-    def tearDownClass(cls) -> None:
-        if cls.session_id and not cls.env_destroyed:
-            try:
-                cls.runner.invoke(app, ["session", "close", "--session_id", cls.session_id, "-y"])
-            except Exception:
-                pass
 
     def test_step_01_start_env(self) -> None:
         self._step_start_env()

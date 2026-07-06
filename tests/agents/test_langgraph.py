@@ -6,7 +6,6 @@ import os
 import unittest
 import unittest.mock
 
-from nika.cli.main import app
 from nika.utils.agent_config import (
     ENV_LANGGRAPH_MODEL,
     ENV_LLM_PROVIDER,
@@ -68,28 +67,11 @@ class LangGraphAgentPipelineTest(CommonPipelineSteps, OrderedPipelineTestCase):
 
     def test_step_03_run_langgraph_agent(self) -> None:
         self.assertIsNotNone(self.session_id)
-        result = self.runner.invoke(
-            app,
-            [
-                "agent",
-                "run",
-                "--agent",
-                "byo.langgraph",
-                "--provider",
-                LANGGRAPH_PROVIDER,
-                "--model",
-                LANGGRAPH_MODEL,
-                "--max-steps",
-                "20",
-                "--session_id",
-                self.session_id,
-            ],
-        )
-        self.assertEqual(
-            result.exit_code,
-            0,
-            f"agent run exited {result.exit_code}:\n{result.output}"
-            + (f"\nException: {result.exception}" if result.exception else ""),
+        self._run_agent(
+            agent_type="byo.langgraph",
+            llm_provider=LANGGRAPH_PROVIDER,
+            model=LANGGRAPH_MODEL,
+            max_steps=20,
         )
         row = SessionStore().get_session(self.session_id)
         self.assertEqual(row.get("agent_type"), "byo.langgraph")

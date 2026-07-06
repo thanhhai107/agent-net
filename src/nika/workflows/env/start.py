@@ -1,11 +1,12 @@
-"""Start a Kathara lab for one scenario and persist a new session."""
+"""Start a network lab for one scenario and persist a new session."""
 
 from datetime import datetime
 from typing import Literal
 from uuid import uuid4
 
-from nika.net_env.net_env_pool import get_net_env_instance, scenario_requires_topo_size
-from nika.utils.logger import bind_session_dir, log_event, refresh_logger
+from nika.net_env.net_env_pool import get_net_env_instance, scenario_requires_topo_size, scenario_supported_backends
+from nika.net_env.verify import verify_lab_with_retry
+from nika.utils.logger import bind_session_dir, log_error_event, log_event, refresh_logger
 from nika.utils.session import Session
 
 
@@ -22,6 +23,7 @@ def start_net_env(
     scenario: str,
     topo_size: str | None,
     *,
+    backend: str = "kathara",
     redeploy: bool = True,
     instance_tag: str | None = None,
     result_dir: str | None = None,
@@ -33,38 +35,76 @@ def start_net_env(
     if not scenario_requires_topo_size(scenario) and size is not None:
         raise ValueError(f"Scenario '{scenario}' does not use topology sizes; omit -s/--size.")
 
+    supported = scenario_supported_backends(scenario)
+    if backend not in supported:
+        raise ValueError(
+            f"Scenario '{scenario}' does not support backend '{backend}'. Supported: {', '.join(supported)}"
+        )
+
     refresh_logger()
     suffix = uuid4().hex[:6]
     tag = f"{instance_tag}-{suffix}" if instance_tag else f"{datetime.now().strftime('%m%d%H%M%S')}-{suffix}"
     lab_name = f"{scenario}__{tag}"
-    net_env = get_net_env_instance(scenario, topo_size=size, lab_name=lab_name)
-    if net_env.lab_exists() and redeploy:
-        net_env.undeploy()
-        net_env.deploy()
-    elif not net_env.lab_exists():
-        net_env.deploy()
-
     session_id = datetime.now().strftime("%Y%m%d-%H%M%S") + f"-{suffix}"
+    net_env = get_net_env_instance(scenario, backend=backend, topo_size=size, lab_name=lab_name)
 
     session = Session()
-    scenario_params: dict = {"lab_name": net_env.lab.name}
+    scenario_params: dict = {"lab_name": net_env.name, "backend": backend}
     if size is not None:
         scenario_params["topo_size"] = size
+    topology_file = getattr(net_env, "topology_file", None)
+    runtime_workdir = getattr(net_env, "runtime_workdir", None)
     session.init_session(
         session_id=session_id,
         scenario_name=scenario,
-        lab_name=net_env.lab.name,
+        lab_name=net_env.name,
         scenario_topo_size=size,
         scenario_params=scenario_params,
         result_dir=result_dir,
+        backend=backend,
+        topology_file=topology_file,
+        runtime_workdir=runtime_workdir,
     )
     bind_session_dir(session.session_dir)
+
+    try:
+        if net_env.lab_exists() and redeploy:
+            net_env.undeploy()
+            net_env.deploy()
+        elif not net_env.lab_exists():
+            net_env.deploy()
+
+        verify_result = verify_lab_with_retry(net_env)
+        if verify_result is not None:
+            log_event(
+                "env_verify",
+                f"Lab verification passed for {scenario} ({net_env.name})",
+                scenario=scenario,
+                lab_name=net_env.name,
+                checks=verify_result.get("checks"),
+            )
+    except Exception as exc:
+        event_type = "env_verify_failed" if net_env.lab_exists() else "env_start_failed"
+        log_error_event(
+            event_type,
+            f"Failed to start network environment: {scenario} ({session_id}): {exc}",
+            scenario=scenario,
+            backend=backend,
+            topo_size=size,
+            session_id=session_id,
+            lab_name=net_env.name,
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
+        raise
+
     log_event(
         "env_start",
-        f"Started network environment: {scenario} (size={size}) — session {session_id}, lab {net_env.lab.name}",
+        f"Started network environment: {scenario} (backend={backend}, size={size}) — session {session_id}, lab {net_env.name}",
         scenario=scenario,
+        backend=backend,
         topo_size=size,
         session_id=session_id,
-        lab_name=net_env.lab.name,
+        lab_name=net_env.name,
     )
     return session_id

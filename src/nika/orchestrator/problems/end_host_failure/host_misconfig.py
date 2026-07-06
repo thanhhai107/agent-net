@@ -1,17 +1,31 @@
 import logging
 from typing import Optional
 
+from nika.orchestrator.problems.context import init_problem
 from pydantic import BaseModel, Field
 
-from nika.generator.fault.injector_host import FaultInjectorHost
-from nika.net_env.net_env_pool import get_net_env_instance
 from nika.orchestrator.problems.inject_resolve import derive_incorrect_ip, derive_wrong_gateway
 from nika.orchestrator.problems.problem_base import ProblemMeta, RootCauseCategory, TaskDescription, TaskLevel, build_verify_result
 from nika.orchestrator.tasks.detection import DetectionTask
 from nika.orchestrator.tasks.localization import LocalizationTask
 from nika.orchestrator.tasks.rca import RCATask
-from nika.service.kathara import KatharaBaseAPI
 from nika.utils.logger import system_logger
+
+
+def _inject_ip_change(
+    runtime,
+    *,
+    host_name: str,
+    old_ip: str,
+    new_ip: str,
+    intf_name: str,
+    new_gateway: str | None = None,
+) -> None:
+    runtime.exec(host_name, f"ip addr del {old_ip} dev {intf_name}")
+    runtime.exec(host_name, f"ip addr add {new_ip} dev {intf_name}")
+    if new_gateway:
+        runtime.exec(host_name, f"ip route add default via {new_gateway}")
+
 
 # ==========================================
 # Problem: Host missing IP address
@@ -37,9 +51,7 @@ class HostMissingIPBase:
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()
         self.logger = system_logger
-        self.net_env = get_net_env_instance(scenario_name, **kwargs)
-        self.kathara_api = KatharaBaseAPI(lab_name=self.net_env.lab.name)
-        self.injector = FaultInjectorHost(lab_name=self.net_env.lab.name)
+        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
         self.faulty_devices: list[str] = []
         self.intf_name = "eth0"
 
@@ -47,17 +59,17 @@ class HostMissingIPBase:
         host = params.host_name
         self.faulty_devices = [host]
         intf = params.intf_name
-        real_ip = self.kathara_api.get_host_ip(host, intf, with_prefix=True)
-        real_gateway = self.kathara_api.get_default_gateway(host)
-        self.kathara_api.exec_cmd(host_name=host, command=f"ip addr del {real_ip} dev {intf}")
-        self.kathara_api.exec_cmd(host_name=host, command=f"echo '{real_ip} {real_gateway}' > /tmp/removed_ip.txt")
+        real_ip = self.runtime.get_host_ip(host, intf, with_prefix=True)
+        real_gateway = self.runtime.get_default_gateway(host)
+        self.runtime.exec(host, f"ip addr del {real_ip} dev {intf}")
+        self.runtime.exec(host, f"echo '{real_ip} {real_gateway}' > /tmp/removed_ip.txt")
         self.logger.info(f"Injected missing IP on {host} from {real_ip} and gateway {real_gateway}.")
 
     def verify_fault(self, params: HostMissingIPParams) -> dict:
         """Verify that the host has no global IPv4 address on the interface."""
         host = params.host_name
         intf = params.intf_name
-        ip_line = self.kathara_api.exec_cmd(
+        ip_line = self.runtime.exec(
             host, f"ip -4 -o addr show dev {intf} scope global"
         ).strip()
         verified = "inet " not in ip_line
@@ -118,21 +130,19 @@ class HostIPConflictBase:
 
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()
-        self.net_env = get_net_env_instance(scenario_name, **kwargs)
-        self.kathara_api = KatharaBaseAPI(lab_name=self.net_env.lab.name)
-        self.injector = FaultInjectorHost(lab_name=self.net_env.lab.name)
+        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
         self.faulty_devices: list[str] = []
 
     def inject_fault(self, params: HostIPConflictParams):
         src_host = params.host_name
         dst_host = params.host_name_2
         self.faulty_devices = [src_host, dst_host]
-        self.injector.inject_ip_change(
+        _inject_ip_change(self.runtime, 
             host_name=dst_host,
-            old_ip=self.kathara_api.get_host_ip(dst_host, "eth0", with_prefix=True),
-            new_ip=self.kathara_api.get_host_ip(src_host, "eth0", with_prefix=True),
+            old_ip=self.runtime.get_host_ip(dst_host, "eth0", with_prefix=True),
+            new_ip=self.runtime.get_host_ip(src_host, "eth0", with_prefix=True),
             intf_name="eth0",
-            new_gateway=self.kathara_api.get_default_gateway(src_host),
+            new_gateway=self.runtime.get_default_gateway(src_host),
         )
 
     def verify_fault(self, params: HostIPConflictParams) -> dict:
@@ -140,8 +150,8 @@ class HostIPConflictBase:
         host_a = params.host_name
         host_b = params.host_name_2
         cmd = "ip -4 -o addr show dev eth0 scope global | awk '/inet /{print $4}'"
-        ip_a_raw = self.kathara_api.exec_cmd(host_a, cmd).strip()
-        ip_b_raw = self.kathara_api.exec_cmd(host_b, cmd).strip()
+        ip_a_raw = self.runtime.exec(host_a, cmd).strip()
+        ip_b_raw = self.runtime.exec(host_b, cmd).strip()
         ip_a = ip_a_raw.split("/")[0] if ip_a_raw else ""
         ip_b = ip_b_raw.split("/")[0] if ip_b_raw else ""
         verified = bool(ip_a) and ip_a == ip_b
@@ -203,30 +213,28 @@ class HostIncorrectIPBase:
 
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()
-        self.net_env = get_net_env_instance(scenario_name, **kwargs)
-        self.kathara_api = KatharaBaseAPI(lab_name=self.net_env.lab.name)
-        self.injector = FaultInjectorHost(lab_name=self.net_env.lab.name)
+        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
         self.faulty_devices: list[str] = []
         self._original_ip: str | None = None
 
     def inject_fault(self, params: HostIncorrectIPParams):
         host = params.host_name
         self.faulty_devices = [host]
-        old_ip = self.kathara_api.get_host_ip(host, "eth0", with_prefix=True)
+        old_ip = self.runtime.get_host_ip(host, "eth0", with_prefix=True)
         self._original_ip = old_ip
-        incorrect_ip = params.incorrect_ip or derive_incorrect_ip(self.kathara_api, host)
-        self.injector.inject_ip_change(
+        incorrect_ip = params.incorrect_ip or derive_incorrect_ip(self.runtime, host)
+        _inject_ip_change(self.runtime, 
             host_name=host,
             old_ip=old_ip,
             new_ip=incorrect_ip,
             intf_name="eth0",
-            new_gateway=self.kathara_api.get_default_gateway(host),
+            new_gateway=self.runtime.get_default_gateway(host),
         )
 
     def verify_fault(self, params: HostIncorrectIPParams) -> dict:
         """Verify that the host eth0 IP differs from the original address at inject time."""
         host = params.host_name
-        ip_line = self.kathara_api.exec_cmd(
+        ip_line = self.runtime.exec(
             host, "ip -4 -o addr show dev eth0 scope global"
         ).strip()
         current_ip = None
@@ -295,21 +303,19 @@ class HostIncorrectGatewayBase:
 
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()
-        self.net_env = get_net_env_instance(scenario_name, **kwargs)
-        self.kathara_api = KatharaBaseAPI(lab_name=self.net_env.lab.name)
-        self.injector = FaultInjectorHost(lab_name=self.net_env.lab.name)
+        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
         self.faulty_devices: list[str] = []
         self._injected_gateway: str | None = None
 
     def inject_fault(self, params: HostIncorrectGatewayParams):
         host = params.host_name
         self.faulty_devices = [host]
-        new_gateway = params.new_gateway or derive_wrong_gateway(self.kathara_api, host)
+        new_gateway = params.new_gateway or derive_wrong_gateway(self.runtime, host)
         self._injected_gateway = new_gateway
-        self.injector.inject_ip_change(
+        _inject_ip_change(self.runtime, 
             host_name=host,
-            old_ip=self.kathara_api.get_host_ip(host, "eth0", with_prefix=True),
-            new_ip=self.kathara_api.get_host_ip(host, "eth0", with_prefix=True),
+            old_ip=self.runtime.get_host_ip(host, "eth0", with_prefix=True),
+            new_ip=self.runtime.get_host_ip(host, "eth0", with_prefix=True),
             intf_name="eth0",
             new_gateway=new_gateway,
         )
@@ -317,7 +323,7 @@ class HostIncorrectGatewayBase:
     def verify_fault(self, params: HostIncorrectGatewayParams) -> dict:
         """Verify that the default route uses the injected wrong gateway."""
         host = params.host_name
-        route_line = self.kathara_api.exec_cmd(host, "ip route show default").strip()
+        route_line = self.runtime.exec(host, "ip route show default").strip()
         expected_gateway = params.new_gateway or self._injected_gateway
         verified = bool(expected_gateway) and expected_gateway in route_line
         return build_verify_result(
@@ -378,31 +384,29 @@ class HostIncorrectNetmaskBase:
 
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()
-        self.net_env = get_net_env_instance(scenario_name, **kwargs)
-        self.kathara_api = KatharaBaseAPI(lab_name=self.net_env.lab.name)
-        self.injector = FaultInjectorHost(lab_name=self.net_env.lab.name)
+        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
         self.faulty_devices: list[str] = []
         self.netmask_prefix = 8
 
     def inject_fault(self, params: HostIncorrectNetmaskParams):
         host = params.host_name
         self.faulty_devices = [host]
-        old_ip = self.kathara_api.get_host_ip(host, "eth0", with_prefix=True)
+        old_ip = self.runtime.get_host_ip(host, "eth0", with_prefix=True)
         ip_part = old_ip.split("/")[0]
         new_ip = f"{ip_part}/{params.netmask_prefix}"
-        self.injector.inject_ip_change(
+        _inject_ip_change(self.runtime, 
             host_name=host,
             old_ip=old_ip,
             new_ip=new_ip,
             intf_name="eth0",
-            new_gateway=self.kathara_api.get_default_gateway(host),
+            new_gateway=self.runtime.get_default_gateway(host),
         )
 
     def verify_fault(self, params: HostIncorrectNetmaskParams) -> dict:
         """Verify that eth0 has a non-/24 prefix (injected wrong netmask)."""
         host = params.host_name
         expected_prefix = params.netmask_prefix
-        ip_line = self.kathara_api.exec_cmd(
+        ip_line = self.runtime.exec(
             host, "ip -4 -o addr show dev eth0 scope global"
         ).strip()
         prefix = None
@@ -472,22 +476,20 @@ class HostIncorrectDNSBase:
     symptom_desc = "Some hosts are unable to access web services."
 
     def __init__(self, scenario_name: str | None, **kwargs):
-        self.net_env = get_net_env_instance(scenario_name, **kwargs)
-        self.kathara_api = KatharaBaseAPI(lab_name=self.net_env.lab.name)
-        self.injector = FaultInjectorHost(lab_name=self.net_env.lab.name)
+        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
         self.faulty_devices: list[str] = []
         self.fake_dns_ip = "8.8.8.8"
 
     def inject_fault(self, params: HostIncorrectDNSParams):
         host = params.host_name
         self.faulty_devices = [host]
-        self.injector.inject_dns_misconfiguration(host_name=host, fake_dns_ip=params.fake_dns_ip)
+        self.runtime.exec(host, f"echo 'nameserver {params.fake_dns_ip}' > /etc/resolv.conf")
 
     def verify_fault(self, params: HostIncorrectDNSParams) -> dict:
         """Verify the incorrect-DNS fault by checking /etc/resolv.conf contains the fake DNS IP."""
         host = params.host_name
         fake_dns_ip = params.fake_dns_ip
-        resolv = self.kathara_api.exec_cmd(host, "cat /etc/resolv.conf 2>/dev/null || echo ''")
+        resolv = self.runtime.exec(host, "cat /etc/resolv.conf 2>/dev/null || echo ''")
         verified = fake_dns_ip in resolv
         return build_verify_result(
             root_cause_name=self.root_cause_name,

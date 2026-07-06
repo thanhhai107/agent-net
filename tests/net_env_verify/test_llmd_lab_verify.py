@@ -19,9 +19,9 @@ from __future__ import annotations
 
 import unittest
 
-from nika.net_env.kubernetes.llmd_lab.lab import LLMDInferenceCluster
+from nika.net_env.kathara.kubernetes.llmd_lab.lab import LLMDInferenceCluster
 
-from tests.integration_base import PerTestEnvTestCase
+from tests.integration_base import CliIntegrationTestCase, PerTestEnvTestCase
 
 
 class LLMDLabUnitTest(unittest.TestCase):
@@ -64,7 +64,7 @@ class LLMDLabUnitTest(unittest.TestCase):
     "Remove @skip and run manually: "
     "uv run python -m unittest tests/net_env_verify/test_llmd_lab_verify.py -v"
 )
-class LLMDLabStartupVerifyTest(PerTestEnvTestCase):
+class LLMDLabStartupVerifyTest(CliIntegrationTestCase, PerTestEnvTestCase):
     """Deploy llmd_lab via CLI and verify the session is running."""
 
     SCENARIO = LLMDInferenceCluster.LAB_NAME

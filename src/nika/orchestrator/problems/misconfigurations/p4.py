@@ -1,14 +1,12 @@
 from typing import Optional
 
+from nika.orchestrator.problems.context import init_problem
 from pydantic import BaseModel, Field
 
-from nika.generator.fault.injector_base import FaultInjectorBase
-from nika.net_env.net_env_pool import get_net_env_instance
 from nika.orchestrator.problems.problem_base import ProblemMeta, RootCauseCategory, TaskDescription, TaskLevel, build_verify_result
 from nika.orchestrator.tasks.detection import DetectionTask
 from nika.orchestrator.tasks.localization import LocalizationTask
 from nika.orchestrator.tasks.rca import RCATask
-from nika.service.kathara import KatharaAPIALL
 from nika.utils.logger import system_logger
 
 logger = system_logger
@@ -35,9 +33,7 @@ class P4AggressiveDetectionThresholdsBase:
 
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()
-        self.net_env = get_net_env_instance(scenario_name, **kwargs)
-        self.kathara_api = KatharaAPIALL(lab_name=self.net_env.lab.name)
-        self.injector = FaultInjectorBase(lab_name=self.net_env.lab.name)
+        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
         self.faulty_devices: list[str] = []
 
     def inject_fault(self, params: P4AggressiveDetectionThresholdsParams):
@@ -45,15 +41,15 @@ class P4AggressiveDetectionThresholdsBase:
         self.faulty_devices = [host]
         p4_name = params.p4_name if params.p4_name is not None else getattr(self, "p4_name", None)
         if p4_name is None:
-            p4_name = self.kathara_api.exec_cmd(host, "echo *.p4 | sed 's/\\.p4//'").strip()
-        self.kathara_api.exec_cmd(
+            p4_name = self.runtime.exec(host, "echo *.p4 | sed 's/\\.p4//'").strip()
+        self.runtime.exec(
             host,
             f"cp {p4_name}.p4 {p4_name}.p4.bak && "
             f"rm {p4_name}.json && "
             f"sed -Ei 's/#define PACKET_THRESHOLD 1000/#define PACKET_THRESHOLD 100/g' {p4_name}.p4 ",
         )
-        self.kathara_api.exec_cmd(host, "pkill -f simple_switch")
-        self.kathara_api.exec_cmd(host, f"./hostlab/{host}.startup")
+        self.runtime.exec(host, "pkill -f simple_switch")
+        self.runtime.exec(host, f"./hostlab/{host}.startup")
 
     def verify_fault(self, params: P4AggressiveDetectionThresholdsParams) -> dict:
         """Verify PACKET_THRESHOLD was changed to 100 in the P4 source."""
@@ -61,12 +57,12 @@ class P4AggressiveDetectionThresholdsBase:
         self.faulty_devices = [host]
         p4_name = params.p4_name if params.p4_name is not None else getattr(self, "p4_name", None)
         if p4_name is None:
-            p4_name = self.kathara_api.exec_cmd(host, "echo *.p4 | sed 's/\\.p4//'").strip()
-        threshold_check = self.kathara_api.exec_cmd(
+            p4_name = self.runtime.exec(host, "echo *.p4 | sed 's/\\.p4//'").strip()
+        threshold_check = self.runtime.exec(
             host,
             f"grep 'PACKET_THRESHOLD 100' {p4_name}.p4 2>/dev/null && echo found || echo absent",
         ).strip()
-        json_check = self.kathara_api.exec_cmd(
+        json_check = self.runtime.exec(
             host, f"ls {p4_name}.json 2>/dev/null && echo exists || echo missing"
         ).strip()
         threshold_modified = "found" in threshold_check

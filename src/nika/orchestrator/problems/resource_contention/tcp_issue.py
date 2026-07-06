@@ -1,18 +1,19 @@
-import io
-import tarfile
+from pathlib import Path
 
 from nika.config import pkg_path
-from nika.generator.fault.injector_host import FaultInjectorHost
-from nika.generator.fault.injector_tc import FaultInjectorTC
-from nika.net_env.net_env_pool import get_net_env_instance
+from nika.orchestrator.problems.context import init_problem
 from nika.orchestrator.problems.problem_base import ProblemMeta, RootCauseCategory, TaskDescription, TaskLevel, build_verify_result
 from nika.orchestrator.tasks.detection import DetectionTask
 from nika.orchestrator.tasks.localization import LocalizationTask
 from nika.orchestrator.tasks.rca import RCATask
-from nika.service.kathara import KatharaAPIALL
-from nika.service.kathara.docker_utils import get_machine_container
 from nika.utils.logger import system_logger
 from pydantic import BaseModel, Field
+
+_STRESS_CMD = (
+    "nohup stress-ng --cpu 0 --cpu-load 100 --iomix 0 --sock 0 --hdd 2 "
+    "--vm 0 --vm-bytes 75% --timeout {duration} </dev/null >/dev/null 2>&1 &"
+)
+
 
 # ==================================================================
 # Problem: sender resource contention. Ref. Dapper: Data Plane Performance Diagnosis of TCP
@@ -35,21 +36,19 @@ class SenderResourceContentionBase:
 
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()
-        self.net_env = get_net_env_instance(scenario_name, **kwargs)
-        self.kathara_api = KatharaAPIALL(lab_name=self.net_env.lab.name)
-        self.injector = FaultInjectorHost(lab_name=self.net_env.lab.name)
+        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
         self.faulty_devices: list[str] = []
 
     def inject_fault(self, params: SenderResourceContentionParams):
         host = params.host_name
         self.faulty_devices = [host]
-        self.injector.inject_stress_all(host_name=host, duration=params.duration)
+        self.runtime.exec(host, _STRESS_CMD.format(duration=params.duration))
         system_logger.info(f"Injected TCP slow sender issue on host {host}")
 
     def verify_fault(self, params: SenderResourceContentionParams) -> dict:
         """Verify stress-ng is running on the sender host."""
         host = params.host_name
-        pgrep_output = self.kathara_api.exec_cmd(host, "pgrep -a stress-ng 2>/dev/null || echo NONE").strip()
+        pgrep_output = self.runtime.exec(host, "pgrep -a stress-ng 2>/dev/null || echo NONE").strip()
         verified = "stress-ng" in pgrep_output and pgrep_output != "NONE"
         return build_verify_result(
             root_cause_name=self.root_cause_name,
@@ -106,29 +105,22 @@ class SenderApplicationDelayBase:
 
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()
-        self.net_env = get_net_env_instance(scenario_name, **kwargs)
-        self.kathara_api = KatharaAPIALL(lab_name=self.net_env.lab.name)
-        self.injector = FaultInjectorTC(lab_name=self.net_env.lab.name)
+        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
         self.faulty_devices: list[str] = []
 
     def inject_fault(self, params: SenderApplicationDelayParams):
         host = params.host_name
         self.faulty_devices = [host]
-        self.kathara_api.exec_cmd(host_name=host, command="cp web_server.py web_server.py.bak")
-        container = get_machine_container(lab_name=self.net_env.lab.name, host_name=host)
-        src_path = str(pkg_path("net_env/utils/web/slow_sender_server.py"))
-        data = io.BytesIO()
-        with tarfile.open(fileobj=data, mode="w") as tar:
-            tar.add(src_path, arcname="web_server.py")
-        data.seek(0)
-        container.put_archive(path="/", data=data)
-        self.kathara_api.exec_cmd(host_name=host, command="systemctl restart web_server.service")
+        self.runtime.exec(host, "cp web_server.py web_server.py.bak")
+        src_path = Path(pkg_path("net_env/kathara/utils/web/slow_sender_server.py"))
+        self.runtime.write_file(host, "/web_server.py", src_path.read_text())
+        self.runtime.systemctl(host, "web_server.service", "restart")
         system_logger.info(f"Injected TCP sender application delay issue on host {host}")
 
     def verify_fault(self, params: SenderApplicationDelayParams) -> dict:
         """Verify the web_server.py has a sleep call injected."""
         host = params.host_name
-        has_sleep = self.kathara_api.exec_cmd(
+        has_sleep = self.runtime.exec(
             host, "grep -l 'time.sleep' /web_server.py 2>/dev/null && echo yes || echo no"
         ).strip()
         verified = has_sleep.endswith("yes") or has_sleep == "yes"
@@ -188,21 +180,19 @@ class ReceiverResourceContentionBase:
 
     def __init__(self, scenario_name: str | None, **kwargs):
         super().__init__()
-        self.net_env = get_net_env_instance(scenario_name, **kwargs)
-        self.kathara_api = KatharaAPIALL(lab_name=self.net_env.lab.name)
-        self.injector = FaultInjectorHost(lab_name=self.net_env.lab.name)
+        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
         self.faulty_devices: list[str] = []
 
     def inject_fault(self, params: ReceiverResourceContentionParams):
         host = params.host_name
         self.faulty_devices = [host]
-        self.injector.inject_stress_all(host_name=host, duration=params.duration)
+        self.runtime.exec(host, _STRESS_CMD.format(duration=params.duration))
         system_logger.info(f"Injected TCP receiver resource contention on host {host}")
 
     def verify_fault(self, params: ReceiverResourceContentionParams) -> dict:
         """Verify stress-ng is running on the receiver host."""
         host = params.host_name
-        pgrep_output = self.kathara_api.exec_cmd(host, "pgrep -a stress-ng 2>/dev/null || echo NONE").strip()
+        pgrep_output = self.runtime.exec(host, "pgrep -a stress-ng 2>/dev/null || echo NONE").strip()
         verified = "stress-ng" in pgrep_output and pgrep_output != "NONE"
         return build_verify_result(
             root_cause_name=self.root_cause_name,
