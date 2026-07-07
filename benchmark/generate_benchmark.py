@@ -10,7 +10,7 @@ from pathlib import Path
 import yaml
 
 from nika.net_env.net_env_pool import list_all_net_envs, scenario_requires_topo_size
-from nika.orchestrator.problems.prob_pool import list_avail_problem_instances
+from nika.problems.prob_pool import list_avail_problem_instances
 
 cur_path = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, cur_path)

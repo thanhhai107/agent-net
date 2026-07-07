@@ -6,6 +6,13 @@ import json
 from typing import Any
 
 
+def should_log_claude_event(event: dict[str, Any]) -> bool:
+    """Return False for streaming noise that should not be written to messages.jsonl."""
+    return not (
+        event.get("type") == "system" and event.get("subtype") == "thinking_tokens"
+    )
+
+
 def format_claude_event(event: dict[str, Any]) -> str | None:
     """Return a terminal-friendly line for a Claude stream-json event, or None to skip."""
     event_type = event.get("type", "")

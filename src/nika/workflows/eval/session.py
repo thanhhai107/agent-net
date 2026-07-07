@@ -9,7 +9,7 @@ from nika.config import resolve_results_root
 from nika.evaluator.llm_judge import LLMJudge
 from nika.evaluator.result_log import EVAL_METRICS_FILENAME, MESSAGES_FILENAME
 from nika.evaluator.trace_parser import AgentTraceParser
-from nika.orchestrator.eval.scoring import (
+from nika.evaluator.scoring import (
     score_detection,
     score_localization,
     score_rca,

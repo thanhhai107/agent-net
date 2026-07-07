@@ -10,7 +10,7 @@ from Kathara.manager.Kathara import Kathara
 from nika.runtime.base import LabRuntime
 from nika.runtime.docker_ops import pause_container, unpause_container
 from nika.runtime.exec_utils import exec_with_timeout
-from nika.runtime.shell import ShellResolver
+from nika.service.shell import ShellResolver
 from nika.service.kathara.docker_utils import get_machine_container, list_lab_containers
 
 if TYPE_CHECKING:

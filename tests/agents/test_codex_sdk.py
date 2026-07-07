@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import unittest
 import unittest.mock
 
@@ -11,16 +10,13 @@ from agent.sdk.codex_sdk.config import (
     codex_sdk_local_auth_available,
     validate_reasoning_effort,
 )
-from nika.utils.agent_config import (
-    ENV_CODEX_SDK_MODEL,
-    ENV_CODEX_MODEL,
-    resolve_agent_model,
-)
 from nika.utils.session_store import SessionStore
 from tests.agents._assertions import assert_phase_messages, assert_submission_fields
 from tests.integration_base import OrderedPipelineTestCase
 from tests.integration_pipeline import (
+    ClabCommonPipelineSteps,
     CommonPipelineSteps,
+    _min3clos_prerequisites,
     codex_sdk_available,
     load_test_env,
 )
@@ -36,21 +32,7 @@ CODEX_MODEL = "gpt-5.4-mini"
 
 
 class CodexSdkConfigTest(unittest.TestCase):
-    """CLI env resolution for the sdk.codex_sdk agent."""
-
-    def test_model_from_nika_codex_model_env(self) -> None:
-        with unittest.mock.patch.dict(
-            os.environ, {ENV_CODEX_MODEL: CODEX_MODEL}, clear=True
-        ):
-            self.assertEqual(resolve_agent_model("sdk.codex_sdk", None), CODEX_MODEL)
-
-    def test_model_from_nika_codex_sdk_model_env(self) -> None:
-        with unittest.mock.patch.dict(
-            os.environ,
-            {ENV_CODEX_SDK_MODEL: "gpt-5.4-mini", ENV_CODEX_MODEL: "other-model"},
-            clear=True,
-        ):
-            self.assertEqual(resolve_agent_model("sdk.codex_sdk", None), "gpt-5.4-mini")
+    """Local auth and reasoning-effort validation for sdk.codex_sdk."""
 
     def test_validate_reasoning_effort_accepts_valid(self) -> None:
         self.assertEqual(validate_reasoning_effort("medium"), "medium")
@@ -93,6 +75,41 @@ class CodexSdkMcpTest(unittest.TestCase):
 )
 class CodexSdkAgentPipelineTest(CommonPipelineSteps, OrderedPipelineTestCase):
     """Full pipeline with the sdk.codex_sdk agent."""
+
+    def test_step_01_start_env(self) -> None:
+        self._step_start_env()
+
+    def test_step_02_inject_failure(self) -> None:
+        self._step_inject_failure()
+
+    def test_step_03_run_codex_sdk_agent(self) -> None:
+        self.assertIsNotNone(self.session_id)
+        self._run_agent(agent_type="sdk.codex_sdk", model=CODEX_MODEL, max_steps=20)
+        row = SessionStore().get_session(self.session_id)
+        self.assertEqual(row.get("agent_type"), "sdk.codex_sdk")
+
+    def test_step_04_check_messages(self) -> None:
+        self.assertIsNotNone(self.session_dir)
+        assert_phase_messages(self, self._load_jsonl("messages.jsonl"))
+
+    def test_step_05_check_submission(self) -> None:
+        self.assertIsNotNone(self.session_dir)
+        self.assertTrue((self.session_dir / "submission.json").exists())
+        assert_submission_fields(self, self.session_dir)
+
+    def test_step_06_session_close(self) -> None:
+        self._step_close_and_verify("sdk.codex_sdk")
+
+    def test_step_07_eval_metrics(self) -> None:
+        self._step_eval_metrics()
+
+
+@unittest.skipUnless(
+    _min3clos_prerequisites() and codex_sdk_available(),
+    "containerlab/gnmic/Docker or openai-codex credentials not available",
+)
+class CodexSdkClabPipelineTest(ClabCommonPipelineSteps, OrderedPipelineTestCase):
+    """Full containerlab pipeline with the sdk.codex_sdk agent."""
 
     def test_step_01_start_env(self) -> None:
         self._step_start_env()

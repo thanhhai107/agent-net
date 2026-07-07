@@ -7,8 +7,7 @@ import unittest
 from unittest.mock import MagicMock
 
 from nika.runtime.base import LabRuntime, RuntimeCapabilityError
-from nika.runtime import ops_defaults
-from nika.orchestrator.problems.problem_base import ProblemBase
+from nika.problems.problem_base import ProblemBase
 
 
 class _StubRuntime(LabRuntime):
@@ -156,7 +155,7 @@ class LabOpsTest(unittest.TestCase):
 
     def test_write_file_uses_base64(self):
         runtime = _StubRuntime()
-        ops_defaults.write_file(runtime, "pc1", "/tmp/x.txt", "hello")
+        runtime.write_file("pc1", "/tmp/x.txt", "hello")
         self.assertIn("base64 -d", runtime.calls[0][1])
 
     def test_frr_get_bgp_asn_number_from_summary(self):

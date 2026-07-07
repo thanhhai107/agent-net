@@ -54,7 +54,7 @@ def agent_run(
         "-p",
         "--provider",
         envvar=ENV_LLM_PROVIDER,
-        help="LLM provider for byo.langgraph only: openai, ollama, deepseek.",
+        help="LLM provider for byo.langgraph only: openai, ollama, deepseek, custom.",
     ),
     model: str | None = typer.Option(
         None,

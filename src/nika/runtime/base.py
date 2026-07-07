@@ -46,6 +46,13 @@ class LabRuntime(ExecSemanticOpsMixin, ABC):
     def capabilities(self) -> frozenset[str]:
         return self.DEFAULT_CAPABILITIES
 
+    @property
+    def lab_api(self):
+        """Backend-neutral lab operations API (host, tc, nft, frr, …)."""
+        from nika.service.lab.adapters import lab_api_for_runtime
+
+        return lab_api_for_runtime(self)
+
     def has_capability(self, capability: str) -> bool:
         return capability in self.capabilities
 

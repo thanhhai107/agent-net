@@ -14,7 +14,7 @@ from nika.config import BENCHMARK_DIR
 from nika.utils.session import Session
 from nika.utils.session_store import SessionStore
 from nika.net_env.net_env_pool import scenario_requires_topo_size
-from nika.orchestrator.problems.prob_pool import get_problem_instance
+from nika.problems.prob_pool import get_problem_instance
 from nika.workflows.agent.run import start_agent
 from nika.workflows.benchmark.load_config import load_benchmark_yaml
 from nika.workflows.benchmark.resume import (
@@ -83,6 +83,7 @@ def _benchmark_row_cli_args(
     judge_llm_provider: str | None,
     judge_model: str | None,
     result_dir: str | None = None,
+    session_tag: str | None = None,
 ) -> list[str]:
     args = [
         row["scenario"],
@@ -113,6 +114,8 @@ def _benchmark_row_cli_args(
         ]
     if result_dir:
         args += ["--result_dir", result_dir]
+    if session_tag:
+        args += ["--session-tag", session_tag]
     return args
 
 
@@ -127,6 +130,7 @@ def _run_benchmark_row_subprocess(
     judge_llm_provider: str | None,
     judge_model: str | None,
     result_dir: str | None = None,
+    session_tag: str | None = None,
 ) -> None:
     """Run one YAML row via a subprocess for thread-safe parallel batch execution."""
     cli_args = _benchmark_row_cli_args(
@@ -139,6 +143,7 @@ def _run_benchmark_row_subprocess(
         judge_llm_provider=judge_llm_provider,
         judge_model=judge_model,
         result_dir=result_dir,
+        session_tag=session_tag,
     )
     proc = subprocess.run(
         [sys.executable, "-m", "nika.cli.main", "benchmark", "run", *cli_args],
@@ -170,6 +175,7 @@ def _run_benchmark_batch_parallel(
     judge_llm_provider: str | None,
     judge_model: str | None,
     result_dir: str | None = None,
+    session_tag: str | None = None,
 ) -> None:
     """Run indexed rows simultaneously (one subprocess each), then return."""
     shared_kwargs = dict(
@@ -181,6 +187,7 @@ def _run_benchmark_batch_parallel(
         judge_llm_provider=judge_llm_provider,
         judge_model=judge_model,
         result_dir=result_dir,
+        session_tag=session_tag,
     )
     with ThreadPoolExecutor(max_workers=len(indexed_rows)) as pool:
         futures = [
@@ -205,6 +212,7 @@ def run_single_case(
     judge_llm_provider: str | None = None,
     judge_model: str | None = None,
     result_dir: str | None = None,
+    session_tag: str | None = None,
 ) -> tuple[str, Path]:
     """Run one benchmark case (env → inject → agent → eval).
 
@@ -226,7 +234,9 @@ def run_single_case(
     validate_inject_params(problem, scenario, topo_size or "", inject_params)
     params = dict(inject_params)
 
-    session_id = start_net_env(scenario, size, redeploy=True, result_dir=result_dir)
+    session_id = start_net_env(
+        scenario, size, redeploy=True, result_dir=result_dir, session_tag=session_tag
+    )
     session_dir = Path(SessionStore().get_session(session_id)["session_dir"])
 
     inject_failure(
@@ -280,6 +290,7 @@ def run_benchmark_from_yaml(
     judge_model: str | None = None,
     result_dir: str | None = None,
     resume: bool = True,
+    session_tag: str | None = None,
 ) -> None:
     """
     Run benchmark cases defined in a YAML file.
@@ -309,6 +320,7 @@ def run_benchmark_from_yaml(
         judge_llm_provider=judge_llm_provider,
         judge_model=judge_model,
         result_dir=result_dir,
+        session_tag=session_tag,
     )
 
     _results_root, pending = scan_benchmark_cases(

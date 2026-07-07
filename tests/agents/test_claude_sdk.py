@@ -13,12 +13,13 @@ from agent.sdk.claude_sdk.config import (
     resolve_claude_sdk_model,
 )
 from agent.sdk.mcp import to_sdk_mcp_servers
-from nika.utils.agent_config import ENV_CLAUDE_SDK_MODEL, resolve_agent_model
 from nika.utils.session_store import SessionStore
 from tests.agents._assertions import assert_phase_messages, assert_submission_fields
 from tests.integration_base import OrderedPipelineTestCase
 from tests.integration_pipeline import (
+    ClabCommonPipelineSteps,
     CommonPipelineSteps,
+    _min3clos_prerequisites,
     claude_sdk_available,
     load_test_env,
 )
@@ -33,27 +34,6 @@ load_test_env()
 
 class ClaudeSdkConfigTest(unittest.TestCase):
     """Model and credential resolution for sdk.claude_sdk."""
-
-    def test_model_from_anthropic_model_env(self) -> None:
-        with unittest.mock.patch.dict(
-            os.environ, {"ANTHROPIC_MODEL": "deepseek-v4-pro[1m]"}, clear=True
-        ):
-            self.assertEqual(
-                resolve_agent_model("sdk.claude_sdk", None), "deepseek-v4-pro[1m]"
-            )
-
-    def test_model_from_nika_claude_sdk_model_env(self) -> None:
-        with unittest.mock.patch.dict(
-            os.environ,
-            {
-                ENV_CLAUDE_SDK_MODEL: "deepseek-v4-flash",
-                "ANTHROPIC_MODEL": "other-model",
-            },
-            clear=True,
-        ):
-            self.assertEqual(
-                resolve_agent_model("sdk.claude_sdk", None), "deepseek-v4-flash"
-            )
 
     def test_prepare_env_maps_auth_token_to_api_key(self) -> None:
         with unittest.mock.patch.dict(
@@ -118,6 +98,41 @@ class ClaudeSdkMcpTest(unittest.TestCase):
 )
 class ClaudeSdkAgentPipelineTest(CommonPipelineSteps, OrderedPipelineTestCase):
     """Full pipeline with the sdk.claude_sdk agent."""
+
+    def test_step_01_start_env(self) -> None:
+        self._step_start_env()
+
+    def test_step_02_inject_failure(self) -> None:
+        self._step_inject_failure()
+
+    def test_step_03_run_claude_sdk_agent(self) -> None:
+        self.assertIsNotNone(self.session_id)
+        self._run_agent(agent_type="sdk.claude_sdk", max_steps=20)
+        row = SessionStore().get_session(self.session_id)
+        self.assertEqual(row.get("agent_type"), "sdk.claude_sdk")
+
+    def test_step_04_check_messages(self) -> None:
+        self.assertIsNotNone(self.session_dir)
+        assert_phase_messages(self, self._load_jsonl("messages.jsonl"))
+
+    def test_step_05_check_submission(self) -> None:
+        self.assertIsNotNone(self.session_dir)
+        self.assertTrue((self.session_dir / "submission.json").exists())
+        assert_submission_fields(self, self.session_dir)
+
+    def test_step_06_session_close(self) -> None:
+        self._step_close_and_verify("sdk.claude_sdk")
+
+    def test_step_07_eval_metrics(self) -> None:
+        self._step_eval_metrics()
+
+
+@unittest.skipUnless(
+    _min3clos_prerequisites() and claude_sdk_available(),
+    "containerlab/gnmic/Docker or claude-agent-sdk credentials not available",
+)
+class ClaudeSdkClabPipelineTest(ClabCommonPipelineSteps, OrderedPipelineTestCase):
+    """Full containerlab pipeline with the sdk.claude_sdk agent."""
 
     def test_step_01_start_env(self) -> None:
         self._step_start_env()

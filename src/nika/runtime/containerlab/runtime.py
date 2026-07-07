@@ -11,6 +11,7 @@ from typing import Any
 import docker
 
 from nika.runtime.base import LabRuntime
+from nika.runtime.containerlab.parse import parse_clab_topology
 from nika.runtime.docker_ops import pause_container, unpause_container
 from nika.runtime.exec_utils import exec_with_timeout
 
@@ -32,6 +33,7 @@ class ContainerlabRuntime(LabRuntime):
         )
         self._docker = docker.from_env()
         self._node_containers: dict[str, docker.models.containers.Container] = {}
+        self._topology_neighbors: dict[str, list[str]] | None = None
 
     @property
     def backend(self) -> str:
@@ -193,3 +195,20 @@ class ContainerlabRuntime(LabRuntime):
 
     def unpause(self, node: str) -> None:
         unpause_container(self.get_container(node))
+
+    def _build_topology_neighbors(self) -> dict[str, list[str]]:
+        spec = parse_clab_topology(self._topology_file)
+        neighbors: dict[str, set[str]] = {}
+        for link in spec.links:
+            left_name, right_name = (
+                link.endpoints[0].split(":")[0],
+                link.endpoints[1].split(":")[0],
+            )
+            neighbors.setdefault(left_name, set()).add(right_name)
+            neighbors.setdefault(right_name, set()).add(left_name)
+        return {name: sorted(peers) for name, peers in neighbors.items()}
+
+    def get_connected_devices(self, node: str) -> list[str]:
+        if self._topology_neighbors is None:
+            self._topology_neighbors = self._build_topology_neighbors()
+        return list(self._topology_neighbors.get(node, []))

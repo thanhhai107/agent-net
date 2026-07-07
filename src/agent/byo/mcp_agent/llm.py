@@ -8,38 +8,17 @@ from mcp.types import CallToolRequest, CallToolResult
 from mcp_agent.workflows.llm.augmented_llm import RequestParams
 from mcp_agent.workflows.llm.augmented_llm_openai import OpenAIAugmentedLLM
 
+from nika.service.mcp_server.registry import MCP_SERVER_PREFIXES
+
 if TYPE_CHECKING:
     from agent.utils.loggers import MessageLogger
 
-_SERVER_PREFIXES = (
-    "kathara_base_mcp_server_",
-    "kathara_frr_mcp_server_",
-    "kathara_bmv2_mcp_server_",
-    "kathara_telemetry_mcp_server_",
-    "task_mcp_server_",
-)
-
-
-def _short_tool_name(name: str) -> str:
-    for prefix in _SERVER_PREFIXES:
-        if name.startswith(prefix):
-            return name.removeprefix(prefix)
-    return name
-
-
-_KATHARA_PREFIXES = (
-    "kathara_base_mcp_server_",
-    "kathara_frr_mcp_server_",
-    "kathara_bmv2_mcp_server_",
-    "kathara_telemetry_mcp_server_",
-)
+_SERVER_PREFIXES = MCP_SERVER_PREFIXES + ("task_mcp_server_",)
 
 
 def _short_tool_name(name: str) -> str:
     """Strip mcp-agent server namespace prefix for messages.jsonl parity."""
-    if name.startswith("task_mcp_server_"):
-        return name.removeprefix("task_mcp_server_")
-    for prefix in _KATHARA_PREFIXES:
+    for prefix in _SERVER_PREFIXES:
         if name.startswith(prefix):
             return name.removeprefix(prefix)
     return name

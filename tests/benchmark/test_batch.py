@@ -22,9 +22,12 @@ from typing import NamedTuple
 import yaml
 
 from agent.utils.phases import DIAGNOSIS, SUBMISSION
+from nika.utils.session_id import resolve_session_tag, session_id_pattern
 from nika.utils.session_store import SESSIONS_DIR, SessionStore
 from tests.benchmark.helpers import inject_params_from_benchmark_yaml
 from tests.integration_base import IntegrationTestCase
+
+TEST_SESSION_ID_RE = session_id_pattern("test")
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _BENCHMARK_DONE_RE = re.compile(
@@ -105,6 +108,8 @@ class ParallelBenchmarkIntegrationTest(IntegrationTestCase):
                     "mock-v1",
                     "-n",
                     "5",
+                    "--session-tag",
+                    resolve_session_tag(context="test"),
                 ],
                 cwd=_REPO_ROOT,
                 capture_output=True,
@@ -160,6 +165,8 @@ class ParallelBenchmarkIntegrationTest(IntegrationTestCase):
             if not isinstance(self._pipeline_results.get(_case_key(c)), BaseException)
         ]
         self.assertEqual(len(ids), len(set(ids)), f"Duplicate session IDs: {ids}")
+        for session_id in ids:
+            self.assertRegex(session_id, TEST_SESSION_ID_RE)
 
     def test_session_dirs_are_isolated(self) -> None:
         dirs = [

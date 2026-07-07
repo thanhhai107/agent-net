@@ -17,6 +17,7 @@ from nika.utils.logger import (
     refresh_logger,
 )
 from nika.utils.session import Session
+from nika.utils.session_id import make_session_id
 
 
 def _normalize_topo_size(raw: str | None) -> Literal["s", "m", "l"] | None:
@@ -35,6 +36,7 @@ def start_net_env(
     backend: str = "kathara",
     redeploy: bool = True,
     instance_tag: str | None = None,
+    session_tag: str | None = None,
     result_dir: str | None = None,
 ) -> str:
     """Deploy the lab for ``scenario`` and create a new runtime session."""
@@ -50,9 +52,13 @@ def start_net_env(
 
     supported = scenario_supported_backends(scenario)
     if backend not in supported:
-        raise ValueError(
-            f"Scenario '{scenario}' does not support backend '{backend}'. Supported: {', '.join(supported)}"
-        )
+        if len(supported) == 1:
+            backend = supported[0]
+        else:
+            raise ValueError(
+                f"Scenario '{scenario}' does not support backend '{backend}'. "
+                f"Supported: {', '.join(supported)}"
+            )
 
     refresh_logger()
     suffix = uuid4().hex[:6]
@@ -62,7 +68,7 @@ def start_net_env(
         else f"{datetime.now().strftime('%m%d%H%M%S')}-{suffix}"
     )
     lab_name = f"{scenario}__{tag}"
-    session_id = datetime.now().strftime("%Y%m%d-%H%M%S") + f"-{suffix}"
+    session_id = make_session_id(session_tag=session_tag, suffix=suffix)
     net_env = get_net_env_instance(
         scenario, backend=backend, topo_size=size, lab_name=lab_name
     )

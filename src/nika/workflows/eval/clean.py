@@ -6,7 +6,7 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
-from nika.config import RESULTS_DIR, SESSIONS_DIR
+from nika.config import RESULTS_DIR, resolve_results_root, SESSIONS_DIR
 from nika.utils.session_index import SessionIndex
 from nika.utils.session_store import SessionStore
 
@@ -25,7 +25,7 @@ def remove_session_results(
 ) -> bool:
     """Remove ``results/{session_id}/`` and the session index row if present."""
     SessionIndex(db_path).purge(session_id)
-    session_results = Path(results_dir or RESULTS_DIR) / session_id
+    session_results = Path(results_dir or resolve_results_root()) / session_id
     if not session_results.exists():
         return False
     shutil.rmtree(session_results)

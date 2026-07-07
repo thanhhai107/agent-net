@@ -7,7 +7,7 @@ This guide shows how to add a new NIKA benchmark task using the existing APIs fo
 A benchmark case combines:
 
 - a network scenario from `src/nika/net_env/`
-- one injectable problem from `src/nika/orchestrator/problems/`
+- one injectable problem from `src/nika/problems/`
 - explicit injection parameters
 - optional traffic generated before or during troubleshooting
 - an agent run and evaluation output under `results/{session_id}/`
@@ -27,10 +27,10 @@ For benchmark automation, `nika benchmark run` performs env deploy, fault inject
 
 ## Add A Network Scenario
 
-Network environments are Kathara labs wrapped by `NetworkEnvBase`.
+Network environments are backend-specific labs wrapped by `NetworkEnvBase` (`kathara`) or `ContainerlabNetworkEnv` (`containerlab`).
 
 1. Add the lab under `src/nika/net_env/kathara/<domain>/<scenario>/` (Kathara) or `src/nika/net_env/containerlab/<scenario>/` (Containerlab).
-2. Implement a class that sets `LAB_NAME`, builds `self.lab`, sets `self.name`, `self.desc`, and declares useful host lists through `load_machines()`.
+2. Implement a class that sets `LAB_NAME`, initializes the backend lab/topology, sets `self.name`, `self.desc`, and declares useful host lists through `load_machines()`.
 3. If the scenario has sizes, expose `TOPO_SIZE = ["s", "m", "l"]` and accept `topo_size` in `__init__`.
 4. Register the class in `src/nika/net_env/net_env_pool.py`.
 
@@ -84,14 +84,14 @@ uv run nika session close -y
 
 ## Add An Injectable Problem
 
-Problems live under `src/nika/orchestrator/problems/<category>/`. They are discovered automatically when a concrete class subclasses `ProblemBase` and sets `root_cause_name`. `prob_pool` builds `META` from the class variables at import time.
+Problems live under `src/nika/problems/<category>/`. They are discovered automatically when a concrete class subclasses `ProblemBase` and sets `root_cause_name`. `prob_pool` builds `META` from the class variables at import time.
 
 Each fault is a single `ProblemBase` subclass that implements injection, verification, and unified ground truth via `get_ground_truth()`. Do not split one fault into separate Detection / Localization / RCA classes.
 
 ```python
 from pydantic import BaseModel, Field
 
-from nika.orchestrator.problems.problem_base import (
+from nika.problems.problem_base import (
     ProblemBase,
     RootCauseCategory,
     build_verify_result,

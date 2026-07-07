@@ -36,7 +36,7 @@ def eval_judge(
         "-p",
         "--provider",
         envvar=ENV_JUDGE_PROVIDER,
-        help="LLM provider for the judge (openai, ollama, deepseek).",
+        help="LLM provider for the judge (openai, ollama, deepseek, custom).",
     ),
     judge_model: str | None = typer.Option(
         None,

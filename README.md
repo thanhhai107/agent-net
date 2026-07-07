@@ -18,7 +18,7 @@
 ![alt text](./assets/images/nika_arch_gpt.png)
 
 This repository is a unified platform that can offer: 
-1. A benchmark suite of curated network incidents that covers 56 realistic network issues, ranging from link and host failures to resource contention, and includes fourteen network scenarios (including Kubernetes labs), ten of which can be instantiated at different topology sizes, spanning campus, data center, and cloud-native networks. By combining these dimensions, the benchmark yields 685 distinct troubleshooting incidents for evaluating AI agents. Each incident specifies deterministic inject parameters (device names, etc.); IP and netmask values are derived from the live lab at inject time.
+1. A benchmark suite of curated network incidents that covers 56 realistic network issues, ranging from link and host failures to resource contention, and includes 15 registered network scenarios (including Kubernetes and Containerlab labs), seven of which can be instantiated at different topology sizes, spanning campus, data center, and cloud-native networks. The full benchmark YAML currently contains 702 troubleshooting incidents for evaluating AI agents. Each incident specifies deterministic inject parameters (device names, etc.); IP and netmask values are derived from the live lab at inject time.
 2. A modular plug-and-play orchestration platform that connects AI agents with the network environment, enabling real-time troubleshooting in realistic conditions, and providing a human-facing interface to monitor agent performance.
 
 
@@ -26,7 +26,7 @@ This repository is a unified platform that can offer:
 
 ## Features
 
-- Standardized network troubleshooting environment based on Kathará
+- Standardized network troubleshooting environments based on Kathará and Containerlab
 - Unified `nika` CLI for env deploy, fault injection, agent runs, and evaluation
 - Session-based workflow with multi-session support (`nika session`, `--session_id`)
 - Parameterized fault injection (`nika failure describe`, `--set key=value`)
@@ -235,7 +235,7 @@ src/agent/
 | Flag | Env | Notes |
 |------|-----|-------|
 | `-a` / `--agent` | `NIKA_AGENT_TYPE` | Required |
-| `-n` / `--max-steps` | `NIKA_MAX_STEPS` | Per-phase step limit (`byo.langgraph`, `byo.mcp_agent`, `byo.autogen`, `community.sade`) |
+| `-n` / `--max-steps` | `NIKA_MAX_STEPS` | Per-phase step limit (`byo.langgraph`, `byo.mcp_agent`, `byo.autogen`, `community.sade`, `sdk.claude_sdk`) |
 | `-m` / `--model` | `NIKA_MODEL` | Overrides agent-specific model env when set |
 | `--session_id` | — | Target session (default: current running session) |
 
@@ -253,13 +253,14 @@ Authoring guide: **[docs/agent-skills.md](docs/agent-skills.md)**.
 
 ### `byo.langgraph` (`byo/langgraph`)
 
-LangGraph + LangChain ReAct workers per phase. Requires `-p` / `NIKA_LLM_PROVIDER` (`openai`, `deepseek`, `ollama`).
+LangGraph + LangChain ReAct workers per phase. Requires `-p` / `NIKA_LLM_PROVIDER` (`openai`, `deepseek`, `ollama`, `custom`).
 
 | Provider | Credential |
 |----------|------------|
 | `openai` | `OPENAI_API_KEY` |
 | `deepseek` | `DEEPSEEK_API_KEY` |
 | `ollama` | `OLLAMA_API_URL` (default `http://localhost:11434`) |
+| `custom` | `CUSTOM_API_BASE`, optional `CUSTOM_API_KEY` |
 
 | Env | Default |
 |-----|---------|
@@ -432,57 +433,72 @@ Registered scenarios (see `nika env list`) live under `src/nika/net_env/`, organ
 | `llmd_lab` | -- | Star topology with k3s cluster running llm-d disaggregated Prefill/Decode inference (simulated, no GPU). See [llmd_lab README](src/nika/net_env/kathara/kubernetes/llmd_lab/README.md). |
 | `min3clos` | -- | 3-node CLOS fabric with Nokia SR Linux ([Containerlab min clos](https://containerlab.dev/lab-examples/min-clos/)). |
 
-Each scenario is defined in a Kathará `lab.py` file, which specifies the network topology, devices, and initial configurations. See **[Creating Benchmark Tasks](docs/creating-benchmark-tasks.md)** for the NIKA extension workflow, and check [Kathará API Docs](https://github.com/KatharaFramework/Kathara/wiki/Kathara-API-Docs) for Kathará details.
+Each scenario is registered in `src/nika/net_env/net_env_pool.py` and declares its supported backend (`kathara` or `containerlab`). Kathará scenarios use `lab.py` files to define topology, devices, and initial configurations; Containerlab scenarios render Containerlab topology files under `runtime/containerlab/`. See **[Creating Benchmark Tasks](docs/creating-benchmark-tasks.md)** for the NIKA extension workflow, and check [Kathará API Docs](https://github.com/KatharaFramework/Kathara/wiki/Kathara-API-Docs) or [Containerlab docs](https://containerlab.dev/) for backend details.
 
 ## Network issues
 
-This framework provides a set of predefined issues that can be injected into the network environment. These issues are categorized into different types, each with specific root causes and key signals. By combining the issues with the network scenarios and composing multiple issues, this framework can generate multiple incidents based on a network issue (see # Incident column). Inject parameters must be specified explicitly (see `nika failure describe`); network addresses are read from the target host at inject time.
-The following table summarizes the issues available in this framework:
+This framework provides a set of predefined issues that can be injected into the network environment. The current problem registry contains 56 root-cause ids under `src/nika/problems/`; `benchmark/benchmark_full.yaml` expands them into 702 single-fault benchmark cases across the registered scenarios. Inject parameters must be specified explicitly (see `nika failure describe`); network addresses are read from the target host at inject time.
+The following table is generated from `ProblemMeta` plus case counts in `benchmark/benchmark_full.yaml`:
 
-| Category                               | Root Cause                              | Key Signals                                                     | # Incident |
-| -------------------------------------- | --------------------------------------- | --------------------------------------------------------------- | ---------- |
-| Link failures                          | Link flap                               | Flap event logs; packet drops                                   | 26         |
-| Link failures                          | Link detached                           | Physical link not detected; PHY down                            | 26         |
-| Link failures                          | Link down                               | Interface state down                                            | 26         |
-| Link failures                          | Faulty cable                            | CRC errors; corrupted frames                                    | 26         |
-| Link failures                          | MAC address conflict                    | Same MAC seen on multiple ports; MAC flapping logs              | 26         |
-| Link failures                          | Link fragmentation disabled             | Large packets dropped; MTU mismatch                             | 26         |
-| End-host failures                      | Conflicting VPN memberships             | Overlapping subnets; VPN servers unreachable                    | 3          |
-| End-host failures                      | Host crash                              | Host unresponsive; no heartbeat; ping fails                     | 35         |
-| End-host failures                      | Host IP conflict                        | Duplicate IP alerts; ARP conflict detected                      | 26         |
-| End-host failures                      | Host IP misconfig                       | Incorrect or missing IP address; host unresponsive              | 68         |
-| End-host failures                      | Incorrect netmask                       | Partial reachability; inconsistent routing behavior             | 16         |
-| End-host failures                      | DNS empty answer                        | Incorrect or missing DNS records; NXDOMAIN                      | 6          |
-| Network node errors                    | Number of MPLS labels hit limit         | Error logs; packet drops                                        | 1          |
-| Network node errors                    | Switch/router crash (e.g., overheating) | Switch down and unreachable from MGMT                           | 20         |
-| Network node errors                    | P4 program reads `invalid` header field | Packet drops; error logs (platform-dependent)                   | 8          |
-| Network node errors                    | SDN controller crash                    | Switches isolated; new flows dropped                            | 6          |
-| Network node errors                    | Southbound port unreachable             | OpenFlow/TCP 6633/6653 unreachable                              | 12         |
-| Misconfigurations (routing, ACL, etc.) | BGP ASN mismatch                        | BGP session fails; ASN mismatch detected                        | 7          |
-| Misconfigurations (routing, ACL, etc.) | BGP blackhole route leak                | Traffic to specific prefixes blackholed; unexpected AS path     | 7          |
-| Misconfigurations (routing, ACL, etc.) | Missing BGP advertisement               | Prefix not propagated; missing announcements                    | 7          |
-| Misconfigurations (routing, ACL, etc.) | Host static blackhole                   | Static blackhole route active; traffic dropped                  | 7          |
-| Misconfigurations (routing, ACL, etc.) | OSPF area misconfiguration              | OSPF adjacency failure; area mismatch                           | 6          |
-| Misconfigurations (routing, ACL, etc.) | OSPF neighbor missing                   | Missing neighbor; no Hello packets exchanged                    | 6          |
-| Misconfigurations (routing, ACL, etc.) | Forwarding table entry misconfig        | No matching entry; default drop                                 | 8          |
-| Misconfigurations (routing, ACL, etc.) | Flow rule loop                          | Traffic loop observed; CPU spike; port flooding                 | 6          |
-| Misconfigurations (routing, ACL, etc.) | Flow rule shadowing                     | Lower-priority rule overridden by higher-priority rule          | 6          |
-| Misconfigurations (routing, ACL, etc.) | ARP ACL block                           | ARP requests or replies dropped; ACL deny counters increase     | 26         |
-| Misconfigurations (routing, ACL, etc.) | ICMP ACL block                          | ICMP traffic blocked; ping fails                                | 26         |
-| Misconfigurations (routing, ACL, etc.) | Routing control-plane ACL block         | BGP (TCP/179) or OSPF (IP proto 89) blocked; neighborship fails | 13         |
-| Misconfigurations (routing, ACL, etc.) | HTTP ACL block                          | HTTP 80/443 traffic blocked; client connection timeout          | 12         |
-| Resource contention                    | Microbursts on interface                | Reduced throughput; queue buildup                               | 26         |
-| Resource contention                    | Receiver saturated & slow               | Multiple segments ACKed per ACK; RWND < CWND                    | 12         |
-| Resource contention                    | Incast traffic                          | Queue buildup; packet drops; retransmissions                    | 12         |
-| Resource contention                    | Sender saturated & slow                 | Segments smaller than MSS; Flight size < min(CWND,RWND)         | 24         |
-| Resource contention                    | Software middle-box overloads           | CPU usage saturates; queue buildup; RTT increases               | 3          |
-| Network under attack                   | Service DoS                             | Surge in HTTP connections; CPU/RAM usage spikes                 | 18         |
-| Network under attack                   | BGP hijacking                           | More specific or illegitimate prefixes appear; path anomaly     | 3          |
-| Network under attack                   | DHCP spoofing                           | DHCP clients received spoofed configurations (IP, DNS, etc.)    | 9          |
-| Network under attack                   | DNS spoofing                            | DNS points to wrong addresses                                   | 12         |
-| Network under attack                   | ARP cache poisoning                     | Abnormal traffic redirection                                    | 26         |
-| Network under attack                   | Misaligned sketch thresholds            | False-positive cardinality alerts (e.g., DoS); packet drops     | 1          |
-| **Total**                              | -                                       | -                                                               | **685**    |
+| Category | Problem ID | Description | # Cases |
+| -------- | ---------- | ----------- | ------- |
+| `end_host_failure` | `dns_record_error` | Some hosts cannot access external websites. | 6 |
+| `end_host_failure` | `host_crash` | host_crash | 28 |
+| `end_host_failure` | `host_incorrect_dns` | Some hosts are unable to access web services. | 6 |
+| `end_host_failure` | `host_incorrect_gateway` | Some hosts seem to be unreachable in the network. | 17 |
+| `end_host_failure` | `host_incorrect_ip` | Some hosts seem to be unreachable in the network. | 28 |
+| `end_host_failure` | `host_incorrect_netmask` | Some hosts seem to be unreachable in the network. | 17 |
+| `end_host_failure` | `host_ip_conflict` | Some hosts experience intermittent connectivity issues. | 28 |
+| `end_host_failure` | `host_missing_ip` | Some hosts are unable to communicate with other devices in the network. | 28 |
+| `end_host_failure` | `host_vpn_membership_missing` | host_vpn_membership_missing | 3 |
+| `link_failure` | `bmv2_switch_down` | bmv2_switch_down | 4 |
+| `link_failure` | `dhcp_service_down` | dhcp_service_down | 3 |
+| `link_failure` | `dns_service_down` | Some hosts cannot access external websites. | 6 |
+| `link_failure` | `link_detach` | Users report connectivity issues to other hosts. | 29 |
+| `link_failure` | `link_down` | Users report connectivity issues to other hosts. | 29 |
+| `link_failure` | `link_flap` | Users report connectivity issues to other hosts. | 29 |
+| `link_failure` | `link_fragmentation_disabled` | Users report partial packet loss when communicating with other hosts. | 29 |
+| `misconfiguration` | `arp_acl_block` | arp_acl_block | 28 |
+| `misconfiguration` | `bgp_acl_block` | bgp_acl_block | 9 |
+| `misconfiguration` | `bgp_asn_misconfig` | Some hosts are experiencing connectivity issues. | 9 |
+| `misconfiguration` | `bgp_blackhole_route_leak` | bgp_blackhole_route_leak | 9 |
+| `misconfiguration` | `bgp_missing_route_advertisement` | bgp_missing_route_advertisement | 9 |
+| `misconfiguration` | `dhcp_missing_subnet` | dhcp_missing_subnet | 3 |
+| `misconfiguration` | `dns_port_blocked` | dns_port_blocked | 6 |
+| `misconfiguration` | `host_static_blackhole` | host_static_blackhole | 9 |
+| `misconfiguration` | `http_acl_block` | http_acl_block | 13 |
+| `misconfiguration` | `icmp_acl_block` | icmp_acl_block | 28 |
+| `misconfiguration` | `mac_address_conflict` | mac_address_conflict | 28 |
+| `misconfiguration` | `ospf_acl_block` | ospf_acl_block | 6 |
+| `misconfiguration` | `ospf_area_misconfiguration` | ospf_area_misconfiguration | 6 |
+| `misconfiguration` | `ospf_neighbor_missing` | ospf_neighbor_missing | 6 |
+| `network_node_error` | `flow_rule_loop` | flow_rule_loop | 6 |
+| `network_node_error` | `flow_rule_shadowing` | flow_rule_shadowing | 6 |
+| `network_node_error` | `frr_service_down` | Users report connectivity issues to other hosts in the network. | 17 |
+| `network_node_error` | `mpls_label_limit_exceeded` | mpls_label_limit_exceeded | 1 |
+| `network_node_error` | `p4_aggressive_detection_thresholds` | p4_aggressive_detection_thresholds | 1 |
+| `network_node_error` | `p4_compilation_error_parser_state` | p4_compilation_error_parser_state | 4 |
+| `network_node_error` | `p4_header_definition_error` | p4_header_definition_error | 4 |
+| `network_node_error` | `p4_table_entry_misconfig` | p4_table_entry_misconfig | 4 |
+| `network_node_error` | `p4_table_entry_missing` | p4_table_entry_missing | 4 |
+| `network_node_error` | `sdn_controller_crash` | sdn_controller_crash | 6 |
+| `network_node_error` | `southbound_port_block` | southbound_port_block | 6 |
+| `network_node_error` | `southbound_port_mismatch` | southbound_port_mismatch | 6 |
+| `network_under_attack` | `arp_cache_poisoning` | arp_cache_poisoning | 28 |
+| `network_under_attack` | `bgp_hijacking` | bgp_hijacking | 9 |
+| `network_under_attack` | `dhcp_spoofed_dns` | Some hosts can not access webservices. | 3 |
+| `network_under_attack` | `dhcp_spoofed_gateway` | dhcp_spoofed_gateway | 3 |
+| `network_under_attack` | `dhcp_spoofed_subnet` | dhcp_spoofed_subnet | 3 |
+| `network_under_attack` | `web_dos_attack` | Users reports high latency when accessing some web services. | 13 |
+| `resource_contention` | `dns_lookup_latency` | Users experience high latency when accessing web services. | 6 |
+| `resource_contention` | `incast_traffic_network_limitation` | incast_traffic_network_limitation | 13 |
+| `resource_contention` | `link_bandwidth_throttling` | link_bandwidth_throttling | 29 |
+| `resource_contention` | `link_high_packet_corruption` | link_high_packet_corruption | 29 |
+| `resource_contention` | `load_balancer_overload` | load_balancer_overload | 3 |
+| `resource_contention` | `receiver_resource_contention` | receiver_resource_contention | 13 |
+| `resource_contention` | `sender_application_delay` | sender_application_delay | 13 |
+| `resource_contention` | `sender_resource_contention` | sender_resource_contention | 13 |
+| **Total** | - | - | **702** |
 
 Based on the above issues, we disclose a large public dataset of AI agents’ behavior for network troubleshooting, with more than 900 reasoning traces. See the [![Zenodo Dataset](https://img.shields.io/badge/Zenodo-17971675-blue?logo=zenodo)](https://zenodo.org/records/17971675).
 
@@ -490,7 +506,7 @@ Based on the above issues, we disclose a large public dataset of AI agents’ be
 
 This framework provides MCP servers under `src/nika/service/mcp_server`. These include:
 
-- **Kathará base MCP server** (`kathara_base_mcp_server.py`): host reachability and diagnostics, including
+- **Host MCP server** (`common/host_server.py`, registered as `kathara_base_mcp_server`): host reachability and diagnostics, including
   - `get_reachability` to ping all pairs of hosts (subset when the lab is large).
   - `ping_pair` to ping between two specific hosts.
   - `iperf_test` to run an iperf test between two hosts.
@@ -498,14 +514,15 @@ This framework provides MCP servers under `src/nika/service/mcp_server`. These i
   - `get_host_net_config` to retrieve the network configuration of a host.
   - `get_tc_statistics`, `netstat`, `ip_addr_statistics`, `ethtool`, `curl_web_test` for interface and service checks.
   - `cat_file`, `exec_shell`, `exec_shell_dual` to read files or run commands in containers.
-- **BMv2 MCP server** (`kathara_bmv2_mcp_server.py`): P4/BMv2 switch interaction, including
+- **BMv2 MCP server** (`kathara/bmv2_server.py`, registered as `kathara_bmv2_mcp_server`): P4/BMv2 switch interaction, including
   - `bmv2_get_log`, `bmv2_get_counter_arrays`, `bmv2_read_p4_program`, `bmv2_counter_read`.
   - `bmv2_show_tables`, `bmv2_table_dump`, `bmv2_get_register_arrays`, `bmv2_register_read`.
-- **FRR MCP server** (`kathara_frr_mcp_server.py`): FRRouting routers, including
+- **FRR MCP server** (`kathara/frr_server.py`, registered as `kathara_frr_mcp_server`): FRRouting routers, including
   - `frr_get_bgp_conf`, `frr_get_ospf_conf`, `frr_show_running_config`, `frr_show_ip_route`, `frr_exec`.
-- **Telemetry MCP server** (`kathara_telemetry_mcp_server.py`): INT/InfluxDB telemetry, including
+- **Telemetry MCP server** (`kathara/telemetry_server.py`, registered as `kathara_telemetry_mcp_server`): INT/InfluxDB telemetry, including
   - `influx_list_buckets`, `influx_get_measurements`, `influx_count_measurements`, `influx_query_measurement`.
-- **Task management MCP server** (`task_mcp_server.py`): agent submissions, including
+- **Containerlab SR Linux MCP server** (`containerlab/srl_server.py`, registered as `containerlab_srl_mcp_server`): SR Linux routing diagnostics for Containerlab scenarios.
+- **Task management MCP server** (`common/task_server.py`, registered as `task_mcp_server`): agent submissions, including
   - `list_avail_problems` to list injectable root-cause ids.
   - `submit` to write the agent's final detection/localization/RCA answer.
 

@@ -70,9 +70,9 @@ Every agent runs **diagnosis** (Kathara MCP, `if_submit=False`) then **submissio
 
 | Flag | Env | Required | Notes |
 |------|-----|----------|-------|
-| `-a` / `--agent` | `NIKA_AGENT_TYPE` | Yes | `byo.langgraph`, `byo.mcp_agent`, `byo.autogen`, `local_cli.codex_cli`, `local_cli.claude_cli`, `community.sade` |
-| `-p` / `--provider` | `NIKA_LLM_PROVIDER` | byo.langgraph only | `openai`, `ollama`, `deepseek` |
-| `-n` / `--max-steps` | `NIKA_MAX_STEPS` | Yes | Limits steps per phase in `byo.langgraph`, `byo.mcp_agent`, `byo.autogen`, and `community.sade` |
+| `-a` / `--agent` | `NIKA_AGENT_TYPE` | Yes | `byo.langgraph`, `byo.mcp_agent`, `byo.autogen`, `local_cli.codex_cli`, `local_cli.claude_cli`, `community.sade`, `sdk.claude_sdk`, `sdk.codex_sdk` |
+| `-p` / `--provider` | `NIKA_LLM_PROVIDER` | byo.langgraph only | `openai`, `ollama`, `deepseek`, `custom` |
+| `-n` / `--max-steps` | `NIKA_MAX_STEPS` | Yes | Limits steps per phase in `byo.langgraph`, `byo.mcp_agent`, `byo.autogen`, `community.sade`, and `sdk.claude_sdk` |
 | `-m` / `--model` | `NIKA_MODEL` | No | Overrides agent-specific model env when set |
 | `--session_id` | — | No | Target session (default: current running session) |
 
@@ -99,6 +99,7 @@ LangGraph orchestration + LangChain ReAct workers per phase.
 | `openai` | `OPENAI_API_KEY` |
 | `deepseek` | `DEEPSEEK_API_KEY` |
 | `ollama` | `OLLAMA_API_URL` (default `http://localhost:11434`) |
+| `custom` | `CUSTOM_API_BASE`, optional `CUSTOM_API_KEY` |
 
 | Env | Default in `.env.example` |
 |-----|-------------------------|

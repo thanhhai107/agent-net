@@ -12,11 +12,18 @@ from typer.testing import CliRunner
 
 from nika.cli.main import app
 from nika.service.mcp_server.mcp_session_context import SESSION_ID_ENV, get_lab_name
+from nika.utils.session_id import (
+    TEST_SESSION_TAG,
+    resolve_session_tag,
+    session_id_pattern,
+)
 from nika.utils.session_store import SessionStore
 from nika.workflows.env.start import start_net_env
 from nika.workflows.eval.clean import remove_session_results
 from nika.workflows.failure.inject import inject_failure as inject_failure_workflow
 from nika.workflows.session.close import close_session
+
+TEST_SESSION_ID_RE = session_id_pattern(TEST_SESSION_TAG)
 
 
 def _parse_env_run_args(extra_args: list[str] | None) -> dict[str, Any]:
@@ -64,7 +71,12 @@ class IntegrationTestCase(unittest.TestCase):
     def _start_env(self, scenario: str, extra_args: list[str] | None = None) -> str:
         kwargs = _parse_env_run_args(extra_args)
         topo_size = kwargs.pop("topo_size", None)
-        return start_net_env(scenario, topo_size, **kwargs)
+        return start_net_env(
+            scenario,
+            topo_size,
+            session_tag=resolve_session_tag(context="test"),
+            **kwargs,
+        )
 
     @classmethod
     def _start_env_class(
@@ -72,7 +84,12 @@ class IntegrationTestCase(unittest.TestCase):
     ) -> str:
         kwargs = _parse_env_run_args(extra_args)
         topo_size = kwargs.pop("topo_size", None)
-        return start_net_env(scenario, topo_size, **kwargs)
+        return start_net_env(
+            scenario,
+            topo_size,
+            session_tag=resolve_session_tag(context="test"),
+            **kwargs,
+        )
 
     def _close_session(self, session_id: str) -> None:
         close_session(session_id=session_id)
@@ -150,8 +167,8 @@ class IntegrationTestCase(unittest.TestCase):
         self.assertIn(scenario, row["lab_name"])
         self.assertRegex(
             session_id,
-            r"^\d{8}-\d{6}-[0-9a-f]{6}$",
-            "session_id does not match expected YYYYMMDD-HHMMSS-{6hex} format",
+            TEST_SESSION_ID_RE,
+            f"session_id must match YYYYMMDD-HHMMSS-{TEST_SESSION_TAG}-{{6hex}}",
         )
         if os.environ.get(SESSION_ID_ENV) == session_id:
             self.assertEqual(get_lab_name(), row["lab_name"])

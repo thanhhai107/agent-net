@@ -3,7 +3,6 @@ import json
 from typing import Literal
 
 from nika.runtime.base import LabRuntime
-from nika.runtime import ops_defaults
 
 
 def to_json(x):
@@ -235,8 +234,7 @@ class ODFLowGenerator:
         server_args: str = "",
         client_args: str = "",
     ) -> list[str]:
-        return ops_defaults.start_background_od_traffic(
-            self.runtime,
+        return self.runtime.start_background_od_traffic(
             od_dicts,
             interval=interval,
             unit=unit,

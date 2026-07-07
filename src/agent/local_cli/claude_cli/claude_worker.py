@@ -27,7 +27,10 @@ import json
 import sys
 from pathlib import Path
 
-from agent.local_cli.claude_cli.claude_display import format_claude_event
+from agent.local_cli.claude_cli.claude_display import (
+    format_claude_event,
+    should_log_claude_event,
+)
 from agent.local_cli.claude_cli.config import (
     prepare_claude_subprocess_env,
     resolve_claude_model,
@@ -296,10 +299,11 @@ class ClaudeWorker:
                 print(raw, flush=True)
             return None
 
-        self._logger.log(
-            event.get("type", "claude_event"),
-            {"claude_event": event},
-        )
+        if should_log_claude_event(event):
+            self._logger.log(
+                event.get("type", "claude_event"),
+                {"claude_event": event},
+            )
         if self._stream_output:
             try:
                 display = format_claude_event(event)

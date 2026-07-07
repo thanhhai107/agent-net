@@ -81,7 +81,7 @@ def benchmark_run(
         "-p",
         "--provider",
         envvar=ENV_LLM_PROVIDER,
-        help="LLM provider for byo.langgraph only: openai, ollama, deepseek.",
+        help="LLM provider for byo.langgraph only: openai, ollama, deepseek, custom.",
     ),
     model: str | None = typer.Option(
         None,
@@ -128,6 +128,11 @@ def benchmark_run(
         "--result_dir",
         envvar=ENV_RESULT_DIR,
         help="Results parent directory (default: results/). Session output goes to {result_dir}/{session_id}.",
+    ),
+    session_tag: str | None = typer.Option(
+        None,
+        "--session-tag",
+        help="Optional tag embedded in each session id (YYYYMMDD-HHMMSS-tag-{hex}).",
     ),
     resume: bool = typer.Option(
         True,
@@ -195,6 +200,7 @@ def benchmark_run(
             judge_llm_provider=judge_provider,
             judge_model=judge_model,
             result_dir=result_dir,
+            session_tag=session_tag,
         )
         return
 
@@ -218,4 +224,5 @@ def benchmark_run(
         judge_model=judge_model,
         result_dir=result_dir,
         resume=resume,
+        session_tag=session_tag,
     )

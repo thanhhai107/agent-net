@@ -1068,6 +1068,12 @@ cases:
   inject:
     host_name: pc1
     intf_name: eth0
+- scenario: min3clos
+  topo_size: null
+  problem: link_detach
+  inject:
+    host_name: leaf1
+    intf_name: e1-1
 - scenario: k8s_lab
   topo_size: null
   problem: link_detach
@@ -1236,6 +1242,12 @@ cases:
   inject:
     host_name: pc1
     intf_name: eth0
+- scenario: min3clos
+  topo_size: null
+  problem: link_down
+  inject:
+    host_name: leaf1
+    intf_name: e1-1
 - scenario: k8s_lab
   topo_size: null
   problem: link_down
@@ -1456,6 +1468,14 @@ cases:
     intf_name: eth0
     down_time: '30'
     up_time: '30'
+- scenario: min3clos
+  topo_size: null
+  problem: link_flap
+  inject:
+    host_name: leaf1
+    intf_name: e1-1
+    down_time: '30'
+    up_time: '30'
 - scenario: k8s_lab
   topo_size: null
   problem: link_flap
@@ -1654,6 +1674,13 @@ cases:
     host_name: pc1
     intf_name: eth0
     mtu: '100'
+- scenario: min3clos
+  topo_size: null
+  problem: link_fragmentation_disabled
+  inject:
+    host_name: leaf1
+    intf_name: e1-1
+    mtu: '100'
 - scenario: k8s_lab
   topo_size: null
   problem: link_fragmentation_disabled
@@ -1847,7 +1874,7 @@ cases:
   topo_size: null
   problem: bgp_acl_block
   inject:
-    host_name: client1
+    host_name: leaf1
 - scenario: k8s_lab
   topo_size: null
   problem: bgp_acl_block
@@ -2157,7 +2184,7 @@ cases:
   topo_size: null
   problem: bgp_asn_misconfig
   inject:
-    host_name: client1
+    host_name: leaf1
 - scenario: k8s_lab
   topo_size: null
   problem: bgp_asn_misconfig
@@ -2202,7 +2229,7 @@ cases:
   topo_size: null
   problem: bgp_blackhole_route_leak
   inject:
-    host_name: client1
+    host_name: leaf1
 - scenario: k8s_lab
   topo_size: null
   problem: bgp_blackhole_route_leak
@@ -2247,7 +2274,7 @@ cases:
   topo_size: null
   problem: bgp_missing_route_advertisement
   inject:
-    host_name: client1
+    host_name: leaf1
 - scenario: k8s_lab
   topo_size: null
   problem: bgp_missing_route_advertisement
@@ -2292,7 +2319,7 @@ cases:
   topo_size: null
   problem: host_static_blackhole
   inject:
-    host_name: client1
+    host_name: leaf1
 - scenario: k8s_lab
   topo_size: null
   problem: host_static_blackhole
@@ -3092,7 +3119,7 @@ cases:
   topo_size: null
   problem: bgp_hijacking
   inject:
-    host_name: client1
+    host_name: leaf1
 - scenario: k8s_lab
   topo_size: null
   problem: bgp_hijacking
@@ -3581,6 +3608,15 @@ cases:
     rate: 30kbit
     burst: 64kb
     limit: 500kb
+- scenario: min3clos
+  topo_size: null
+  problem: link_bandwidth_throttling
+  inject:
+    host_name: leaf1
+    intf_name: e1-1
+    rate: 30kbit
+    burst: 64kb
+    limit: 500kb
 - scenario: k8s_lab
   topo_size: null
   problem: link_bandwidth_throttling
@@ -3780,6 +3816,13 @@ cases:
   inject:
     host_name: pc1
     intf_name: eth0
+    corruption_percentage: '60'
+- scenario: min3clos
+  topo_size: null
+  problem: link_high_packet_corruption
+  inject:
+    host_name: leaf1
+    intf_name: e1-1
     corruption_percentage: '60'
 - scenario: k8s_lab
   topo_size: null

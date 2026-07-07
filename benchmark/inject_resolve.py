@@ -9,7 +9,7 @@ from nika.net_env.net_env_pool import (
     list_all_net_envs,
     scenario_supported_backends,
 )
-from nika.orchestrator.problems.prob_pool import list_avail_problem_instances
+from nika.problems.prob_pool import list_avail_problem_instances
 
 _DEVICE_KEYS = ("host_name", "host_name_2", "attacker_device")
 
@@ -75,6 +75,10 @@ def _all_device_names(net_env) -> set[str]:
     for bucket in (net_env.servers or {}).values():
         names.update(bucket)
     names.update(getattr(net_env, "kubernetes_nodes", []) or [])
+    if net_env.lab is None:
+        spec = net_env.get_lab_spec()
+        if spec is not None:
+            names.update(node.name for node in spec.nodes)
     return names
 
 
@@ -149,6 +153,14 @@ def _scenario_device_defaults(scenario: str, net_env) -> dict[str, str]:
             "attacker": client,
             "controller": controller,
         }
+    if scenario == "min3clos":
+        return {
+            "host0": _pick("client1", hosts, _first(hosts) or "client1"),
+            "host1": _pick("client2", hosts, _second(hosts) or "client2"),
+            "router0": _pick("leaf1", routers, _first(routers) or "leaf1"),
+            "web0": _pick("client1", hosts, "client1"),
+            "attacker": _pick("client2", hosts, "client2"),
+        }
     return {}
 
 
@@ -194,9 +206,13 @@ def resolve_inject_params(
         "arp_cache_poisoning",
         "receiver_resource_contention",
     }:
-        params["host_name"] = host0
-        if problem.startswith("link_"):
-            params["intf_name"] = "eth0"
+        if scenario == "min3clos" and problem.startswith("link_"):
+            params["host_name"] = router0
+            params["intf_name"] = "e1-1"
+        else:
+            params["host_name"] = host0
+            if problem.startswith("link_"):
+                params["intf_name"] = "eth0"
         if problem == "link_flap":
             params["down_time"] = "30"
             params["up_time"] = "30"

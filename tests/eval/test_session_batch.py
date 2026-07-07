@@ -8,11 +8,10 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from nika.evaluator.result_log import EVAL_METRICS_FILENAME, MESSAGES_FILENAME
+from nika.evaluator.result_log import MESSAGES_FILENAME
 from nika.utils.session_artifacts import RUN_FILENAME
 from nika.workflows.eval.session import (
     _iter_eval_session_ids,
-    run_eval_metrics,
     run_llm_judge,
 )
 
@@ -91,20 +90,6 @@ class EvalSessionBatchTestCase(unittest.TestCase):
             ):
                 with self.assertRaisesRegex(ValueError, "Multiple closed sessions"):
                     _iter_eval_session_ids()
-
-    def test_run_eval_metrics_batch_under_result_dir(self) -> None:
-        sid_one = "20260101-120000-aaa111"
-        sid_two = "20260101-120000-bbb222"
-        _write_closed_session(self.results_root, sid_one)
-        _write_closed_session(self.results_root, sid_two)
-
-        run_eval_metrics(result_dir=str(self.results_root))
-
-        for sid in (sid_one, sid_two):
-            metrics_path = self.results_root / sid / EVAL_METRICS_FILENAME
-            self.assertTrue(metrics_path.exists(), f"missing metrics for {sid}")
-            metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
-            self.assertEqual(metrics["detection_score"], 1.0)
 
     def test_run_llm_judge_batch_under_result_dir(self) -> None:
         sid_one = "20260101-120000-aaa111"

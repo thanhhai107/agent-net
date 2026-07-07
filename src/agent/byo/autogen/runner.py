@@ -12,12 +12,9 @@ from autogen_ext.models.openai import OpenAIChatCompletionClient
 
 from agent.utils.loggers import MessageLogger
 
-_KATHARA_PREFIXES = (
-    "kathara_base_mcp_server_",
-    "kathara_frr_mcp_server_",
-    "kathara_bmv2_mcp_server_",
-    "kathara_telemetry_mcp_server_",
-)
+from nika.service.mcp_server.registry import MCP_SERVER_PREFIXES
+
+_KATHARA_PREFIXES = MCP_SERVER_PREFIXES
 
 _DEEPSEEK_BASE_URL = "https://api.deepseek.com"
 _DEEPSEEK_MODEL_INFO = {

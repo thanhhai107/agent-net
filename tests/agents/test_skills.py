@@ -29,7 +29,9 @@ from tests.agents._assertions import (
 )
 from tests.integration_base import OrderedPipelineTestCase
 from tests.integration_pipeline import (
+    ClabCommonPipelineSteps,
     CommonPipelineSteps,
+    _min3clos_prerequisites,
     claude_cli_available,
     claude_sdk_available,
     codex_cli_available,
@@ -292,6 +294,68 @@ class CodexSdkSkillPipelineTest(
 
     def test_step_06_session_close(self) -> None:
         self._step_close_and_verify(self.agent_id)
+
+
+class _ClabSkillPipelineMixin(_SkillPipelineMixin):
+    def test_step_01_start_env(self) -> None:
+        self._step_start_env()  # type: ignore[attr-defined]
+
+    def test_step_02_inject_failure(self) -> None:
+        self._step_inject_failure()  # type: ignore[attr-defined]
+
+
+@unittest.skipUnless(
+    _min3clos_prerequisites() and claude_sdk_available(),
+    "containerlab/gnmic/Docker or claude-agent-sdk credentials required",
+)
+class ClaudeSdkClabSkillPipelineTest(
+    _ClabSkillPipelineMixin, ClabCommonPipelineSteps, OrderedPipelineTestCase
+):
+    agent_id = "sdk.claude_sdk"
+
+    def test_step_06_session_close(self) -> None:
+        self._step_close_and_verify(self.agent_id)  # type: ignore[attr-defined]
+
+
+@unittest.skipUnless(
+    _min3clos_prerequisites() and claude_cli_available(),
+    "containerlab/gnmic/Docker or Claude CLI credentials required",
+)
+class ClaudeCliClabSkillPipelineTest(
+    _ClabSkillPipelineMixin, ClabCommonPipelineSteps, OrderedPipelineTestCase
+):
+    agent_id = "local_cli.claude_cli"
+
+    def test_step_06_session_close(self) -> None:
+        self._step_close_and_verify(self.agent_id)  # type: ignore[attr-defined]
+
+
+@unittest.skipUnless(
+    _min3clos_prerequisites() and codex_cli_available(),
+    "containerlab/gnmic/Docker or Codex CLI credentials required",
+)
+class CodexCliClabSkillPipelineTest(
+    _ClabSkillPipelineMixin, ClabCommonPipelineSteps, OrderedPipelineTestCase
+):
+    agent_id = "local_cli.codex_cli"
+    agent_model = CODEX_MODEL
+
+    def test_step_06_session_close(self) -> None:
+        self._step_close_and_verify(self.agent_id)  # type: ignore[attr-defined]
+
+
+@unittest.skipUnless(
+    _min3clos_prerequisites() and codex_sdk_available(),
+    "containerlab/gnmic/Docker or openai-codex credentials required",
+)
+class CodexSdkClabSkillPipelineTest(
+    _ClabSkillPipelineMixin, ClabCommonPipelineSteps, OrderedPipelineTestCase
+):
+    agent_id = "sdk.codex_sdk"
+    agent_model = CODEX_MODEL
+
+    def test_step_06_session_close(self) -> None:
+        self._step_close_and_verify(self.agent_id)  # type: ignore[attr-defined]
 
 
 if __name__ == "__main__":

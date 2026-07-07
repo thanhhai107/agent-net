@@ -1,62 +1,64 @@
-"""Exec-based semantic operations mixed into LabRuntime backends."""
+"""Exec-based semantic operations mixed into LabRuntime backends.
+
+Implementation lives in ``service/lab``; this module is a thin capability-aware
+facade so orchestrator problems can keep calling ``runtime.<op>()``.
+"""
 
 from __future__ import annotations
 
 from typing import Literal
 
-from nika.runtime import ops_defaults
+from nika.service.lab.adapters import lab_api_for_runtime, node_status_from_container
 
 
 class ExecSemanticOpsMixin:
-    """Default semantic lab operations implemented via ``runtime.exec``."""
+    """Delegate semantic operations to ``service.lab`` APIs."""
 
     require_capabilities: object
-    exec: object
-    get_container: object
     list_nodes: object
+
+    def _api(self):
+        return lab_api_for_runtime(self)
+
+    def _delegate(self, capability: str, method: str, /, *args, **kwargs):
+        self.require_capabilities(capability)
+        return getattr(self._api(), method)(*args, **kwargs)
 
     def node_status(self, node: str) -> str:
         self.require_capabilities("node_status")
         try:
-            return ops_defaults.node_status_from_container(self.get_container(node))
+            return node_status_from_container(self.get_container(node))
         except ValueError:
             return "not_found"
 
     def set_interface_state(
         self, node: str, intf: str, state: Literal["up", "down"]
     ) -> str:
-        self.require_capabilities("interface")
-        return ops_defaults.set_interface_state(self, node, intf, state)
+        return self._delegate("interface", "set_interface_state", node, intf, state)
 
     def get_interface_operstate(self, node: str, intf: str) -> str:
-        self.require_capabilities("interface")
-        return ops_defaults.get_interface_operstate(self, node, intf)
+        return self._delegate("interface", "get_interface_operstate", node, intf)
 
     def get_host_ip(
         self, node: str, iface: str = "eth0", *, with_prefix: bool = False
     ) -> str | None:
-        self.require_capabilities("ip")
-        return ops_defaults.get_host_ip(self, node, iface, with_prefix=with_prefix)
+        return self._delegate("ip", "get_host_ip", node, iface, with_prefix=with_prefix)
 
     def get_default_gateway(self, node: str) -> str | None:
-        self.require_capabilities("route")
-        return ops_defaults.get_default_gateway(self, node)
+        return self._delegate("route", "get_default_gateway", node)
 
     def get_host_interfaces(
         self, node: str, *, include_loopback: bool = False
     ) -> list[str]:
-        self.require_capabilities("interface")
-        return ops_defaults.get_host_interfaces(
-            self, node, include_loopback=include_loopback
+        return self._delegate(
+            "interface", "get_host_interfaces", node, include_loopback=include_loopback
         )
 
     def get_host_mac_address(self, node: str, iface: str = "eth0") -> str | None:
-        self.require_capabilities("interface")
-        return ops_defaults.get_host_mac_address(self, node, iface)
+        return self._delegate("interface", "get_host_mac_address", node, iface)
 
     def list_nft_ruleset(self, node: str) -> str:
-        self.require_capabilities("nft")
-        return ops_defaults.list_nft_ruleset(self, node)
+        return self._delegate("nft", "list_nft_ruleset", node)
 
     def add_nft_drop_rule(
         self,
@@ -66,14 +68,14 @@ class ExecSemanticOpsMixin:
         table: str = "filter",
         family: str = "inet",
     ) -> None:
-        self.require_capabilities("nft")
-        ops_defaults.add_nft_drop_rule(self, node, rule, table=table, family=family)
+        self._delegate(
+            "nft", "add_nft_drop_rule", node, rule, table=table, family=family
+        )
 
     def delete_nft_table(
         self, node: str, *, table: str = "filter", family: str = "inet"
     ) -> None:
-        self.require_capabilities("nft")
-        ops_defaults.delete_nft_table(self, node, table=table, family=family)
+        self._delegate("nft", "delete_nft_table", node, table=table, family=family)
 
     def tc_set_netem(
         self,
@@ -91,12 +93,12 @@ class ExecSemanticOpsMixin:
         handle: str | None = None,
         parent: str | None = None,
     ) -> str:
-        self.require_capabilities("tc")
         target_node = node if node is not None else host_name
         if target_node is None:
             raise TypeError("tc_set_netem requires node or host_name.")
-        return ops_defaults.tc_set_netem(
-            self,
+        return self._delegate(
+            "tc",
+            "tc_set_netem",
             target_node,
             intf_name,
             loss=loss,
@@ -122,12 +124,12 @@ class ExecSemanticOpsMixin:
         handle: str | None = None,
         parent: str | None = None,
     ) -> str:
-        self.require_capabilities("tc")
         target_node = node if node is not None else host_name
         if target_node is None:
             raise TypeError("tc_set_tbf requires node or host_name.")
-        return ops_defaults.tc_set_tbf(
-            self,
+        return self._delegate(
+            "tc",
+            "tc_set_tbf",
             target_node,
             intf_name,
             rate=rate,
@@ -138,48 +140,85 @@ class ExecSemanticOpsMixin:
         )
 
     def tc_clear_intf(self, node: str, intf_name: str) -> str:
-        self.require_capabilities("tc")
-        return ops_defaults.tc_clear_intf(self, node, intf_name)
+        return self._delegate("tc", "tc_clear_intf", node, intf_name)
 
     def tc_show_intf(self, node: str, intf_name: str) -> str:
-        self.require_capabilities("tc")
-        return ops_defaults.tc_show_intf(self, node, intf_name)
+        return self._delegate("tc", "tc_show_intf", node, intf_name)
 
     def systemctl(
         self, node: str, service: str, operation: Literal["start", "stop", "restart"]
     ) -> str:
-        self.require_capabilities("service")
-        return ops_defaults.systemctl(self, node, service, operation)
+        return self._delegate("service", "systemctl", node, service, operation)
 
     def frr_get_bgp_asn_number(self, node: str) -> int:
-        self.require_capabilities("frr")
-        return ops_defaults.frr_get_bgp_asn_number(self, node)
+        return self._delegate("frr", "frr_get_bgp_asn_number", node)
+
+    def uses_srl_router(self, node: str) -> bool:
+        return self._api().uses_srl_router(node)
+
+    def srl_get_bgp_as(self, node: str) -> int:
+        return self._api().srl_get_bgp_as(node)
+
+    def srl_set_bgp_as(self, node: str, asn: int) -> None:
+        self._api().srl_set_bgp_as(node, asn)
+
+    def srl_add_bgp_acl_drop_179(self, node: str) -> None:
+        self._api().srl_add_bgp_acl_drop_179(node)
+
+    def srl_bgp_acl_drop_179_present(self, node: str) -> bool:
+        return self._api().srl_bgp_acl_drop_179_present(node)
+
+    def srl_withdraw_client_prefix(
+        self, node: str, *, subinterface: str = "ethernet-1/2.0"
+    ) -> None:
+        self._api().srl_withdraw_client_prefix(node, subinterface=subinterface)
+
+    def srl_client_subinterface_disabled(self, node: str, *, subinterface: str) -> bool:
+        return self._api().srl_client_subinterface_disabled(
+            node, subinterface=subinterface
+        )
+
+    def srl_add_blackhole_static(self, node: str, prefix: str) -> None:
+        self._api().srl_add_blackhole_static(node, prefix)
+
+    def srl_blackhole_static_present(self, node: str, prefix: str) -> bool:
+        return self._api().srl_blackhole_static_present(node, prefix)
+
+    def srl_advertise_prefix(self, node: str, prefix: str) -> None:
+        self._api().srl_advertise_prefix(node, prefix)
+
+    def srl_prefix_advertised(self, node: str, prefix: str) -> bool:
+        return self._api().srl_prefix_advertised(node, prefix)
+
+    def srl_add_blackhole_route_leak(self, node: str, prefix: str) -> None:
+        self._api().srl_add_blackhole_route_leak(node, prefix)
+
+    def srl_withdraw_bgp_prefix(self, node: str, prefix: str) -> None:
+        self._api().srl_withdraw_bgp_prefix(node, prefix)
+
+    def srl_bgp_prefix_withdrawn(self, node: str, prefix: str) -> bool:
+        return self._api().srl_bgp_prefix_withdrawn(node, prefix)
 
     def kill_process(self, node: str, process_name: str) -> str:
-        self.require_capabilities("process")
-        return ops_defaults.kill_process(self, node, process_name)
+        return self._delegate("process", "kill_process", node, process_name)
 
     def write_file(self, node: str, path: str, content: str) -> str:
-        self.require_capabilities("file")
-        return ops_defaults.write_file(self, node, path, content)
+        return self._delegate("file", "write_file", node, path, content)
 
     def renew_dhcp_leases(self, nodes: list[str], intf: str = "eth0") -> None:
         self.require_capabilities("dns")
-        ops_defaults.renew_dhcp_leases(self, nodes, intf)
+        self._api().renew_dhcp_leases(nodes, intf)
 
     def dhcp_set_option_routers(
         self, dhcp_server: str, subnet: str, gateway: str
     ) -> None:
-        self.require_capabilities("dns")
-        ops_defaults.dhcp_set_option_routers(self, dhcp_server, subnet, gateway)
+        self._delegate("dns", "dhcp_set_option_routers", dhcp_server, subnet, gateway)
 
     def dhcp_set_option_dns(self, dhcp_server: str, subnet: str, dns: str) -> None:
-        self.require_capabilities("dns")
-        ops_defaults.dhcp_set_option_dns(self, dhcp_server, subnet, dns)
+        self._delegate("dns", "dhcp_set_option_dns", dhcp_server, subnet, dns)
 
     def dhcp_delete_subnet(self, dhcp_server: str, subnet: str) -> None:
-        self.require_capabilities("dns")
-        ops_defaults.dhcp_delete_subnet(self, dhcp_server, subnet)
+        self._delegate("dns", "dhcp_delete_subnet", dhcp_server, subnet)
 
     def list_dhcp_client_nodes(self) -> list[str]:
         self.require_capabilities("dns")
@@ -190,46 +229,38 @@ class ExecSemanticOpsMixin:
         ]
 
     def process_running(self, node: str, process_name: str) -> bool:
-        self.require_capabilities("process")
-        return ops_defaults.process_running(self, node, process_name)
+        return self._delegate("process", "process_running", node, process_name)
 
     def process_not_running(self, node: str, process_name: str) -> bool:
-        self.require_capabilities("process")
-        return ops_defaults.process_not_running(self, node, process_name)
+        return self._delegate("process", "process_not_running", node, process_name)
 
     def pidfile_running(self, node: str, pidfile: str) -> bool:
-        self.require_capabilities("pidfile")
-        return ops_defaults.pidfile_running(self, node, pidfile)
+        return self._delegate("pidfile", "pidfile_running", node, pidfile)
 
     def interface_exists(self, node: str, intf: str) -> bool:
-        self.require_capabilities("interface")
-        return ops_defaults.interface_exists(self, node, intf)
+        return self._delegate("interface", "interface_exists", node, intf)
 
     def tc_qdisc_contains(self, node: str, intf: str, keyword: str) -> bool:
-        self.require_capabilities("tc")
-        return ops_defaults.tc_qdisc_contains(self, node, intf, keyword)
+        return self._delegate("tc", "tc_qdisc_contains", node, intf, keyword)
 
     def iptables_rule_present(self, node: str, chain: str, rule_args: str) -> bool:
-        self.require_capabilities("iptables")
-        return ops_defaults.iptables_rule_present(self, node, chain, rule_args)
+        return self._delegate(
+            "iptables", "iptables_rule_present", node, chain, rule_args
+        )
 
     def nft_ruleset_contains(self, node: str, pattern: str) -> bool:
-        self.require_capabilities("nft")
-        return ops_defaults.nft_ruleset_contains(self, node, pattern)
+        return self._delegate("nft", "nft_ruleset_contains", node, pattern)
 
     def ping_ok(self, node: str, target: str, *, count: int = 1) -> bool:
-        self.require_capabilities("exec")
-        return ops_defaults.ping_ok(self, node, target, count=count)
+        return self._delegate("exec", "ping_ok", node, target, count=count)
 
     def dig_query(
         self, node: str, domain: str, *, nameserver: str | None = None
     ) -> str:
-        self.require_capabilities("dns")
-        return ops_defaults.dig_query(self, node, domain, nameserver=nameserver)
+        return self._delegate("dns", "dig_query", node, domain, nameserver=nameserver)
 
     def file_contains(self, node: str, path: str, pattern: str) -> bool:
-        self.require_capabilities("file")
-        return ops_defaults.file_contains(self, node, path, pattern)
+        return self._delegate("file", "file_contains", node, path, pattern)
 
     def start_background_od_traffic(
         self,
@@ -242,8 +273,7 @@ class ExecSemanticOpsMixin:
         client_args: str = "",
     ) -> list[str]:
         self.require_capabilities("traffic", "ip")
-        return ops_defaults.start_background_od_traffic(
-            self,
+        return self._api().start_background_od_traffic(
             od_dicts,
             interval=interval,
             unit=unit,

@@ -11,11 +11,11 @@
 
 - `src/nika/cli/`: Typer CLI groups for `session`, `env`, `failure`, `exec`, `agent`, `eval`, `benchmark`, and `traffic`.
 - `src/nika/workflows/`: command workflows that coordinate CLI actions.
-- `src/nika/orchestrator/`: injectable `ProblemBase` fault classes and registration via `prob_pool`.
+- `src/nika/problems/`: injectable `ProblemBase` fault classes and registration via `prob_pool`.
 - `src/nika/net_env/`: Network lab definitions split by backend — `kathara/` (Kathara labs) and `containerlab/` (Containerlab labs).
 - `src/nika/service/`: Kathara APIs and MCP servers exposed to troubleshooting agents.
 - `src/nika/generator/`: fault and traffic generators.
-- `src/nika/evaluator/`: metrics, trace parsing, and LLM judge support.
+- `src/nika/evaluator/`: rule-based scoring, submission schemas, trace parsing, and LLM judge support.
 - `src/agent/`: troubleshooting agent implementations and shared agent utilities.
 - `benchmark/`: benchmark YAML cases and regeneration script.
 - `tests/`: unit tests plus Docker/Kathara integration tests (`agents/`, `benchmark/`, `integration/`, `failure_inject_verify/`, `net_env_verify/`, `runtime/`).
@@ -37,7 +37,7 @@
 - Runtime state belongs under `runtime/`; experiment artifacts belong under `results/{session_id}/`.
 - Relative result paths must resolve from the repository root, matching `resolve_results_root()`.
 - New Kathara network scenarios belong under `src/nika/net_env/kathara/`; Containerlab scenarios under `src/nika/net_env/containerlab/`. Both must be registered in the environment pool.
-- New injectable problems belong under `src/nika/orchestrator/problems/`, subclass `ProblemBase`, set `root_cause_category` / `root_cause_name`, optional `symptom_desc`, and typed `Params`. Registration in `prob_pool` keys on `root_cause_name`; `META` is auto-built from those class variables.
+- New injectable problems belong under `src/nika/problems/`, subclass `ProblemBase`, set `root_cause_category` / `root_cause_name`, optional `symptom_desc`, and typed `Params`. Registration in `prob_pool` keys on `root_cause_name`; `META` is auto-built from those class variables.
 - New agents must implement the shared troubleshooting contract, register in `agent.registry.create_agent()`, and write standard artifacts.
 
 ## Agent System Rules

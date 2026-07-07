@@ -7,7 +7,10 @@ import os
 import unittest
 import unittest.mock
 
-from agent.local_cli.claude_cli.claude_display import format_claude_event
+from agent.local_cli.claude_cli.claude_display import (
+    format_claude_event,
+    should_log_claude_event,
+)
 from agent.local_cli.claude_cli.claude_worker import ClaudeWorker, _build_mcp_json
 from agent.local_cli.claude_cli.config import (
     default_claude_model,
@@ -16,12 +19,13 @@ from agent.local_cli.claude_cli.config import (
     use_bare_claude_mode,
 )
 from agent.utils.phases import DIAGNOSIS, SUBMISSION
-from nika.utils.agent_config import resolve_agent_model
 from nika.utils.session_store import SessionStore
 from tests.agents._assertions import assert_submission_fields
 from tests.integration_base import OrderedPipelineTestCase
 from tests.integration_pipeline import (
+    ClabCommonPipelineSteps,
     CommonPipelineSteps,
+    _min3clos_prerequisites,
     claude_cli_available,
     load_test_env,
 )
@@ -60,18 +64,6 @@ class ClaudeConfigTest(unittest.TestCase):
         ):
             self.assertTrue(use_bare_claude_mode())
             self.assertTrue(has_env_claude_credentials())
-
-
-class ClaudeAgentConfigTest(unittest.TestCase):
-    """CLI env resolution for the Claude CLI agent."""
-
-    def test_model_from_env(self) -> None:
-        with unittest.mock.patch.dict(
-            os.environ, {"ANTHROPIC_MODEL": "deepseek-v4-pro[1m]"}, clear=True
-        ):
-            self.assertEqual(
-                resolve_agent_model("local_cli.claude_cli", None), "deepseek-v4-pro[1m]"
-            )
 
 
 class ClaudeMcpJsonTest(unittest.TestCase):
@@ -171,6 +163,20 @@ class ClaudeDisplayTest(unittest.TestCase):
     def test_thinking_tokens_skipped(self) -> None:
         event = {"type": "system", "subtype": "thinking_tokens", "estimated_tokens": 42}
         self.assertIsNone(format_claude_event(event))
+        self.assertFalse(should_log_claude_event(event))
+
+    def test_should_log_keeps_meaningful_events(self) -> None:
+        self.assertTrue(
+            should_log_claude_event({"type": "system", "subtype": "init", "model": "x"})
+        )
+        self.assertTrue(
+            should_log_claude_event(
+                {"type": "assistant", "message": {"content": [{"type": "text"}]}}
+            )
+        )
+        self.assertTrue(
+            should_log_claude_event({"type": "result", "is_error": False, "usage": {}})
+        )
 
     def test_assistant_text_message(self) -> None:
         event = {
@@ -297,6 +303,68 @@ class ClaudeAgentPipelineTest(CommonPipelineSteps, OrderedPipelineTestCase):
             e for e in claude_events if e["claude_event"].get("type") == "result"
         ]
         self.assertTrue(result_events)
+
+    def test_step_05_check_submission(self) -> None:
+        self.assertIsNotNone(self.session_dir)
+        self.assertTrue((self.session_dir / "submission.json").exists())
+        assert_submission_fields(self, self.session_dir)
+
+    def test_step_06_session_close(self) -> None:
+        self._step_close_and_verify("local_cli.claude_cli")
+
+    def test_step_07_eval_metrics(self) -> None:
+        self._step_eval_metrics()
+
+
+@unittest.skipUnless(
+    _min3clos_prerequisites() and claude_cli_available(),
+    "containerlab/gnmic/Docker or Claude CLI credentials not available",
+)
+class ClaudeClabPipelineTest(ClabCommonPipelineSteps, OrderedPipelineTestCase):
+    """Full containerlab pipeline with the Claude Code CLI agent."""
+
+    def test_step_01_start_env(self) -> None:
+        self._step_start_env()
+
+    def test_step_02_inject_failure(self) -> None:
+        self._step_inject_failure()
+
+    def test_step_03_run_claude_agent(self) -> None:
+        self.assertIsNotNone(self.session_id)
+        self._run_agent(agent_type="local_cli.claude_cli", max_steps=20)
+        row = SessionStore().get_session(self.session_id)
+        self.assertEqual(row.get("agent_type"), "local_cli.claude_cli")
+
+    def test_step_04_check_workspace_and_messages(self) -> None:
+        self.assertIsNotNone(self.session_dir)
+
+        workspace = self.session_dir / "claude_workspace"
+        self.assertTrue(workspace.is_dir())
+
+        diag_config = workspace / "diagnosis_mcp_config.json"
+        sub_config = workspace / "submission_mcp_config.json"
+        self.assertTrue(diag_config.exists())
+        self.assertTrue(sub_config.exists())
+
+        diag_cfg = json.loads(diag_config.read_text())
+        self.assertIn("mcpServers", diag_cfg)
+        self.assertIn("kathara_base_mcp_server", diag_cfg["mcpServers"])
+        self.assertNotIn("kathara_frr_mcp_server", diag_cfg["mcpServers"])
+        self.assertNotIn("kathara_bmv2_mcp_server", diag_cfg["mcpServers"])
+
+        sub_cfg = json.loads(sub_config.read_text())
+        self.assertIn("task_mcp_server", sub_cfg["mcpServers"])
+
+        messages = self._load_jsonl("messages.jsonl")
+        agents = {e["agent"] for e in messages}
+        self.assertIn(DIAGNOSIS, agents)
+        self.assertIn(SUBMISSION, agents)
+
+        mcp_events = [e for e in messages if e.get("event") == "mcp_config"]
+        diag_mcp = next((e for e in mcp_events if e.get("agent") == DIAGNOSIS), None)
+        self.assertIsNotNone(diag_mcp)
+        self.assertIn("kathara_base_mcp_server", diag_mcp.get("servers", []))
+        self.assertNotIn("kathara_frr_mcp_server", diag_mcp.get("servers", []))
 
     def test_step_05_check_submission(self) -> None:
         self.assertIsNotNone(self.session_dir)

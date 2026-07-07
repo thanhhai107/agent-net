@@ -5,7 +5,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any
 
-from nika.orchestrator.problems.prob_pool import (
+from nika.problems.prob_pool import (
     get_problem_instance,
     list_avail_problem_names,
 )
