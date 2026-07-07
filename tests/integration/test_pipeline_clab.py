@@ -20,7 +20,7 @@ MIN3CLOS_NODES = frozenset({"leaf1", "leaf2", "spine", "client1", "client2"})
 class ClabPipelineIntegrationTest(pipeline_case.PipelineCaseBase):
     SCENARIO = "min3clos"
     BACKEND = "containerlab"
-    ENV_RUN_ARGS = ["--backend", "containerlab"]
+    ENV_RUN_ARGS: ClassVar[list[str]] = []
     PROBLEM = "link_down"
     INJECT_PARAMS = {"host_name": "leaf1", "intf_name": "e1-1"}
     EXPECTED_NODES = MIN3CLOS_NODES

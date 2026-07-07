@@ -39,7 +39,7 @@ def _min3clos_prerequisites() -> bool:
 )
 class Min3ClosVerifyIntegrationTest(SharedSessionTestCase):
     SCENARIO = "min3clos"
-    ENV_RUN_ARGS = ["--backend", "containerlab"]
+    ENV_RUN_ARGS: ClassVar[list[str]] = []
 
     def _runtime(self):
         return runtime_for_session(self._session_row(self.session_id))

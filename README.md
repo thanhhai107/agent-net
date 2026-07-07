@@ -42,7 +42,8 @@ This repository is a unified platform that can offer:
 ## Requirements
 
 - [Kathará](https://www.kathara.org/). 
-  Follow the [official installation guide](https://github.com/KatharaFramework/Kathara?tab=readme-ov-file#installation) to install Kathará.
+  Follow the [official installation guide](https://github.com/KatharaFramework/Kathara?tab=readme-ov-file#installation) to install Kathará. Required for Kathará-backed scenarios.
+- [Containerlab](https://containerlab.dev/). Required only for Containerlab-backed scenarios.
 - Python >= 3.12
 
 
@@ -415,25 +416,42 @@ Registered scenarios (see `nika env list`) live under `src/nika/net_env/`, organ
 - `kathara/` — Kathara-based scenarios (topology generators, startup files, network configs)
 - `containerlab/` — Containerlab-based scenarios
 
-| Scenario ID | Scalable | Description |
-| ----------- | -------- | ----------- |
-| `dc_clos_bgp` | ✓ | Multi-tier data center CLOS with EBGP (FRR). |
-| `dc_clos_service` | ✓ | Data center CLOS with DNS/HTTP edge services and external clients. |
-| `ospf_enterprise_static` | ✓ | Enterprise hierarchical OSPF network with static host addressing. |
-| `ospf_enterprise_dhcp` | ✓ | Enterprise OSPF network with DHCP for host addressing. |
-| `rip_small_internet_vpn` | ✓ | Small RIP-based Internet with external zones and WireGuard VPN overlay. |
-| `sdn_clos` | ✓ | Scalable SDN spine–leaf fabric with OpenFlow controller. |
-| `sdn_star` | ✓ | SDN star (hub-and-spoke) topology with OpenFlow controller. |
-| `simple_bgp` | -- | Compact inter-domain BGP lab (two routers, two hosts). |
-| `p4_int` | -- | P4 spine–leaf testbed with In-band Network Telemetry (InfluxDB). |
-| `p4_bloom_filter` | -- | P4 bloom-filter data-plane validation testbed. |
-| `p4_counter` | -- | P4 counter pipeline testbed. |
-| `p4_mpls` | -- | P4 MPLS data-plane testbed. |
-| `k8s_lab` | -- | Fat-tree BGP fabric with k3s cluster, MetalLB, NGINX Ingress, and sample microservices. See [k8s_lab README](src/nika/net_env/kathara/kubernetes/k8s_lab/README.md). |
-| `llmd_lab` | -- | Star topology with k3s cluster running llm-d disaggregated Prefill/Decode inference (simulated, no GPU). See [llmd_lab README](src/nika/net_env/kathara/kubernetes/llmd_lab/README.md). |
-| `min3clos` | -- | 3-node CLOS fabric with Nokia SR Linux ([Containerlab min clos](https://containerlab.dev/lab-examples/min-clos/)). |
+### Backend support
 
-Each scenario is registered in `src/nika/net_env/net_env_pool.py` and declares its supported backend (`kathara` or `containerlab`). Kathará scenarios use `lab.py` files to define topology, devices, and initial configurations; Containerlab scenarios render Containerlab topology files under `runtime/containerlab/`. See **[Creating Benchmark Tasks](docs/creating-benchmark-tasks.md)** for the NIKA extension workflow, and check [Kathará API Docs](https://github.com/KatharaFramework/Kathara/wiki/Kathara-API-Docs) or [Containerlab docs](https://containerlab.dev/) for backend details.
+NIKA supports two lab backends:
+
+- `kathara` — uses Kathará labs and Docker containers, and covers the existing routing, SDN, P4, and Kubernetes scenarios under `src/nika/net_env/kathara/`.
+- `containerlab` — uses Containerlab topology files and vendor/network OS containers for scenarios under `src/nika/net_env/containerlab/`, such as `min3clos`.
+
+Each scenario is bound to exactly one backend. Use `nika env list` to see which backend a scenario uses:
+
+```shell
+nika env list
+nika env run simple_bgp
+nika env run min3clos
+```
+
+Backend information is stored in the session metadata and reused by session-scoped commands such as `nika exec`, `nika failure inject`, `nika agent run`, and `nika session close`. Kathará scenarios build their topology from `lab.py`; Containerlab scenarios render topology files under `runtime/containerlab/`.
+
+| Scenario ID | Scalable | Backend | Description |
+| ----------- | -------- | -------- | ----------- |
+| `dc_clos_bgp` | ✓ | kathara | Multi-tier data center CLOS with EBGP (FRR). |
+| `dc_clos_service` | ✓ | kathara | Data center CLOS with DNS/HTTP edge services and external clients. |
+| `ospf_enterprise_static` | ✓ | kathara | Enterprise hierarchical OSPF network with static host addressing. |
+| `ospf_enterprise_dhcp` | ✓ | kathara | Enterprise OSPF network with DHCP for host addressing. |
+| `rip_small_internet_vpn` | ✓ | kathara | Small RIP-based Internet with external zones and WireGuard VPN overlay. |
+| `sdn_clos` | ✓ | kathara | Scalable SDN spine–leaf fabric with OpenFlow controller. |
+| `sdn_star` | ✓ | kathara | SDN star (hub-and-spoke) topology with OpenFlow controller. |
+| `simple_bgp` | -- | kathara | Compact inter-domain BGP lab (two routers, two hosts). |
+| `p4_int` | -- | kathara | P4 spine–leaf testbed with In-band Network Telemetry (InfluxDB). |
+| `p4_bloom_filter` | -- | kathara | P4 bloom-filter data-plane validation testbed. |
+| `p4_counter` | -- | kathara | P4 counter pipeline testbed. |
+| `p4_mpls` | -- | kathara | P4 MPLS data-plane testbed. |
+| `k8s_lab` | -- | kathara | Fat-tree BGP fabric with k3s cluster, MetalLB, NGINX Ingress, and sample microservices. See [k8s_lab README](src/nika/net_env/kathara/kubernetes/k8s_lab/README.md). |
+| `llmd_lab` | -- | kathara | Star topology with k3s cluster running llm-d disaggregated Prefill/Decode inference (simulated, no GPU). See [llmd_lab README](src/nika/net_env/kathara/kubernetes/llmd_lab/README.md). |
+| `min3clos` | -- | containerlab | 3-node CLOS fabric with Nokia SR Linux ([Containerlab min clos](https://containerlab.dev/lab-examples/min-clos/)). |
+
+Each scenario is registered in `src/nika/net_env/net_env_pool.py` and declares its supported backend (`kathara` or `containerlab`). See **[Creating Benchmark Tasks](docs/creating-benchmark-tasks.md)** for the NIKA extension workflow, and check [Kathará API Docs](https://github.com/KatharaFramework/Kathara/wiki/Kathara-API-Docs) or [Containerlab docs](https://containerlab.dev/) for backend details.
 
 ## Network issues
 

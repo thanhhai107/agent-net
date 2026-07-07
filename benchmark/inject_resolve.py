@@ -7,7 +7,7 @@ from collections import defaultdict
 from nika.net_env.net_env_pool import (
     get_net_env_instance,
     list_all_net_envs,
-    scenario_supported_backends,
+    scenario_backend,
 )
 from nika.problems.prob_pool import list_avail_problem_instances
 
@@ -86,10 +86,7 @@ def _get_net_env_for_benchmark(scenario: str, topo_size: str = ""):
     kwargs: dict = {}
     if topo_size:
         kwargs["topo_size"] = topo_size
-    supported_backends = scenario_supported_backends(scenario)
-    kwargs["backend"] = (
-        "kathara" if "kathara" in supported_backends else supported_backends[0]
-    )
+    kwargs["backend"] = scenario_backend(scenario)
     return get_net_env_instance(scenario, **kwargs)
 
 

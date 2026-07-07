@@ -30,7 +30,7 @@ MIN3CLOS_FAILURES = (
 @unittest.skipUnless(shutil.which("clab"), "containerlab not installed")
 class ClabFailureInjectVerifyTest(PerTestEnvTestCase):
     SCENARIO = "min3clos"
-    ENV_RUN_ARGS = ["--backend", "containerlab"]
+    ENV_RUN_ARGS: ClassVar[list[str]] = []
 
     def _inject_and_assert(self, problem: str) -> None:
         params = self._benchmark_inject_from_yaml(self.SCENARIO, problem)

@@ -6,8 +6,8 @@ from uuid import uuid4
 
 from nika.net_env.net_env_pool import (
     get_net_env_instance,
+    scenario_backend,
     scenario_requires_topo_size,
-    scenario_supported_backends,
 )
 from nika.net_env.verify import verify_lab_with_retry
 from nika.utils.logger import (
@@ -33,7 +33,6 @@ def start_net_env(
     scenario: str,
     topo_size: str | None,
     *,
-    backend: str = "kathara",
     redeploy: bool = True,
     instance_tag: str | None = None,
     session_tag: str | None = None,
@@ -50,15 +49,7 @@ def start_net_env(
             f"Scenario '{scenario}' does not use topology sizes; omit -s/--size."
         )
 
-    supported = scenario_supported_backends(scenario)
-    if backend not in supported:
-        if len(supported) == 1:
-            backend = supported[0]
-        else:
-            raise ValueError(
-                f"Scenario '{scenario}' does not support backend '{backend}'. "
-                f"Supported: {', '.join(supported)}"
-            )
+    backend = scenario_backend(scenario)
 
     refresh_logger()
     suffix = uuid4().hex[:6]

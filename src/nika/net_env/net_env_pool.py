@@ -52,6 +52,17 @@ def scenario_supported_backends(scenario_name: str) -> list[str]:
     return list(_NET_ENVS[scenario_name].SUPPORTED_BACKENDS)
 
 
+def scenario_backend(scenario_name: str) -> str:
+    """Return the lab backend bound to ``scenario_name``."""
+    supported = scenario_supported_backends(scenario_name)
+    if len(supported) != 1:
+        raise ValueError(
+            f"Scenario '{scenario_name}' must declare exactly one backend; "
+            f"found: {', '.join(supported)}"
+        )
+    return supported[0]
+
+
 def get_net_env_instance(
     scenario_name: str, *, backend: str = "kathara", **kwargs
 ) -> NetworkEnvBase:

@@ -18,7 +18,6 @@ PROBLEM = "link_down"
 LINK_INJECT_PARAMS = {"host_name": "pc1", "intf_name": "eth0"}
 
 CLAB_SCENARIO = "min3clos"
-CLAB_ENV_RUN_ARGS = ["--backend", "containerlab"]
 CLAB_LINK_INJECT_PARAMS = {"host_name": "leaf1", "intf_name": "e1-1"}
 
 
@@ -158,7 +157,7 @@ class ClabCommonPipelineSteps:
 
     def _step_start_env(self) -> None:
         type(self).session_id = self._start_env(  # type: ignore[attr-defined]
-            CLAB_SCENARIO, CLAB_ENV_RUN_ARGS
+            CLAB_SCENARIO
         )
         self._assert_session_ready(self.session_id, CLAB_SCENARIO)  # type: ignore[attr-defined]
 

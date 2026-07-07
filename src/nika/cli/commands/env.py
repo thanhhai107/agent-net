@@ -33,11 +33,6 @@ def env_run(
         "--size",
         help="Topology size s, m, or l (required only for scalable scenarios).",
     ),
-    backend: str = typer.Option(
-        "kathara",
-        "--backend",
-        help="Lab backend: kathara or containerlab.",
-    ),
     no_redeploy: bool = typer.Option(
         False,
         "--no-redeploy",
@@ -58,13 +53,9 @@ def env_run(
     """Deploy one scenario and start a new session."""
     from nika.workflows.env.start import start_net_env
 
-    if backend not in ("kathara", "containerlab"):
-        raise typer.BadParameter("backend must be 'kathara' or 'containerlab'.")
-
     session_id = start_net_env(
         name,
         size,
-        backend=backend,
         redeploy=not no_redeploy,
         instance_tag=instance_tag,
         result_dir=result_dir,

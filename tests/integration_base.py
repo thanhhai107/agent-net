@@ -35,9 +35,6 @@ def _parse_env_run_args(extra_args: list[str] | None) -> dict[str, Any]:
         if arg in ("-s", "--size") and i + 1 < len(args):
             kwargs["topo_size"] = args[i + 1]
             i += 2
-        elif arg == "--backend" and i + 1 < len(args):
-            kwargs["backend"] = args[i + 1]
-            i += 2
         elif arg == "--no-redeploy":
             kwargs["redeploy"] = False
             i += 1
