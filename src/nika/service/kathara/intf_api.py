@@ -8,7 +8,12 @@ class IntfAPIMixin:
     Interfaces to interact with host interfaces within Kathara.
     """
 
-    def intf_on_off(self: _SupportsBase, host_name: str, interface: str, state: Literal["up", "down"]) -> list[str]:
+    def intf_on_off(
+        self: _SupportsBase,
+        host_name: str,
+        interface: str,
+        state: Literal["up", "down"],
+    ) -> list[str]:
         """
         Set a specific interface of a host on or off.
         """

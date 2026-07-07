@@ -126,7 +126,9 @@ class ClaudeWorker:
         if self.phase == SUBMISSION:
             servers = mcp_cfg.load_config(if_submit=True)
         else:
-            server_names = select_diagnosis_servers(self.scenario_name, self.problem_names)
+            server_names = select_diagnosis_servers(
+                self.scenario_name, self.problem_names
+            )
             servers = mcp_cfg.load_filtered_config(server_names)
 
         self._logger.log(
@@ -163,16 +165,22 @@ class ClaudeWorker:
             cmd.append("--bare")
         cmd += [
             "--dangerously-skip-permissions",
-            "--mcp-config", str(self._mcp_config_path),
-            "--model", self.model,
-            "--output-format", "stream-json",
+            "--mcp-config",
+            str(self._mcp_config_path),
+            "--model",
+            self.model,
+            "--output-format",
+            "stream-json",
             "--verbose",
         ]
         if skills_enabled():
             cmd += ["--setting-sources", "project"]
         cmd.append(prompt)
 
-        self._logger.log("subprocess_start", {"command": " ".join(cmd[:6] + ["..."]), "phase": self.phase})
+        self._logger.log(
+            "subprocess_start",
+            {"command": " ".join(cmd[:6] + ["..."]), "phase": self.phase},
+        )
 
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -185,10 +193,14 @@ class ClaudeWorker:
             )
             returncode, final_result, stderr_text = await self._stream_subprocess(proc)
         except asyncio.TimeoutError:
-            self._logger.log("subprocess_timeout", {"phase": self.phase, "timeout_s": self.timeout})
+            self._logger.log(
+                "subprocess_timeout", {"phase": self.phase, "timeout_s": self.timeout}
+            )
             return f"ERROR: {self.phase} phase timed out after {self.timeout}s"
         except FileNotFoundError:
-            self._logger.log("subprocess_error", {"error": "claude binary not found in PATH"})
+            self._logger.log(
+                "subprocess_error", {"error": "claude binary not found in PATH"}
+            )
             return "ERROR: 'claude' not found in PATH — is Claude Code installed?"
 
         if returncode != 0:
@@ -204,7 +216,10 @@ class ClaudeWorker:
             )
 
         if final_result:
-            self._logger.log("subprocess_done", {"phase": self.phase, "output_length": len(final_result)})
+            self._logger.log(
+                "subprocess_done",
+                {"phase": self.phase, "output_length": len(final_result)},
+            )
             return final_result
 
         self._logger.log("subprocess_error", {"error": "no result event captured"})
@@ -243,7 +258,9 @@ class ClaudeWorker:
                     raise asyncio.TimeoutError
 
                 try:
-                    line_bytes = await asyncio.wait_for(proc.stdout.readline(), timeout=remaining)
+                    line_bytes = await asyncio.wait_for(
+                        proc.stdout.readline(), timeout=remaining
+                    )
                 except asyncio.TimeoutError:
                     proc.kill()
                     await proc.wait()

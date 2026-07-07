@@ -63,7 +63,9 @@ class BasicReActAgent:
         if langfuse.auth_check():
             system_logger.info("Authentication to Langfuse successful.")
         else:
-            system_logger.warning("Authentication to Langfuse failed. Please check your LANGFUSE_API_KEY.")
+            system_logger.warning(
+                "Authentication to Langfuse failed. Please check your LANGFUSE_API_KEY."
+            )
 
         diagnosis_phase = DiagnosisPhase(
             session_id=session_id,
@@ -75,7 +77,9 @@ class BasicReActAgent:
         asyncio.run(diagnosis_phase.load_tools())
         self._diagnosis_runner = diagnosis_phase.get_agent()
 
-        submission_phase = SubmissionPhase(session_id=session_id, llm_provider=llm_provider, model=model)
+        submission_phase = SubmissionPhase(
+            session_id=session_id, llm_provider=llm_provider, model=model
+        )
         asyncio.run(submission_phase.load_tools())
         self._submission_runner = submission_phase.get_agent()
 
@@ -127,7 +131,10 @@ class BasicReActAgent:
                 },
                 debug=True,
             )
-            return {"diagnosis_report": [diagnosis_report["messages"][-1].content], "is_max_steps_reached": False}
+            return {
+                "diagnosis_report": [diagnosis_report["messages"][-1].content],
+                "is_max_steps_reached": False,
+            }
         except ValidationError as e:
             MessageLogger(agent=DIAGNOSIS, session_dir=self.session_dir).log(
                 "error", {"message": f"Validation error: {e}"}
@@ -143,7 +150,11 @@ class BasicReActAgent:
                 {"message": "Diagnosis phase reached max recursion limit."},
             )
             return {
-                "messages": [HumanMessage(content="Error: diagnosis did not finish within max steps.")],
+                "messages": [
+                    HumanMessage(
+                        content="Error: diagnosis did not finish within max steps."
+                    )
+                ],
                 "diagnosis_report": ["ERROR_MAX_STEPS_REACHED"],
                 "is_max_steps_reached": True,
             }
@@ -159,7 +170,9 @@ class BasicReActAgent:
                 ]
             },
             config={
-                "callbacks": [AgentCallbackLogger(agent=SUBMISSION, session_dir=self.session_dir)],
+                "callbacks": [
+                    AgentCallbackLogger(agent=SUBMISSION, session_dir=self.session_dir)
+                ],
                 "recursion_limit": self.max_steps,
             },
             debug=True,

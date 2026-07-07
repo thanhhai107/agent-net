@@ -68,7 +68,9 @@ class ClaudeSdkWorker:
         if self.phase == SUBMISSION:
             servers = mcp.load_config(if_submit=True)
         else:
-            server_names = select_diagnosis_servers(self.scenario_name, self.problem_names)
+            server_names = select_diagnosis_servers(
+                self.scenario_name, self.problem_names
+            )
             servers = mcp.load_filtered_config(server_names)
         return to_sdk_mcp_servers(servers)
 
@@ -128,7 +130,9 @@ class ClaudeSdkWorker:
         def _flush_turn() -> None:
             nonlocal turn_text
             if turn_text:
-                self._logger.log("llm_end", {"text": "\n".join(turn_text), "usage_metadata": {}})
+                self._logger.log(
+                    "llm_end", {"text": "\n".join(turn_text), "usage_metadata": {}}
+                )
                 turn_text = []
 
         try:
@@ -143,34 +147,49 @@ class ClaudeSdkWorker:
                     elif isinstance(message, AssistantMessage):
                         for block in message.content:
                             if isinstance(block, (ThinkingBlock, TextBlock)):
-                                text = block.thinking if isinstance(block, ThinkingBlock) else block.text
+                                text = (
+                                    block.thinking
+                                    if isinstance(block, ThinkingBlock)
+                                    else block.text
+                                )
                                 turn_text.append(text)
                             elif isinstance(block, ToolUseBlock):
                                 _flush_turn()
                                 self._logger.log(
                                     "tool_start",
                                     {
-                                        "tool": {"name": _normalize_tool_name(block.name)},
+                                        "tool": {
+                                            "name": _normalize_tool_name(block.name)
+                                        },
                                         "input": str(block.input),
                                     },
                                 )
                     elif isinstance(message, UserMessage):
                         _flush_turn()
-                        content = message.content if isinstance(message.content, list) else []
+                        content = (
+                            message.content if isinstance(message.content, list) else []
+                        )
                         for block in content:
                             if isinstance(block, ToolResultBlock):
                                 if block.is_error:
-                                    self._logger.log("tool_error", {"output": str(block.content)})
+                                    self._logger.log(
+                                        "tool_error", {"output": str(block.content)}
+                                    )
                                 else:
                                     self._logger.log(
                                         "tool_end",
-                                        {"output": str(block.content), "output_type": "tool_result"},
+                                        {
+                                            "output": str(block.content),
+                                            "output_type": "tool_result",
+                                        },
                                     )
                     elif isinstance(message, ResultMessage):
                         _flush_turn()
                         result_text = message.result or ""
                         md = _usage_metadata(message.usage)
-                        self._logger.log("llm_end", {"text": result_text, "usage_metadata": md})
+                        self._logger.log(
+                            "llm_end", {"text": result_text, "usage_metadata": md}
+                        )
                         system_logger.info(
                             f"claude_sdk/{self.phase}: complete - "
                             f"stop_reason={message.stop_reason}"
@@ -180,5 +199,7 @@ class ClaudeSdkWorker:
             self._logger.log("agent_error", {"phase": self.phase, "error": str(exc)})
             return f"ERROR: {exc}"
 
-        self._logger.log("agent_done", {"phase": self.phase, "report_length": len(result_text)})
+        self._logger.log(
+            "agent_done", {"phase": self.phase, "report_length": len(result_text)}
+        )
         return result_text

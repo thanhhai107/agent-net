@@ -14,7 +14,7 @@ from nika.orchestrator.problems.prob_pool import list_avail_problem_instances
 
 cur_path = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, cur_path)
-from inject_resolve import resolve_inject_params, validate_benchmark_case
+from inject_resolve import resolve_inject_params, validate_benchmark_case  # noqa: E402
 
 # One best-matching traditional Kathara scenario per failure (k8s/llmd appear in full only).
 SELECTED_SCENARIO_FOR_PROBLEM: dict[str, str] = {
@@ -77,10 +77,10 @@ SELECTED_SCENARIO_FOR_PROBLEM: dict[str, str] = {
 }
 
 
-def _topo_sizes_for_scenario(net_env_cls) -> list[str]:
-    if net_env_cls.TOPO_SIZE is None:
-        return [""]
-    return ["s", "m", "l"]
+def _topo_sizes_for_scenario(scenario: str) -> list[str]:
+    if scenario_requires_topo_size(scenario):
+        return ["s", "m", "l"]
+    return [""]
 
 
 def _make_row(scenario: str, problem: str, topo_size: str) -> dict:
@@ -99,12 +99,12 @@ def iter_full_cases() -> list[dict]:
     problem_instances = list_avail_problem_instances()
     rows: list[dict] = []
 
-    for prob_name, prob_task_levels in problem_instances.items():
-        problem_instance = prob_task_levels["detection"]
+    for prob_name, problem_class in problem_instances.items():
+        problem_instance = problem_class
         for net_env_name, net_env_cls in net_envs.items():
             if not set(problem_instance.TAGS).issubset(set(net_env_cls.TAGS)):
                 continue
-            for topo_size in _topo_sizes_for_scenario(net_env_cls):
+            for topo_size in _topo_sizes_for_scenario(net_env_name):
                 rows.append(_make_row(net_env_name, prob_name, topo_size))
     return rows
 
@@ -119,7 +119,7 @@ def iter_selected_cases() -> list[dict]:
         if scenario is None:
             raise ValueError(f"No selected scenario mapping for problem {prob_name!r}")
         net_env_cls = net_envs[scenario]
-        problem_instance = problem_instances[prob_name]["detection"]
+        problem_instance = problem_instances[prob_name]
         if not set(problem_instance.TAGS).issubset(set(net_env_cls.TAGS)):
             raise ValueError(
                 f"Selected scenario {scenario} not tag-compatible with {prob_name} "
@@ -133,7 +133,9 @@ def iter_selected_cases() -> list[dict]:
 def _print_stats(label: str, rows: list[dict]) -> None:
     by_scenario = Counter(r["scenario"] for r in rows)
     by_problem = Counter(r["problem"] for r in rows)
-    print(f"\n{label}: {len(rows)} cases, {len(by_problem)} problems, {len(by_scenario)} scenarios")
+    print(
+        f"\n{label}: {len(rows)} cases, {len(by_problem)} problems, {len(by_scenario)} scenarios"
+    )
     for scenario, count in sorted(by_scenario.items(), key=lambda x: (-x[1], x[0])):
         print(f"  {scenario}: {count}")
 
@@ -146,7 +148,10 @@ def generate_benchmark() -> tuple[list[dict], list[dict]]:
     _print_stats("benchmark_selected.yaml", selected_rows)
 
     benchmark_dir = Path(cur_path)
-    for name, rows in (("benchmark_full.yaml", full_rows), ("benchmark_selected.yaml", selected_rows)):
+    for name, rows in (
+        ("benchmark_full.yaml", full_rows),
+        ("benchmark_selected.yaml", selected_rows),
+    ):
         out_path = benchmark_dir / name
         out_path.write_text(
             yaml.dump({"cases": rows}, sort_keys=False, allow_unicode=True),

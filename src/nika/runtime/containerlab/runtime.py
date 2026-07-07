@@ -9,9 +9,10 @@ from pathlib import Path
 from typing import Any
 
 import docker
-from func_timeout import FunctionTimedOut, func_timeout
 
 from nika.runtime.base import LabRuntime
+from nika.runtime.docker_ops import pause_container, unpause_container
+from nika.runtime.exec_utils import exec_with_timeout
 
 
 class ContainerlabRuntime(LabRuntime):
@@ -26,9 +27,15 @@ class ContainerlabRuntime(LabRuntime):
     ) -> None:
         self._lab_name = lab_name
         self._topology_file = Path(topology_file)
-        self._runtime_workdir = Path(runtime_workdir) if runtime_workdir else self._topology_file.parent
+        self._runtime_workdir = (
+            Path(runtime_workdir) if runtime_workdir else self._topology_file.parent
+        )
         self._docker = docker.from_env()
         self._node_containers: dict[str, docker.models.containers.Container] = {}
+
+    @property
+    def backend(self) -> str:
+        return "containerlab"
 
     @property
     def lab_name(self) -> str:
@@ -122,7 +129,9 @@ class ContainerlabRuntime(LabRuntime):
             "--cleanup",
         )
         if result.returncode != 0:
-            print(f"Error destroying containerlab lab {self._lab_name}: {result.stderr or result.stdout}")
+            print(
+                f"Error destroying containerlab lab {self._lab_name}: {result.stderr or result.stdout}"
+            )
         self._node_containers = {}
 
     def exists(self) -> bool:
@@ -134,7 +143,11 @@ class ContainerlabRuntime(LabRuntime):
         rows: list[dict[str, Any]] = []
         for node_name, container in sorted(self._node_containers.items()):
             container.reload()
-            image = container.image.tags[0] if container.image.tags else container.image.short_id
+            image = (
+                container.image.tags[0]
+                if container.image.tags
+                else container.image.short_id
+            )
             rows.append(
                 {
                     "container_id": container.short_id,
@@ -154,7 +167,9 @@ class ContainerlabRuntime(LabRuntime):
         self._refresh_node_map()
         container = self._node_containers.get(node)
         if container is None:
-            raise ValueError(f"No container found for node {node!r} in lab {self._lab_name!r}.")
+            raise ValueError(
+                f"No container found for node {node!r} in lab {self._lab_name!r}."
+            )
         return container
 
     def exec(self, node: str, cmd: str, *, timeout: float = 10.0) -> str:
@@ -162,26 +177,19 @@ class ContainerlabRuntime(LabRuntime):
 
         def _run() -> str:
             exit_code, output = container.exec_run(["/bin/sh", "-c", cmd])
-            text = output.decode("utf-8", errors="replace") if isinstance(output, bytes) else str(output)
+            text = (
+                output.decode("utf-8", errors="replace")
+                if isinstance(output, bytes)
+                else str(output)
+            )
             if exit_code != 0 and text.strip() == "":
                 return f"[exit {exit_code}]"
             return text
 
-        try:
-            return func_timeout(timeout, _run)
-        except FunctionTimedOut:
-            return f"[TIMEOUT] Command '{cmd}' on '{node}' exceeded {timeout}s."
+        return exec_with_timeout(_run, timeout=timeout, node=node, cmd=cmd)
 
     def pause(self, node: str) -> None:
-        container = self.get_container(node)
-        container.reload()
-        if container.status != "paused":
-            container.pause()
+        pause_container(self.get_container(node))
 
     def unpause(self, node: str) -> None:
-        container = self.get_container(node)
-        container.reload()
-        if container.status == "paused":
-            container.unpause()
-        elif container.status in {"created", "exited"}:
-            container.start()
+        unpause_container(self.get_container(node))

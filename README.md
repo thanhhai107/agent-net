@@ -7,7 +7,9 @@
 [🛠️Usage](#🛠️usage) | 
 [📚Cite](#📚cite)
 
-[![ArXiv Link](https://img.shields.io/badge/arXiv-2512.16381-red?logo=arxiv)](https://arxiv.org/abs/2512.16381)
+[![ArXiv Link](https://img.shields.io/badge/arXiv-2512.16381-red?logo=arxiv)](https://arxiv.org/abs/2512.16381) 
+[![Project Page](https://img.shields.io/badge/-Project%20Page-1E88E5?logo=googlechrome&logoColor=white&labelColor=24292f)](https://sands-lab.github.io/nika/)
+[![Open Telco AI](https://img.shields.io/badge/-Open%20Telco%20AI-00AEEF?logo=gsma&logoColor=white&labelColor=24292f)](https://www.open-telco.ai/resources/nika/)
 
 </div>
 
@@ -165,7 +167,7 @@ Each `nika env run` creates a **session** (printed as `session_id=…`). Session
    nika eval clean -y                              # wipe results/, session JSON, and SQLite index
    ```
 
-Full CLI documentation (benchmark batch mode, traffic types, parameter tables, and conventions) lives in **[src/nika/cli/README.md](src/nika/cli/README.md)**. Developer guides: **[Creating Benchmark Tasks](docs/creating-benchmark-tasks.md)**, **[Custom Agents](docs/custom-agents.md)**, and **[Agent Skills](docs/agent-skills.md)**.
+Full CLI documentation (benchmark batch mode, traffic types, parameter tables, and conventions) lives in **[src/nika/cli/README.md](src/nika/cli/README.md)**. Developer guides: **[Creating Benchmark Tasks](docs/creating-benchmark-tasks.md)** (scenarios, `ProblemBase` faults, benchmark YAML), **[Custom Agents](docs/custom-agents.md)**, and **[Agent Skills](docs/agent-skills.md)**.
 
 ### Optional: benchmark or traffic from the CLI
 
@@ -428,8 +430,7 @@ Registered scenarios (see `nika env list`) live under `src/nika/net_env/`, organ
 | `p4_mpls` | -- | P4 MPLS data-plane testbed. |
 | `k8s_lab` | -- | Fat-tree BGP fabric with k3s cluster, MetalLB, NGINX Ingress, and sample microservices. See [k8s_lab README](src/nika/net_env/kathara/kubernetes/k8s_lab/README.md). |
 | `llmd_lab` | -- | Star topology with k3s cluster running llm-d disaggregated Prefill/Decode inference (simulated, no GPU). See [llmd_lab README](src/nika/net_env/kathara/kubernetes/llmd_lab/README.md). |
-| `min5clos` | -- | 5-stage CLOS fabric with Nokia SR Linux ([Containerlab min 5clos](https://containerlab.dev/lab-examples/min-5clos/#description)). |
-| `srlceos01` | -- | Nokia SR Linux and Arista cEOS interconnect ([Containerlab srlceos01](https://containerlab.dev/lab-examples/srl-ceos/)). |
+| `min3clos` | -- | 3-node CLOS fabric with Nokia SR Linux ([Containerlab min clos](https://containerlab.dev/lab-examples/min-clos/)). |
 
 Each scenario is defined in a Kathará `lab.py` file, which specifies the network topology, devices, and initial configurations. See **[Creating Benchmark Tasks](docs/creating-benchmark-tasks.md)** for the NIKA extension workflow, and check [Kathará API Docs](https://github.com/KatharaFramework/Kathara/wiki/Kathara-API-Docs) for Kathará details.
 

@@ -44,7 +44,10 @@ def _tool_text_list(result: object) -> list[str]:
             return [result]
     if not isinstance(result, list):
         return [str(result)]
-    return [str(item["text"]) if isinstance(item, dict) and "text" in item else str(item) for item in result]
+    return [
+        str(item["text"]) if isinstance(item, dict) and "text" in item else str(item)
+        for item in result
+    ]
 
 
 class PipelineIntegrationTest(CliIntegrationTestCase, OrderedPipelineTestCase):
@@ -76,10 +79,14 @@ class PipelineIntegrationTest(CliIntegrationTestCase, OrderedPipelineTestCase):
         session_ps_output = self._invoke_ok(["session", "ps"])
         self.assertIn(self.session_id, session_ps_output)
 
-        inspect_output = self._invoke_ok(["session", "inspect", "--session_id", self.session_id])
+        inspect_output = self._invoke_ok(
+            ["session", "inspect", "--session_id", self.session_id]
+        )
         self.assertIn(self.session_id, inspect_output)
 
-        resolved_id, resolved_lab, container_rows = list_session_containers(self.session_id)
+        resolved_id, resolved_lab, container_rows = list_session_containers(
+            self.session_id
+        )
         self.assertEqual(resolved_id, self.session_id)
         self.assertEqual(resolved_lab, lab_name)
         self.assertEqual(len(container_rows), len(SIMPLE_BGP_MACHINES))
@@ -90,7 +97,9 @@ class PipelineIntegrationTest(CliIntegrationTestCase, OrderedPipelineTestCase):
             self.assertTrue(row["container_name"])
             self.assertIn("kathara", row["image"].lower())
 
-        containers_output = self._invoke_ok(["session", "containers", "--session_id", self.session_id])
+        containers_output = self._invoke_ok(
+            ["session", "containers", "--session_id", self.session_id]
+        )
         self.assertIn(f"session_id={self.session_id}", containers_output)
         self.assertIn(f"lab={lab_name}", containers_output)
         self.assertIn("CONTAINER ID", containers_output)
@@ -101,7 +110,10 @@ class PipelineIntegrationTest(CliIntegrationTestCase, OrderedPipelineTestCase):
         inspect_containers_output = self._invoke_ok(
             ["session", "inspect", "--session_id", self.session_id, "--containers"],
         )
-        self.assertIn(f"containers  ({len(SIMPLE_BGP_MACHINES)} running)", inspect_containers_output)
+        self.assertIn(
+            f"containers  ({len(SIMPLE_BGP_MACHINES)} running)",
+            inspect_containers_output,
+        )
         for name in SIMPLE_BGP_MACHINES:
             self.assertIn(name, inspect_containers_output)
 
@@ -144,10 +156,14 @@ class PipelineIntegrationTest(CliIntegrationTestCase, OrderedPipelineTestCase):
         self.assertEqual(row["root_cause_name"], PROBLEM)
 
         task_description = row.get("task_description", "")
-        self.assertTrue(len(task_description) > 0, "task_description should be non-empty")
+        self.assertTrue(
+            len(task_description) > 0, "task_description should be non-empty"
+        )
 
         session_dir_str = row.get("session_dir", "")
-        self.assertIn(self.session_id, session_dir_str, "session_dir must contain session_id")
+        self.assertIn(
+            self.session_id, session_dir_str, "session_dir must contain session_id"
+        )
 
         type(self).session_dir = Path(session_dir_str)
         self.assertTrue((self.session_dir / "ground_truth.json").exists())
@@ -155,6 +171,9 @@ class PipelineIntegrationTest(CliIntegrationTestCase, OrderedPipelineTestCase):
         ground_truth = self._load_json("ground_truth.json")
         self.assertTrue(ground_truth["is_anomaly"])
         self.assertIn(PROBLEM, ground_truth["root_cause_name"])
+        self.assertEqual(ground_truth["root_cause_category"], "link_failure")
+        self.assertTrue(ground_truth.get("detailed_cause"))
+        self.assertIn("pc1", ground_truth["faulty_devices"])
 
     def test_step_04_mcp_session_context(self) -> None:
         """mcp_session_context functions correctly read NIKA_SESSION_ID from env."""
@@ -202,26 +221,45 @@ class PipelineIntegrationTest(CliIntegrationTestCase, OrderedPipelineTestCase):
         )
 
         config = mcp_config.load_config(if_submit=False)
-        diagnosis_config = {k: v for k, v in config.items() if k == "kathara_base_mcp_server"}
+        diagnosis_config = {
+            k: v for k, v in config.items() if k == "kathara_base_mcp_server"
+        }
 
         async def _run() -> dict:
             client = MultiServerMCPClient(connections=diagnosis_config)
             tools = {t.name: t for t in await client.get_tools()}
 
-            self.assertIn("get_reachability", tools, "get_reachability tool must be available")
+            self.assertIn(
+                "get_reachability", tools, "get_reachability tool must be available"
+            )
             reach_result = await tools["get_reachability"].ainvoke({})
             reach_str = str(reach_result)
-            self.assertTrue(len(reach_str) > 0, "get_reachability must return non-empty output")
+            self.assertTrue(
+                len(reach_str) > 0, "get_reachability must return non-empty output"
+            )
 
-            self.assertIn("get_host_net_config", tools, "get_host_net_config tool must be available")
-            host_config_result = await tools["get_host_net_config"].ainvoke({"host_name": "pc1"})
+            self.assertIn(
+                "get_host_net_config",
+                tools,
+                "get_host_net_config tool must be available",
+            )
+            host_config_result = await tools["get_host_net_config"].ainvoke(
+                {"host_name": "pc1"}
+            )
             host_config_str = str(host_config_result)
-            self.assertTrue(len(host_config_str) > 0, "get_host_net_config must return non-empty output")
+            self.assertTrue(
+                len(host_config_str) > 0,
+                "get_host_net_config must return non-empty output",
+            )
 
             self.assertIn("exec_shell", tools, "exec_shell tool must be available")
-            exec_result = await tools["exec_shell"].ainvoke({"host_name": "pc1", "command": "hostname"})
+            exec_result = await tools["exec_shell"].ainvoke(
+                {"host_name": "pc1", "command": "hostname"}
+            )
             exec_str = str(exec_result)
-            self.assertTrue(len(exec_str) > 0, "exec_shell must return non-empty output")
+            self.assertTrue(
+                len(exec_str) > 0, "exec_shell must return non-empty output"
+            )
 
             return {
                 "reachability": reach_str,
@@ -259,7 +297,9 @@ class PipelineIntegrationTest(CliIntegrationTestCase, OrderedPipelineTestCase):
 
             avail_raw = await tools["list_avail_problems"].ainvoke({})
             avail = _tool_text_list(avail_raw)
-            self.assertTrue(len(avail) > 0, "list_avail_problems must return at least one entry")
+            self.assertTrue(
+                len(avail) > 0, "list_avail_problems must return at least one entry"
+            )
             self.assertIn(PROBLEM, avail, f"{PROBLEM} must be among available problems")
 
             submit_result = await tools["submit"].ainvoke(
@@ -272,7 +312,11 @@ class PipelineIntegrationTest(CliIntegrationTestCase, OrderedPipelineTestCase):
             return str(submit_result)
 
         result_str = asyncio.run(_run())
-        self.assertIn("success", result_str.lower(), f"submit tool should report success; got: {result_str}")
+        self.assertIn(
+            "success",
+            result_str.lower(),
+            f"submit tool should report success; got: {result_str}",
+        )
 
         submission_path = self.session_dir / "submission.json"
         self.assertTrue(

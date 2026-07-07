@@ -31,7 +31,10 @@ def openai_api_key_available() -> bool:
 def codex_cli_available() -> bool:
     if shutil.which("codex") is None:
         return False
-    return bool(os.environ.get("OPENAI_API_KEY")) or (Path.home() / ".codex" / "auth.json").is_file()
+    return (
+        bool(os.environ.get("OPENAI_API_KEY"))
+        or (Path.home() / ".codex" / "auth.json").is_file()
+    )
 
 
 def claude_cli_available() -> bool:
@@ -82,7 +85,10 @@ def tool_text_list(result: object) -> list[str]:
             return [result]
     if not isinstance(result, list):
         return [str(result)]
-    return [str(item["text"]) if isinstance(item, dict) and "text" in item else str(item) for item in result]
+    return [
+        str(item["text"]) if isinstance(item, dict) and "text" in item else str(item)
+        for item in result
+    ]
 
 
 class CommonPipelineSteps:
@@ -115,7 +121,12 @@ class CommonPipelineSteps:
         self.assertIsNotNone(self.session_id)  # type: ignore[attr-defined]
         run_eval_metrics(session_id=self.session_id)  # type: ignore[attr-defined]
         metrics = self._load_json("eval_metrics.json")  # type: ignore[attr-defined]
-        for field in ("detection_score", "localization_accuracy", "rca_accuracy", "tool_calls"):
+        for field in (
+            "detection_score",
+            "localization_accuracy",
+            "rca_accuracy",
+            "tool_calls",
+        ):
             self.assertIn(field, metrics)  # type: ignore[attr-defined]
         self.assertGreaterEqual(metrics["detection_score"], 0.0)  # type: ignore[attr-defined]
         self.assertGreaterEqual(metrics["tool_calls"], min_tool_calls)  # type: ignore[attr-defined]

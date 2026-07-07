@@ -89,7 +89,9 @@ class P4INT(NetworkEnvBase):
             if j != len(hosts) + 1:
                 collector_cmd_list.append(f"arp -s 10.0.0.{j} 00:00:0a:00:00:0{j}")
 
-        collector_cmd_list.append("python3 collector_src/int_collector.py &> int_collector.log")
+        collector_cmd_list.append(
+            "python3 collector_src/int_collector.py &> int_collector.log"
+        )
         self.lab.create_file_from_list(
             collector_cmd_list,
             f"{collector.name}.startup",
@@ -100,7 +102,9 @@ class P4INT(NetworkEnvBase):
         for i, switch in enumerate(switches, start=1):
             switch.copy_directory_from_path(os.path.join(cur_path, "p4_src"), "p4_src")
 
-            switch.create_file_from_path(os.path.join(cur_path, f"cmds/{switch.name}.txt"), "commands.txt")
+            switch.create_file_from_path(
+                os.path.join(cur_path, f"cmds/{switch.name}.txt"), "commands.txt"
+            )
 
             # add the sswitch_thrift_API.py file to the Kathara image
             switch.create_file_from_path(

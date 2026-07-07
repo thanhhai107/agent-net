@@ -28,6 +28,8 @@ _CLAUDE_MODEL_ENV_KEYS = (
     "CLAUDE_CODE_SUBAGENT_MODEL",
     "ANTHROPIC_DEFAULT_SONNET_MODEL",
 )
+
+
 def default_claude_model() -> str:
     """Return the Claude model id from environment variables."""
     for key in _CLAUDE_MODEL_ENV_KEYS:
@@ -99,13 +101,16 @@ def prepare_claude_subprocess_env(
 ) -> dict[str, str]:
     """Build the subprocess environment for ``claude -p``.
 
-  * Copies *base* or ``os.environ``.
-  * Maps ``ANTHROPIC_AUTH_TOKEN`` → ``ANTHROPIC_API_KEY`` when the latter is unset
-    (required by ``--bare`` and some third-party Anthropic-compatible APIs).
-  * Forwards ``ANTHROPIC_BASE_URL`` unchanged when present.
+    * Copies *base* or ``os.environ``.
+    * Maps ``ANTHROPIC_AUTH_TOKEN`` → ``ANTHROPIC_API_KEY`` when the latter is unset
+      (required by ``--bare`` and some third-party Anthropic-compatible APIs).
+    * Forwards ``ANTHROPIC_BASE_URL`` unchanged when present.
     """
     env = dict(base if base is not None else os.environ)
-    if env.get("ANTHROPIC_AUTH_TOKEN", "").strip() and not env.get("ANTHROPIC_API_KEY", "").strip():
+    if (
+        env.get("ANTHROPIC_AUTH_TOKEN", "").strip()
+        and not env.get("ANTHROPIC_API_KEY", "").strip()
+    ):
         env["ANTHROPIC_API_KEY"] = env["ANTHROPIC_AUTH_TOKEN"]
     return env
 
@@ -113,7 +118,11 @@ def prepare_claude_subprocess_env(
 def describe_claude_auth() -> dict[str, Any]:
     """Summarize detected auth mode (for logging and documentation)."""
     if has_env_claude_credentials():
-        mode = "env_token" if os.environ.get("ANTHROPIC_AUTH_TOKEN", "").strip() else "env_api_key"
+        mode = (
+            "env_token"
+            if os.environ.get("ANTHROPIC_AUTH_TOKEN", "").strip()
+            else "env_api_key"
+        )
         return {
             "mode": mode,
             "bare": True,

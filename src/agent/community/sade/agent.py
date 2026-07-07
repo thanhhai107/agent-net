@@ -160,14 +160,18 @@ class SadeAgent:
             """
             nonlocal turn_text
             if turn_text:
-                logger.log("llm_end", {"text": "\n".join(turn_text), "usage_metadata": {}})
+                logger.log(
+                    "llm_end", {"text": "\n".join(turn_text), "usage_metadata": {}}
+                )
                 turn_text = []
 
         async with ClaudeSDKClient(options=options) as client:
             await client.query(task_description)
             async for message in client.receive_messages():
                 if isinstance(message, SystemMessage) and message.subtype == "init":
-                    system_logger.info(f"sade: session started - {message.data.get('session_id')}")
+                    system_logger.info(
+                        f"sade: session started - {message.data.get('session_id')}"
+                    )
                 elif isinstance(message, AssistantMessage):
                     for block in message.content:
                         if isinstance(block, ThinkingBlock):
@@ -181,13 +185,18 @@ class SadeAgent:
                             _flush_turn()
                             logger.log(
                                 "tool_start",
-                                {"tool": {"name": block.name}, "input": str(block.input)},
+                                {
+                                    "tool": {"name": block.name},
+                                    "input": str(block.input),
+                                },
                             )
                             if "submit" in block.name:
                                 has_submitted = True
                 elif isinstance(message, UserMessage):
                     _flush_turn()  # close the turn that called these tools
-                    content = message.content if isinstance(message.content, list) else []
+                    content = (
+                        message.content if isinstance(message.content, list) else []
+                    )
                     for block in content:
                         if isinstance(block, ToolResultBlock):
                             if block.is_error:
@@ -195,13 +204,22 @@ class SadeAgent:
                             else:
                                 logger.log(
                                     "tool_end",
-                                    {"output": str(block.content), "output_type": "tool_result"},
+                                    {
+                                        "output": str(block.content),
+                                        "output_type": "tool_result",
+                                    },
                                 )
-                    if not reminded and not has_submitted and api_turn_count >= reminder_at:
+                    if (
+                        not reminded
+                        and not has_submitted
+                        and api_turn_count >= reminder_at
+                    ):
                         reminded = True
                         remaining = self.max_steps - api_turn_count
                         text = SADE_REMINDER.format(
-                            turn=api_turn_count, total=self.max_steps, remaining=remaining
+                            turn=api_turn_count,
+                            total=self.max_steps,
+                            remaining=remaining,
                         )
                         await client.query(text)
                         system_logger.info(

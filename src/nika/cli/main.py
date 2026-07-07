@@ -8,14 +8,34 @@ from nika.cli.lazy_group import LAZY_COMMANDS, LazyCommandSpec, LazyTyperGroup
 
 LAZY_COMMANDS.update(
     {
-        "session": LazyCommandSpec("nika.cli.commands.session", "session_app", "Session lifecycle."),
-        "env": LazyCommandSpec("nika.cli.commands.env", "env_app", "Deploy and manage network scenarios."),
-        "failure": LazyCommandSpec("nika.cli.commands.failure", "failure_app", "Inject and inspect faults."),
-        "exec": LazyCommandSpec("nika.cli.commands.exec", "exec_app", "Execute a shell command inside a host."),
-        "agent": LazyCommandSpec("nika.cli.commands.agent", "agent_app", "Troubleshooting agents."),
-        "eval": LazyCommandSpec("nika.cli.commands.evaluation", "eval_app", "Evaluate agent runs."),
-        "benchmark": LazyCommandSpec("nika.cli.commands.benchmark", "benchmark_app", "Batch benchmark runs."),
-        "traffic": LazyCommandSpec("nika.cli.commands.traffic", "traffic_app", "Generate traffic in the Kathará lab."),
+        "session": LazyCommandSpec(
+            "nika.cli.commands.session", "session_app", "Session lifecycle."
+        ),
+        "env": LazyCommandSpec(
+            "nika.cli.commands.env", "env_app", "Deploy and manage network scenarios."
+        ),
+        "failure": LazyCommandSpec(
+            "nika.cli.commands.failure", "failure_app", "Inject and inspect faults."
+        ),
+        "exec": LazyCommandSpec(
+            "nika.cli.commands.exec",
+            "exec_app",
+            "Execute a shell command inside a host.",
+        ),
+        "agent": LazyCommandSpec(
+            "nika.cli.commands.agent", "agent_app", "Troubleshooting agents."
+        ),
+        "eval": LazyCommandSpec(
+            "nika.cli.commands.evaluation", "eval_app", "Evaluate agent runs."
+        ),
+        "benchmark": LazyCommandSpec(
+            "nika.cli.commands.benchmark", "benchmark_app", "Batch benchmark runs."
+        ),
+        "traffic": LazyCommandSpec(
+            "nika.cli.commands.traffic",
+            "traffic_app",
+            "Generate traffic in the Kathará lab.",
+        ),
     }
 )
 

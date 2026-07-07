@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 import unittest
 import unittest.mock
@@ -24,7 +23,11 @@ from nika.utils.agent_config import (
 from nika.utils.session_store import SessionStore
 from tests.agents._assertions import assert_submission_fields
 from tests.integration_base import OrderedPipelineTestCase
-from tests.integration_pipeline import CommonPipelineSteps, codex_cli_available, load_test_env
+from tests.integration_pipeline import (
+    CommonPipelineSteps,
+    codex_cli_available,
+    load_test_env,
+)
 
 load_test_env()
 
@@ -58,7 +61,10 @@ class CodexMcpTomlTest(unittest.TestCase):
     def test_approves_each_configured_server(self) -> None:
         toml = _build_mcp_toml(
             {
-                "kathara_base_mcp_server": {"command": "python3", "args": ["/path/base.py"]},
+                "kathara_base_mcp_server": {
+                    "command": "python3",
+                    "args": ["/path/base.py"],
+                },
                 "task_mcp_server": {"command": "python3", "args": ["/path/task.py"]},
             }
         )
@@ -81,13 +87,19 @@ class CodexAgentConfigTest(unittest.TestCase):
             clear=True,
         ):
             self.assertEqual(resolve_agent_type(None), "local_cli.codex_cli")
-            self.assertIsNone(resolve_llm_provider(None, agent_type="local_cli.codex_cli"))
+            self.assertIsNone(
+                resolve_llm_provider(None, agent_type="local_cli.codex_cli")
+            )
             self.assertEqual(resolve_max_steps(None), 30)
             self.assertEqual(resolve_reasoning_effort(None), "medium")
 
     def test_model_from_env(self) -> None:
-        with unittest.mock.patch.dict(os.environ, {ENV_CODEX_MODEL: "gpt-5.4-mini"}, clear=True):
-            self.assertEqual(resolve_agent_model("local_cli.codex_cli", None), "gpt-5.4-mini")
+        with unittest.mock.patch.dict(
+            os.environ, {ENV_CODEX_MODEL: "gpt-5.4-mini"}, clear=True
+        ):
+            self.assertEqual(
+                resolve_agent_model("local_cli.codex_cli", None), "gpt-5.4-mini"
+            )
 
 
 class CodexWorkerConfigTest(unittest.TestCase):
@@ -109,7 +121,11 @@ class CodexDisplayTest(unittest.TestCase):
     def test_agent_message(self) -> None:
         event = {
             "type": "item.completed",
-            "item": {"id": "item_1", "type": "agent_message", "text": "BGP session is down."},
+            "item": {
+                "id": "item_1",
+                "type": "agent_message",
+                "text": "BGP session is down.",
+            },
         }
         self.assertIn("BGP session is down.", format_codex_event(event) or "")
 
@@ -171,7 +187,9 @@ class CodexCliAgentPipelineTest(CommonPipelineSteps, OrderedPipelineTestCase):
 
     def test_step_03_run_cli_agent(self) -> None:
         self.assertIsNotNone(self.session_id)
-        self._run_agent(agent_type="local_cli.codex_cli", model=CODEX_MODEL, max_steps=20)
+        self._run_agent(
+            agent_type="local_cli.codex_cli", model=CODEX_MODEL, max_steps=20
+        )
         row = SessionStore().get_session(self.session_id)
         self.assertEqual(row.get("agent_type"), "local_cli.codex_cli")
 
@@ -183,7 +201,9 @@ class CodexCliAgentPipelineTest(CommonPipelineSteps, OrderedPipelineTestCase):
         self.assertTrue((workspace / ".git").is_dir())
         self.assertTrue((workspace / ".codex_home").is_dir())
 
-        config_text = (workspace / ".codex_home" / "config.toml").read_text(encoding="utf-8")
+        config_text = (workspace / ".codex_home" / "config.toml").read_text(
+            encoding="utf-8"
+        )
         self.assertIn("NIKA_SESSION_ID", config_text)
         self.assertIn(self.session_id, config_text)
         self.assertIn("[mcp_servers.", config_text)
@@ -216,7 +236,9 @@ class CodexCliAgentPipelineTest(CommonPipelineSteps, OrderedPipelineTestCase):
 
         codex_events = [e for e in messages if "codex_event" in e]
         self.assertGreater(len(codex_events), 0)
-        rendered_count = sum(1 for e in codex_events if format_codex_event(e["codex_event"]))
+        rendered_count = sum(
+            1 for e in codex_events if format_codex_event(e["codex_event"])
+        )
         self.assertGreater(rendered_count, 0)
 
     def test_step_05_check_submission(self) -> None:

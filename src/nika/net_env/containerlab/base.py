@@ -42,7 +42,9 @@ class ContainerlabNetworkEnv(NetworkEnvBase):
         self.runtime_workdir.mkdir(parents=True, exist_ok=True)
 
         self.topology_file = self.runtime_workdir / f"{self.LAB_NAME}.clab.yml"
-        render_topology(self.topology_template(), lab_name=lab_name, output_path=self.topology_file)
+        render_topology(
+            self.topology_template(), lab_name=lab_name, output_path=self.topology_file
+        )
 
     def get_lab_spec(self) -> LabSpec:
         spec = parse_clab_topology(self.topology_template())
@@ -59,5 +61,7 @@ class ContainerlabNetworkEnv(NetworkEnvBase):
         summary = f"Network Description: {self.desc}\n"
         summary += f"Nodes: {', '.join(node_names)}\n"
         summary += f"Links: {', '.join(link_labels)}\n"
-        summary += f"Topology: {', '.join(f'({a}, {b})' for a, b in self.get_topology())}"
+        summary += (
+            f"Topology: {', '.join(f'({a}, {b})' for a, b in self.get_topology())}"
+        )
         return summary

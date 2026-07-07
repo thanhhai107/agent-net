@@ -1,5 +1,13 @@
-from int_defines import *
-from int_headers import *
+from int_headers import (
+    INTEgressInterfaceTxUtil,
+    INTEgressTstamp,
+    INTHopLatency,
+    INTIngressTstamp,
+    INTLevel1InterfaceIDs,
+    INTLevel2InterfaceIDs,
+    INTNodeID,
+    INTQueueOccupancy,
+)
 
 
 def extract_0003_i0(b):

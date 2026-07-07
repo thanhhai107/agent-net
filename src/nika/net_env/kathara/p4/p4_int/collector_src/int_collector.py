@@ -2,8 +2,37 @@ from datetime import datetime
 
 from influxdb_client import InfluxDBClient, Point
 from influxdb_client.client.write_api import SYNCHRONOUS
-from int_defines import *
-from int_headers import *
+from int_defines import (
+    ETHERNET_HEADER_LENGTH,
+    INNER_ETHERNET_OFFSET,
+    INNER_IP_HEADER_OFFSET,
+    INNER_L4_HEADER_OFFSET,
+    INT_IPv4_DSCP,
+    INT_META_LENGTH,
+    INT_META_WORD_LENGTH,
+    INT_REPORT_HEADER_LENGTH,
+    INT_SHIM_LENGTH,
+    INT_SHIM_OFFSET,
+    INT_SHIM_WORD_LENGTH,
+    IP_HEADER_LENGTH,
+    OUTER_IP_HEADER,
+    OUTER_L4_HEADER_OFFSET,
+    UDP_HEADER_LENGTH,
+    UDP_PROTO,
+)
+from int_headers import (
+    INTEgressInterfaceTxUtil,
+    INTEgressTstamp,
+    INTHopLatency,
+    INTIngressTstamp,
+    INTLevel1InterfaceIDs,
+    INTLevel2InterfaceIDs,
+    INTMeta,
+    INTNodeID,
+    INTQueueOccupancy,
+    INTShim,
+    TelemetryReport,
+)
 from scapy.all import raw, sniff
 from scapy.layers.inet import IP, UDP
 from scapy.layers.l2 import Ether
@@ -70,12 +99,14 @@ class INTCollector:
         info["rec_time"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
 
         # parse outer headers
-        eth_report = Ether(pkt[0:ETHERNET_HEADER_LENGTH])
-        # eth_report.show()
-        ip_report = IP(pkt[OUTER_IP_HEADER : OUTER_IP_HEADER + IP_HEADER_LENGTH])
-        # ip_report.show()
-        udp_report = UDP(pkt[OUTER_L4_HEADER_OFFSET : OUTER_L4_HEADER_OFFSET + UDP_HEADER_LENGTH])
-        # udp_report.show()
+        _eth_report = Ether(pkt[0:ETHERNET_HEADER_LENGTH])
+        # _eth_report.show()
+        _ip_report = IP(pkt[OUTER_IP_HEADER : OUTER_IP_HEADER + IP_HEADER_LENGTH])
+        # _ip_report.show()
+        _udp_report = UDP(
+            pkt[OUTER_L4_HEADER_OFFSET : OUTER_L4_HEADER_OFFSET + UDP_HEADER_LENGTH]
+        )
+        # _udp_report.show()
 
         # parse report header
         raw_payload = bytes(packet[Raw])  # to get 'raw' payload
@@ -83,14 +114,26 @@ class INTCollector:
         # telemetry_report.show()
 
         # parse inner headers
-        inner_eth = Ether(raw_payload[INNER_ETHERNET_OFFSET : INNER_ETHERNET_OFFSET + ETHERNET_HEADER_LENGTH])
-        # inner_eth.show()
-        inner_ip = IP(raw_payload[INNER_IP_HEADER_OFFSET : INNER_IP_HEADER_OFFSET + IP_HEADER_LENGTH])
+        _inner_eth = Ether(
+            raw_payload[
+                INNER_ETHERNET_OFFSET : INNER_ETHERNET_OFFSET + ETHERNET_HEADER_LENGTH
+            ]
+        )
+        # _inner_eth.show()
+        inner_ip = IP(
+            raw_payload[
+                INNER_IP_HEADER_OFFSET : INNER_IP_HEADER_OFFSET + IP_HEADER_LENGTH
+            ]
+        )
         # inner_ip.show()
         # check if it's the int packets
         if inner_ip.tos != INT_IPv4_DSCP or inner_ip.proto != UDP_PROTO:
             return
-        inner_udp = UDP(raw_payload[INNER_L4_HEADER_OFFSET : INNER_L4_HEADER_OFFSET + UDP_HEADER_LENGTH])
+        inner_udp = UDP(
+            raw_payload[
+                INNER_L4_HEADER_OFFSET : INNER_L4_HEADER_OFFSET + UDP_HEADER_LENGTH
+            ]
+        )
         # inner_udp.show()
 
         # parse int headers
@@ -98,15 +141,24 @@ class INTCollector:
         int_shim_offset += UDP_HEADER_LENGTH
         int_meta_offset = int_shim_offset + INT_SHIM_LENGTH
         # print("SHIM OFFSET: "+str(int_shim_offset))
-        int_shim = INTShim(raw_payload[int_shim_offset : int_shim_offset + INT_SHIM_LENGTH])
+        int_shim = INTShim(
+            raw_payload[int_shim_offset : int_shim_offset + INT_SHIM_LENGTH]
+        )
         # int_shim.show()
-        int_meta = INTMeta(raw_payload[int_meta_offset : int_meta_offset + INT_META_LENGTH])
+        int_meta = INTMeta(
+            raw_payload[int_meta_offset : int_meta_offset + INT_META_LENGTH]
+        )
         # int_meta.show()
 
         # parse int metadata stack
         int_metadata_stack_offset = int_meta_offset + INT_META_LENGTH
-        int_metadata_stack_length = (int_shim.len - INT_SHIM_WORD_LENGTH - INT_META_WORD_LENGTH) * 4
-        stack_payload = raw_payload[int_metadata_stack_offset : int_metadata_stack_offset + int_metadata_stack_length]
+        int_metadata_stack_length = (
+            int_shim.len - INT_SHIM_WORD_LENGTH - INT_META_WORD_LENGTH
+        ) * 4
+        stack_payload = raw_payload[
+            int_metadata_stack_offset : int_metadata_stack_offset
+            + int_metadata_stack_length
+        ]
 
         # hop_m_len：per-hop metadata length, set by the source for transit and sink
         hop_m_len = int_meta.hop_metadata_len * 4
@@ -137,23 +189,33 @@ class INTCollector:
             cur_offset = hop_index * hop_m_len
 
             # parse per-hop metadata field
-            flow_info.sw_ids.append(INTNodeID(stack_payload[cur_offset : cur_offset + len(INTNodeID())]).node_id)
+            flow_info.sw_ids.append(
+                INTNodeID(
+                    stack_payload[cur_offset : cur_offset + len(INTNodeID())]
+                ).node_id
+            )
             cur_offset += len(INTNodeID())
             if is_l1_in_e_port_ids:
                 flow_info.l1_in_port_ids.append(
                     INTLevel1InterfaceIDs(
-                        stack_payload[cur_offset : cur_offset + len(INTLevel1InterfaceIDs())]
+                        stack_payload[
+                            cur_offset : cur_offset + len(INTLevel1InterfaceIDs())
+                        ]
                     ).l1_ingress_interface_id
                 )
                 flow_info.l1_e_port_ids.append(
                     INTLevel1InterfaceIDs(
-                        stack_payload[cur_offset : cur_offset + len(INTLevel1InterfaceIDs())]
+                        stack_payload[
+                            cur_offset : cur_offset + len(INTLevel1InterfaceIDs())
+                        ]
                     ).l1_egress_interface_id
                 )
                 cur_offset += len(INTLevel1InterfaceIDs())
             if is_hop_latencies:
                 flow_info.hop_latencies.append(
-                    INTHopLatency(stack_payload[cur_offset : cur_offset + len(INTHopLatency())]).hop_latency
+                    INTHopLatency(
+                        stack_payload[cur_offset : cur_offset + len(INTHopLatency())]
+                    ).hop_latency
                 )
 
                 flow_info.flow_latency += INTHopLatency(
@@ -162,10 +224,18 @@ class INTCollector:
                 cur_offset += len(INTHopLatency())
             if is_queue_occups:
                 flow_info.queue_ids.append(
-                    INTQueueOccupancy(stack_payload[cur_offset : cur_offset + len(INTQueueOccupancy())]).q_id
+                    INTQueueOccupancy(
+                        stack_payload[
+                            cur_offset : cur_offset + len(INTQueueOccupancy())
+                        ]
+                    ).q_id
                 )
                 flow_info.queue_occups.append(
-                    INTQueueOccupancy(stack_payload[cur_offset : cur_offset + len(INTQueueOccupancy())]).q_occupancy
+                    INTQueueOccupancy(
+                        stack_payload[
+                            cur_offset : cur_offset + len(INTQueueOccupancy())
+                        ]
+                    ).q_occupancy
                 )
                 cur_offset += len(INTQueueOccupancy())
             if is_ingr_times:
@@ -185,30 +255,40 @@ class INTCollector:
             if is_l2_in_e_port_ids:
                 flow_info.l2_in_port_ids.append(
                     INTLevel2InterfaceIDs(
-                        stack_payload[cur_offset : cur_offset + len(INTLevel2InterfaceIDs())]
+                        stack_payload[
+                            cur_offset : cur_offset + len(INTLevel2InterfaceIDs())
+                        ]
                     ).l2_ingress_interface_id
                 )
                 flow_info.l2_e_port_ids.append(
                     INTLevel2InterfaceIDs(
-                        stack_payload[cur_offset : cur_offset + len(INTLevel2InterfaceIDs())]
+                        stack_payload[
+                            cur_offset : cur_offset + len(INTLevel2InterfaceIDs())
+                        ]
                     ).l2_egress_interface_id
                 )
                 cur_offset += len(INTLevel2InterfaceIDs())
             if is_tx_utilizes:
                 flow_info.tx_utilizes.append(
                     INTEgressInterfaceTxUtil(
-                        stack_payload[cur_offset : cur_offset + len(INTEgressInterfaceTxUtil())]
+                        stack_payload[
+                            cur_offset : cur_offset + len(INTEgressInterfaceTxUtil())
+                        ]
                     ).egress_interface_tx_util
                 )
                 cur_offset += len(INTEgressInterfaceTxUtil())
         print("INT data: ", flow_info.__dict__)
 
         # record into influxdb
-        with InfluxDBClient(url="http://localhost:8086", token=token, org=org) as client:
+        with InfluxDBClient(
+            url="http://localhost:8086", token=token, org=org
+        ) as client:
             write_api = client.write_api(write_options=SYNCHRONOUS)
             # write flow latency and flow path
             if is_hop_latencies:
-                path_str = ":".join(str(flow_info.sw_ids[i]) for i in reversed(range(0, int_hop_num)))
+                path_str = ":".join(
+                    str(flow_info.sw_ids[i]) for i in reversed(range(0, int_hop_num))
+                )
                 p = (
                     Point("flow_stat")
                     .tag("src_ip", flow_info.src_ip)

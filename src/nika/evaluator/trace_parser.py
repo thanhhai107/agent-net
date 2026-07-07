@@ -39,7 +39,10 @@ class AgentTraceParser:
                 self.tool_calls += 1
         elif event == "item.completed":
             codex_item = (entry.get("codex_event") or {}).get("item") or {}
-            if codex_item.get("type") == "mcp_tool_call" and codex_item.get("status") == "failed":
+            if (
+                codex_item.get("type") == "mcp_tool_call"
+                and codex_item.get("status") == "failed"
+            ):
                 self.tool_errors += 1
         elif event == "turn.completed":
             self.steps += 1
@@ -48,8 +51,14 @@ class AgentTraceParser:
             self.out_tokens += usage.get("output_tokens", 0)
         elif event == "assistant":
             # Claude Code stream-json: tool calls appear in message content blocks.
-            content = ((entry.get("claude_event") or {}).get("message") or {}).get("content") or []
-            self.tool_calls += sum(1 for b in content if isinstance(b, dict) and b.get("type") == "tool_use")
+            content = ((entry.get("claude_event") or {}).get("message") or {}).get(
+                "content"
+            ) or []
+            self.tool_calls += sum(
+                1
+                for b in content
+                if isinstance(b, dict) and b.get("type") == "tool_use"
+            )
         elif event == "result":
             # Claude Code stream-json: final result event carries usage and step count.
             claude_event = entry.get("claude_event") or {}
@@ -82,7 +91,9 @@ class AgentTraceParser:
 
                 self._record_event(entry)
 
-        self.time_taken = (time_end - time_start).total_seconds() if time_start and time_end else 0
+        self.time_taken = (
+            (time_end - time_start).total_seconds() if time_start and time_end else 0
+        )
         return {
             "in_tokens": self.in_tokens,
             "out_tokens": self.out_tokens,

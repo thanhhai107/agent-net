@@ -72,7 +72,14 @@ PreType = enum("PreType", "none", "SimplePre", "SimplePreLAG")
 MeterType = enum("MeterType", "packets", "bytes")
 TableType = enum("TableType", "simple", "indirect", "indirect_ws")
 ResType = enum(
-    "ResType", "table", "action_prof", "action", "meter_array", "counter_array", "register_array", "parse_vset"
+    "ResType",
+    "table",
+    "action_prof",
+    "action",
+    "meter_array",
+    "counter_array",
+    "register_array",
+    "parse_vset",
 )
 
 
@@ -117,10 +124,17 @@ class Table:
         return len(self.key)
 
     def key_str(self):
-        return ",\t".join([name + "(" + MatchType.to_str(t) + ", " + str(bw) + ")" for name, t, bw in self.key])
+        return ",\t".join(
+            [
+                name + "(" + MatchType.to_str(t) + ", " + str(bw) + ")"
+                for name, t, bw in self.key
+            ]
+        )
 
     def table_str(self):
-        ap_str = "implementation={}".format("None" if not self.action_prof else self.action_prof.name)
+        ap_str = "implementation={}".format(
+            "None" if not self.action_prof else self.action_prof.name
+        )
         return "{0:30} [{1}, mk={2}]".format(self.name, ap_str, self.key_str())
 
     def get_action(self, action_name, suffix_lookup_map):
@@ -160,7 +174,9 @@ class Action:
         return len(self.runtime_data)
 
     def runtime_data_str(self):
-        return ",\t".join([name + "(" + str(bw) + ")" for name, bw in self.runtime_data])
+        return ",\t".join(
+            [name + "(" + str(bw) + ")" for name, bw in self.runtime_data]
+        )
 
     def action_str(self):
         return "{0:30} [{1}]".format(self.name, self.runtime_data_str())
@@ -177,7 +193,9 @@ class MeterArray:
         self.rate_count = None
 
     def meter_str(self):
-        return "{0:30} [{1}, {2}]".format(self.name, self.size, MeterType.to_str(self.type_))
+        return "{0:30} [{1}, {2}]".format(
+            self.name, self.size, MeterType.to_str(self.type_)
+        )
 
 
 class CounterArray:
@@ -326,14 +344,18 @@ class SwitchInfo:
                     else:
                         field_name = ".".join(target)
                         header_type = get_header_type(target[0], json_["headers"])
-                        bitwidth = get_field_bitwidth(header_type, target[1], json_["header_types"])
+                        bitwidth = get_field_bitwidth(
+                            header_type, target[1], json_["header_types"]
+                        )
                     table.key += [(field_name, match_type, bitwidth)]
 
                     self.tables[j_table["name"]] = table
 
                 # table's action has no match key
                 if len(j_table["key"]) == 0:
-                    if j_table["name"].startswith(j_pipeline["source_info"]["source_fragment"] + "."):
+                    if j_table["name"].startswith(
+                        j_pipeline["source_info"]["source_fragment"] + "."
+                    ):
                         self.tables[j_table["name"]] = table
 
         for j_meter in get_json_key("meter_arrays"):
@@ -552,7 +574,9 @@ def parse_param(input_str, bitwidth):
     try:
         input_ = int(input_str, 0)
     except:
-        raise UIn_BadParamError("Invalid input, could not cast to integer, try in hex with 0x prefix")
+        raise UIn_BadParamError(
+            "Invalid input, could not cast to integer, try in hex with 0x prefix"
+        )
     try:
         return int_to_bytes(input_, (bitwidth + 7) // 8)
     except UIn_BadParamError:
@@ -602,19 +626,31 @@ def parse_match_key(table, key_fields):
             try:
                 prefix, length = field.split("/")
             except ValueError:
-                raise UIn_MatchKeyError("Invalid LPM value {}, use '/' to separate prefix and length".format(field))
+                raise UIn_MatchKeyError(
+                    "Invalid LPM value {}, use '/' to separate prefix and length".format(
+                        field
+                    )
+                )
             key = bytes_to_string(parse_param_(prefix, bw))
             param = BmMatchParam(type=param_type, lpm=BmMatchParamLPM(key, int(length)))
         elif param_type == BmMatchParamType.TERNARY:
             try:
                 key, mask = field.split("&&&")
             except ValueError:
-                raise UIn_MatchKeyError("Invalid ternary value {}, use '&&&' to separate key and mask".format(field))
+                raise UIn_MatchKeyError(
+                    "Invalid ternary value {}, use '&&&' to separate key and mask".format(
+                        field
+                    )
+                )
             key = bytes_to_string(parse_param_(key, bw))
             mask = bytes_to_string(parse_param_(mask, bw))
             if len(mask) != len(key):
-                raise UIn_MatchKeyError("Key and mask have different lengths in expression {}".forma(field))
-            param = BmMatchParam(type=param_type, ternary=BmMatchParamTernary(key, mask))
+                raise UIn_MatchKeyError(
+                    "Key and mask have different lengths in expression {}".forma(field)
+                )
+            param = BmMatchParam(
+                type=param_type, ternary=BmMatchParamTernary(key, mask)
+            )
         elif param_type == BmMatchParamType.VALID:
             key = bool(int(field))
             param = BmMatchParam(type=param_type, valid=BmMatchParamValid(key))
@@ -623,14 +659,22 @@ def parse_match_key(table, key_fields):
                 start, end = field.split("->")
             except ValueError:
                 raise UIn_MatchKeyError(
-                    "Invalid range value {}, use '->' to separate range start and range end".format(field)
+                    "Invalid range value {}, use '->' to separate range start and range end".format(
+                        field
+                    )
                 )
             start = bytes_to_string(parse_param_(start, bw))
             end = bytes_to_string(parse_param_(end, bw))
             if len(start) != len(end):
-                raise UIn_MatchKeyError("start and end have different lengths in expression {}".format(field))
+                raise UIn_MatchKeyError(
+                    "start and end have different lengths in expression {}".format(
+                        field
+                    )
+                )
             if start > end:
-                raise UIn_MatchKeyError("start is less than end in expression {}".format(field))
+                raise UIn_MatchKeyError(
+                    "start is less than end in expression {}".format(field)
+                )
             param = BmMatchParam(type=param_type, range=BmMatchParamRange(start, end))
         else:
             assert 0
@@ -686,13 +730,17 @@ def parse_pvs_value(input_str, bitwidth):
     try:
         input_ = int(input_str, 0)
     except:
-        raise UIn_BadParamError("Invalid input, could not cast to integer, try in hex with 0x prefix")
+        raise UIn_BadParamError(
+            "Invalid input, could not cast to integer, try in hex with 0x prefix"
+        )
     max_v = (1 << bitwidth) - 1
     # bmv2 does not perform this check when receiving the value (and does not
     # truncate values which are too large), so we perform this check
     # client-side.
     if input_ > max_v:
-        raise UIn_BadParamError("Input is too large, it should fit within {} bits".format(bitwidth))
+        raise UIn_BadParamError(
+            "Input is too large, it should fit within {} bits".format(bitwidth)
+        )
     try:
         v = int_to_bytes(input_, (bitwidth + 7) / 8)
     except UIn_BadParamError:
@@ -796,11 +844,17 @@ def deprecated_act_prof(substitute, with_selection=False, strictly_deprecated=Tr
             assert table.action_prof is not None
             assert table.action_prof.ref_cnt > 0
             if strictly_deprecated and table.action_prof.ref_cnt > 1:
-                raise UIn_Error("Legacy command does not work with shared action profiles")
+                raise UIn_Error(
+                    "Legacy command does not work with shared action profiles"
+                )
             args[0] = table.action_prof.name
             if strictly_deprecated:
                 # writing to stderr in case someone is parsing stdout
-                sys.stderr.write("This is a deprecated command, use '{}' instead\n".format(substitute))
+                sys.stderr.write(
+                    "This is a deprecated command, use '{}' instead\n".format(
+                        substitute
+                    )
+                )
             return substitute_fn(" ".join(args))
 
         # we add the handle_bad_input decorator "programatically"
@@ -909,7 +963,9 @@ class ThriftAPI:
         if isinstance(pre_type, str):
             pre_type = PreType.from_str(pre_type)
 
-        standard_client, mc_client = thrift_connect(thrift_ip, thrift_port, ThriftAPI.get_thrift_services(pre_type))
+        standard_client, mc_client = thrift_connect(
+            thrift_ip, thrift_port, ThriftAPI.get_thrift_services(pre_type)
+        )
 
         # Controller to Switch Info
         self.switch_info = SwitchInfo()
@@ -943,7 +999,9 @@ class ThriftAPI:
 
     def parse_runtime_data(self, action, action_params):
         if len(action_params) != action.num_params():
-            raise UIn_Error("Action {} needs {} parameters".format(action.name, action.num_params()))
+            raise UIn_Error(
+                "Action {} needs {} parameters".format(action.name, action.num_params())
+            )
 
         return parse_runtime_data(action, action_params)
 
@@ -988,7 +1046,11 @@ class ThriftAPI:
     def print_set_default(self, table_name, action_name, runtime_data):
         print("Setting default action of", table_name)
         print("{0:20} {1}".format("action:", action_name))
-        print("{0:20} {1}".format("runtime data:", "\t".join(printable_byte_str(d) for d in runtime_data)))
+        print(
+            "{0:20} {1}".format(
+                "runtime data:", "\t".join(printable_byte_str(d) for d in runtime_data)
+            )
+        )
 
     @handle_bad_input
     def table_set_default(self, table_name, action_name, action_params=[]):
@@ -1027,9 +1089,15 @@ class ThriftAPI:
 
     # for debugging
     def print_table_add(self, match_key, action_name, runtime_data):
-        print("{0:20} {1}".format("match key:", "\t".join(d.to_str() for d in match_key)))
+        print(
+            "{0:20} {1}".format("match key:", "\t".join(d.to_str() for d in match_key))
+        )
         print("{0:20} {1}".format("action:", action_name))
-        print("{0:20} {1}".format("runtime data:", "\t".join(printable_byte_str(d) for d in runtime_data)))
+        print(
+            "{0:20} {1}".format(
+                "runtime data:", "\t".join(printable_byte_str(d) for d in runtime_data)
+            )
+        )
 
     @handle_bad_input
     def table_num_entries(self, table_name):
@@ -1104,30 +1172,48 @@ class ThriftAPI:
             try:
                 priority = int(prio)
             except:
-                raise UIn_Error("Table is ternary, but could not extract a valid priority from args")
+                raise UIn_Error(
+                    "Table is ternary, but could not extract a valid priority from args"
+                )
         else:
             priority = 0
 
         if len(match_keys) != table.num_key_fields():
-            raise UIn_Error("Table {} needs {} key fields".format(table_name, table.num_key_fields()))
+            raise UIn_Error(
+                "Table {} needs {} key fields".format(
+                    table_name, table.num_key_fields()
+                )
+            )
 
         runtime_data = self.parse_runtime_data(action, action_params)
         match_keys = parse_match_key(table, match_keys)
 
-        print("Adding entry to", MatchType.to_str(table.match_type), "match table", table_name)
+        print(
+            "Adding entry to",
+            MatchType.to_str(table.match_type),
+            "match table",
+            table_name,
+        )
 
         # disable, maybe a verbose CLI option?
         self.print_table_add(match_keys, action_name, runtime_data)
 
         entry_handle = self.client.bm_mt_add_entry(
-            0, table.name, match_keys, action.name, runtime_data, BmAddEntryOptions(priority=priority)
+            0,
+            table.name,
+            match_keys,
+            action.name,
+            runtime_data,
+            BmAddEntryOptions(priority=priority),
         )
 
         # save handle
         # for sub_table_name in self.table_multiple_names[table.name]:
         try:
             entry_handle = int(entry_handle)
-            self.table_entries_match_to_handle[table.name][str(match_keys)] = entry_handle
+            self.table_entries_match_to_handle[table.name][str(match_keys)] = (
+                entry_handle
+            )
         except:
             print("Could not add entry with handle {}".format(entry_handle))
             return entry_handle
@@ -1148,7 +1234,9 @@ class ThriftAPI:
 
         table = self.get_res("table", table_name, ResType.table)
         if not table.support_timeout:
-            raise UIn_Error("Table {} does not support entry timeouts".format(table_name))
+            raise UIn_Error(
+                "Table {} does not support entry timeouts".format(table_name)
+            )
 
         try:
             entry_handle = int(entry_handle)
@@ -1204,10 +1292,19 @@ class ThriftAPI:
 
         runtime_data = self.parse_runtime_data(action, action_params)
 
-        print("Modifying entry", entry_handle, "for", MatchType.to_str(table.match_type), "match table", table_name)
+        print(
+            "Modifying entry",
+            entry_handle,
+            "for",
+            MatchType.to_str(table.match_type),
+            "match table",
+            table_name,
+        )
 
         # does not return anything
-        self.client.bm_mt_modify_entry(0, table.name, entry_handle, action.name, runtime_data)
+        self.client.bm_mt_modify_entry(
+            0, table.name, entry_handle, action.name, runtime_data
+        )
 
         return entry_handle
 
@@ -1283,11 +1380,15 @@ class ThriftAPI:
 
     def check_indirect_ws(self, table):
         if table.type_ != TableType.indirect_ws:
-            raise UIn_Error("Cannot run this command on non-indirect table, or on indirect table with no selector")
+            raise UIn_Error(
+                "Cannot run this command on non-indirect table, or on indirect table with no selector"
+            )
 
     def check_act_prof_ws(self, act_prof):
         if not act_prof.with_selection:
-            raise UIn_Error("Cannot run this command on an action profile without selector")
+            raise UIn_Error(
+                "Cannot run this command on an action profile without selector"
+            )
 
     @handle_bad_input
     def act_prof_create_member(self, act_prof_name, action_name, action_params=[]):
@@ -1310,10 +1411,16 @@ class ThriftAPI:
 
         action = act_prof.get_action(action_name, self.switch_info.suffix_lookup_map)
         if action is None:
-            raise UIn_Error("Action profile '{}' has no action '{}'".format(act_prof_name, action_name))
+            raise UIn_Error(
+                "Action profile '{}' has no action '{}'".format(
+                    act_prof_name, action_name
+                )
+            )
 
         runtime_data = self.parse_runtime_data(action, action_params)
-        mbr_handle = self.client.bm_mt_act_prof_add_member(0, act_prof.name, action.name, runtime_data)
+        mbr_handle = self.client.bm_mt_act_prof_add_member(
+            0, act_prof.name, action.name, runtime_data
+        )
         print("Member has been created with handle", mbr_handle)
 
         return mbr_handle
@@ -1336,7 +1443,9 @@ class ThriftAPI:
         self.client.bm_mt_act_prof_delete_member(0, act_prof.name, mbr_handle)
 
     @handle_bad_input
-    def act_prof_modify_member(self, act_prof_name, action_name, mbr_handle, action_params=[]):
+    def act_prof_modify_member(
+        self, act_prof_name, action_name, mbr_handle, action_params=[]
+    ):
         """Modifies member in an action profile.
 
         Args:
@@ -1357,7 +1466,11 @@ class ThriftAPI:
 
         action = act_prof.get_action(action_name, self.switch_info.suffix_lookup_map)
         if action is None:
-            raise UIn_Error("Action profile '{}' has no action '{}'".format(act_prof_name, action_name))
+            raise UIn_Error(
+                "Action profile '{}' has no action '{}'".format(
+                    act_prof_name, action_name
+                )
+            )
 
         try:
             mbr_handle = int(mbr_handle)
@@ -1365,7 +1478,9 @@ class ThriftAPI:
             raise UIn_Error("Bad format for member handle")
 
         runtime_data = self.parse_runtime_data(action, action_params)
-        self.client.bm_mt_act_prof_modify_member(0, act_prof.name, mbr_handle, action.name, runtime_data)
+        self.client.bm_mt_act_prof_modify_member(
+            0, act_prof.name, mbr_handle, action.name, runtime_data
+        )
 
         return mbr_handle
 
@@ -1430,7 +1545,9 @@ class ThriftAPI:
         except:
             raise UIn_Error("Bad format for group handle")
 
-        self.client.bm_mt_act_prof_add_member_to_group(0, act_prof.name, mbr_handle, grp_handle)
+        self.client.bm_mt_act_prof_add_member_to_group(
+            0, act_prof.name, mbr_handle, grp_handle
+        )
 
     @handle_bad_input
     def act_prof_remove_member_from_group(self, act_prof_name, mbr_handle, grp_handle):
@@ -1456,11 +1573,15 @@ class ThriftAPI:
         except:
             raise UIn_Error("Bad format for group handle")
 
-        self.client.bm_mt_act_prof_remove_member_from_group(0, act_prof.name, mbr_handle, grp_handle)
+        self.client.bm_mt_act_prof_remove_member_from_group(
+            0, act_prof.name, mbr_handle, grp_handle
+        )
 
     def check_has_pre(self):
         if self.pre_type == PreType.none:
-            raise UIn_Error("Cannot execute this command without packet replication engine")
+            raise UIn_Error(
+                "Cannot execute this command without packet replication engine"
+            )
 
     def get_mgrp(self, s):
         try:
@@ -1509,14 +1630,20 @@ class ThriftAPI:
             try:
                 port_num = int(port_num_str)
             except:
-                raise UIn_Error("'{}' is not a valid {} number".format(port_num_str, description))
+                raise UIn_Error(
+                    "'{}' is not a valid {} number".format(port_num_str, description)
+                )
             if port_num < 0:
-                raise UIn_Error("'{}' is not a valid {} number".format(port_num_str, description))
+                raise UIn_Error(
+                    "'{}' is not a valid {} number".format(port_num_str, description)
+                )
             ports_int.append(port_num)
         ports_int.sort()
         for port_num in ports_int:
             if port_num == (last_port_num - 1):
-                raise UIn_Error("Found duplicate {} number '{}'".format(description, port_num))
+                raise UIn_Error(
+                    "Found duplicate {} number '{}'".format(description, port_num)
+                )
             port_map_str += "0" * (port_num - last_port_num) + "1"
             last_port_num = port_num + 1
         return port_map_str[::-1]
@@ -1543,7 +1670,14 @@ class ThriftAPI:
             print("Creating node with rid", rid, "and with port map", port_map_str)
             l1_hdl = self.mc_client.bm_mc_node_create(0, rid, port_map_str)
         else:
-            print("Creating node with rid", rid, ", port map", port_map_str, "and lag map", lag_map_str)
+            print(
+                "Creating node with rid",
+                rid,
+                ", port map",
+                port_map_str,
+                "and lag map",
+                lag_map_str,
+            )
             l1_hdl = self.mc_client.bm_mc_node_create(0, rid, port_map_str, lag_map_str)
         print("node was created with handle", l1_hdl)
 
@@ -1575,7 +1709,14 @@ class ThriftAPI:
             print("Updating node", l1_hdl, "with port map", port_map_str)
             self.mc_client.bm_mc_node_update(0, l1_hdl, port_map_str)
         else:
-            print("Updating node", l1_hdl, "with port map", port_map_str, "and lag map", lag_map_str)
+            print(
+                "Updating node",
+                l1_hdl,
+                "with port map",
+                port_map_str,
+                "and lag map",
+                lag_map_str,
+            )
             self.mc_client.bm_mc_node_update(0, l1_hdl, port_map_str, lag_map_str)
 
         return l1_hdl
@@ -1631,7 +1772,9 @@ class ThriftAPI:
 
         self.check_has_pre()
         if self.pre_type != PreType.SimplePreLAG:
-            raise UIn_Error("Cannot execute this command with this type of PRE, SimplePreLAG is required")
+            raise UIn_Error(
+                "Cannot execute this command with this type of PRE, SimplePreLAG is required"
+            )
 
         try:
             lag_index = int(lag_index)
@@ -1671,7 +1814,8 @@ class ThriftAPI:
                 ports, lags = l2_handles[L2h]
                 print(
                     "-> (ports=[{}], lags=[{}])".format(
-                        ", ".join([str(p) for p in ports]), ", ".join([str(l) for l in lags])
+                        ", ".join([str(p) for p in ports]),
+                        ", ".join([str(l) for l in lags]),
                     )
                 )
 
@@ -1728,7 +1872,11 @@ class ThriftAPI:
 
         meter = self.get_res("meter", meter_name, ResType.meter_array)
         if len(rates) != meter.rate_count:
-            raise UIn_Error("Invalid number of rates, expected {} but got {}".format(meter.rate_count, len(rates)))
+            raise UIn_Error(
+                "Invalid number of rates, expected {} but got {}".format(
+                    meter.rate_count, len(rates)
+                )
+            )
         new_rates = []
         for rate, burst in rates:
             try:
@@ -1759,7 +1907,11 @@ class ThriftAPI:
         except:
             raise UIn_Error("Bad format for index")
         if len(rates) != meter.rate_count:
-            raise UIn_Error("Invalid number of rates, expected {} but got {}".format(meter.rate_count, len(rates)))
+            raise UIn_Error(
+                "Invalid number of rates, expected {} but got {}".format(
+                    meter.rate_count, len(rates)
+                )
+            )
         new_rates = []
         for rate, burst in rates:
             try:
@@ -1807,7 +1959,11 @@ class ThriftAPI:
 
         values = []
         for idx, rate in enumerate(rates):
-            print("{}: info rate = {}, burst size = {}".format(idx, rate.units_per_micros, rate.burst_size))
+            print(
+                "{}: info rate = {}, burst size = {}".format(
+                    idx, rate.units_per_micros, rate.burst_size
+                )
+            )
             values.append((rate.units_per_micros, rate.burst_size))
 
         return values
@@ -1840,7 +1996,11 @@ class ThriftAPI:
         else:
             value = self.client.bm_counter_read(0, counter.name, index)
 
-        print("{}[{}]= ({} bytes, {} packets)".format(counter_name, index, value.bytes, value.packets))
+        print(
+            "{}[{}]= ({} bytes, {} packets)".format(
+                counter_name, index, value.bytes, value.packets
+            )
+        )
         return value.bytes, value.packets
 
     @handle_bad_input
@@ -1870,9 +2030,13 @@ class ThriftAPI:
         if counter.is_direct:
             table_name = counter.binding
             print("writing to direct counter for table", table_name)
-            self.client.bm_mt_write_counter(0, table_name, index, BmCounterValue(bytes=byts, packets=pkts))
+            self.client.bm_mt_write_counter(
+                0, table_name, index, BmCounterValue(bytes=byts, packets=pkts)
+            )
         else:
-            self.client.bm_counter_write(0, counter_name, index, BmCounterValue(bytes=byts, packets=pkts))
+            self.client.bm_counter_write(
+                0, counter_name, index, BmCounterValue(bytes=byts, packets=pkts)
+            )
         print("{}[{}] has been updated".format(counter_name, index))
 
     @handle_bad_input
@@ -1949,7 +2113,9 @@ class ThriftAPI:
             raise UIn_Error("Bad format for value, must be an integer")
 
         if isinstance(index, list):
-            self.client.bm_register_write_range(0, register.name, index[0], index[1], value)
+            self.client.bm_register_write_range(
+                0, register.name, index[0], index[1], value
+            )
         else:
             self.client.bm_register_write(0, register.name, index, value)
 
@@ -1965,7 +2131,11 @@ class ThriftAPI:
         self.client.bm_register_reset(0, register.name)
 
     def dump_action_and_data(self, action_name, action_data):
-        print("Action entry: {} - {}".format(action_name, ", ".join([hexstr(a) for a in action_data])))
+        print(
+            "Action entry: {} - {}".format(
+                action_name, ", ".join([hexstr(a) for a in action_data])
+            )
+        )
 
     def dump_action_entry(self, a_entry):
         if a_entry.action_type == BmActionEntryType.NONE:
@@ -2027,12 +2197,20 @@ class ThriftAPI:
         for p, k in zip(entry.match_key, table.key):
             assert k[1] == p.type
             pdumper = pdumpers[MatchType.to_str(p.type)]
-            print("* {0:{w}}: {1:10}{2}".format(k[0], MatchType.to_str(p.type).upper(), pdumper(p), w=out_name_w))
+            print(
+                "* {0:{w}}: {1:10}{2}".format(
+                    k[0], MatchType.to_str(p.type).upper(), pdumper(p), w=out_name_w
+                )
+            )
         if entry.options.priority >= 0:
             print("Priority: {}".format(entry.options.priority))
         self.dump_action_entry(entry.action_entry)
         if entry.life is not None:
-            print("Life: {}ms since hit, timeout is {}ms".format(entry.life.time_since_hit_ms, entry.life.timeout_ms))
+            print(
+                "Life: {}ms since hit, timeout is {}ms".format(
+                    entry.life.time_since_hit_ms, entry.life.timeout_ms
+                )
+            )
 
     @handle_bad_input
     def table_dump_entry(self, table_name, entry_handle):
@@ -2119,7 +2297,9 @@ class ThriftAPI:
             self.table_entries_match_to_handle[table_name].clear()
             switch_entries = self.client.bm_mt_get_entries(0, table.name)
             for entry in switch_entries:
-                self.table_entries_match_to_handle[table_name][str(entry.match_key)] = entry.entry_handle
+                self.table_entries_match_to_handle[table_name][str(entry.match_key)] = (
+                    entry.entry_handle
+                )
 
     @handle_bad_input
     def table_dump(self, table_name):
@@ -2170,15 +2350,23 @@ class ThriftAPI:
             try:
                 priority = int(prio)
             except:
-                raise UIn_Error("Table is ternary, but could not extract a valid priority from args")
+                raise UIn_Error(
+                    "Table is ternary, but could not extract a valid priority from args"
+                )
         else:
             priority = 0
 
         if len(match_keys) != table.num_key_fields():
-            raise UIn_Error("Table {} needs {} key fields".format(table_name, table.num_key_fields()))
+            raise UIn_Error(
+                "Table {} needs {} key fields".format(
+                    table_name, table.num_key_fields()
+                )
+            )
         match_key = parse_match_key(table, match_keys)
 
-        entry = self.client.bm_mt_get_entry_from_key(0, table.name, match_key, BmAddEntryOptions(priority=priority))
+        entry = self.client.bm_mt_get_entry_from_key(
+            0, table.name, match_key, BmAddEntryOptions(priority=priority)
+        )
         self.dump_one_entry(table, entry)
 
     @handle_bad_input
@@ -2285,12 +2473,20 @@ class ThriftAPI:
     def show_ports(self):
         """Shows the ports connected to the switch."""
         ports = self.client.bm_dev_mgr_show_ports()
-        print("{:^10}{:^20}{:^10}{}".format("port #", "iface name", "status", "extra info"))
+        print(
+            "{:^10}{:^20}{:^10}{}".format(
+                "port #", "iface name", "status", "extra info"
+            )
+        )
         print("=" * 50)
         for port_info in ports:
             status = "UP" if port_info.is_up else "DOWN"
             extra_info = "; ".join([k + "=" + v for k, v in port_info.extra.items()])
-            print("{:^10}{:^20}{:^10}{}".format(port_info.port_num, port_info.iface_name, status, extra_info))
+            print(
+                "{:^10}{:^20}{:^10}{}".format(
+                    port_info.port_num, port_info.iface_name, status, extra_info
+                )
+            )
 
     @handle_bad_input
     def show_switch_info(self):
@@ -2324,24 +2520,43 @@ class ThriftAPI:
             f.write(state)
 
     def set_crc_parameters_common(
-        self, name, polynomial, initial_remainder, final_xor_value, reflect_data, reflect_remainder, crc_width=16
+        self,
+        name,
+        polynomial,
+        initial_remainder,
+        final_xor_value,
+        reflect_data,
+        reflect_remainder,
+        crc_width=16,
     ):
         conversion_fn = {16: hex_to_i16, 32: hex_to_i32}[crc_width]
         config_type = {16: BmCrc16Config, 32: BmCrc32Config}[crc_width]
-        thrift_fn = {16: self.client.bm_set_crc16_custom_parameters, 32: self.client.bm_set_crc32_custom_parameters}[
-            crc_width
-        ]
+        thrift_fn = {
+            16: self.client.bm_set_crc16_custom_parameters,
+            32: self.client.bm_set_crc32_custom_parameters,
+        }[crc_width]
 
-        if name not in self.switch_info.custom_crc_calcs or self.switch_info.custom_crc_calcs[name] != crc_width:
+        if (
+            name not in self.switch_info.custom_crc_calcs
+            or self.switch_info.custom_crc_calcs[name] != crc_width
+        ):
             raise UIn_ResourceError("crc{}_custom".format(crc_width), name)
-        config_args = [conversion_fn(a) for a in [polynomial, initial_remainder, final_xor_value]]
+        config_args = [
+            conversion_fn(a) for a in [polynomial, initial_remainder, final_xor_value]
+        ]
         config_args += [parse_bool(a) for a in [reflect_data, reflect_remainder]]
         crc_config = config_type(*config_args)
         thrift_fn(0, name, crc_config)
 
     @handle_bad_input
     def set_crc16_parameters(
-        self, name, polynomial, initial_remainder, final_xor_value, reflect_data, reflect_remainder
+        self,
+        name,
+        polynomial,
+        initial_remainder,
+        final_xor_value,
+        reflect_data,
+        reflect_remainder,
     ):
         """Changes the parameters for a custom ``crc16`` hash.
 
@@ -2354,12 +2569,24 @@ class ThriftAPI:
             reflect_remainder (bool): reflect remainder or do not
         """
         self.set_crc_parameters_common(
-            name, polynomial, initial_remainder, final_xor_value, reflect_data, reflect_remainder, 16
+            name,
+            polynomial,
+            initial_remainder,
+            final_xor_value,
+            reflect_data,
+            reflect_remainder,
+            16,
         )
 
     @handle_bad_input
     def set_crc32_parameters(
-        self, name, polynomial, initial_remainder, final_xor_value, reflect_data, reflect_remainder
+        self,
+        name,
+        polynomial,
+        initial_remainder,
+        final_xor_value,
+        reflect_data,
+        reflect_remainder,
     ):
         """Changes the parameters for a custom ``crc32`` hash.
 
@@ -2372,7 +2599,13 @@ class ThriftAPI:
             reflect_remainder (bool): reflect remainder or do not
         """
         self.set_crc_parameters_common(
-            name, polynomial, initial_remainder, final_xor_value, reflect_data, reflect_remainder, 32
+            name,
+            polynomial,
+            initial_remainder,
+            final_xor_value,
+            reflect_data,
+            reflect_remainder,
+            32,
         )
 
     # Global Variable Getters

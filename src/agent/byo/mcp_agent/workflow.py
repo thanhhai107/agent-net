@@ -37,10 +37,14 @@ class NikaTroubleshootingWorkflow(Workflow[dict[str, Any]]):
         self._scenario_name = scenario_name
         self._problem_names = problem_names
         self._stream_output = stream_output
-        self._diagnosis_server_names = diagnosis_server_names(scenario_name, problem_names)
+        self._diagnosis_server_names = diagnosis_server_names(
+            scenario_name, problem_names
+        )
 
     async def run(self, task_description: str) -> WorkflowResult[dict[str, Any]]:
-        diagnosis_report, is_max_steps_reached = await self._run_diagnosis(task_description)
+        diagnosis_report, is_max_steps_reached = await self._run_diagnosis(
+            task_description
+        )
         if is_max_steps_reached:
             return WorkflowResult(
                 value={
@@ -61,7 +65,9 @@ class NikaTroubleshootingWorkflow(Workflow[dict[str, Any]]):
     async def _run_diagnosis(self, task_description: str) -> tuple[str, bool]:
         logger = MessageLogger(agent=DIAGNOSIS, session_dir=self._session_dir)
         self._print_phase(DIAGNOSIS, "starting network fault analysis")
-        logger.log("agent_start", {"phase": DIAGNOSIS, "task_preview": task_description[:200]})
+        logger.log(
+            "agent_start", {"phase": DIAGNOSIS, "task_preview": task_description[:200]}
+        )
 
         phase = McpDiagnosisPhase(
             session_dir=self._session_dir,
@@ -76,13 +82,21 @@ class NikaTroubleshootingWorkflow(Workflow[dict[str, Any]]):
             return f"ERROR: {exc}", False
 
         if is_max_steps_reached:
-            logger.log("error", {"message": "Diagnosis phase reached max iteration limit."})
-            logger.log("agent_done", {"phase": DIAGNOSIS, "is_error": True, "report_length": len(report)})
+            logger.log(
+                "error", {"message": "Diagnosis phase reached max iteration limit."}
+            )
+            logger.log(
+                "agent_done",
+                {"phase": DIAGNOSIS, "is_error": True, "report_length": len(report)},
+            )
             self._print_phase(DIAGNOSIS, "stopped: max steps reached")
             return report, True
 
         is_error = report.startswith("ERROR:")
-        logger.log("agent_done", {"phase": DIAGNOSIS, "is_error": is_error, "report_length": len(report)})
+        logger.log(
+            "agent_done",
+            {"phase": DIAGNOSIS, "is_error": is_error, "report_length": len(report)},
+        )
         self._print_phase(
             DIAGNOSIS,
             "completed" if not is_error else f"finished with error ({report[:120]})",

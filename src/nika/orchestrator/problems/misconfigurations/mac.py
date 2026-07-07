@@ -1,10 +1,10 @@
-from nika.orchestrator.problems.context import init_problem
 from pydantic import BaseModel, Field
 
-from nika.orchestrator.problems.problem_base import ProblemMeta, RootCauseCategory, TaskDescription, TaskLevel, build_verify_result
-from nika.orchestrator.tasks.detection import DetectionTask
-from nika.orchestrator.tasks.localization import LocalizationTask
-from nika.orchestrator.tasks.rca import RCATask
+from nika.orchestrator.problems.problem_base import (
+    RootCauseCategory,
+    build_verify_result,
+    ProblemBase,
+)
 from nika.utils.logger import system_logger
 
 # ==================================================================
@@ -19,7 +19,7 @@ class MacAddressConflictParams(BaseModel):
     host_name_2: str = Field(description="Peer device whose MAC is copied.")
 
 
-class MacAddressConflictBase:
+class MacAddressConflict(ProblemBase):
     root_cause_category: RootCauseCategory = RootCauseCategory.MISCONFIGURATION
     root_cause_name: str = "mac_address_conflict"
     TAGS: str = ["mac"]
@@ -27,24 +27,24 @@ class MacAddressConflictBase:
     Params = MacAddressConflictParams
 
     def __init__(self, scenario_name: str | None, **kwargs):
-        super().__init__()
+        super().__init__(scenario_name, **kwargs)
         self.logger = system_logger
-        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
-        self.faulty_devices: list[str] = []
 
     def inject_fault(self, params: MacAddressConflictParams):
         device_0 = params.host_name
         device_1 = params.host_name_2
-        self.faulty_devices = [device_0, device_1]
+        self.set_faulty_devices([device_0, device_1])
         target_mac = self.runtime.get_host_mac_address(device_1, "eth0")
         self.runtime.exec(device_0, f"ip link set dev eth0 address {target_mac}")
-        self.logger.info(f"Injected MAC address conflict on {device_0} with MAC {target_mac} of {device_1}")
+        self.logger.info(
+            f"Injected MAC address conflict on {device_0} with MAC {target_mac} of {device_1}"
+        )
 
     def verify_fault(self, params: MacAddressConflictParams) -> dict:
         """Verify device_0's eth0 MAC matches device_1's eth0 MAC (conflict)."""
         device_0 = params.host_name
         device_1 = params.host_name_2
-        self.faulty_devices = [device_0, device_1]
+        self.set_faulty_devices([device_0, device_1])
         mac_0 = self.runtime.get_host_mac_address(device_0, "eth0")
         mac_1 = self.runtime.get_host_mac_address(device_1, "eth0")
         verified = bool(mac_0) and mac_0.lower() == mac_1.lower()
@@ -52,32 +52,10 @@ class MacAddressConflictBase:
             root_cause_name=self.root_cause_name,
             faulty_devices=self.faulty_devices,
             verified=verified,
-            details={"device_0": device_0, "device_1": device_1, "mac_0": mac_0, "mac_1": mac_1},
+            details={
+                "device_0": device_0,
+                "device_1": device_1,
+                "mac_0": mac_0,
+                "mac_1": mac_1,
+            },
         )
-
-
-class MacAddressConflictDetection(MacAddressConflictBase, DetectionTask):
-    META = ProblemMeta(
-        root_cause_category=MacAddressConflictBase.root_cause_category,
-        root_cause_name=MacAddressConflictBase.root_cause_name,
-        task_level=TaskLevel.DETECTION,
-        description=TaskDescription.DETECTION,
-    )
-
-
-class MacAddressConflictLocalization(MacAddressConflictBase, LocalizationTask):
-    META = ProblemMeta(
-        root_cause_category=MacAddressConflictBase.root_cause_category,
-        root_cause_name=MacAddressConflictBase.root_cause_name,
-        task_level=TaskLevel.LOCALIZATION,
-        description=TaskDescription.LOCALIZATION,
-    )
-
-
-class MacAddressConflictRCA(MacAddressConflictBase, RCATask):
-    META = ProblemMeta(
-        root_cause_category=MacAddressConflictBase.root_cause_category,
-        root_cause_name=MacAddressConflictBase.root_cause_name,
-        task_level=TaskLevel.RCA,
-        description=TaskDescription.RCA,
-    )

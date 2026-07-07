@@ -36,7 +36,9 @@ def get_session_meta() -> dict[str, Any]:
 
 def get_lab_name() -> str:
     meta = get_session_meta()
-    lab_name = meta.get("lab_name") or (meta.get("scenario_params") or {}).get("lab_name")
+    lab_name = meta.get("lab_name") or (meta.get("scenario_params") or {}).get(
+        "lab_name"
+    )
     if not lab_name:
         raise ValueError(f"Session '{meta.get('session_id')}' has no lab_name.")
     return str(lab_name)

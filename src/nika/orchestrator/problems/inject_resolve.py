@@ -37,9 +37,7 @@ def resolve_victim_host(runtime: LabRuntime, router: str) -> str:
     """Pick the first sorted non-router/switch host connected to a router."""
     connected = runtime.get_connected_devices(router)
     hosts = sorted(
-        dev
-        for dev in connected
-        if "switch" not in dev and "router" not in dev
+        dev for dev in connected if "switch" not in dev and "router" not in dev
     )
     if not hosts:
         raise ValueError(f"No victim host found for router {router}")
@@ -50,5 +48,7 @@ def resolve_intf(runtime: LabRuntime, host: str, intf_name: str = "eth0") -> str
     """Validate that ``intf_name`` exists on ``host``."""
     interfaces = runtime.get_host_interfaces(host)
     if intf_name not in interfaces:
-        raise ValueError(f"Interface {intf_name!r} not found on {host}; available: {interfaces}")
+        raise ValueError(
+            f"Interface {intf_name!r} not found on {host}; available: {interfaces}"
+        )
     return intf_name

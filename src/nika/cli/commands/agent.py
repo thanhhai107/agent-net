@@ -77,13 +77,17 @@ def agent_run(
         envvar=ENV_CODEX_REASONING_EFFORT,
         help="Codex model_reasoning_effort (local_cli.codex_cli, sdk.codex_sdk): none, minimal, low, medium, high, xhigh.",
     ),
-    session_id: str | None = typer.Option(None, "--session_id", help="Target session id."),
+    session_id: str | None = typer.Option(
+        None, "--session_id", help="Target session id."
+    ),
 ) -> None:
     """Run the agent on the current session task."""
     from nika.workflows.agent.run import start_agent
 
     if reasoning_effort is not None and reasoning_effort not in REASONING_EFFORT_LEVELS:
-        raise typer.BadParameter(f"reasoning_effort must be one of {', '.join(REASONING_EFFORT_LEVELS)}")
+        raise typer.BadParameter(
+            f"reasoning_effort must be one of {', '.join(REASONING_EFFORT_LEVELS)}"
+        )
 
     try:
         start_agent(

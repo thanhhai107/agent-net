@@ -14,7 +14,11 @@ from nika.utils.agent_config import resolve_agent_model
 from nika.utils.session_store import SessionStore
 from tests.agents._assertions import assert_submission_fields
 from tests.integration_base import OrderedPipelineTestCase
-from tests.integration_pipeline import CommonPipelineSteps, load_test_env, sade_available
+from tests.integration_pipeline import (
+    CommonPipelineSteps,
+    load_test_env,
+    sade_available,
+)
 
 load_test_env()
 
@@ -28,8 +32,12 @@ class SadeConfigTest(unittest.TestCase):
     """Model and credential resolution for community.sade."""
 
     def test_model_from_anthropic_model_env(self) -> None:
-        with unittest.mock.patch.dict(os.environ, {"ANTHROPIC_MODEL": "deepseek-v4-pro[1m]"}, clear=True):
-            self.assertEqual(resolve_agent_model("community.sade", None), "deepseek-v4-pro[1m]")
+        with unittest.mock.patch.dict(
+            os.environ, {"ANTHROPIC_MODEL": "deepseek-v4-pro[1m]"}, clear=True
+        ):
+            self.assertEqual(
+                resolve_agent_model("community.sade", None), "deepseek-v4-pro[1m]"
+            )
 
     def test_model_from_nika_sade_model_env(self) -> None:
         with unittest.mock.patch.dict(
@@ -37,17 +45,24 @@ class SadeConfigTest(unittest.TestCase):
             {"NIKA_SADE_MODEL": "deepseek-v4-flash", "ANTHROPIC_MODEL": "other-model"},
             clear=True,
         ):
-            self.assertEqual(resolve_agent_model("community.sade", None), "deepseek-v4-flash")
+            self.assertEqual(
+                resolve_agent_model("community.sade", None), "deepseek-v4-flash"
+            )
 
     def test_prepare_env_maps_auth_token_to_api_key(self) -> None:
         with unittest.mock.patch.dict(
             os.environ,
-            {"ANTHROPIC_AUTH_TOKEN": "tok", "ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic"},
+            {
+                "ANTHROPIC_AUTH_TOKEN": "tok",
+                "ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic",
+            },
             clear=True,
         ):
             env = prepare_sade_sdk_env(session_id="sess-abc")
         self.assertEqual(env["ANTHROPIC_API_KEY"], "tok")
-        self.assertEqual(env["ANTHROPIC_BASE_URL"], "https://api.deepseek.com/anthropic")
+        self.assertEqual(
+            env["ANTHROPIC_BASE_URL"], "https://api.deepseek.com/anthropic"
+        )
         self.assertEqual(env["NIKA_SESSION_ID"], "sess-abc")
 
     def test_prepare_env_requires_credentials(self) -> None:
@@ -56,7 +71,9 @@ class SadeConfigTest(unittest.TestCase):
                 prepare_sade_sdk_env(session_id="sess-abc")
 
     def test_sade_credentials_available_with_auth_token(self) -> None:
-        with unittest.mock.patch.dict(os.environ, {"ANTHROPIC_AUTH_TOKEN": "tok"}, clear=True):
+        with unittest.mock.patch.dict(
+            os.environ, {"ANTHROPIC_AUTH_TOKEN": "tok"}, clear=True
+        ):
             self.assertTrue(sade_credentials_available())
 
 
@@ -83,7 +100,10 @@ class SadeMcpAdapterTest(unittest.TestCase):
     def test_multiple_servers_all_present(self) -> None:
         servers = to_sdk_mcp_servers(
             {
-                "kathara_base_mcp_server": {"command": "python3", "args": ["/path/base.py"]},
+                "kathara_base_mcp_server": {
+                    "command": "python3",
+                    "args": ["/path/base.py"],
+                },
                 "task_mcp_server": {"command": "python3", "args": ["/path/task.py"]},
             }
         )
@@ -96,7 +116,9 @@ class SadeMcpAdapterTest(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 
-@unittest.skipUnless(sade_available(), "claude-agent-sdk + ANTHROPIC credentials required")
+@unittest.skipUnless(
+    sade_available(), "claude-agent-sdk + ANTHROPIC credentials required"
+)
 class SadeAgentPipelineTest(CommonPipelineSteps, OrderedPipelineTestCase):
     """Full pipeline with the SADE community agent."""
 
@@ -121,7 +143,9 @@ class SadeAgentPipelineTest(CommonPipelineSteps, OrderedPipelineTestCase):
         tool_starts = [e for e in messages if e.get("event") == "tool_start"]
         self.assertTrue(tool_starts, "SADE must emit tool_start events")
         tool_names = [e.get("tool", {}).get("name", "") for e in tool_starts]
-        self.assertTrue(any("submit" in name for name in tool_names), "expected submit tool call")
+        self.assertTrue(
+            any("submit" in name for name in tool_names), "expected submit tool call"
+        )
 
         llm_ends = [e for e in messages if e.get("event") == "llm_end"]
         self.assertTrue(llm_ends, "SADE must emit llm_end events")

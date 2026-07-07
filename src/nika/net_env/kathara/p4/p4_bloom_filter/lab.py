@@ -61,7 +61,9 @@ class P4BloomFilter(NetworkEnvBase):
                 os.path.join(cur_path, "bloom_filter.p4"),
                 "bloom_filter.p4",
             )
-            s_i.create_file_from_path(os.path.join(cur_path, f"cmds/switch_{i}.txt"), "commands.txt")
+            s_i.create_file_from_path(
+                os.path.join(cur_path, f"cmds/switch_{i}.txt"), "commands.txt"
+            )
 
             # add the switch_thrift_API.py file to the Kathara image
             s_i.create_file_from_path(

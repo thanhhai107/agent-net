@@ -139,7 +139,9 @@ class CodexCliAgent:
         task_description: str = state["messages"][-1].content
         logger = MessageLogger(agent=DIAGNOSIS, session_dir=self.session_dir)
         self._print_phase(DIAGNOSIS, "starting network fault analysis")
-        logger.log("agent_start", {"phase": DIAGNOSIS, "task_preview": task_description[:200]})
+        logger.log(
+            "agent_start", {"phase": DIAGNOSIS, "task_preview": task_description[:200]}
+        )
 
         try:
             report = await self._diagnosis_phase.run(task_description)
@@ -151,8 +153,14 @@ class CodexCliAgent:
             }
 
         is_error = report.startswith("ERROR:")
-        logger.log("agent_done", {"phase": DIAGNOSIS, "is_error": is_error, "report_length": len(report)})
-        self._print_phase(DIAGNOSIS, "completed" if not is_error else f"finished with error ({report[:120]})")
+        logger.log(
+            "agent_done",
+            {"phase": DIAGNOSIS, "is_error": is_error, "report_length": len(report)},
+        )
+        self._print_phase(
+            DIAGNOSIS,
+            "completed" if not is_error else f"finished with error ({report[:120]})",
+        )
         return {
             "diagnosis_report": report,
             "is_max_steps_reached": False,

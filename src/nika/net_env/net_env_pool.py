@@ -2,13 +2,18 @@ from pathlib import Path
 from typing import Dict, Type
 
 from nika.net_env.base import NetworkEnvBase
-from nika.net_env.containerlab.min5clos.lab import ContainerlabMin5Clos
-from nika.net_env.containerlab.srlceos01.lab import ContainerlabSrlCeos01
-from nika.net_env.kathara.data_center_routing.dc_clos_bgp.lab_services import DCClosService
+from nika.net_env.containerlab.min3clos.lab import ContainerlabMin3Clos
+from nika.net_env.kathara.data_center_routing.dc_clos_bgp.lab_services import (
+    DCClosService,
+)
 from nika.net_env.kathara.data_center_routing.dc_clos_bgp.lab_workers import DCClosBGP
 from nika.net_env.kathara.interdomain_routing.simple_bgp.lab import SimpleBGP
-from nika.net_env.kathara.intradomain_routing.ospf_enterprise.lab_dhcp import OSPFEnterpriseDHCP
-from nika.net_env.kathara.intradomain_routing.ospf_enterprise.lab_static import OSPFEnterpriseStatic
+from nika.net_env.kathara.intradomain_routing.ospf_enterprise.lab_dhcp import (
+    OSPFEnterpriseDHCP,
+)
+from nika.net_env.kathara.intradomain_routing.ospf_enterprise.lab_static import (
+    OSPFEnterpriseStatic,
+)
 from nika.net_env.kathara.intradomain_routing.rip_vpn.lab import RIPSmallInternetVPN
 from nika.net_env.kathara.kubernetes.k8s_lab.lab import K8sFatTreeBGP
 from nika.net_env.kathara.kubernetes.llmd_lab.lab import LLMDInferenceCluster
@@ -32,8 +37,7 @@ _NET_ENVS: Dict[str, Type[NetworkEnvBase]] = {
     P4INT.LAB_NAME: P4INT,
     P4_MPLS.LAB_NAME: P4_MPLS,
     SimpleBGP.LAB_NAME: SimpleBGP,
-    ContainerlabMin5Clos.LAB_NAME: ContainerlabMin5Clos,
-    ContainerlabSrlCeos01.LAB_NAME: ContainerlabSrlCeos01,
+    ContainerlabMin3Clos.LAB_NAME: ContainerlabMin3Clos,
     K8sFatTreeBGP.LAB_NAME: K8sFatTreeBGP,
     LLMDInferenceCluster.LAB_NAME: LLMDInferenceCluster,
 }
@@ -42,11 +46,15 @@ _NET_ENVS: Dict[str, Type[NetworkEnvBase]] = {
 def scenario_supported_backends(scenario_name: str) -> list[str]:
     """Return backends supported by ``scenario_name``."""
     if scenario_name not in _NET_ENVS:
-        raise ValueError(f"Network environment '{scenario_name}' not found in the pool.")
+        raise ValueError(
+            f"Network environment '{scenario_name}' not found in the pool."
+        )
     return list(_NET_ENVS[scenario_name].SUPPORTED_BACKENDS)
 
 
-def get_net_env_instance(scenario_name: str, *, backend: str = "kathara", **kwargs) -> NetworkEnvBase:
+def get_net_env_instance(
+    scenario_name: str, *, backend: str = "kathara", **kwargs
+) -> NetworkEnvBase:
     """Get an instance of the specified network environment.
 
     Args:
@@ -60,7 +68,9 @@ def get_net_env_instance(scenario_name: str, *, backend: str = "kathara", **kwar
         ValueError: If the specified network environment is not found or backend unsupported.
     """
     if scenario_name not in _NET_ENVS:
-        raise ValueError(f"Network environment '{scenario_name}' not found in the pool.")
+        raise ValueError(
+            f"Network environment '{scenario_name}' not found in the pool."
+        )
     cls = _NET_ENVS[scenario_name]
     if backend not in cls.SUPPORTED_BACKENDS:
         raise ValueError(
@@ -97,6 +107,8 @@ def list_all_net_envs(*, backend: str | None = None) -> dict[str, Type[NetworkEn
 def scenario_requires_topo_size(scenario_name: str) -> bool:
     """Return True if this scenario's lab expects an explicit topo size (s/m/l)."""
     if scenario_name not in _NET_ENVS:
-        raise ValueError(f"Network environment '{scenario_name}' not found in the pool.")
+        raise ValueError(
+            f"Network environment '{scenario_name}' not found in the pool."
+        )
     topo_size = getattr(_NET_ENVS[scenario_name], "TOPO_SIZE", None)
     return isinstance(topo_size, list)

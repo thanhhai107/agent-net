@@ -1,64 +1,63 @@
 import importlib
 import inspect
 import pkgutil
-from collections import defaultdict
 from typing import Dict, Type
 
-from nika.orchestrator.problems.multi_problems import MultiFaultDetection, MultiFaultLocalization, MultiFaultRCA
-from nika.orchestrator.problems.problem_base import TaskLevel
-from nika.orchestrator.tasks.base import TaskBase
+from nika.orchestrator.problems.multi_problems import MultiFaultProblem
+from nika.orchestrator.problems.problem_base import ProblemBase
 from nika.utils.logger import system_logger
 
 logger = system_logger
 
 
-def _register_problems():
-    """Register all available problems in the pool."""
-
-    problems = defaultdict(dict)
+def _register_problems() -> dict[str, type[ProblemBase]]:
+    """Register single-fault problem classes keyed by root_cause_name."""
+    problems: dict[str, type[ProblemBase]] = {}
     package = importlib.import_module("nika.orchestrator.problems")
 
     for info in pkgutil.walk_packages(package.__path__, prefix=package.__name__ + "."):
-        # Skip direct sub-packages
         if info.name.count(".") == package.__name__.count(".") + 1:
             continue
 
-        root_cause_category_name = info.name
-
-        # Safely import the module
         try:
-            module = importlib.import_module(root_cause_category_name)
+            module = importlib.import_module(info.name)
         except Exception as e:
-            logger.warning(f"Failed to import {root_cause_category_name}: {e}")
+            logger.warning(f"Failed to import {info.name}: {e}")
             continue
-        # Safely get classes from the module
+
         try:
             members = inspect.getmembers(module, inspect.isclass)
         except Exception as e:
-            logger.warning(f"Failed to inspect members of {root_cause_category_name}: {e}")
+            logger.warning(f"Failed to inspect members of {info.name}: {e}")
             continue
-        # Register each concrete problem task class (Detection / Localization / RCA).
+
         for cls_name, cls_obj in members:
             if cls_obj.__module__ != module.__name__:
                 continue
-
-            if not (inspect.isclass(cls_obj) and issubclass(cls_obj, TaskBase) and cls_obj is not TaskBase):
+            if not (
+                inspect.isclass(cls_obj)
+                and issubclass(cls_obj, ProblemBase)
+                and cls_obj is not ProblemBase
+            ):
                 continue
 
             try:
-                problem_class: Type[TaskBase] = cls_obj
-                root_cause_name = problem_class.META.root_cause_name
-                task_level = problem_class.META.task_level
-                if root_cause_name not in problems:
-                    problems[root_cause_name] = {}
-                problems[root_cause_name][task_level] = problem_class
+                meta = cls_obj.META
+                if meta is None:
+                    continue
+                root_cause_name = meta.root_cause_name
+                if not root_cause_name:
+                    continue
+                problems[root_cause_name] = cls_obj
             except Exception as e:
-                logger.warning(f"Failed to register class {cls_name} in {root_cause_category_name}: {e}")
+                logger.warning(
+                    f"Failed to register class {cls_name} in {info.name}: {e}"
+                )
                 continue
     return problems
 
 
-_PROBLEMS: Dict[str, Type[TaskBase]] = _register_problems()
+_PROBLEMS: Dict[str, Type[ProblemBase]] = _register_problems()
 
 
 def list_avail_problem_names() -> list[str]:
@@ -66,67 +65,37 @@ def list_avail_problem_names() -> list[str]:
     return list(_PROBLEMS.keys())
 
 
-def list_avail_problem_instances() -> list[Type[TaskBase]]:
+def list_avail_problem_instances() -> dict[str, type[ProblemBase]]:
     return _PROBLEMS
 
 
 def list_avail_tags() -> list[str]:
     """List all available tags for problems."""
-    tags = set()
-    for problem_classes in _PROBLEMS.values():
-        for problem_class in problem_classes.values():
-            tags.update(problem_class.TAGS)
+    tags: set[str] = set()
+    for problem_class in _PROBLEMS.values():
+        tags.update(problem_class.TAGS)
     return list(tags)
 
 
-def get_problem_class(problem_name: str, task_level: TaskLevel) -> Type[TaskBase] | None:
-    """Return the registered class for *problem_name* at *task_level*, or None."""
-    return _PROBLEMS.get(problem_name, {}).get(task_level)
+def get_problem_class(problem_name: str) -> type[ProblemBase] | None:
+    """Return the registered class for *problem_name*, or None."""
+    return _PROBLEMS.get(problem_name)
 
 
-def get_problem_instance(problem_names: list, task_level: TaskLevel, scenario_name: str, **kwargs) -> TaskBase:
-    """Get the problem instance for a specific root cause name and task level.
-    Args:
-        problem_names (list): The root cause names of the problem.
-    Returns:
-        TaskBase: The problem instance.
-    """
+def get_problem_instance(
+    problem_names: list, scenario_name: str, **kwargs
+) -> ProblemBase:
+    """Get a problem instance for the given root cause name(s)."""
     if not isinstance(problem_names, list) or len(problem_names) == 0:
         raise ValueError("problem_names should be a list of problem_names.")
 
-    # Multi-fault scenario
     if len(problem_names) > 1:
-        match task_level:
-            case TaskLevel.DETECTION:
-                return MultiFaultDetection(
-                    sub_faults=[
-                        _PROBLEMS[fault_name][task_level](scenario_name=scenario_name, **kwargs)
-                        for fault_name in problem_names
-                    ],
-                    scenario_name=scenario_name,
-                    **kwargs,
-                )
-            case TaskLevel.LOCALIZATION:
-                return MultiFaultLocalization(
-                    sub_faults=[
-                        _PROBLEMS[fault_name][task_level](scenario_name=scenario_name, **kwargs)
-                        for fault_name in problem_names
-                    ],
-                    scenario_name=scenario_name,
-                    **kwargs,
-                )
-            case TaskLevel.RCA:
-                return MultiFaultRCA(
-                    sub_faults=[
-                        _PROBLEMS[fault_name][task_level](scenario_name=scenario_name, **kwargs)
-                        for fault_name in problem_names
-                    ],
-                    scenario_name=scenario_name,
-                    **kwargs,
-                )
-            case _:
-                raise ValueError(f"Unsupported task level for multi-fault: {task_level}")
+        sub_faults = [
+            _PROBLEMS[fault_name](scenario_name=scenario_name, **kwargs)
+            for fault_name in problem_names
+        ]
+        return MultiFaultProblem(
+            sub_faults=sub_faults, scenario_name=scenario_name, **kwargs
+        )
 
-    # Single-fault scenario
-    else:
-        return _PROBLEMS[problem_names[0]][task_level](scenario_name=scenario_name, **kwargs)
+    return _PROBLEMS[problem_names[0]](scenario_name=scenario_name, **kwargs)

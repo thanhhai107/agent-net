@@ -15,7 +15,9 @@ def to_stdio_params(server: dict) -> StdioServerParams:
     )
 
 
-def diagnosis_server_configs(session_id: str, scenario_name: str, problem_names: list[str]) -> dict:
+def diagnosis_server_configs(
+    session_id: str, scenario_name: str, problem_names: list[str]
+) -> dict:
     mcp_cfg = MCPServerConfig(session_id=session_id)
     server_names = select_diagnosis_servers(scenario_name, problem_names)
     return mcp_cfg.load_filtered_config(server_names)

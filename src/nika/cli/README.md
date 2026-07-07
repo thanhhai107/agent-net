@@ -153,9 +153,9 @@ Example: `nika exec pc1 ping -c 3 10.0.0.2 --timeout 30`
 
 Eval commands operate on **closed** sessions only. Close the lab with **`nika session close`** before running eval; artifacts are read from and written to `results/{session_id}/`.
 
-- **`nika eval metrics [--session_id ID]`**: rule-based metrics → `eval_metrics.json` (records eval completion in `events.jsonl`).
-- **`nika eval judge -p PROVIDER -m MODEL [--session_id ID]`**: LLM judge → `llm_judge.json`.
-- **`nika eval summary [filters] [-o PATH]`**: scan finished sessions under `results/` and write one CSV.
+- **`nika eval metrics [--session_id ID] [--result_dir PATH]`**: rule-based metrics → `eval_metrics.json` (records eval completion in `events.jsonl`). With `--result_dir` and no `--session_id`, runs on every closed session under that directory.
+- **`nika eval judge -p PROVIDER -m MODEL [--session_id ID] [--result_dir PATH]`**: LLM judge → `llm_judge.json`. With `--result_dir` and no `--session_id`, judges every closed session under that directory.
+- **`nika eval summary [filters] [-o PATH] [--result_dir PATH]`**: scan finished sessions and write one CSV.
 - **`nika eval clean [-y] [--force]`**: delete historical artifacts under `results/`, runtime session JSON files, and the SQLite index at `runtime/sessions.db`. Refuses when running sessions exist unless **`--force`** is passed.
 
 ### `nika eval summary` filters
@@ -164,7 +164,8 @@ All filters are optional and repeatable. Omit filters to include every finished 
 
 | Option | Meaning |
 |--------|---------|
-| `-o` / `--output` | Output CSV path (default: `results/0_summary/evaluation_summary.csv`) |
+| `-o` / `--output` | Output CSV path (default: `{result_dir}/0_summary/evaluation_summary.csv`) |
+| `--result_dir` | Results parent directory to scan (default: `results/` or `NIKA_RESULT_DIR`) |
 | `-p` / `--problem` | Root-cause / problem id (e.g. `link_down`) |
 | `-e` / `--env` | Scenario / net env (e.g. `simple_bgp`) |
 | `-c` / `--category` | Root-cause category (e.g. `link_failure`) |

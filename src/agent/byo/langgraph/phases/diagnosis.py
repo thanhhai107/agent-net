@@ -37,6 +37,9 @@ class DiagnosisPhase:
 
     def get_agent(self):
         agent = create_agent(
-            model=self.llm, system_prompt=OVERALL_DIAGNOSIS_PROMPT, tools=self.tools, name=DIAGNOSIS
+            model=self.llm,
+            system_prompt=OVERALL_DIAGNOSIS_PROMPT,
+            tools=self.tools,
+            name=DIAGNOSIS,
         )
         return agent

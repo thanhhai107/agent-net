@@ -84,9 +84,13 @@ def generate_sdn_clos_topology(
     controller = ControllerMeta(name="controller")
 
     for switch_meta in tot_switch_list:
-        switch_meta.cmd_list.append("/usr/share/openvswitch/scripts/ovs-ctl --system-id=random start")
+        switch_meta.cmd_list.append(
+            "/usr/share/openvswitch/scripts/ovs-ctl --system-id=random start"
+        )
         switch_meta.cmd_list.append(f"ovs-vsctl add-br {switch_meta.name}")
-        switch_meta.cmd_list.append(f"ovs-vsctl set-fail-mode {switch_meta.name} secure")
+        switch_meta.cmd_list.append(
+            f"ovs-vsctl set-fail-mode {switch_meta.name} secure"
+        )
 
     host_network = IPv4Network("10.0.0.0/24")
     host_pool = list(host_network.hosts())
@@ -100,8 +104,10 @@ def generate_sdn_clos_topology(
             host_ip = str(host_pool[idx])
             idx += 1
             host_meta.cmd_list.append(f"ip addr add {host_ip}/24 dev eth0")
-            host_meta.cmd_list.append(f"ip link set eth0 up")
-            leaf_switch.cmd_list.append(f"ovs-vsctl add-port {leaf_switch.name} eth{leaf_switch.eth_index}")
+            host_meta.cmd_list.append("ip link set eth0 up")
+            leaf_switch.cmd_list.append(
+                f"ovs-vsctl add-port {leaf_switch.name} eth{leaf_switch.eth_index}"
+            )
             leaf_switch.cmd_list.append(f"ip link set eth{leaf_switch.eth_index} up")
             leaf_switch.eth_index += 1
 
@@ -110,7 +116,9 @@ def generate_sdn_clos_topology(
             link_name = f"{spine.name}_{leaf.name}"
             spine.links.append((spine.eth_index, link_name))
             leaf.links.append((leaf.eth_index, link_name))
-            spine.cmd_list.append(f"ovs-vsctl add-port {spine.name} eth{spine.eth_index}")
+            spine.cmd_list.append(
+                f"ovs-vsctl add-port {spine.name} eth{spine.eth_index}"
+            )
             spine.eth_index += 1
             leaf.cmd_list.append(f"ovs-vsctl add-port {leaf.name} eth{leaf.eth_index}")
             leaf.eth_index += 1
@@ -120,9 +128,13 @@ def generate_sdn_clos_topology(
     for switch_meta in tot_switch_list:
         switch_meta.links.append((switch_meta.eth_index, "switch_controller"))
         switch_ip = str(infra_network.pop(0))
-        switch_meta.cmd_list.append(f"ip addr add {switch_ip}/24 dev eth{switch_meta.eth_index}")
+        switch_meta.cmd_list.append(
+            f"ip addr add {switch_ip}/24 dev eth{switch_meta.eth_index}"
+        )
         switch_meta.cmd_list.append(f"ip link set eth{switch_meta.eth_index} up")
-        switch_meta.cmd_list.append(f"ovs-vsctl set-controller {switch_meta.name} tcp:{controller_ip}:6633")
+        switch_meta.cmd_list.append(
+            f"ovs-vsctl set-controller {switch_meta.name} tcp:{controller_ip}:6633"
+        )
         switch_meta.eth_index += 1
     controller.links.append((0, "switch_controller"))
     controller.cmd_list = [
@@ -151,16 +163,22 @@ def generate_sdn_clos_topology(
     lab_conf_lines.append(f'{controller.name}[image]="{controller.image}"')
     lab_conf_lines.append(f"{controller.name}[cpus]={controller.cpus}")
     lab_conf_lines.append(f'{controller.name}[mem]="{controller.mem}"')
-    lab_conf_lines.append(f'{controller.name}[bridged]={"true" if controller.bridged else "false"}')
+    lab_conf_lines.append(
+        f"{controller.name}[bridged]={'true' if controller.bridged else 'false'}"
+    )
     lab_conf_lines.append("")
 
     with open(os.path.join(out_path, "lab.conf"), "w", encoding="utf-8") as f:
         f.write("\n".join(lab_conf_lines))
 
     for meta in tot_switch_list + tot_host_list:
-        with open(os.path.join(out_path, f"{meta.name}.startup"), "w", encoding="utf-8") as f:
+        with open(
+            os.path.join(out_path, f"{meta.name}.startup"), "w", encoding="utf-8"
+        ) as f:
             f.write("\n".join(meta.cmd_list))
-    with open(os.path.join(out_path, f"{controller.name}.startup"), "w", encoding="utf-8") as f:
+    with open(
+        os.path.join(out_path, f"{controller.name}.startup"), "w", encoding="utf-8"
+    ) as f:
         f.write("\n".join(controller.cmd_list))
 
     return out_path
@@ -169,8 +187,12 @@ def generate_sdn_clos_topology(
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="Generate Kathara lab config for SDN Clos")
-    parser.add_argument("-s", "--size", choices=["s", "m", "l"], default="s", help="Topology size")
+    parser = argparse.ArgumentParser(
+        description="Generate Kathara lab config for SDN Clos"
+    )
+    parser.add_argument(
+        "-s", "--size", choices=["s", "m", "l"], default="s", help="Topology size"
+    )
     parser.add_argument("-o", "--output", default=None, help="Output directory")
     args = parser.parse_args()
     out = generate_sdn_clos_topology(

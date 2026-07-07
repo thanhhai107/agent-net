@@ -176,7 +176,9 @@ class KatharaBaseAPI:
             return result.strip()
         return None
 
-    def get_host_ip(self, host_name: str, iface: str = "eth0", with_prefix: bool = False) -> str | None:
+    def get_host_ip(
+        self, host_name: str, iface: str = "eth0", with_prefix: bool = False
+    ) -> str | None:
         """
         Get the IPv4 address of a host via `ip -j addr`.
         Prefer the given interface (default: eth0).
@@ -228,7 +230,9 @@ class KatharaBaseAPI:
 
         return None
 
-    def get_host_interfaces(self, host_name: str, include_loopback: bool = False) -> list[str]:
+    def get_host_interfaces(
+        self, host_name: str, include_loopback: bool = False
+    ) -> list[str]:
         cmd = "ip -j addr"
         result = self.exec_cmd(host_name, cmd)
         output = "\n".join(result) if isinstance(result, list) else result
@@ -259,7 +263,10 @@ class KatharaBaseAPI:
         result = {}
         for _, link in links.items():
             if link.name:
-                result[link.name] = (link.containers[0].labels["name"], link.containers[1].labels["name"])
+                result[link.name] = (
+                    link.containers[0].labels["name"],
+                    link.containers[1].labels["name"],
+                )
         return result
 
     async def exec_cmd_async(self, host_name: str, command: str) -> str:
@@ -276,10 +283,19 @@ class KatharaBaseAPI:
         """
         try:
             output_generator = self.instance.exec(
-                machine_name=host_name, command=command, lab_name=self.lab.name, stream=False
+                machine_name=host_name,
+                command=command,
+                lab_name=self.lab.name,
+                stream=False,
             )
             for item in output_generator:
-                if not item or item == b"" or isinstance(item, int) or item is None or item == "None":
+                if (
+                    not item
+                    or item == b""
+                    or isinstance(item, int)
+                    or item is None
+                    or item == "None"
+                ):
                     continue
 
                 if isinstance(item, bytes):
@@ -290,7 +306,10 @@ class KatharaBaseAPI:
                     out = str(item).strip()
 
                 if len(out) > max_chars:
-                    return out[:max_chars] + f"...[truncated, {len(out) - max_chars} chars omitted]"
+                    return (
+                        out[:max_chars]
+                        + f"...[truncated, {len(out) - max_chars} chars omitted]"
+                    )
 
                 return out
 
@@ -481,7 +500,9 @@ class KatharaBaseAPI:
 
         return json.dumps(payload, separators=(",", ":"))
 
-    def ping_pair(self, host_a: str, host_b: str, count: int = 4, args: str = "") -> str:
+    def ping_pair(
+        self, host_a: str, host_b: str, count: int = 4, args: str = ""
+    ) -> str:
         """
         Ping from one host to another in the lab.
         """
@@ -517,14 +538,18 @@ class KatharaBaseAPI:
         self.exec_cmd(server_host_name, f"iperf3 -s -D {server_args}")
         # Run iperf client
         result = self.exec_cmd(
-            client_host_name, f"iperf3 -c {self.get_host_ip(server_host_name)} -t {duration} {client_args}"
+            client_host_name,
+            f"iperf3 -c {self.get_host_ip(server_host_name)} -t {duration} {client_args}",
         )
         # Stop iperf server
         self.exec_cmd(server_host_name, "pkill iperf3")
         return result
 
     def systemctl_ops(
-        self, host_name: str, service_name: str, operation: Literal["start", "stop", "restart", "status"]
+        self,
+        host_name: str,
+        service_name: str,
+        operation: Literal["start", "stop", "restart", "status"],
     ) -> str:
         """
         Perform systemctl operations (start, stop, restart, status) on a host.

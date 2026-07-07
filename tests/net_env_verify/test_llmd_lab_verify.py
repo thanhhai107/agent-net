@@ -5,23 +5,37 @@ Unit tests (no Docker required)
 - Node classification (k3s nodes, client host).
 - Machine flags (bridged k3s nodes, privileged k3s nodes).
 
-Integration tests (require Docker + ``rancher/k3s`` images)
-------------------------------------------------------------
+Integration tests (require Docker, root, and ``rancher/k3s`` images)
+--------------------------------------------------------------------
 - Deploy llmd_lab via CLI and verify the session is running.
 
 Prerequisites:
   - Unit tests: uv run python -m unittest tests/net_env_verify/test_llmd_lab_verify.py -v
-  - Integration: Docker running + ``rancher/k3s`` pulled; remove ``@unittest.skip`` on
-    ``LLMDLabStartupVerifyTest`` first.
+  - Integration: Docker running as root (k3s nodes are privileged).
 """
 
 from __future__ import annotations
 
+import os
 import unittest
+
+import docker
 
 from nika.net_env.kathara.kubernetes.llmd_lab.lab import LLMDInferenceCluster
 
 from tests.integration_base import CliIntegrationTestCase, PerTestEnvTestCase
+
+
+def _docker_available() -> bool:
+    try:
+        docker.from_env().ping()
+        return True
+    except Exception:
+        return False
+
+
+def _privileged_lab_supported() -> bool:
+    return os.geteuid() == 0
 
 
 class LLMDLabUnitTest(unittest.TestCase):
@@ -30,7 +44,14 @@ class LLMDLabUnitTest(unittest.TestCase):
     def test_has_kubernetes_nodes(self) -> None:
         """llmd_lab must classify all k3s machines into kubernetes_nodes."""
         inst = LLMDInferenceCluster()
-        expected_k8s = {"controller", "worker1", "worker2", "worker3", "worker4", "worker5"}
+        expected_k8s = {
+            "controller",
+            "worker1",
+            "worker2",
+            "worker3",
+            "worker4",
+            "worker5",
+        }
         self.assertEqual(set(inst.kubernetes_nodes), expected_k8s)
 
     def test_has_client_host(self) -> None:
@@ -59,10 +80,9 @@ class LLMDLabUnitTest(unittest.TestCase):
             )
 
 
-@unittest.skip(
-    "Requires Docker + rancher/k3s image. "
-    "Remove @skip and run manually: "
-    "uv run python -m unittest tests/net_env_verify/test_llmd_lab_verify.py -v"
+@unittest.skipUnless(
+    _docker_available() and _privileged_lab_supported(),
+    "Requires Docker and root (privileged k3s containers)",
 )
 class LLMDLabStartupVerifyTest(CliIntegrationTestCase, PerTestEnvTestCase):
     """Deploy llmd_lab via CLI and verify the session is running."""

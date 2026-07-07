@@ -67,7 +67,9 @@ class IntegrationTestCase(unittest.TestCase):
         return start_net_env(scenario, topo_size, **kwargs)
 
     @classmethod
-    def _start_env_class(cls, scenario: str, extra_args: list[str] | None = None) -> str:
+    def _start_env_class(
+        cls, scenario: str, extra_args: list[str] | None = None
+    ) -> str:
         kwargs = _parse_env_run_args(extra_args)
         topo_size = kwargs.pop("topo_size", None)
         return start_net_env(scenario, topo_size, **kwargs)
@@ -107,7 +109,9 @@ class IntegrationTestCase(unittest.TestCase):
                 self._topo_size_from_env_args(),
             )
         )
-        inject_failure_workflow([problem], session_id=sid, param_overrides=inject_params)
+        inject_failure_workflow(
+            [problem], session_id=sid, param_overrides=inject_params
+        )
 
     def _run_agent(
         self,
@@ -163,7 +167,10 @@ class IntegrationTestCase(unittest.TestCase):
         return kwargs
 
     def _problem(self, cls_, session_id: str | None = None):
-        scenario = getattr(self, "SCENARIO", None) or self._session_row(session_id)["scenario_name"]
+        scenario = (
+            getattr(self, "SCENARIO", None)
+            or self._session_row(session_id)["scenario_name"]
+        )
         return cls_(scenario_name=scenario, **self._scenario_kwargs(session_id))
 
     def _topo_size_from_env_args(self) -> str:
@@ -182,7 +189,9 @@ class IntegrationTestCase(unittest.TestCase):
 
         return inject_params_from_benchmark_yaml(scenario, problem, topo_size)
 
-    def _assert_failure_injected(self, problem: str, session_id: str | None = None) -> None:
+    def _assert_failure_injected(
+        self, problem: str, session_id: str | None = None
+    ) -> None:
         sid = session_id or getattr(self, "session_id", None)
         if sid is None:
             raise ValueError("session_id is required")
@@ -210,7 +219,9 @@ class CliIntegrationTestCase(IntegrationTestCase):
     def _invoke_ok_class(cls, runner: CliRunner, args: list[str]) -> str:
         result = runner.invoke(app, args)
         if result.exit_code != 0:
-            raise RuntimeError(f"`nika {' '.join(args)}` exited {result.exit_code}:\n{result.output}")
+            raise RuntimeError(
+                f"`nika {' '.join(args)}` exited {result.exit_code}:\n{result.output}"
+            )
         return result.output
 
 
@@ -263,7 +274,11 @@ class SharedSessionTestCase(IntegrationTestCase):
     def setUpClass(cls) -> None:
         cls.session_id = cls._start_env_class(cls.SCENARIO, cls.ENV_RUN_ARGS)
         if cls.INJECT_PROBLEM is not None:
-            params = dict(cls.INJECT_PARAMS) if cls.INJECT_PARAMS else _parse_inject_args(cls.INJECT_ARGS)
+            params = (
+                dict(cls.INJECT_PARAMS)
+                if cls.INJECT_PARAMS
+                else _parse_inject_args(cls.INJECT_ARGS)
+            )
             try:
                 inject_failure_workflow(
                     [cls.INJECT_PROBLEM],
@@ -301,6 +316,8 @@ class OrderedPipelineTestCase(IntegrationTestCase):
         assert self.session_dir is not None
         return [
             json.loads(line)
-            for line in (self.session_dir / filename).read_text(encoding="utf-8").splitlines()
+            for line in (self.session_dir / filename)
+            .read_text(encoding="utf-8")
+            .splitlines()
             if line.strip()
         ]

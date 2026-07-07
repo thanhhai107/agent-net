@@ -54,7 +54,9 @@ class SkillsConfigTest(unittest.TestCase):
     def test_resolve_skills_root_override(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             override = Path(tmp)
-            with unittest.mock.patch.dict(os.environ, {ENV_SKILLS_DIR: str(override)}, clear=False):
+            with unittest.mock.patch.dict(
+                os.environ, {ENV_SKILLS_DIR: str(override)}, clear=False
+            ):
                 self.assertEqual(resolve_skills_root(), override.resolve())
 
     def test_skills_enabled_default(self) -> None:
@@ -62,25 +64,35 @@ class SkillsConfigTest(unittest.TestCase):
             self.assertTrue(skills_enabled())
 
     def test_skills_enabled_false(self) -> None:
-        with unittest.mock.patch.dict(os.environ, {ENV_ENABLE_SKILLS: "false"}, clear=True):
+        with unittest.mock.patch.dict(
+            os.environ, {ENV_ENABLE_SKILLS: "false"}, clear=True
+        ):
             self.assertFalse(skills_enabled())
 
     def test_claude_skills_package_dir_when_disabled(self) -> None:
-        with unittest.mock.patch.dict(os.environ, {ENV_ENABLE_SKILLS: "false"}, clear=True):
+        with unittest.mock.patch.dict(
+            os.environ, {ENV_ENABLE_SKILLS: "false"}, clear=True
+        ):
             self.assertIsNone(claude_skills_package_dir())
 
     def test_claude_skills_package_dir_when_enabled(self) -> None:
-        with unittest.mock.patch.dict(os.environ, {ENV_ENABLE_SKILLS: "true"}, clear=True):
+        with unittest.mock.patch.dict(
+            os.environ, {ENV_ENABLE_SKILLS: "true"}, clear=True
+        ):
             package = claude_skills_package_dir()
             self.assertIsNotNone(package)
             assert package is not None
             self.assertTrue((package / ".claude" / "CLAUDE.md").is_file())
 
     def test_diagnosis_prompt_with_skills(self) -> None:
-        with unittest.mock.patch.dict(os.environ, {ENV_ENABLE_SKILLS: "true"}, clear=True):
+        with unittest.mock.patch.dict(
+            os.environ, {ENV_ENABLE_SKILLS: "true"}, clear=True
+        ):
             prompt = diagnosis_prompt_with_skills(OVERALL_DIAGNOSIS_PROMPT)
             self.assertIn(SKILLS_PROMPT_SUFFIX, prompt)
-        with unittest.mock.patch.dict(os.environ, {ENV_ENABLE_SKILLS: "false"}, clear=True):
+        with unittest.mock.patch.dict(
+            os.environ, {ENV_ENABLE_SKILLS: "false"}, clear=True
+        ):
             self.assertEqual(
                 diagnosis_prompt_with_skills(OVERALL_DIAGNOSIS_PROMPT),
                 OVERALL_DIAGNOSIS_PROMPT,
@@ -91,7 +103,9 @@ class SkillsWorkspaceTest(unittest.TestCase):
     def test_prepare_claude_workspace_links_dot_claude(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)
-            with unittest.mock.patch.dict(os.environ, {ENV_ENABLE_SKILLS: "true"}, clear=True):
+            with unittest.mock.patch.dict(
+                os.environ, {ENV_ENABLE_SKILLS: "true"}, clear=True
+            ):
                 prepare_claude_workspace(workspace)
             link = workspace / ".claude"
             self.assertTrue(link.exists())
@@ -100,9 +114,15 @@ class SkillsWorkspaceTest(unittest.TestCase):
     def test_prepare_codex_workspace_links_agents_skills(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)
-            with unittest.mock.patch.dict(os.environ, {ENV_ENABLE_SKILLS: "true"}, clear=True):
+            with unittest.mock.patch.dict(
+                os.environ, {ENV_ENABLE_SKILLS: "true"}, clear=True
+            ):
                 prepare_codex_workspace(workspace)
-            self.assertTrue((workspace / ".agents" / "skills" / "nika-test-skill" / "SKILL.md").exists())
+            self.assertTrue(
+                (
+                    workspace / ".agents" / "skills" / "nika-test-skill" / "SKILL.md"
+                ).exists()
+            )
             self.assertTrue((workspace / "AGENTS.md").is_file())
 
 
@@ -202,8 +222,12 @@ class _SkillPipelineMixin:
         assert_submission_fields(self, self.session_dir)
 
 
-@unittest.skipUnless(claude_sdk_available(), "claude-agent-sdk + ANTHROPIC credentials required")
-class ClaudeSdkSkillPipelineTest(_SkillPipelineMixin, CommonPipelineSteps, OrderedPipelineTestCase):
+@unittest.skipUnless(
+    claude_sdk_available(), "claude-agent-sdk + ANTHROPIC credentials required"
+)
+class ClaudeSdkSkillPipelineTest(
+    _SkillPipelineMixin, CommonPipelineSteps, OrderedPipelineTestCase
+):
     agent_id = "sdk.claude_sdk"
 
     def test_step_01_start_env(self) -> None:
@@ -216,8 +240,12 @@ class ClaudeSdkSkillPipelineTest(_SkillPipelineMixin, CommonPipelineSteps, Order
         self._step_close_and_verify(self.agent_id)
 
 
-@unittest.skipUnless(claude_cli_available(), "Claude CLI + ANTHROPIC credentials required")
-class ClaudeCliSkillPipelineTest(_SkillPipelineMixin, CommonPipelineSteps, OrderedPipelineTestCase):
+@unittest.skipUnless(
+    claude_cli_available(), "Claude CLI + ANTHROPIC credentials required"
+)
+class ClaudeCliSkillPipelineTest(
+    _SkillPipelineMixin, CommonPipelineSteps, OrderedPipelineTestCase
+):
     agent_id = "local_cli.claude_cli"
 
     def test_step_01_start_env(self) -> None:
@@ -231,7 +259,9 @@ class ClaudeCliSkillPipelineTest(_SkillPipelineMixin, CommonPipelineSteps, Order
 
 
 @unittest.skipUnless(codex_cli_available(), "Codex CLI and OpenAI credentials required")
-class CodexCliSkillPipelineTest(_SkillPipelineMixin, CommonPipelineSteps, OrderedPipelineTestCase):
+class CodexCliSkillPipelineTest(
+    _SkillPipelineMixin, CommonPipelineSteps, OrderedPipelineTestCase
+):
     agent_id = "local_cli.codex_cli"
     agent_model = CODEX_MODEL
 
@@ -245,8 +275,12 @@ class CodexCliSkillPipelineTest(_SkillPipelineMixin, CommonPipelineSteps, Ordere
         self._step_close_and_verify(self.agent_id)
 
 
-@unittest.skipUnless(codex_sdk_available(), "openai-codex + ~/.codex/auth.json required")
-class CodexSdkSkillPipelineTest(_SkillPipelineMixin, CommonPipelineSteps, OrderedPipelineTestCase):
+@unittest.skipUnless(
+    codex_sdk_available(), "openai-codex + ~/.codex/auth.json required"
+)
+class CodexSdkSkillPipelineTest(
+    _SkillPipelineMixin, CommonPipelineSteps, OrderedPipelineTestCase
+):
     agent_id = "sdk.codex_sdk"
     agent_model = CODEX_MODEL
 

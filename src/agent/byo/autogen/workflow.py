@@ -67,7 +67,9 @@ class DiagnosisPhaseAgent(BaseChatAgent):
 
         logger = MessageLogger(agent=DIAGNOSIS, session_dir=self._session_dir)
         self._print_phase(DIAGNOSIS, "starting network fault analysis")
-        logger.log("agent_start", {"phase": DIAGNOSIS, "task_preview": task_description[:200]})
+        logger.log(
+            "agent_start", {"phase": DIAGNOSIS, "task_preview": task_description[:200]}
+        )
 
         try:
             report, is_max_steps_reached = await self._phase.run(task_description)
@@ -77,19 +79,30 @@ class DiagnosisPhaseAgent(BaseChatAgent):
             is_max_steps_reached = False
 
         if is_max_steps_reached:
-            logger.log("error", {"message": "Diagnosis phase reached max iteration limit."})
-            logger.log("agent_done", {"phase": DIAGNOSIS, "is_error": True, "report_length": len(report)})
+            logger.log(
+                "error", {"message": "Diagnosis phase reached max iteration limit."}
+            )
+            logger.log(
+                "agent_done",
+                {"phase": DIAGNOSIS, "is_error": True, "report_length": len(report)},
+            )
             self._print_phase(DIAGNOSIS, "stopped: max steps reached")
             report = _MAX_STEPS_MARKER
         else:
             is_error = report.startswith("ERROR:")
             logger.log(
                 "agent_done",
-                {"phase": DIAGNOSIS, "is_error": is_error, "report_length": len(report)},
+                {
+                    "phase": DIAGNOSIS,
+                    "is_error": is_error,
+                    "report_length": len(report),
+                },
             )
             self._print_phase(
                 DIAGNOSIS,
-                "completed" if not is_error else f"finished with error ({report[:120]})",
+                "completed"
+                if not is_error
+                else f"finished with error ({report[:120]})",
             )
 
         return Response(chat_message=TextMessage(content=report, source=self.name))

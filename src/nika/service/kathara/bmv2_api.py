@@ -36,7 +36,9 @@ class BMv2APIMixin:
     """
 
     # Log related API
-    def bmv2_get_log(self: _SupportsBase, switch_name: str, rows: int = 100) -> list[str]:
+    def bmv2_get_log(
+        self: _SupportsBase, switch_name: str, rows: int = 100
+    ) -> list[str]:
         """
         Get the log file of a switch.
         """
@@ -92,35 +94,45 @@ class BMv2APIMixin:
         return self.exec_cmd(switch_name, command)
 
     # Table related API
-    def bmv2_table_info(self: _SupportsBase, switch_name: str, table_name: str) -> list[str]:
+    def bmv2_table_info(
+        self: _SupportsBase, switch_name: str, table_name: str
+    ) -> list[str]:
         """
         Show the info of a table.
         """
         command = _build_thrift_command([f'table_info("{table_name}")'])
         return self.exec_cmd(switch_name, command)
 
-    def bmv2_table_dump(self: _SupportsBase, switch_name: str, table_name: str) -> list[str]:
+    def bmv2_table_dump(
+        self: _SupportsBase, switch_name: str, table_name: str
+    ) -> list[str]:
         """
         Dump the content of a table.
         """
         command = _build_thrift_command([f'table_dump("{table_name}")'])
         return self.exec_cmd(switch_name, command)
 
-    def bmv2_table_show_actions(self: _SupportsBase, switch_name: str, table_name: str) -> list[str]:
+    def bmv2_table_show_actions(
+        self: _SupportsBase, switch_name: str, table_name: str
+    ) -> list[str]:
         """
         Show the actions of a table.
         """
         command = _build_thrift_command([f'table_show_actions("{table_name}")'])
         return self.exec_cmd(switch_name, command)
 
-    def bmv2_table_num_entries(self: _SupportsBase, switch_name: str, table_name: str) -> list[str]:
+    def bmv2_table_num_entries(
+        self: _SupportsBase, switch_name: str, table_name: str
+    ) -> list[str]:
         """
         Show the number of entries in a table.
         """
         command = _build_thrift_command([f'table_num_entries("{table_name}")'])
         return self.exec_cmd(switch_name, command)
 
-    def bmv2_table_clear(self: _SupportsBase, switch_name: str, table_name: str) -> list[str]:
+    def bmv2_table_clear(
+        self: _SupportsBase, switch_name: str, table_name: str
+    ) -> list[str]:
         """
         Clear the content of a table.
         """
@@ -143,7 +155,9 @@ class BMv2APIMixin:
         action_params_str = _quote_list_double(action_params)
 
         command = _build_thrift_command(
-            [f'table_add("{table_name}", "{action_name}", {match_keys_str}, {action_params_str}, {prio})']
+            [
+                f'table_add("{table_name}", "{action_name}", {match_keys_str}, {action_params_str}, {prio})'
+            ]
         )
         return self.exec_cmd(switch_name, command)
 
@@ -157,7 +171,9 @@ class BMv2APIMixin:
         Get the entry handle of a table given the match keys.
         """
         match_keys_str = _quote_list_double(match_keys)
-        command = _build_thrift_command([f'get_handle_from_match("{table_name}", {match_keys_str})'])
+        command = _build_thrift_command(
+            [f'get_handle_from_match("{table_name}", {match_keys_str})']
+        )
         return self.exec_cmd(switch_name, command)
 
     def bmv2_table_set_timeout(
@@ -170,7 +186,9 @@ class BMv2APIMixin:
         """
         Set the timeout of a table entry. The table has to support timeouts.
         """
-        command = _build_thrift_command([f'table_set_timeout("{table_name}", "{entry_handle}", {timeout_ms})'])
+        command = _build_thrift_command(
+            [f'table_set_timeout("{table_name}", "{entry_handle}", {timeout_ms})']
+        )
         return self.exec_cmd(switch_name, command)
 
     def bmv2_table_modify(
@@ -186,7 +204,9 @@ class BMv2APIMixin:
         """
         action_params_str = _quote_list_double(action_params)
         command = _build_thrift_command(
-            [f'table_modify("{table_name}", "{action_name}", {entry_handle}, {action_params_str})']
+            [
+                f'table_modify("{table_name}", "{action_name}", {entry_handle}, {action_params_str})'
+            ]
         )
         return self.exec_cmd(switch_name, command)
 
@@ -204,7 +224,9 @@ class BMv2APIMixin:
         match_keys_str = _quote_list_double(match_keys)
         action_params_str = _quote_list_double(action_params)
         command = _build_thrift_command(
-            [f'table_modify_match("{table_name}", "{action_name}", {match_keys_str}, {action_params_str})']
+            [
+                f'table_modify_match("{table_name}", "{action_name}", {match_keys_str}, {action_params_str})'
+            ]
         )
         return self.exec_cmd(switch_name, command)
 
@@ -217,7 +239,9 @@ class BMv2APIMixin:
         """
         Delete an entry from a table.
         """
-        command = _build_thrift_command([f'table_delete("{table_name}", "{entry_handle}")'])
+        command = _build_thrift_command(
+            [f'table_delete("{table_name}", "{entry_handle}")']
+        )
         return self.exec_cmd(switch_name, command)
 
     def bmv2_table_delete_match(
@@ -230,7 +254,9 @@ class BMv2APIMixin:
         Delete an entry from a table using match keys.
         """
         match_keys_str = _quote_list_double(match_keys)
-        command = _build_thrift_command([f'table_delete_match("{table_name}", {match_keys_str})'])
+        command = _build_thrift_command(
+            [f'table_delete_match("{table_name}", {match_keys_str})']
+        )
         return self.exec_cmd(switch_name, command)
 
     # Counter related API
@@ -271,7 +297,9 @@ class BMv2APIMixin:
                 return ""
 
         # If not found, try p4_src/
-        list_p4src = self.exec_cmd(switch_name, "ls p4_src/*.p4 2>/dev/null || true").strip()
+        list_p4src = self.exec_cmd(
+            switch_name, "ls p4_src/*.p4 2>/dev/null || true"
+        ).strip()
         if list_p4src:
             p4_files = list_p4src.split()
             if len(p4_files) > 0:

@@ -26,7 +26,9 @@ def resolve_results_root(result_dir: str | Path | None = None) -> Path:
     Precedence: explicit *result_dir* (CLI) → ``NIKA_RESULT_DIR`` in ``.env`` → ``RESULTS_DIR``.
     Relative paths resolve from the repository root.
     """
-    raw = (str(result_dir).strip() if result_dir is not None else "") or os.environ.get(ENV_RESULT_DIR, "").strip()
+    raw = (str(result_dir).strip() if result_dir is not None else "") or os.environ.get(
+        ENV_RESULT_DIR, ""
+    ).strip()
     if not raw:
         return RESULTS_DIR
     path = Path(raw)

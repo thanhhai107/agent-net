@@ -12,7 +12,9 @@ if TYPE_CHECKING:
     from nika.net_env.base import NetworkEnvBase
 
 
-def init_problem(scenario_name: str | None, **kwargs: Any) -> tuple[NetworkEnvBase, LabRuntime]:
+def init_problem(
+    scenario_name: str | None, **kwargs: Any
+) -> tuple[NetworkEnvBase, LabRuntime]:
     """Resolve network environment and backend-neutral runtime for a problem."""
     net_env = get_net_env_instance(scenario_name, **kwargs)
     runtime = kwargs.get("runtime")

@@ -21,8 +21,12 @@ from unittest.mock import MagicMock
 
 import docker
 
-from nika.net_env.kathara.intradomain_routing.ospf_enterprise.lab_dhcp import OSPFEnterpriseDHCP
-from nika.net_env.kathara.intradomain_routing.ospf_enterprise.lab_static import OSPFEnterpriseStatic
+from nika.net_env.kathara.intradomain_routing.ospf_enterprise.lab_dhcp import (
+    OSPFEnterpriseDHCP,
+)
+from nika.net_env.kathara.intradomain_routing.ospf_enterprise.lab_static import (
+    OSPFEnterpriseStatic,
+)
 from nika.net_env.kathara.intradomain_routing.ospf_enterprise.verify import (
     DIST_ROUTER_STATIC,
     HOST_GATEWAY,
@@ -69,10 +73,18 @@ class _OSPFEnterpriseVerifyBase(SharedSessionTestCase):
         self.assertEqual(resolve_backend(row), "kathara")
         self.assertIn(self.SCENARIO, row["lab_name"])
 
-    def test_key_nodes_deployed(self) -> None:
+    def _assert_common_key_nodes_deployed(self) -> None:
         nodes = set(self._runtime().list_nodes())
-        for name in (*self.CORE_ROUTERS, *self.ACCESS_SWITCHES, *self.HOSTS, "dns_server"):
+        for name in (
+            *self.CORE_ROUTERS,
+            *self.ACCESS_SWITCHES,
+            *self.HOSTS,
+            "dns_server",
+        ):
             self.assertIn(name, nodes, f"Expected node {name!r} in deployed lab")
+
+    def test_common_key_nodes_deployed(self) -> None:
+        self._assert_common_key_nodes_deployed()
 
 
 class OSPFEnterpriseLabVerifyUnitTest(unittest.TestCase):
@@ -90,53 +102,82 @@ class OSPFEnterpriseLabVerifyUnitTest(unittest.TestCase):
             ("router_core_1", "vtysh -c 'show ip ospf neighbor'"): "Full\nFull\n",
             ("router_core_1", "vtysh -c 'show ip ospf'"): "Routing Process\n",
             ("router_core_1", "cat /sys/class/net/eth0/operstate"): "up",
-            (DIST_ROUTER_STATIC, "ip -4 -o addr show dev br0"): f"inet {HOST_GATEWAY}/24",
+            (
+                DIST_ROUTER_STATIC,
+                "ip -4 -o addr show dev br0",
+            ): f"inet {HOST_GATEWAY}/24",
             (PROBE_HOST, "ip -4 -o addr show dev eth0"): f"inet {HOST_STATIC_IP}/24",
-            (PEER_HOST, "ip -4 -o addr show dev eth0"): f"inet {HOST_PEER_STATIC_IP}/24",
-            (PROBE_HOST, "ip route show default"): f"default via {HOST_GATEWAY} dev eth0",
+            (
+                PEER_HOST,
+                "ip -4 -o addr show dev eth0",
+            ): f"inet {HOST_PEER_STATIC_IP}/24",
+            (
+                PROBE_HOST,
+                "ip route show default",
+            ): f"default via {HOST_GATEWAY} dev eth0",
             (PROBE_HOST, f"ping -c 1 -W 2 {HOST_GATEWAY}"): "1 received",
             (PROBE_HOST, f"ping -c 1 -W 2 {HOST_PEER_STATIC_IP}"): "1 received",
             (PROBE_HOST, "ping -c 1 -W 2 10.200.0.2"): "1 received",
             ("dns_server", "systemctl is-active named"): "active",
             (PROBE_HOST, "getent hosts web0.local"): f"{WEB0_IP} web0.local",
-            (PROBE_HOST, f"curl -s -o /dev/null -w '%{{http_code}}' --connect-timeout 5 {WEB0_URL}"): "200",
-            (PEER_HOST, f"curl -s -o /dev/null -w '%{{http_code}}' --connect-timeout 5 {WEB3_URL}"): "200",
+            (
+                PROBE_HOST,
+                f"curl -s -o /dev/null -w '%{{http_code}}' --connect-timeout 5 {WEB0_URL}",
+            ): "200",
+            (
+                PEER_HOST,
+                f"curl -s -o /dev/null -w '%{{http_code}}' --connect-timeout 5 {WEB3_URL}",
+            ): "200",
             ("web_server_0", "systemctl is-active apache2"): "active",
         }
 
     def _dhcp_responses(self) -> dict[tuple[str, str], str]:
         responses = self._static_responses()
-        responses.update({
-            ("router_dist_1_1", "ip -4 -o addr show dev br0"): f"inet {HOST_GATEWAY}/24",
-            ("router_dist_1_1", "pgrep -a dhcrelay"): "123 dhcrelay -i br0",
-            (PROBE_HOST, "ip -4 -o addr show dev eth0"): "inet 10.1.1.42/24",
-            (PEER_HOST, "ip -4 -o addr show dev eth0"): "inet 10.2.1.42/24",
-            (PROBE_HOST, "ping -c 1 -W 2 10.2.1.42"): "1 received",
-            ("dhcp_server", "systemctl is-active isc-dhcp-server"): "active",
-            ("web_server_0", "systemctl is-active web_server"): "active",
-            ("load_balancer", "pgrep -x nginx"): "456",
-            (PROBE_HOST, "getent hosts web99.local"): "10.200.0.10 web99.local",
-            (PROBE_HOST, f"curl -s -o /dev/null -w '%{{http_code}}' --connect-timeout 5 {WEB99_URL}"): "200",
-        })
+        responses.update(
+            {
+                (
+                    "router_dist_1_1",
+                    "ip -4 -o addr show dev br0",
+                ): f"inet {HOST_GATEWAY}/24",
+                ("router_dist_1_1", "pgrep -a dhcrelay"): "123 dhcrelay -i br0",
+                (PROBE_HOST, "ip -4 -o addr show dev eth0"): "inet 10.1.1.42/24",
+                (PEER_HOST, "ip -4 -o addr show dev eth0"): "inet 10.2.1.42/24",
+                (PROBE_HOST, "ping -c 1 -W 2 10.2.1.42"): "1 received",
+                ("dhcp_server", "systemctl is-active isc-dhcp-server"): "active",
+                ("web_server_0", "systemctl is-active web_server"): "active",
+                ("load_balancer", "pgrep -x nginx"): "456",
+                (PROBE_HOST, "getent hosts web99.local"): "10.200.0.10 web99.local",
+                (
+                    PROBE_HOST,
+                    f"curl -s -o /dev/null -w '%{{http_code}}' --connect-timeout 5 {WEB99_URL}",
+                ): "200",
+            }
+        )
         responses.pop(("web_server_0", "systemctl is-active apache2"), None)
         responses.pop((PROBE_HOST, f"ping -c 1 -W 2 {HOST_PEER_STATIC_IP}"), None)
         return responses
 
     def test_static_verify_passes_when_all_checks_ok(self) -> None:
         runtime = self._runtime(self._static_responses())
-        result = verify_ospf_enterprise_lab(runtime, scenario_name="ospf_enterprise_static", mode="static")
+        result = verify_ospf_enterprise_lab(
+            runtime, scenario_name="ospf_enterprise_static", mode="static"
+        )
         self.assertTrue(result["verified"])
         self.assertTrue(all(result["checks"].values()))
 
     def test_dhcp_verify_passes_when_all_checks_ok(self) -> None:
         runtime = self._runtime(self._dhcp_responses())
-        result = verify_ospf_enterprise_lab(runtime, scenario_name="ospf_enterprise_dhcp", mode="dhcp")
+        result = verify_ospf_enterprise_lab(
+            runtime, scenario_name="ospf_enterprise_dhcp", mode="dhcp"
+        )
         self.assertTrue(result["verified"])
         self.assertTrue(all(result["checks"].values()))
 
     def test_dhcp_verify_fails_without_dhcp_address(self) -> None:
         responses = self._dhcp_responses()
-        responses[(PROBE_HOST, "ip -4 -o addr show dev eth0")] = f"inet {HOST_STATIC_IP}/24"
+        responses[(PROBE_HOST, "ip -4 -o addr show dev eth0")] = (
+            f"inet {HOST_STATIC_IP}/24"
+        )
         result = verify_ospf_enterprise_lab(
             self._runtime(responses),
             scenario_name="ospf_enterprise_dhcp",
@@ -147,7 +188,12 @@ class OSPFEnterpriseLabVerifyUnitTest(unittest.TestCase):
 
     def test_static_verify_fails_when_web_unreachable(self) -> None:
         responses = self._static_responses()
-        responses[(PROBE_HOST, f"curl -s -o /dev/null -w '%{{http_code}}' --connect-timeout 5 {WEB0_URL}")] = "000"
+        responses[
+            (
+                PROBE_HOST,
+                f"curl -s -o /dev/null -w '%{{http_code}}' --connect-timeout 5 {WEB0_URL}",
+            )
+        ] = "000"
         result = verify_ospf_enterprise_lab(
             self._runtime(responses),
             scenario_name="ospf_enterprise_static",
@@ -160,14 +206,17 @@ class OSPFEnterpriseLabVerifyUnitTest(unittest.TestCase):
 class OSPFEnterpriseStaticUnitTest(unittest.TestCase):
     def test_size_s_key_routers(self) -> None:
         inst = OSPFEnterpriseStatic(topo_size="s")
-        self.assertEqual(set(inst.routers), {
-            "router_core_1",
-            "router_core_2",
-            "router_core_3",
-            "switch_dist_1_1",
-            "switch_dist_2_1",
-            "switch_server_access",
-        })
+        self.assertEqual(
+            set(inst.routers),
+            {
+                "router_core_1",
+                "router_core_2",
+                "router_core_3",
+                "switch_dist_1_1",
+                "switch_dist_2_1",
+                "switch_server_access",
+            },
+        )
 
     def test_size_s_hosts_and_servers(self) -> None:
         inst = OSPFEnterpriseStatic(topo_size="s")
@@ -180,14 +229,17 @@ class OSPFEnterpriseStaticUnitTest(unittest.TestCase):
 class OSPFEnterpriseDHCPUnitTest(unittest.TestCase):
     def test_size_s_key_routers(self) -> None:
         inst = OSPFEnterpriseDHCP(topo_size="s")
-        self.assertEqual(set(inst.routers), {
-            "router_core_1",
-            "router_core_2",
-            "router_core_3",
-            "router_dist_1_1",
-            "router_dist_2_1",
-            "server_access_router",
-        })
+        self.assertEqual(
+            set(inst.routers),
+            {
+                "router_core_1",
+                "router_core_2",
+                "router_core_3",
+                "router_dist_1_1",
+                "router_dist_2_1",
+                "server_access_router",
+            },
+        )
 
     def test_size_s_dhcp_and_load_balancer(self) -> None:
         inst = OSPFEnterpriseDHCP(topo_size="s")
@@ -201,8 +253,8 @@ class OSPFEnterpriseDHCPUnitTest(unittest.TestCase):
 class OSPFEnterpriseStaticVerifyTest(_OSPFEnterpriseVerifyBase):
     SCENARIO = OSPFEnterpriseStatic.LAB_NAME
 
-    def test_key_nodes_deployed(self) -> None:
-        super().test_key_nodes_deployed()
+    def test_static_key_nodes_deployed(self) -> None:
+        self._assert_common_key_nodes_deployed()
         nodes = set(self._runtime().list_nodes())
         for name in (
             "switch_dist_1_1",
@@ -217,8 +269,8 @@ class OSPFEnterpriseStaticVerifyTest(_OSPFEnterpriseVerifyBase):
 class OSPFEnterpriseDHCPVerifyTest(_OSPFEnterpriseVerifyBase):
     SCENARIO = OSPFEnterpriseDHCP.LAB_NAME
 
-    def test_key_nodes_deployed(self) -> None:
-        super().test_key_nodes_deployed()
+    def test_dhcp_key_nodes_deployed(self) -> None:
+        self._assert_common_key_nodes_deployed()
         nodes = set(self._runtime().list_nodes())
         for name in (
             "router_dist_1_1",

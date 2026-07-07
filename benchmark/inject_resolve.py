@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
-from nika.net_env.net_env_pool import get_net_env_instance, list_all_net_envs
+from collections import defaultdict
+
+from nika.net_env.net_env_pool import (
+    get_net_env_instance,
+    list_all_net_envs,
+    scenario_supported_backends,
+)
 from nika.orchestrator.problems.prob_pool import list_avail_problem_instances
 
 _DEVICE_KEYS = ("host_name", "host_name_2", "attacker_device")
@@ -58,7 +64,9 @@ def _flow_rule_loop_pair(net_env) -> tuple[str, str]:
 
 
 def _all_device_names(net_env) -> set[str]:
-    names: set[str] = set(net_env.lab.machines.keys())
+    names: set[str] = (
+        set(net_env.lab.machines.keys()) if net_env.lab is not None else set()
+    )
     names.update(net_env.hosts or [])
     names.update(net_env.routers or [])
     names.update(net_env.bmv2_switches or [])
@@ -68,6 +76,52 @@ def _all_device_names(net_env) -> set[str]:
         names.update(bucket)
     names.update(getattr(net_env, "kubernetes_nodes", []) or [])
     return names
+
+
+def _get_net_env_for_benchmark(scenario: str, topo_size: str = ""):
+    kwargs: dict = {}
+    if topo_size:
+        kwargs["topo_size"] = topo_size
+    supported_backends = scenario_supported_backends(scenario)
+    kwargs["backend"] = (
+        "kathara" if "kathara" in supported_backends else supported_backends[0]
+    )
+    return get_net_env_instance(scenario, **kwargs)
+
+
+def _load_inventory(net_env) -> None:
+    if net_env.lab is not None:
+        net_env.load_machines()
+        return
+
+    spec = net_env.get_lab_spec()
+    if spec is None:
+        raise ValueError(f"Cannot derive benchmark inventory for {net_env.name!r}.")
+
+    net_env.bmv2_switches = []
+    net_env.ovs_switches = []
+    net_env.sdn_controllers = []
+    net_env.hosts = []
+    net_env.routers = []
+    net_env.switches = []
+    net_env.servers = defaultdict(list)
+
+    for node in spec.nodes:
+        name = node.name
+        kind = node.kind.lower()
+        image = node.image.lower()
+        if any(key in name for key in ("client", "pc", "host")) or "linux" in kind:
+            net_env.hosts.append(name)
+        elif any(key in kind for key in ("srl", "ceos", "router")) or any(
+            key in image for key in ("srl", "ceos", "frr")
+        ):
+            net_env.routers.append(name)
+        else:
+            net_env.switches.append(name)
+
+    net_env.hosts = sorted(net_env.hosts)
+    net_env.routers = sorted(net_env.routers)
+    net_env.switches = sorted(net_env.switches)
 
 
 def _scenario_device_defaults(scenario: str, net_env) -> dict[str, str]:
@@ -98,13 +152,12 @@ def _scenario_device_defaults(scenario: str, net_env) -> dict[str, str]:
     return {}
 
 
-def resolve_inject_params(problem: str, scenario: str, topo_size: str = "") -> dict[str, str]:
+def resolve_inject_params(
+    problem: str, scenario: str, topo_size: str = ""
+) -> dict[str, str]:
     """Return inject params for one benchmark row."""
-    kwargs: dict = {}
-    if topo_size:
-        kwargs["topo_size"] = topo_size
-    net_env = get_net_env_instance(scenario, **kwargs)
-    net_env.load_machines()
+    net_env = _get_net_env_for_benchmark(scenario, topo_size)
+    _load_inventory(net_env)
 
     hosts = net_env.hosts
     routers = net_env.routers
@@ -290,7 +343,7 @@ def validate_benchmark_case(
     if problem not in problems:
         raise ValueError(f"Unknown problem {problem!r}")
 
-    problem_tags = set(problems[problem]["detection"].TAGS)
+    problem_tags = set(problems[problem].TAGS)
     scenario_tags = set(net_envs[scenario].TAGS)
     if not problem_tags.issubset(scenario_tags):
         raise ValueError(
@@ -298,11 +351,8 @@ def validate_benchmark_case(
             f"problem tags {sorted(problem_tags)} not subset of scenario tags {sorted(scenario_tags)}"
         )
 
-    kwargs: dict = {}
-    if topo_size:
-        kwargs["topo_size"] = topo_size
-    net_env = get_net_env_instance(scenario, **kwargs)
-    net_env.load_machines()
+    net_env = _get_net_env_for_benchmark(scenario, topo_size)
+    _load_inventory(net_env)
     devices = _all_device_names(net_env)
 
     for key in _DEVICE_KEYS:
@@ -319,8 +369,7 @@ def validate_benchmark_case(
         urls = getattr(net_env, "web_urls", None) or []
         if urls:
             matched = any(
-                website in url and (not domain or domain in url)
-                for url in urls
+                website in url and (not domain or domain in url) for url in urls
             )
             if not matched:
                 raise ValueError(

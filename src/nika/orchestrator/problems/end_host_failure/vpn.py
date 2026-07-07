@@ -1,10 +1,10 @@
 from pydantic import BaseModel, Field
 
-from nika.orchestrator.problems.context import init_problem
-from nika.orchestrator.problems.problem_base import ProblemMeta, RootCauseCategory, TaskDescription, TaskLevel, build_verify_result
-from nika.orchestrator.tasks.detection import DetectionTask
-from nika.orchestrator.tasks.localization import LocalizationTask
-from nika.orchestrator.tasks.rca import RCATask
+from nika.orchestrator.problems.problem_base import (
+    RootCauseCategory,
+    build_verify_result,
+    ProblemBase,
+)
 from nika.utils.logger import system_logger
 
 # ==========================================
@@ -19,7 +19,7 @@ class VPNMembershipMissingParams(BaseModel):
     host_name_2: str = Field(description="VPN server host name.")
 
 
-class VPNMembershipMissingBase:
+class VPNMembershipMissing(ProblemBase):
     root_cause_category: RootCauseCategory = RootCauseCategory.END_HOST_FAILURE
     root_cause_name: str = "host_vpn_membership_missing"
     TAGS: str = ["vpn"]
@@ -27,15 +27,13 @@ class VPNMembershipMissingBase:
     Params = VPNMembershipMissingParams
 
     def __init__(self, scenario_name: str | None, **kwargs):
-        super().__init__()
+        super().__init__(scenario_name, **kwargs)
         self.logger = system_logger
-        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
-        self.faulty_devices: list[str] = []
 
     def inject_fault(self, params: VPNMembershipMissingParams):
         target_host = params.host_name
         vpn_server = params.host_name_2
-        self.faulty_devices = [target_host, vpn_server]
+        self.set_faulty_devices([target_host, vpn_server])
 
         self.runtime.exec(
             vpn_server,
@@ -72,30 +70,3 @@ class VPNMembershipMissingBase:
                 "wg_conf_snippet": wg_conf_snippet,
             },
         )
-
-
-class HostIncorrectDNSDetection(VPNMembershipMissingBase, DetectionTask):
-    META = ProblemMeta(
-        root_cause_category=VPNMembershipMissingBase.root_cause_category,
-        root_cause_name=VPNMembershipMissingBase.root_cause_name,
-        task_level=TaskLevel.DETECTION,
-        description=TaskDescription.DETECTION,
-    )
-
-
-class HostIncorrectDNSLocalization(VPNMembershipMissingBase, LocalizationTask):
-    META = ProblemMeta(
-        root_cause_category=VPNMembershipMissingBase.root_cause_category,
-        root_cause_name=VPNMembershipMissingBase.root_cause_name,
-        task_level=TaskLevel.LOCALIZATION,
-        description=TaskDescription.LOCALIZATION,
-    )
-
-
-class HostIncorrectDNSRCA(VPNMembershipMissingBase, RCATask):
-    META = ProblemMeta(
-        root_cause_category=VPNMembershipMissingBase.root_cause_category,
-        root_cause_name=VPNMembershipMissingBase.root_cause_name,
-        task_level=TaskLevel.RCA,
-        description=TaskDescription.RCA,
-    )

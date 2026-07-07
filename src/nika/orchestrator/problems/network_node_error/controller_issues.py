@@ -1,12 +1,10 @@
-import logging
-
-from nika.orchestrator.problems.context import init_problem
 from pydantic import BaseModel, Field
 
-from nika.orchestrator.problems.problem_base import ProblemMeta, RootCauseCategory, TaskDescription, TaskLevel, build_verify_result
-from nika.orchestrator.tasks.detection import DetectionTask
-from nika.orchestrator.tasks.localization import LocalizationTask
-from nika.orchestrator.tasks.rca import RCATask
+from nika.orchestrator.problems.problem_base import (
+    ProblemBase,
+    RootCauseCategory,
+    build_verify_result,
+)
 from nika.utils.logger import system_logger
 
 logger = system_logger
@@ -23,7 +21,7 @@ class SDNControllerCrashParams(BaseModel):
     host_name: str = Field(description="Target SDN controller host name.")
 
 
-class SDNControllerCrashBase:
+class SDNControllerCrash(ProblemBase):
     root_cause_category: RootCauseCategory = RootCauseCategory.NETWORK_NODE_ERROR
     root_cause_name: str = "sdn_controller_crash"
     TAGS: str = ["sdn"]
@@ -31,55 +29,25 @@ class SDNControllerCrashBase:
     Params = SDNControllerCrashParams
 
     def __init__(self, scenario_name: str | None, **kwargs):
-        super().__init__()
-        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
-        self.faulty_devices: list[str] = []
+        super().__init__(scenario_name, **kwargs)
 
     def inject_fault(self, params: SDNControllerCrashParams):
-        host = params.host_name
-        self.faulty_devices = [host]
-        self.runtime.exec(host, "pkill -f pox.py")
+        self.set_faulty_devices([params.host_name])
+        self.runtime.exec(params.host_name, "pkill -f pox.py")
 
     def verify_fault(self, params: SDNControllerCrashParams) -> dict:
         """Verify POX controller is NOT running on the SDN controller."""
-        host = params.host_name
         pgrep_output = self.runtime.exec(
-            host, "pgrep -af pox 2>/dev/null | grep -v 'pgrep\\|bash\\|grep' | grep . || echo NONE"
+            params.host_name,
+            "pgrep -af pox 2>/dev/null | grep -v 'pgrep\\|bash\\|grep' | grep . || echo NONE",
         ).strip()
         verified = pgrep_output == "NONE" or "pox" not in pgrep_output
         return build_verify_result(
             root_cause_name=self.root_cause_name,
             faulty_devices=self.faulty_devices,
             verified=verified,
-            details={"host": host, "pgrep_output": pgrep_output},
+            details={"host": params.host_name, "pgrep_output": pgrep_output},
         )
-
-
-class SDNControllerCrashDetection(SDNControllerCrashBase, DetectionTask):
-    META = ProblemMeta(
-        root_cause_category=SDNControllerCrashBase.root_cause_category,
-        root_cause_name=SDNControllerCrashBase.root_cause_name,
-        task_level=TaskLevel.DETECTION,
-        description=TaskDescription.DETECTION,
-    )
-
-
-class SDNControllerCrashLocalization(SDNControllerCrashBase, LocalizationTask):
-    META = ProblemMeta(
-        root_cause_category=SDNControllerCrashBase.root_cause_category,
-        root_cause_name=SDNControllerCrashBase.root_cause_name,
-        task_level=TaskLevel.LOCALIZATION,
-        description=TaskDescription.LOCALIZATION,
-    )
-
-
-class SDNControllerCrashRCA(SDNControllerCrashBase, RCATask):
-    META = ProblemMeta(
-        root_cause_category=SDNControllerCrashBase.root_cause_category,
-        root_cause_name=SDNControllerCrashBase.root_cause_name,
-        task_level=TaskLevel.RCA,
-        description=TaskDescription.RCA,
-    )
 
 
 # ==================================================================
@@ -94,7 +62,7 @@ class SouthboundPortBlockParams(BaseModel):
     southbound_port: int = Field(default=6633, description="Port to block.")
 
 
-class SouthboundPortBlockBase:
+class SouthboundPortBlock(ProblemBase):
     root_cause_category: RootCauseCategory = RootCauseCategory.NETWORK_NODE_ERROR
     root_cause_name: str = "southbound_port_block"
     TAGS: str = ["sdn"]
@@ -102,54 +70,28 @@ class SouthboundPortBlockBase:
     Params = SouthboundPortBlockParams
 
     def __init__(self, scenario_name: str | None, **kwargs):
-        super().__init__()
-        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
-        self.faulty_devices: list[str] = []
+        super().__init__(scenario_name, **kwargs)
 
     def inject_fault(self, params: SouthboundPortBlockParams):
-        host = params.host_name
-        self.faulty_devices = [host]
-        self.runtime.add_nft_drop_rule(host, f"tcp dport {params.southbound_port} drop")
+        self.set_faulty_devices([params.host_name])
+        self.runtime.add_nft_drop_rule(
+            params.host_name, f"tcp dport {params.southbound_port} drop"
+        )
 
     def verify_fault(self, params: SouthboundPortBlockParams) -> dict:
         """Verify nftables has a rule blocking the southbound port."""
-        host = params.host_name
-        port = params.southbound_port
-        nft_output = self.runtime.exec(host, "nft list ruleset 2>/dev/null").strip()
-        verified = f"tcp dport {port}" in nft_output and "drop" in nft_output
+        nft_output = self.runtime.exec(
+            params.host_name, "nft list ruleset 2>/dev/null"
+        ).strip()
+        verified = (
+            f"tcp dport {params.southbound_port}" in nft_output and "drop" in nft_output
+        )
         return build_verify_result(
             root_cause_name=self.root_cause_name,
             faulty_devices=self.faulty_devices,
             verified=verified,
-            details={"host": host, "nft_output": nft_output},
+            details={"host": params.host_name, "nft_output": nft_output},
         )
-
-
-class SouthboundPortBlockDetection(SouthboundPortBlockBase, DetectionTask):
-    META = ProblemMeta(
-        root_cause_category=SouthboundPortBlockBase.root_cause_category,
-        root_cause_name=SouthboundPortBlockBase.root_cause_name,
-        task_level=TaskLevel.DETECTION,
-        description=TaskDescription.DETECTION,
-    )
-
-
-class SouthboundPortBlockLocalization(SouthboundPortBlockBase, LocalizationTask):
-    META = ProblemMeta(
-        root_cause_category=SouthboundPortBlockBase.root_cause_category,
-        root_cause_name=SouthboundPortBlockBase.root_cause_name,
-        task_level=TaskLevel.LOCALIZATION,
-        description=TaskDescription.LOCALIZATION,
-    )
-
-
-class SouthboundPortBlockRCA(SouthboundPortBlockBase, RCATask):
-    META = ProblemMeta(
-        root_cause_category=SouthboundPortBlockBase.root_cause_category,
-        root_cause_name=SouthboundPortBlockBase.root_cause_name,
-        task_level=TaskLevel.RCA,
-        description=TaskDescription.RCA,
-    )
 
 
 # ==================================================================
@@ -162,10 +104,12 @@ class SouthboundPortMismatchParams(BaseModel):
 
     host_name: str = Field(description="Target SDN controller host name.")
     mismatched_port: int = Field(default=6653, description="Port used after restart.")
-    original_port: int = Field(default=6633, description="Expected original OpenFlow port.")
+    original_port: int = Field(
+        default=6633, description="Expected original OpenFlow port."
+    )
 
 
-class SouthboundPortMismatchBase:
+class SouthboundPortMismatch(ProblemBase):
     root_cause_category: RootCauseCategory = RootCauseCategory.NETWORK_NODE_ERROR
     root_cause_name: str = "southbound_port_mismatch"
     TAGS: str = ["sdn"]
@@ -173,62 +117,31 @@ class SouthboundPortMismatchBase:
     Params = SouthboundPortMismatchParams
 
     def __init__(self, scenario_name: str | None, **kwargs):
-        super().__init__()
-        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
-        self.faulty_devices: list[str] = []
+        super().__init__(scenario_name, **kwargs)
 
     def inject_fault(self, params: SouthboundPortMismatchParams):
-        host = params.host_name
-        self.faulty_devices = [host]
-        self.runtime.exec(host, "pkill -f pox.py")
+        self.set_faulty_devices([params.host_name])
+        self.runtime.exec(params.host_name, "pkill -f pox.py")
         self.runtime.exec(
-            host,
+            params.host_name,
             f"python3 /pox/pox.py openflow.of_01 --port={params.mismatched_port} forwarding.l2_learning &",
         )
 
     def verify_fault(self, params: SouthboundPortMismatchParams) -> dict:
         """Verify POX controller is running with the mismatched port."""
-        host = params.host_name
-        mismatched_port = params.mismatched_port
         pgrep_output = self.runtime.exec(
-            host, "pgrep -af pox 2>/dev/null | grep -v 'pgrep\\|bash\\|grep' | grep . || echo NONE"
+            params.host_name,
+            "pgrep -af pox 2>/dev/null | grep -v 'pgrep\\|bash\\|grep' | grep . || echo NONE",
         ).strip()
         running = "pox" in pgrep_output and pgrep_output != "NONE"
-        has_port = str(mismatched_port) in pgrep_output
+        has_port = str(params.mismatched_port) in pgrep_output
         verified = running and has_port
         return build_verify_result(
             root_cause_name=self.root_cause_name,
             faulty_devices=self.faulty_devices,
             verified=verified,
-            details={"host": host, "pgrep_output": pgrep_output},
+            details={"host": params.host_name, "pgrep_output": pgrep_output},
         )
-
-
-class SouthboundPortMismatchDetection(SouthboundPortMismatchBase, DetectionTask):
-    META = ProblemMeta(
-        root_cause_category=SouthboundPortMismatchBase.root_cause_category,
-        root_cause_name=SouthboundPortMismatchBase.root_cause_name,
-        task_level=TaskLevel.DETECTION,
-        description=TaskDescription.DETECTION,
-    )
-
-
-class SouthboundPortMismatchLocalization(SouthboundPortMismatchBase, LocalizationTask):
-    META = ProblemMeta(
-        root_cause_category=SouthboundPortMismatchBase.root_cause_category,
-        root_cause_name=SouthboundPortMismatchBase.root_cause_name,
-        task_level=TaskLevel.LOCALIZATION,
-        description=TaskDescription.LOCALIZATION,
-    )
-
-
-class SouthboundPortMismatchRCA(SouthboundPortMismatchBase, RCATask):
-    META = ProblemMeta(
-        root_cause_category=SouthboundPortMismatchBase.root_cause_category,
-        root_cause_name=SouthboundPortMismatchBase.root_cause_name,
-        task_level=TaskLevel.RCA,
-        description=TaskDescription.RCA,
-    )
 
 
 # ==================================================================
@@ -242,7 +155,7 @@ class FlowRuleShadowingParams(BaseModel):
     host_name: str = Field(description="Target OVS switch name.")
 
 
-class FlowRuleShadowingBase:
+class FlowRuleShadowing(ProblemBase):
     root_cause_category: RootCauseCategory = RootCauseCategory.NETWORK_NODE_ERROR
     root_cause_name: str = "flow_rule_shadowing"
     TAGS: str = ["sdn"]
@@ -250,53 +163,27 @@ class FlowRuleShadowingBase:
     Params = FlowRuleShadowingParams
 
     def __init__(self, scenario_name: str | None, **kwargs):
-        super().__init__()
-        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
-        self.faulty_devices: list[str] = []
+        super().__init__(scenario_name, **kwargs)
 
     def inject_fault(self, params: FlowRuleShadowingParams):
-        host = params.host_name
-        self.faulty_devices = [host]
-        self.runtime.exec(host, f"ovs-ofctl add-flow {host} 'priority=100,actions=drop'")
+        self.set_faulty_devices([params.host_name])
+        self.runtime.exec(
+            params.host_name,
+            f"ovs-ofctl add-flow {params.host_name} 'priority=100,actions=drop'",
+        )
 
     def verify_fault(self, params: FlowRuleShadowingParams) -> dict:
         """Verify the OVS switch has a high-priority drop rule."""
-        host = params.host_name
-        flows = self.runtime.exec(host, f"ovs-ofctl dump-flows {host} 2>/dev/null").strip()
+        flows = self.runtime.exec(
+            params.host_name, f"ovs-ofctl dump-flows {params.host_name} 2>/dev/null"
+        ).strip()
         verified = "priority=100" in flows and "drop" in flows
         return build_verify_result(
             root_cause_name=self.root_cause_name,
             faulty_devices=self.faulty_devices,
             verified=verified,
-            details={"host": host, "flows": flows},
+            details={"host": params.host_name, "flows": flows},
         )
-
-
-class FlowRuleShadowingDetection(FlowRuleShadowingBase, DetectionTask):
-    META = ProblemMeta(
-        root_cause_category=FlowRuleShadowingBase.root_cause_category,
-        root_cause_name=FlowRuleShadowingBase.root_cause_name,
-        task_level=TaskLevel.DETECTION,
-        description=TaskDescription.DETECTION,
-    )
-
-
-class FlowRuleShadowingLocalization(FlowRuleShadowingBase, LocalizationTask):
-    META = ProblemMeta(
-        root_cause_category=FlowRuleShadowingBase.root_cause_category,
-        root_cause_name=FlowRuleShadowingBase.root_cause_name,
-        task_level=TaskLevel.LOCALIZATION,
-        description=TaskDescription.LOCALIZATION,
-    )
-
-
-class FlowRuleShadowingRCA(FlowRuleShadowingBase, RCATask):
-    META = ProblemMeta(
-        root_cause_category=FlowRuleShadowingBase.root_cause_category,
-        root_cause_name=FlowRuleShadowingBase.root_cause_name,
-        task_level=TaskLevel.RCA,
-        description=TaskDescription.RCA,
-    )
 
 
 # ==================================================================
@@ -311,7 +198,7 @@ class FlowRuleLoopParams(BaseModel):
     host_name_2: str = Field(description="Secondary OVS switch name.")
 
 
-class FlowRuleLoopBase:
+class FlowRuleLoop(ProblemBase):
     root_cause_category: RootCauseCategory = RootCauseCategory.NETWORK_NODE_ERROR
     root_cause_name: str = "flow_rule_loop"
     TAGS: str = ["sdn"]
@@ -319,23 +206,29 @@ class FlowRuleLoopBase:
     Params = FlowRuleLoopParams
 
     def __init__(self, scenario_name: str | None, **kwargs):
-        super().__init__()
-        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
-        self.faulty_devices: list[str] = []
+        super().__init__(scenario_name, **kwargs)
 
     def inject_fault(self, params: FlowRuleLoopParams):
         host0 = params.host_name
         host1 = params.host_name_2
-        self.faulty_devices = [host0, host1]
-        self.runtime.exec(host0, f"ovs-ofctl add-flow {host0} 'in_port=eth0,actions=output:eth0'")
-        self.runtime.exec(host1, f"ovs-ofctl add-flow {host1} 'in_port=eth1,actions=output:eth1'")
+        self.set_faulty_devices([host0, host1])
+        self.runtime.exec(
+            host0, f"ovs-ofctl add-flow {host0} 'in_port=eth0,actions=output:eth0'"
+        )
+        self.runtime.exec(
+            host1, f"ovs-ofctl add-flow {host1} 'in_port=eth1,actions=output:eth1'"
+        )
 
     def verify_fault(self, params: FlowRuleLoopParams) -> dict:
         """Verify both OVS switches have loop flow rules."""
         host0 = params.host_name
         host1 = params.host_name_2
-        flows0 = self.runtime.exec(host0, f"ovs-ofctl dump-flows {host0} 2>/dev/null").strip()
-        flows1 = self.runtime.exec(host1, f"ovs-ofctl dump-flows {host1} 2>/dev/null").strip()
+        flows0 = self.runtime.exec(
+            host0, f"ovs-ofctl dump-flows {host0} 2>/dev/null"
+        ).strip()
+        flows1 = self.runtime.exec(
+            host1, f"ovs-ofctl dump-flows {host1} 2>/dev/null"
+        ).strip()
         has_loop0 = "in_port" in flows0 and "output" in flows0
         has_loop1 = "in_port" in flows1 and "output" in flows1
         verified = has_loop0 and has_loop1
@@ -345,30 +238,3 @@ class FlowRuleLoopBase:
             verified=verified,
             details={"host0_flows": flows0, "host1_flows": flows1},
         )
-
-
-class FlowRuleLoopDetection(FlowRuleLoopBase, DetectionTask):
-    META = ProblemMeta(
-        root_cause_category=FlowRuleLoopBase.root_cause_category,
-        root_cause_name=FlowRuleLoopBase.root_cause_name,
-        task_level=TaskLevel.DETECTION,
-        description=TaskDescription.DETECTION,
-    )
-
-
-class FlowRuleLoopLocalization(FlowRuleLoopBase, LocalizationTask):
-    META = ProblemMeta(
-        root_cause_category=FlowRuleLoopBase.root_cause_category,
-        root_cause_name=FlowRuleLoopBase.root_cause_name,
-        task_level=TaskLevel.LOCALIZATION,
-        description=TaskDescription.LOCALIZATION,
-    )
-
-
-class FlowRuleLoopRCA(FlowRuleLoopBase, RCATask):
-    META = ProblemMeta(
-        root_cause_category=FlowRuleLoopBase.root_cause_category,
-        root_cause_name=FlowRuleLoopBase.root_cause_name,
-        task_level=TaskLevel.RCA,
-        description=TaskDescription.RCA,
-    )

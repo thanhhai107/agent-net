@@ -5,7 +5,9 @@ from typing import List
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
 
-from nika.orchestrator.problems.prob_pool import list_avail_problem_names as _list_avail_problems
+from nika.orchestrator.problems.prob_pool import (
+    list_avail_problem_names as _list_avail_problems,
+)
 from nika.service.mcp_server.mcp_session_context import get_session_dir
 from nika.utils.errors import safe_tool
 
@@ -17,7 +19,9 @@ mcp = FastMCP(
 
 
 class SubmissionFormat(BaseModel):
-    is_anomaly: bool = Field(..., description="Indicates whether an anomaly was detected.")
+    is_anomaly: bool = Field(
+        ..., description="Indicates whether an anomaly was detected."
+    )
     faulty_devices: List[str] = Field(
         ...,
         description=(

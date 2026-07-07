@@ -8,7 +8,9 @@ from nika.service.mcp_server.mcp_session_context import get_lab_name
 from nika.utils.errors import safe_tool
 
 # Initialize FastMCP server
-mcp = FastMCP(name="kathara_base_mcp_server", host="127.0.0.1", port=8000, log_level="INFO")
+mcp = FastMCP(
+    name="kathara_base_mcp_server", host="127.0.0.1", port=8000, log_level="INFO"
+)
 
 
 @safe_tool
@@ -57,7 +59,9 @@ def systemctl_ops(host_name: str, service_name: str, operation: str) -> str:
         str: The output of the systemctl command.
     """
     kathara_api = KatharaAPI(lab_name=get_lab_name())
-    result = kathara_api.systemctl_ops(host_name=host_name, service_name=service_name, operation=operation)
+    result = kathara_api.systemctl_ops(
+        host_name=host_name, service_name=service_name, operation=operation
+    )
     return result
 
 

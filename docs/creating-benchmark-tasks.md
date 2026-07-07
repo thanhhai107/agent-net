@@ -84,24 +84,18 @@ uv run nika session close -y
 
 ## Add An Injectable Problem
 
-Problems live under `src/nika/orchestrator/problems/<category>/`. They are discovered automatically when their concrete task classes subclass `TaskBase` through `DetectionTask`, `LocalizationTask`, or `RCATask`.
+Problems live under `src/nika/orchestrator/problems/<category>/`. They are discovered automatically when a concrete class subclasses `ProblemBase` and sets `root_cause_name`. `prob_pool` builds `META` from the class variables at import time.
 
-Use a shared base class for the fault logic, then expose three task classes.
+Each fault is a single `ProblemBase` subclass that implements injection, verification, and unified ground truth via `get_ground_truth()`. Do not split one fault into separate Detection / Localization / RCA classes.
 
 ```python
 from pydantic import BaseModel, Field
 
-from nika.orchestrator.problems.context import init_problem
 from nika.orchestrator.problems.problem_base import (
-    ProblemMeta,
+    ProblemBase,
     RootCauseCategory,
-    TaskDescription,
-    TaskLevel,
     build_verify_result,
 )
-from nika.orchestrator.tasks.detection import DetectionTask
-from nika.orchestrator.tasks.localization import LocalizationTask
-from nika.orchestrator.tasks.rca import RCATask
 
 
 class MyFaultParams(BaseModel):
@@ -109,7 +103,7 @@ class MyFaultParams(BaseModel):
     intf_name: str = Field(default="eth0", description="Target interface.")
 
 
-class MyFaultBase:
+class MyFault(ProblemBase):
     root_cause_category = RootCauseCategory.LINK_FAILURE
     root_cause_name = "my_fault"
     TAGS = ["link"]
@@ -118,12 +112,10 @@ class MyFaultBase:
     symptom_desc = "Users report intermittent connectivity."
 
     def __init__(self, scenario_name: str | None, **kwargs):
-        super().__init__()
-        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
-        self.faulty_devices: list[str] = []
+        super().__init__(scenario_name, **kwargs)
 
     def inject_fault(self, params: MyFaultParams):
-        self.faulty_devices = [params.host_name]
+        self.set_faulty_devices([params.host_name])
         self.runtime.set_interface_state(params.host_name, params.intf_name, "down")
 
     def verify_fault(self, params: MyFaultParams) -> dict:
@@ -134,41 +126,16 @@ class MyFaultBase:
             verified=operstate == "down",
             details={"host": params.host_name, "intf": params.intf_name, "operstate": operstate},
         )
-
-
-class MyFaultDetection(MyFaultBase, DetectionTask):
-    META = ProblemMeta(
-        root_cause_category=MyFaultBase.root_cause_category,
-        root_cause_name=MyFaultBase.root_cause_name,
-        task_level=TaskLevel.DETECTION,
-        description=TaskDescription.DETECTION,
-    )
-
-
-class MyFaultLocalization(MyFaultBase, LocalizationTask):
-    META = ProblemMeta(
-        root_cause_category=MyFaultBase.root_cause_category,
-        root_cause_name=MyFaultBase.root_cause_name,
-        task_level=TaskLevel.LOCALIZATION,
-        description=TaskDescription.LOCALIZATION,
-    )
-
-
-class MyFaultRCA(MyFaultBase, RCATask):
-    META = ProblemMeta(
-        root_cause_category=MyFaultBase.root_cause_category,
-        root_cause_name=MyFaultBase.root_cause_name,
-        task_level=TaskLevel.RCA,
-        description=TaskDescription.RCA,
-    )
 ```
 
 Notes:
 
-- `Params` must be a Pydantic model. `nika failure describe` and benchmark YAML validation use it as the injection schema.
+- Set `root_cause_category`, `root_cause_name`, and `Params` on the class. `META` is auto-generated; you do not define it by hand.
+- `symptom_desc` is optional. When set, it becomes the problem description and the ground-truth `detailed_cause`. When omitted, `root_cause_name` is used as the description.
 - `inject_fault()` should mutate only the selected lab instance.
 - `verify_fault()` must prove the fault is active. Failed verification marks the injection as failed and stops the run.
-- Set `faulty_devices` and other task attributes before ground truth is written.
+- Set `faulty_devices` during injection via `set_faulty_devices()`; `get_ground_truth()` reads them for localization, detection, and RCA targets.
+- `Params` must be a Pydantic model. `nika failure describe` and benchmark YAML validation use it as the injection schema.
 
 Verify the problem:
 

@@ -24,7 +24,9 @@ def env_list() -> None:
 
 @env_app.command("run")
 def env_run(
-    name: str = typer.Argument(..., metavar="NAME", help="Scenario id (see `nika env list`)."),
+    name: str = typer.Argument(
+        ..., metavar="NAME", help="Scenario id (see `nika env list`)."
+    ),
     size: str | None = typer.Option(
         None,
         "-s",
@@ -36,7 +38,11 @@ def env_run(
         "--backend",
         help="Lab backend: kathara or containerlab.",
     ),
-    no_redeploy: bool = typer.Option(False, "--no-redeploy", help="If set, do not redeploy when the lab already exists."),
+    no_redeploy: bool = typer.Option(
+        False,
+        "--no-redeploy",
+        help="If set, do not redeploy when the lab already exists.",
+    ),
     instance_tag: str | None = typer.Option(
         None,
         "--instance-tag",
@@ -113,7 +119,8 @@ def env_ps() -> None:
 
         # Count all running sessions sharing this lab instance.
         active = sum(
-            1 for s in sessions
+            1
+            for s in sessions
             if s.get("lab_name") == lab_name and s.get("status") == "running"
         )
         sessions_col = f"{active} active"

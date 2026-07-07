@@ -51,16 +51,33 @@ class K8sLabUnitTest(unittest.TestCase):
         inst = K8sFatTreeBGP()
         self.assertTrue(len(inst.routers) > 0, "Expected at least one FRR router")
         expected_routers = {
-            "leaf_1_1", "leaf_1_2", "spine_1_1", "spine_1_2",
-            "spine_2_1", "spine_2_2", "leaf_2_1", "leaf_2_2",
-            "core_1_1", "core_1_2", "dc_exit", "as1r1", "as2r1",
+            "leaf_1_1",
+            "leaf_1_2",
+            "spine_1_1",
+            "spine_1_2",
+            "spine_2_1",
+            "spine_2_2",
+            "leaf_2_1",
+            "leaf_2_2",
+            "core_1_1",
+            "core_1_2",
+            "dc_exit",
+            "as1r1",
+            "as2r1",
         }
         self.assertEqual(set(inst.routers), expected_routers)
 
     def test_has_kubernetes_nodes(self) -> None:
         """k8s_lab must classify k3s machines into kubernetes_nodes."""
         inst = K8sFatTreeBGP()
-        expected_k8s = {"controller", "worker1", "worker2", "worker3", "worker4", "worker5"}
+        expected_k8s = {
+            "controller",
+            "worker1",
+            "worker2",
+            "worker3",
+            "worker4",
+            "worker5",
+        }
         self.assertEqual(set(inst.kubernetes_nodes), expected_k8s)
 
     def test_has_client_host(self) -> None:
@@ -119,8 +136,14 @@ class K8sLabIntegrationTest(SharedSessionTestCase):
         last_error = "timeout"
         while time.time() < deadline:
             try:
-                nodes = cls._exec("controller", "kubectl get nodes --no-headers", timeout=60)
-                ready_nodes = [line for line in nodes.splitlines() if line.strip().endswith(" Ready")]
+                nodes = cls._exec(
+                    "controller", "kubectl get nodes --no-headers", timeout=60
+                )
+                ready_nodes = [
+                    line
+                    for line in nodes.splitlines()
+                    if line.strip().endswith(" Ready")
+                ]
                 if len(ready_nodes) < 6:
                     last_error = f"k3s nodes not ready ({len(ready_nodes)}/6)"
                     time.sleep(15)
@@ -150,7 +173,9 @@ class K8sLabIntegrationTest(SharedSessionTestCase):
             except Exception as exc:  # noqa: BLE001 - poll until deadline
                 last_error = str(exc)
                 time.sleep(15)
-        raise TimeoutError(f"k8s_lab not ready within {cls._READY_TIMEOUT_SEC}s: {last_error}")
+        raise TimeoutError(
+            f"k8s_lab not ready within {cls._READY_TIMEOUT_SEC}s: {last_error}"
+        )
 
     def test_bgp_spine_neighbors_up(self) -> None:
         """Pod-1 leaf routers must peer with spine routers (AS 64514)."""
@@ -166,7 +191,9 @@ class K8sLabIntegrationTest(SharedSessionTestCase):
     def test_k3s_cluster_ready(self) -> None:
         """All six k3s nodes must report Ready."""
         output = self._exec("controller", "kubectl get nodes --no-headers")
-        ready = [line for line in output.splitlines() if line.strip().endswith(" Ready")]
+        ready = [
+            line for line in output.splitlines() if line.strip().endswith(" Ready")
+        ]
         self.assertEqual(len(ready), 6, output)
 
     def test_ingress_loadbalancer_vip(self) -> None:

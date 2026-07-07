@@ -90,24 +90,35 @@ class AgentCallbackLogger(BaseCallbackHandler):
                     payload["generation_info"] = res.generation_info
                 message = getattr(res, "message", None)
                 if message:
-                    payload["invalid_tool_calls"] = getattr(message, "invalid_tool_calls", None)
+                    payload["invalid_tool_calls"] = getattr(
+                        message, "invalid_tool_calls", None
+                    )
                     payload["usage_metadata"] = getattr(message, "usage_metadata", None)
             self._logger.log("llm_end", payload)
         except Exception as exc:
             import traceback
+
             self._logger.log(
                 "llm_end_error",
-                {"error": str(exc), "traceback": traceback.format_exc(), "response": str(response)},
+                {
+                    "error": str(exc),
+                    "traceback": traceback.format_exc(),
+                    "response": str(response),
+                },
             )
 
-    def on_tool_start(self, serialized: dict[str, Any], input_str: str, **kwargs) -> None:
+    def on_tool_start(
+        self, serialized: dict[str, Any], input_str: str, **kwargs
+    ) -> None:
         self._logger.log("tool_start", {"tool": serialized, "input": input_str})
 
     def on_tool_end(self, output: ToolMessage, **kwargs) -> None:
         if output.status == "error":
             self._logger.log("tool_error", {"output": output})
             return
-        self._logger.log("tool_end", {"output": output, "output_type": type(output).__name__})
+        self._logger.log(
+            "tool_end", {"output": output, "output_type": type(output).__name__}
+        )
 
     def on_tool_error(self, error, **kwargs) -> None:
         self._logger.log("tool_error", {"error": str(error)})

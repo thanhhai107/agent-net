@@ -103,24 +103,40 @@ def resolve_agent_model(agent_type: str, model: str | None = None) -> str:
         case "sdk.codex_sdk":
             if codex_sdk_model := _env_str(ENV_CODEX_SDK_MODEL):
                 return codex_sdk_model
-            return _require_str(value=None, env_key=ENV_CODEX_MODEL, cli_flag="-m/--model")
+            return _require_str(
+                value=None, env_key=ENV_CODEX_MODEL, cli_flag="-m/--model"
+            )
         case "local_cli.codex_cli":
-            return _require_str(value=None, env_key=ENV_CODEX_MODEL, cli_flag="-m/--model")
+            return _require_str(
+                value=None, env_key=ENV_CODEX_MODEL, cli_flag="-m/--model"
+            )
         case "mock":
             return _require_str(value=None, env_key=ENV_MODEL, cli_flag="-m/--model")
         case "byo.mcp_agent":
-            return _require_str(value=None, env_key=ENV_MCP_AGENT_MODEL, cli_flag="-m/--model")
+            return _require_str(
+                value=None, env_key=ENV_MCP_AGENT_MODEL, cli_flag="-m/--model"
+            )
         case "byo.autogen":
-            return _require_str(value=None, env_key=ENV_AUTOGEN_MODEL, cli_flag="-m/--model")
+            return _require_str(
+                value=None, env_key=ENV_AUTOGEN_MODEL, cli_flag="-m/--model"
+            )
         case "byo.langgraph":
-            return _require_str(value=None, env_key=ENV_LANGGRAPH_MODEL, cli_flag="-m/--model")
+            return _require_str(
+                value=None, env_key=ENV_LANGGRAPH_MODEL, cli_flag="-m/--model"
+            )
         case _:
-            raise ValueError(f"Unsupported agent type for model resolution: {agent_type!r}")
+            raise ValueError(
+                f"Unsupported agent type for model resolution: {agent_type!r}"
+            )
 
 
 def resolve_judge_provider(value: str | None = None) -> str:
-    return _require_str(value=value, env_key=ENV_JUDGE_PROVIDER, cli_flag="-p/--provider (judge)")
+    return _require_str(
+        value=value, env_key=ENV_JUDGE_PROVIDER, cli_flag="-p/--provider (judge)"
+    )
 
 
 def resolve_judge_model(value: str | None = None) -> str:
-    return _require_str(value=value, env_key=ENV_JUDGE_MODEL, cli_flag="-m/--model (judge)")
+    return _require_str(
+        value=value, env_key=ENV_JUDGE_MODEL, cli_flag="-m/--model (judge)"
+    )

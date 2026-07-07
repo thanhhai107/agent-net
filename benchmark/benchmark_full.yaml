@@ -1843,6 +1843,11 @@ cases:
   problem: bgp_acl_block
   inject:
     host_name: router1
+- scenario: min3clos
+  topo_size: null
+  problem: bgp_acl_block
+  inject:
+    host_name: client1
 - scenario: k8s_lab
   topo_size: null
   problem: bgp_acl_block
@@ -2148,6 +2153,11 @@ cases:
   problem: bgp_asn_misconfig
   inject:
     host_name: router1
+- scenario: min3clos
+  topo_size: null
+  problem: bgp_asn_misconfig
+  inject:
+    host_name: client1
 - scenario: k8s_lab
   topo_size: null
   problem: bgp_asn_misconfig
@@ -2188,26 +2198,16 @@ cases:
   problem: bgp_blackhole_route_leak
   inject:
     host_name: router1
+- scenario: min3clos
+  topo_size: null
+  problem: bgp_blackhole_route_leak
+  inject:
+    host_name: client1
 - scenario: k8s_lab
   topo_size: null
   problem: bgp_blackhole_route_leak
   inject:
     host_name: leaf_1_1
-- scenario: dc_clos_service
-  topo_size: s
-  problem: bgp_hijacking
-  inject:
-    host_name: leaf_router_0_0
-- scenario: dc_clos_service
-  topo_size: m
-  problem: bgp_hijacking
-  inject:
-    host_name: leaf_router_0_0
-- scenario: dc_clos_service
-  topo_size: l
-  problem: bgp_hijacking
-  inject:
-    host_name: leaf_router_0_0
 - scenario: dc_clos_bgp
   topo_size: s
   problem: bgp_missing_route_advertisement
@@ -2243,6 +2243,11 @@ cases:
   problem: bgp_missing_route_advertisement
   inject:
     host_name: router1
+- scenario: min3clos
+  topo_size: null
+  problem: bgp_missing_route_advertisement
+  inject:
+    host_name: client1
 - scenario: k8s_lab
   topo_size: null
   problem: bgp_missing_route_advertisement
@@ -2283,6 +2288,11 @@ cases:
   problem: host_static_blackhole
   inject:
     host_name: router1
+- scenario: min3clos
+  topo_size: null
+  problem: host_static_blackhole
+  inject:
+    host_name: client1
 - scenario: k8s_lab
   topo_size: null
   problem: host_static_blackhole
@@ -2715,42 +2725,42 @@ cases:
     original_port: '6633'
 - scenario: p4_bloom_filter
   topo_size: null
-  problem: p4_header_definition_error
+  problem: p4_compilation_error_parser_state
   inject:
     host_name: switch_1
 - scenario: p4_counter
   topo_size: null
-  problem: p4_header_definition_error
+  problem: p4_compilation_error_parser_state
   inject:
     host_name: s1
 - scenario: p4_int
   topo_size: null
-  problem: p4_header_definition_error
+  problem: p4_compilation_error_parser_state
   inject:
     host_name: leaf1
 - scenario: p4_mpls
   topo_size: null
-  problem: p4_header_definition_error
+  problem: p4_compilation_error_parser_state
   inject:
     host_name: switch_1
 - scenario: p4_bloom_filter
   topo_size: null
-  problem: p4_compilation_error_parser_state
+  problem: p4_header_definition_error
   inject:
     host_name: switch_1
 - scenario: p4_counter
   topo_size: null
-  problem: p4_compilation_error_parser_state
+  problem: p4_header_definition_error
   inject:
     host_name: s1
 - scenario: p4_int
   topo_size: null
-  problem: p4_compilation_error_parser_state
+  problem: p4_header_definition_error
   inject:
     host_name: leaf1
 - scenario: p4_mpls
   topo_size: null
-  problem: p4_compilation_error_parser_state
+  problem: p4_header_definition_error
   inject:
     host_name: switch_1
 - scenario: p4_mpls
@@ -3043,6 +3053,51 @@ cases:
   problem: arp_cache_poisoning
   inject:
     host_name: client
+- scenario: dc_clos_bgp
+  topo_size: s
+  problem: bgp_hijacking
+  inject:
+    host_name: leaf_router_0_0
+- scenario: dc_clos_bgp
+  topo_size: m
+  problem: bgp_hijacking
+  inject:
+    host_name: leaf_router_0_0
+- scenario: dc_clos_bgp
+  topo_size: l
+  problem: bgp_hijacking
+  inject:
+    host_name: leaf_router_0_0
+- scenario: dc_clos_service
+  topo_size: s
+  problem: bgp_hijacking
+  inject:
+    host_name: leaf_router_0_0
+- scenario: dc_clos_service
+  topo_size: m
+  problem: bgp_hijacking
+  inject:
+    host_name: leaf_router_0_0
+- scenario: dc_clos_service
+  topo_size: l
+  problem: bgp_hijacking
+  inject:
+    host_name: leaf_router_0_0
+- scenario: simple_bgp
+  topo_size: null
+  problem: bgp_hijacking
+  inject:
+    host_name: router1
+- scenario: min3clos
+  topo_size: null
+  problem: bgp_hijacking
+  inject:
+    host_name: client1
+- scenario: k8s_lab
+  topo_size: null
+  problem: bgp_hijacking
+  inject:
+    host_name: leaf_1_1
 - scenario: ospf_enterprise_dhcp
   topo_size: s
   problem: dhcp_spoofed_dns

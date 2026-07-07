@@ -1,7 +1,12 @@
 import json
 from pathlib import Path
 
-from nika.utils.logger import bind_session_dir, log_error_event, log_event, refresh_logger
+from nika.utils.logger import (
+    bind_session_dir,
+    log_error_event,
+    log_event,
+    refresh_logger,
+)
 
 
 def test_log_event_and_error_event_write_jsonl(tmp_path: Path) -> None:
@@ -9,7 +14,9 @@ def test_log_event_and_error_event_write_jsonl(tmp_path: Path) -> None:
     bind_session_dir(str(tmp_path))
 
     log_event("env_start", "started", session_id="s1")
-    log_error_event("env_start_failed", "deploy failed", session_id="s1", error="timeout")
+    log_error_event(
+        "env_start_failed", "deploy failed", session_id="s1", error="timeout"
+    )
 
     lines = (tmp_path / "events.jsonl").read_text(encoding="utf-8").strip().splitlines()
     assert len(lines) == 2

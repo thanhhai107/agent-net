@@ -30,6 +30,7 @@ dependencies = [
     "mcp-agent[openai]>=0.2.6",
     "autogen-agentchat>=0.7.5",
     "autogen-ext[mcp,openai]>=0.7.5",
+    "ruff>=0.15.20",
 ]
 
 [project.optional-dependencies]
@@ -55,4 +56,8 @@ filterwarnings = [
 
 [tool.uv]
 prerelease = "allow"
+
+[tool.ruff.lint.per-file-ignores]
+# Barefoot Networks P4 runtime Thrift client (vendor code).
+"src/nika/net_env/kathara/utils/p4/thrift_API.py" = ["E712", "E721", "E722", "E741", "F403", "F405", "F841"]
 

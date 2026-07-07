@@ -98,7 +98,9 @@ class DCClosBGP(NetworkEnvBase):
 
         for ss in range(super_spine_count):
             ss_name = f"super_spine_router_{ss}"
-            router_ss = self.lab.new_machine(ss_name, **{"image": "kathara/nika-frr", "cpus": 0.5, "mem": "256m"})
+            router_ss = self.lab.new_machine(
+                ss_name, **{"image": "kathara/nika-frr", "cpus": 0.5, "mem": "256m"}
+            )
             router_ss_meta = RouterMeta(
                 name=ss_name,
                 machine=router_ss,
@@ -113,7 +115,8 @@ class DCClosBGP(NetworkEnvBase):
             for spine_id in range(spine_per_pod):
                 spine_name = f"spine_router_{pod}_{spine_id}"
                 router_spine = self.lab.new_machine(
-                    spine_name, **{"image": "kathara/nika-frr", "cpus": 0.5, "mem": "256m"}
+                    spine_name,
+                    **{"image": "kathara/nika-frr", "cpus": 0.5, "mem": "256m"},
                 )
                 spine_meta = RouterMeta(
                     name=spine_name,
@@ -129,7 +132,8 @@ class DCClosBGP(NetworkEnvBase):
             for leaf_id in range(leaf_per_pod):
                 leaf_name = f"leaf_router_{pod}_{leaf_id}"
                 router_leaf = self.lab.new_machine(
-                    leaf_name, **{"image": "kathara/nika-frr", "cpus": 0.5, "mem": "256m"}
+                    leaf_name,
+                    **{"image": "kathara/nika-frr", "cpus": 0.5, "mem": "256m"},
                 )
                 leaf_meta = RouterMeta(
                     name=leaf_name,
@@ -144,7 +148,10 @@ class DCClosBGP(NetworkEnvBase):
             pod_hosts[pod] = []
             for host in range(leaf_per_pod):
                 host_name = f"pc_{pod}_{host}"
-                host = self.lab.new_machine(host_name, **{"image": "kathara/nika-base", "cpus": 0.5, "mem": "256m"})
+                host = self.lab.new_machine(
+                    host_name,
+                    **{"image": "kathara/nika-base", "cpus": 0.5, "mem": "256m"},
+                )
                 host_meta = HostMeta(
                     name=host_name,
                     machine=host,
@@ -159,16 +166,22 @@ class DCClosBGP(NetworkEnvBase):
             super_spine_meta = tot_super_spines[pod]
             for spine_meta in tot_spines:
                 self.lab.connect_machine_to_link(
-                    super_spine_meta.machine.name, f"{super_spine_meta.machine.name}_{spine_meta.machine.name}"
+                    super_spine_meta.machine.name,
+                    f"{super_spine_meta.machine.name}_{spine_meta.machine.name}",
                 )
                 self.lab.connect_machine_to_link(
-                    spine_meta.machine.name, f"{super_spine_meta.machine.name}_{spine_meta.machine.name}"
+                    spine_meta.machine.name,
+                    f"{super_spine_meta.machine.name}_{spine_meta.machine.name}",
                 )
                 subnet = subnets31.pop(0)
                 a_ip, b_ip = assign_p2p_ips(subnet)
-                super_spine_meta.cmd_list.append(f"ip addr add {a_ip} dev eth{super_spine_meta.eth_index}")
+                super_spine_meta.cmd_list.append(
+                    f"ip addr add {a_ip} dev eth{super_spine_meta.eth_index}"
+                )
                 super_spine_meta.eth_index += 1
-                spine_meta.cmd_list.append(f"ip addr add {b_ip} dev eth{spine_meta.eth_index}")
+                spine_meta.cmd_list.append(
+                    f"ip addr add {b_ip} dev eth{spine_meta.eth_index}"
+                )
                 spine_meta.eth_index += 1
 
                 # add BGP neighbor config
@@ -195,16 +208,22 @@ class DCClosBGP(NetworkEnvBase):
             for spine_meta in pod_spines[pod]:
                 for leaf_meta in pod_leaves[pod]:
                     self.lab.connect_machine_to_link(
-                        spine_meta.machine.name, f"{spine_meta.machine.name}_{leaf_meta.machine.name}"
+                        spine_meta.machine.name,
+                        f"{spine_meta.machine.name}_{leaf_meta.machine.name}",
                     )
                     self.lab.connect_machine_to_link(
-                        leaf_meta.machine.name, f"{spine_meta.machine.name}_{leaf_meta.machine.name}"
+                        leaf_meta.machine.name,
+                        f"{spine_meta.machine.name}_{leaf_meta.machine.name}",
                     )
                     subnet = subnets31.pop(0)
                     a_ip, b_ip = assign_p2p_ips(subnet)
-                    spine_meta.cmd_list.append(f"ip addr add {a_ip} dev eth{spine_meta.eth_index}")
+                    spine_meta.cmd_list.append(
+                        f"ip addr add {a_ip} dev eth{spine_meta.eth_index}"
+                    )
                     spine_meta.eth_index += 1
-                    leaf_meta.cmd_list.append(f"ip addr add {b_ip} dev eth{leaf_meta.eth_index}")
+                    leaf_meta.cmd_list.append(
+                        f"ip addr add {b_ip} dev eth{leaf_meta.eth_index}"
+                    )
                     leaf_meta.eth_index += 1
                     # add BGP neighbor config
                     spine_meta.frr_neighbor_configs.append(
@@ -232,16 +251,27 @@ class DCClosBGP(NetworkEnvBase):
                 leaf_meta = pod_leaves[pod][idx]
                 host = pod_hosts[pod][idx]
                 self.lab.connect_machine_to_link(
-                    leaf_meta.machine.name, f"{leaf_meta.machine.name}_{host.machine.name}"
+                    leaf_meta.machine.name,
+                    f"{leaf_meta.machine.name}_{host.machine.name}",
                 )
-                self.lab.connect_machine_to_link(host.machine.name, f"{leaf_meta.machine.name}_{host.machine.name}")
+                self.lab.connect_machine_to_link(
+                    host.machine.name, f"{leaf_meta.machine.name}_{host.machine.name}"
+                )
                 subnet = IPv4Network(f"10.{pod}.{idx}.0/24")
-                leaf_ip = IPv4Interface(f"{subnet.network_address + 1}/{subnet.prefixlen}")
-                host_ip = IPv4Interface(f"{subnet.network_address + 2}/{subnet.prefixlen}")
-                leaf_meta.cmd_list.append(f"ip addr add {leaf_ip} dev eth{leaf_meta.eth_index}")
+                leaf_ip = IPv4Interface(
+                    f"{subnet.network_address + 1}/{subnet.prefixlen}"
+                )
+                host_ip = IPv4Interface(
+                    f"{subnet.network_address + 2}/{subnet.prefixlen}"
+                )
+                leaf_meta.cmd_list.append(
+                    f"ip addr add {leaf_ip} dev eth{leaf_meta.eth_index}"
+                )
                 leaf_meta.eth_index += 1
                 host.cmd_list.append(f"ip addr add {host_ip} dev eth{host.eth_index}")
-                host.cmd_list.append(f"ip route add default via {leaf_ip.ip} dev eth{host.eth_index}")
+                host.cmd_list.append(
+                    f"ip route add default via {leaf_ip.ip} dev eth{host.eth_index}"
+                )
                 host.eth_index += 1
                 # add host network to leaf for redistribution
                 leaf_meta.host_network = str(subnet)
@@ -253,7 +283,8 @@ class DCClosBGP(NetworkEnvBase):
                 str(pkg_path("net_env/kathara/utils/bgp/daemons")), "/etc/frr/daemons"
             )
             router_meta.machine.create_file_from_path(
-                str(pkg_path("net_env/kathara/utils/bgp/vtysh.conf")), "/etc/frr/vtysh.conf"
+                str(pkg_path("net_env/kathara/utils/bgp/vtysh.conf")),
+                "/etc/frr/vtysh.conf",
             )
             router_meta.frr_config = FRR_BASE_TEMPLATE.format(
                 hostname=router_meta.name,
@@ -262,7 +293,9 @@ class DCClosBGP(NetworkEnvBase):
                 network="",
                 neighbor_add_configs=" ".join(router_meta.frr_neighbor_configs),
             )
-            router_meta.machine.create_file_from_string(router_meta.frr_config, "/etc/frr/frr.conf")
+            router_meta.machine.create_file_from_string(
+                router_meta.frr_config, "/etc/frr/frr.conf"
+            )
 
             # startup file
             router_meta.cmd_list.append("service frr start")
@@ -278,7 +311,8 @@ class DCClosBGP(NetworkEnvBase):
                 str(pkg_path("net_env/kathara/utils/bgp/daemons")), "/etc/frr/daemons"
             )
             router_meta.machine.create_file_from_path(
-                str(pkg_path("net_env/kathara/utils/bgp/vtysh.conf")), "/etc/frr/vtysh.conf"
+                str(pkg_path("net_env/kathara/utils/bgp/vtysh.conf")),
+                "/etc/frr/vtysh.conf",
             )
             router_meta.frr_config = FRR_BASE_TEMPLATE.format(
                 hostname=router_meta.name,
@@ -287,7 +321,9 @@ class DCClosBGP(NetworkEnvBase):
                 network=f"network {router_meta.host_network}\n",
                 neighbor_add_configs=" ".join(router_meta.frr_neighbor_configs),
             )
-            router_meta.machine.create_file_from_string(router_meta.frr_config, "/etc/frr/frr.conf")
+            router_meta.machine.create_file_from_string(
+                router_meta.frr_config, "/etc/frr/frr.conf"
+            )
 
             # startup file
             router_meta.cmd_list.append("service frr start")

@@ -31,7 +31,7 @@ from pathlib import Path
 from agent.local_cli.codex_cli.codex_display import format_codex_event
 from agent.utils.loggers import MessageLogger
 from agent.utils.mcp_servers import MCPServerConfig, select_diagnosis_servers
-from agent.utils.phases import DIAGNOSIS, PHASES, SUBMISSION
+from agent.utils.phases import PHASES, SUBMISSION
 from agent.utils.skills import prepare_codex_workspace
 
 REASONING_EFFORT_LEVELS = ("none", "minimal", "low", "medium", "high", "xhigh")
@@ -39,6 +39,7 @@ REASONING_EFFORT_LEVELS = ("none", "minimal", "low", "medium", "high", "xhigh")
 # ---------------------------------------------------------------------------
 # TOML helper
 # ---------------------------------------------------------------------------
+
 
 def _build_mcp_toml(servers: dict) -> str:
     """Serialise an MCP server dict (from MCPServerConfig) as TOML.
@@ -71,6 +72,7 @@ def _build_mcp_toml(servers: dict) -> str:
 # ---------------------------------------------------------------------------
 # CodexWorker
 # ---------------------------------------------------------------------------
+
 
 class CodexWorker:
     """Run one non-interactive ``codex exec`` invocation as a LangGraph node.
@@ -113,7 +115,10 @@ class CodexWorker:
     ) -> None:
         if phase not in PHASES:
             raise ValueError(f"phase must be one of {PHASES}, got {phase!r}")
-        if reasoning_effort is not None and reasoning_effort not in REASONING_EFFORT_LEVELS:
+        if (
+            reasoning_effort is not None
+            and reasoning_effort not in REASONING_EFFORT_LEVELS
+        ):
             raise ValueError(
                 f"reasoning_effort must be one of {REASONING_EFFORT_LEVELS}, got {reasoning_effort!r}"
             )
@@ -163,7 +168,9 @@ class CodexWorker:
         if self.phase == SUBMISSION:
             servers = mcp_cfg.load_config(if_submit=True)
         else:
-            server_names = select_diagnosis_servers(self.scenario_name, self.problem_names)
+            server_names = select_diagnosis_servers(
+                self.scenario_name, self.problem_names
+            )
             servers = mcp_cfg.load_filtered_config(server_names)
 
         self._logger.log(
@@ -198,16 +205,23 @@ class CodexWorker:
         if self.reasoning_effort is not None:
             cmd += ["-c", f"model_reasoning_effort={self.reasoning_effort}"]
         cmd += [
-            "-m", self.model,
-            "-C", str(self.workspace),
-            "--sandbox", "workspace-write",
+            "-m",
+            self.model,
+            "-C",
+            str(self.workspace),
+            "--sandbox",
+            "workspace-write",
             "--skip-git-repo-check",
-            "--output-last-message", str(output_file),
+            "--output-last-message",
+            str(output_file),
             "--json",
             prompt,
         ]
 
-        self._logger.log("subprocess_start", {"command": " ".join(cmd[:6] + ["..."]), "phase": self.phase})
+        self._logger.log(
+            "subprocess_start",
+            {"command": " ".join(cmd[:6] + ["..."]), "phase": self.phase},
+        )
 
         try:
             proc = await asyncio.create_subprocess_exec(
@@ -220,10 +234,14 @@ class CodexWorker:
             )
             returncode, stderr_text = await self._stream_subprocess(proc)
         except asyncio.TimeoutError:
-            self._logger.log("subprocess_timeout", {"phase": self.phase, "timeout_s": self.timeout})
+            self._logger.log(
+                "subprocess_timeout", {"phase": self.phase, "timeout_s": self.timeout}
+            )
             return f"ERROR: {self.phase} phase timed out after {self.timeout}s"
         except FileNotFoundError:
-            self._logger.log("subprocess_error", {"error": "codex binary not found in PATH"})
+            self._logger.log(
+                "subprocess_error", {"error": "codex binary not found in PATH"}
+            )
             return "ERROR: 'codex' not found in PATH — is Codex CLI installed?"
 
         if returncode != 0:
@@ -240,13 +258,17 @@ class CodexWorker:
 
         if output_file.exists():
             result = output_file.read_text(encoding="utf-8").strip()
-            self._logger.log("subprocess_done", {"phase": self.phase, "output_length": len(result)})
+            self._logger.log(
+                "subprocess_done", {"phase": self.phase, "output_length": len(result)}
+            )
             return result
 
         self._logger.log("subprocess_error", {"error": "output file not created"})
         return f"ERROR: {self.phase} phase produced no output"
 
-    async def _stream_subprocess(self, proc: asyncio.subprocess.Process) -> tuple[int, str]:
+    async def _stream_subprocess(
+        self, proc: asyncio.subprocess.Process
+    ) -> tuple[int, str]:
         """Read Codex stdout line-by-line until the process exits."""
         stderr_chunks: list[bytes] = []
         loop = asyncio.get_running_loop()
@@ -272,7 +294,9 @@ class CodexWorker:
                     raise asyncio.TimeoutError
 
                 try:
-                    line_bytes = await asyncio.wait_for(proc.stdout.readline(), timeout=remaining)
+                    line_bytes = await asyncio.wait_for(
+                        proc.stdout.readline(), timeout=remaining
+                    )
                 except asyncio.TimeoutError:
                     proc.kill()
                     await proc.wait()
@@ -281,7 +305,9 @@ class CodexWorker:
                 if not line_bytes:
                     break
 
-                self._handle_stdout_line(line_bytes.decode("utf-8", errors="replace").rstrip("\n"))
+                self._handle_stdout_line(
+                    line_bytes.decode("utf-8", errors="replace").rstrip("\n")
+                )
         finally:
             await stderr_task
 
@@ -332,7 +358,8 @@ class CodexWorker:
                             output = "\n".join(
                                 str(block.get("text", ""))
                                 for block in content
-                                if isinstance(block, dict) and block.get("type") == "text"
+                                if isinstance(block, dict)
+                                and block.get("type") == "text"
                             )
                         else:
                             output = json.dumps(result, ensure_ascii=False)

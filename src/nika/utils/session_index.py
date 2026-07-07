@@ -147,7 +147,11 @@ def extract_index_fields(doc: Mapping[str, Any]) -> dict[str, Any]:
     if isinstance(llm_judge, dict):
         fields.update(extract_eval_fields({}, llm_judge))
 
-    return {k: v for k, v in fields.items() if v is not None or k in ("failure_count", "session_id", "status")}
+    return {
+        k: v
+        for k, v in fields.items()
+        if v is not None or k in ("failure_count", "session_id", "status")
+    }
 
 
 def extract_eval_fields(
@@ -214,7 +218,9 @@ class SessionIndex:
         for field in _JSON_LIST_FIELDS:
             if field in data and data[field] is not None:
                 data[field] = _json_loads(data[field])
-        if isinstance(data.get("root_cause_name"), str) and data["root_cause_name"].startswith("["):
+        if isinstance(data.get("root_cause_name"), str) and data[
+            "root_cause_name"
+        ].startswith("["):
             try:
                 data["root_cause_name"] = _json_loads(data["root_cause_name"])
             except (json.JSONDecodeError, TypeError):
@@ -274,7 +280,9 @@ class SessionIndex:
                 (session_id,),
             ).fetchone()
             if row is None:
-                self.upsert({"session_id": session_id, "failure_count": 1, "updated_at": now})
+                self.upsert(
+                    {"session_id": session_id, "failure_count": 1, "updated_at": now}
+                )
                 return
             conn.execute(
                 """
@@ -285,8 +293,14 @@ class SessionIndex:
                 (now, session_id),
             )
 
-    def mark_finished(self, session_id: str, *, doc: Mapping[str, Any] | None = None) -> None:
-        fields: dict[str, Any] = {"session_id": session_id, "status": "finished", "updated_at": _now_iso()}
+    def mark_finished(
+        self, session_id: str, *, doc: Mapping[str, Any] | None = None
+    ) -> None:
+        fields: dict[str, Any] = {
+            "session_id": session_id,
+            "status": "finished",
+            "updated_at": _now_iso(),
+        }
         if doc is not None:
             fields.update(extract_index_fields(doc))
             fields["status"] = "finished"
@@ -375,7 +389,9 @@ class SessionIndex:
                     pass
 
             if fields.get("failure_count", 0) == 0:
-                problem_names = fields.get("problem_names") or run_meta.get("problem_names")
+                problem_names = fields.get("problem_names") or run_meta.get(
+                    "problem_names"
+                )
                 if problem_names:
                     fields["failure_count"] = len(problem_names)
 

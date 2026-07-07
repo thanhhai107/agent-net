@@ -1,12 +1,12 @@
 import ipaddress
 
-from nika.orchestrator.problems.context import init_problem
 from pydantic import BaseModel, Field
 
-from nika.orchestrator.problems.problem_base import ProblemMeta, RootCauseCategory, TaskDescription, TaskLevel, build_verify_result
-from nika.orchestrator.tasks.detection import DetectionTask
-from nika.orchestrator.tasks.localization import LocalizationTask
-from nika.orchestrator.tasks.rca import RCATask
+from nika.orchestrator.problems.problem_base import (
+    RootCauseCategory,
+    build_verify_result,
+    ProblemBase,
+)
 from nika.utils.logger import system_logger
 
 # ==================================================================
@@ -21,7 +21,7 @@ class DHCPMissingSubnetParams(BaseModel):
     host_name_2: str = Field(description="Affected client host name.")
 
 
-class DHCPMissingSubnetBase:
+class DHCPMissingSubnet(ProblemBase):
     root_cause_category: RootCauseCategory = RootCauseCategory.MISCONFIGURATION
     root_cause_name: str = "dhcp_missing_subnet"
 
@@ -30,15 +30,15 @@ class DHCPMissingSubnetBase:
     Params = DHCPMissingSubnetParams
 
     def __init__(self, scenario_name: str | None, **kwargs):
-        super().__init__()
-        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
-        self.faulty_devices: list[str] = []
+        super().__init__(scenario_name, **kwargs)
 
     def inject_fault(self, params: DHCPMissingSubnetParams):
         dhcp_server = params.host_name
         client_host = params.host_name_2
-        self.faulty_devices = [dhcp_server, client_host]
-        system_logger.info(f"Injecting DHCP missing subnet fault: DHCP server {dhcp_server}, affected host {client_host}")
+        self.set_faulty_devices([dhcp_server, client_host])
+        system_logger.info(
+            f"Injecting DHCP missing subnet fault: DHCP server {dhcp_server}, affected host {client_host}"
+        )
         subnet = str(
             ipaddress.ip_network(
                 self.runtime.get_host_ip(client_host, with_prefix=True), strict=False
@@ -52,12 +52,13 @@ class DHCPMissingSubnetBase:
         """Verify the deleted subnet is absent from dhcpd.conf."""
         dhcp_server = params.host_name
         client_host = params.host_name_2
-        self.faulty_devices = [dhcp_server, client_host]
+        self.set_faulty_devices([dhcp_server, client_host])
         subnet = getattr(self, "_injected_subnet", None)
         if subnet is None:
             subnet = str(
                 ipaddress.ip_network(
-                    self.runtime.get_host_ip(client_host, with_prefix=True), strict=False
+                    self.runtime.get_host_ip(client_host, with_prefix=True),
+                    strict=False,
                 ).network_address
             )
         grep_result = self.runtime.exec(
@@ -69,32 +70,9 @@ class DHCPMissingSubnetBase:
             root_cause_name=self.root_cause_name,
             faulty_devices=self.faulty_devices,
             verified=verified,
-            details={"dhcp_server": dhcp_server, "subnet": subnet, "grep_result": grep_result},
+            details={
+                "dhcp_server": dhcp_server,
+                "subnet": subnet,
+                "grep_result": grep_result,
+            },
         )
-
-
-class DHCPMissingSubnetDetection(DHCPMissingSubnetBase, DetectionTask):
-    META = ProblemMeta(
-        root_cause_category=DHCPMissingSubnetBase.root_cause_category,
-        root_cause_name=DHCPMissingSubnetBase.root_cause_name,
-        task_level=TaskLevel.DETECTION,
-        description=TaskDescription.DETECTION,
-    )
-
-
-class DHCPMissingSubnetLocalization(DHCPMissingSubnetBase, LocalizationTask):
-    META = ProblemMeta(
-        root_cause_category=DHCPMissingSubnetBase.root_cause_category,
-        root_cause_name=DHCPMissingSubnetBase.root_cause_name,
-        task_level=TaskLevel.LOCALIZATION,
-        description=TaskDescription.LOCALIZATION,
-    )
-
-
-class DHCPMissingSubnetRCA(DHCPMissingSubnetBase, RCATask):
-    META = ProblemMeta(
-        root_cause_category=DHCPMissingSubnetBase.root_cause_category,
-        root_cause_name=DHCPMissingSubnetBase.root_cause_name,
-        task_level=TaskLevel.RCA,
-        description=TaskDescription.RCA,
-    )

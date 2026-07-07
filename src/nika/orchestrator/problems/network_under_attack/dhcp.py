@@ -1,12 +1,12 @@
 import ipaddress
 
-from nika.orchestrator.problems.context import init_problem
 from pydantic import BaseModel, Field
 
-from nika.orchestrator.problems.problem_base import ProblemMeta, RootCauseCategory, TaskDescription, TaskLevel, build_verify_result
-from nika.orchestrator.tasks.detection import DetectionTask
-from nika.orchestrator.tasks.localization import LocalizationTask
-from nika.orchestrator.tasks.rca import RCATask
+from nika.orchestrator.problems.problem_base import (
+    RootCauseCategory,
+    build_verify_result,
+    ProblemBase,
+)
 
 # ==================================================================
 # Problem: DHCP distributing spoofed gateway to hosts
@@ -20,7 +20,7 @@ class DHCPSpoofedGatewayParams(BaseModel):
     host_name_2: str = Field(description="Affected client host name.")
 
 
-class DHCPSpoofedGatewayBase:
+class DHCPSpoofedGateway(ProblemBase):
     root_cause_category: RootCauseCategory = RootCauseCategory.NETWORK_UNDER_ATTACK
     root_cause_name: str = "dhcp_spoofed_gateway"
 
@@ -29,9 +29,7 @@ class DHCPSpoofedGatewayBase:
     Params = DHCPSpoofedGatewayParams
 
     def __init__(self, scenario_name: str | None, **kwargs):
-        super().__init__()
-        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
-        self.faulty_devices: list[str] = []
+        super().__init__(scenario_name, **kwargs)
 
     def _client_subnet(self, client_host: str) -> str:
         return str(
@@ -43,7 +41,7 @@ class DHCPSpoofedGatewayBase:
     def inject_fault(self, params: DHCPSpoofedGatewayParams):
         dhcp_server = params.host_name
         client_host = params.host_name_2
-        self.faulty_devices = [dhcp_server, client_host]
+        self.set_faulty_devices([dhcp_server, client_host])
         subnet = self._client_subnet(client_host)
         wrong_gw = ".".join(subnet.split(".")[:3] + ["254"])
         self.runtime.dhcp_set_option_routers(dhcp_server, subnet, wrong_gw)
@@ -65,33 +63,6 @@ class DHCPSpoofedGatewayBase:
         )
 
 
-class DHCPSpoofedGatewayDetection(DHCPSpoofedGatewayBase, DetectionTask):
-    META = ProblemMeta(
-        root_cause_category=DHCPSpoofedGatewayBase.root_cause_category,
-        root_cause_name=DHCPSpoofedGatewayBase.root_cause_name,
-        task_level=TaskLevel.DETECTION,
-        description=TaskDescription.DETECTION,
-    )
-
-
-class DHCPSpoofedGatewayLocalization(DHCPSpoofedGatewayBase, LocalizationTask):
-    META = ProblemMeta(
-        root_cause_category=DHCPSpoofedGatewayBase.root_cause_category,
-        root_cause_name=DHCPSpoofedGatewayBase.root_cause_name,
-        task_level=TaskLevel.LOCALIZATION,
-        description=TaskDescription.LOCALIZATION,
-    )
-
-
-class DHCPSpoofedGatewayRCA(DHCPSpoofedGatewayBase, RCATask):
-    META = ProblemMeta(
-        root_cause_category=DHCPSpoofedGatewayBase.root_cause_category,
-        root_cause_name=DHCPSpoofedGatewayBase.root_cause_name,
-        task_level=TaskLevel.RCA,
-        description=TaskDescription.RCA,
-    )
-
-
 # ==================================================================
 # Problem: DHCP distributing spoofed DNS to hosts
 # ==================================================================
@@ -105,7 +76,7 @@ class DHCPSpoofedDNSParams(BaseModel):
     wrong_dns: str = Field(default="8.8.8.8", description="Spoofed DNS IP.")
 
 
-class DHCPSpoofedDNSBase:
+class DHCPSpoofedDNS(ProblemBase):
     root_cause_category: RootCauseCategory = RootCauseCategory.NETWORK_UNDER_ATTACK
     root_cause_name: str = "dhcp_spoofed_dns"
 
@@ -115,9 +86,7 @@ class DHCPSpoofedDNSBase:
     Params = DHCPSpoofedDNSParams
 
     def __init__(self, scenario_name: str | None, **kwargs):
-        super().__init__()
-        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
-        self.faulty_devices: list[str] = []
+        super().__init__(scenario_name, **kwargs)
 
     def _client_subnet(self, client_host: str) -> str:
         return str(
@@ -129,7 +98,7 @@ class DHCPSpoofedDNSBase:
     def inject_fault(self, params: DHCPSpoofedDNSParams):
         dhcp_server = params.host_name
         client_host = params.host_name_2
-        self.faulty_devices = [dhcp_server, client_host]
+        self.set_faulty_devices([dhcp_server, client_host])
         subnet = self._client_subnet(client_host)
         self.runtime.dhcp_set_option_dns(dhcp_server, subnet, params.wrong_dns)
         self.runtime.renew_dhcp_leases(self.runtime.list_dhcp_client_nodes())
@@ -137,45 +106,21 @@ class DHCPSpoofedDNSBase:
     def verify_fault(self, params: DHCPSpoofedDNSParams) -> dict:
         """Verify dhcpd.conf has spoofed DNS server 8.8.8.8."""
         dhcp_server = params.host_name
-        wrong_dns = params.wrong_dns
         grep_result = self.runtime.exec(
             dhcp_server,
-            f"grep 'option domain-name-servers.*{wrong_dns}' /etc/dhcp/dhcpd.conf && echo found || echo absent",
+            f"grep 'option domain-name-servers.*{params.wrong_dns}' /etc/dhcp/dhcpd.conf && echo found || echo absent",
         ).strip()
         verified = "found" in grep_result
         return build_verify_result(
             root_cause_name=self.root_cause_name,
             faulty_devices=self.faulty_devices,
             verified=verified,
-            details={"dhcp_server": dhcp_server, "wrong_dns": wrong_dns, "grep_result": grep_result},
+            details={
+                "dhcp_server": dhcp_server,
+                "wrong_dns": params.wrong_dns,
+                "grep_result": grep_result,
+            },
         )
-
-
-class DHCPSpoofedDNSDetection(DHCPSpoofedDNSBase, DetectionTask):
-    META = ProblemMeta(
-        root_cause_category=DHCPSpoofedDNSBase.root_cause_category,
-        root_cause_name=DHCPSpoofedDNSBase.root_cause_name,
-        task_level=TaskLevel.DETECTION,
-        description=TaskDescription.DETECTION,
-    )
-
-
-class DHCPSpoofedDNSLocalization(DHCPSpoofedDNSBase, LocalizationTask):
-    META = ProblemMeta(
-        root_cause_category=DHCPSpoofedDNSBase.root_cause_category,
-        root_cause_name=DHCPSpoofedDNSBase.root_cause_name,
-        task_level=TaskLevel.LOCALIZATION,
-        description=TaskDescription.LOCALIZATION,
-    )
-
-
-class DHCPSpoofedDNSRCA(DHCPSpoofedDNSBase, RCATask):
-    META = ProblemMeta(
-        root_cause_category=DHCPSpoofedDNSBase.root_cause_category,
-        root_cause_name=DHCPSpoofedDNSBase.root_cause_name,
-        task_level=TaskLevel.RCA,
-        description=TaskDescription.RCA,
-    )
 
 
 # ==================================================================
@@ -190,7 +135,7 @@ class DHCPSpoofedSubnetParams(BaseModel):
     host_name_2: str = Field(description="Affected client host name.")
 
 
-class DHCPSpoofedSubnetBase:
+class DHCPSpoofedSubnet(ProblemBase):
     root_cause_category: RootCauseCategory = RootCauseCategory.NETWORK_UNDER_ATTACK
     root_cause_name: str = "dhcp_spoofed_subnet"
 
@@ -199,9 +144,7 @@ class DHCPSpoofedSubnetBase:
     Params = DHCPSpoofedSubnetParams
 
     def __init__(self, scenario_name: str | None, **kwargs):
-        super().__init__()
-        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
-        self.faulty_devices: list[str] = []
+        super().__init__(scenario_name, **kwargs)
 
     def _client_subnet(self, client_host: str) -> str:
         return str(
@@ -213,7 +156,7 @@ class DHCPSpoofedSubnetBase:
     def inject_fault(self, params: DHCPSpoofedSubnetParams):
         dhcp_server = params.host_name
         client_host = params.host_name_2
-        self.faulty_devices = [dhcp_server, client_host]
+        self.set_faulty_devices([dhcp_server, client_host])
         subnet = self._client_subnet(client_host)
         self.deleted_subnet = subnet
         self.runtime.dhcp_delete_subnet(dhcp_server, subnet)
@@ -222,7 +165,9 @@ class DHCPSpoofedSubnetBase:
     def verify_fault(self, params: DHCPSpoofedSubnetParams) -> dict:
         """Verify the target subnet has been removed from dhcpd.conf."""
         dhcp_server = params.host_name
-        subnet = getattr(self, "deleted_subnet", None) or self._client_subnet(params.host_name_2)
+        subnet = getattr(self, "deleted_subnet", None) or self._client_subnet(
+            params.host_name_2
+        )
         sub_escaped = subnet.replace(".", "\\.")
         match_output = self.runtime.exec(
             dhcp_server,
@@ -245,32 +190,9 @@ class DHCPSpoofedSubnetBase:
             root_cause_name=self.root_cause_name,
             faulty_devices=self.faulty_devices,
             verified=verified,
-            details={"dhcp_server": dhcp_server, "subnet_count": subnet_count, "deleted_subnet": subnet},
+            details={
+                "dhcp_server": dhcp_server,
+                "subnet_count": subnet_count,
+                "deleted_subnet": subnet,
+            },
         )
-
-
-class DHCPSpoofedSubnetDetection(DHCPSpoofedSubnetBase, DetectionTask):
-    META = ProblemMeta(
-        root_cause_category=DHCPSpoofedSubnetBase.root_cause_category,
-        root_cause_name=DHCPSpoofedSubnetBase.root_cause_name,
-        task_level=TaskLevel.DETECTION,
-        description=TaskDescription.DETECTION,
-    )
-
-
-class DHCPSpoofedSubnetLocalization(DHCPSpoofedSubnetBase, LocalizationTask):
-    META = ProblemMeta(
-        root_cause_category=DHCPSpoofedSubnetBase.root_cause_category,
-        root_cause_name=DHCPSpoofedSubnetBase.root_cause_name,
-        task_level=TaskLevel.LOCALIZATION,
-        description=TaskDescription.LOCALIZATION,
-    )
-
-
-class DHCPSpoofedSubnetRCA(DHCPSpoofedSubnetBase, RCATask):
-    META = ProblemMeta(
-        root_cause_category=DHCPSpoofedSubnetBase.root_cause_category,
-        root_cause_name=DHCPSpoofedSubnetBase.root_cause_name,
-        task_level=TaskLevel.RCA,
-        description=TaskDescription.RCA,
-    )

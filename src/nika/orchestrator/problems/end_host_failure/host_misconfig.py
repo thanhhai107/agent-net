@@ -1,14 +1,16 @@
-import logging
 from typing import Optional
 
-from nika.orchestrator.problems.context import init_problem
 from pydantic import BaseModel, Field
 
-from nika.orchestrator.problems.inject_resolve import derive_incorrect_ip, derive_wrong_gateway
-from nika.orchestrator.problems.problem_base import ProblemMeta, RootCauseCategory, TaskDescription, TaskLevel, build_verify_result
-from nika.orchestrator.tasks.detection import DetectionTask
-from nika.orchestrator.tasks.localization import LocalizationTask
-from nika.orchestrator.tasks.rca import RCATask
+from nika.orchestrator.problems.inject_resolve import (
+    derive_incorrect_ip,
+    derive_wrong_gateway,
+)
+from nika.orchestrator.problems.problem_base import (
+    RootCauseCategory,
+    build_verify_result,
+    ProblemBase,
+)
 from nika.utils.logger import system_logger
 
 
@@ -33,79 +35,60 @@ def _inject_ip_change(
 
 
 class HostMissingIPParams(BaseModel):
-    """Parameters for injecting a host-missing-IP fault."""
+    """Parameters for injecting a params.host_name-missing-IP fault."""
 
     host_name: str = Field(description="Target host name.")
     intf_name: str = Field(default="eth0", description="Target interface name.")
 
 
-class HostMissingIPBase:
+class HostMissingIP(ProblemBase):
     root_cause_category: RootCauseCategory = RootCauseCategory.END_HOST_FAILURE
     root_cause_name: str = "host_missing_ip"
     TAGS: str = ["pc"]
 
     Params = HostMissingIPParams
 
-    symptom_desc = "Some hosts are unable to communicate with other devices in the network."
+    symptom_desc = (
+        "Some hosts are unable to communicate with other devices in the network."
+    )
 
     def __init__(self, scenario_name: str | None, **kwargs):
-        super().__init__()
+        super().__init__(scenario_name, **kwargs)
         self.logger = system_logger
-        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
-        self.faulty_devices: list[str] = []
         self.intf_name = "eth0"
 
     def inject_fault(self, params: HostMissingIPParams):
-        host = params.host_name
-        self.faulty_devices = [host]
-        intf = params.intf_name
-        real_ip = self.runtime.get_host_ip(host, intf, with_prefix=True)
-        real_gateway = self.runtime.get_default_gateway(host)
-        self.runtime.exec(host, f"ip addr del {real_ip} dev {intf}")
-        self.runtime.exec(host, f"echo '{real_ip} {real_gateway}' > /tmp/removed_ip.txt")
-        self.logger.info(f"Injected missing IP on {host} from {real_ip} and gateway {real_gateway}.")
+        self.set_faulty_devices([params.host_name])
+        real_ip = self.runtime.get_host_ip(
+            params.host_name, params.intf_name, with_prefix=True
+        )
+        real_gateway = self.runtime.get_default_gateway(params.host_name)
+        self.runtime.exec(
+            params.host_name, f"ip addr del {real_ip} dev {params.intf_name}"
+        )
+        self.runtime.exec(
+            params.host_name, f"echo '{real_ip} {real_gateway}' > /tmp/removed_ip.txt"
+        )
+        self.logger.info(
+            f"Injected missing IP on {params.host_name} from {real_ip} and gateway {real_gateway}."
+        )
 
     def verify_fault(self, params: HostMissingIPParams) -> dict:
-        """Verify that the host has no global IPv4 address on the interface."""
-        host = params.host_name
-        intf = params.intf_name
+        """Verify that the params.host_name has no global IPv4 address on the interface."""
         ip_line = self.runtime.exec(
-            host, f"ip -4 -o addr show dev {intf} scope global"
+            params.host_name, f"ip -4 -o addr show dev {params.intf_name} scope global"
         ).strip()
         verified = "inet " not in ip_line
         return build_verify_result(
             root_cause_name=self.root_cause_name,
             faulty_devices=self.faulty_devices,
             verified=verified,
-            details={"host": host, "intf": intf, "ip_line": ip_line},
+            details={
+                "host": params.host_name,
+                "intf": params.intf_name,
+                "ip_line": ip_line,
+            },
         )
-
-
-class HostMissingIPDetection(HostMissingIPBase, DetectionTask):
-    META = ProblemMeta(
-        root_cause_category=HostMissingIPBase.root_cause_category,
-        root_cause_name=HostMissingIPBase.root_cause_name,
-        task_level=TaskLevel.DETECTION,
-        description=TaskDescription.DETECTION,
-    )
-
-
-class HostMissingIPLocalization(HostMissingIPBase, LocalizationTask):
-    META = ProblemMeta(
-        root_cause_category=HostMissingIPBase.root_cause_category,
-        root_cause_name=HostMissingIPBase.root_cause_name,
-        task_level=TaskLevel.LOCALIZATION,
-        description=TaskDescription.LOCALIZATION,
-    )
-
-
-class HostMissingIPRCA(HostMissingIPBase, RCATask):
-    META = ProblemMeta(
-        root_cause_category=HostMissingIPBase.root_cause_category,
-        root_cause_name=HostMissingIPBase.root_cause_name,
-        task_level=TaskLevel.RCA,
-        description=TaskDescription.RCA,
-    )
 
 
 # ==========================================
@@ -113,13 +96,13 @@ class HostMissingIPRCA(HostMissingIPBase, RCATask):
 
 
 class HostIPConflictParams(BaseModel):
-    """Parameters for injecting a host IP conflict fault."""
+    """Parameters for injecting a params.host_name IP conflict fault."""
 
-    host_name: str = Field(description="Source host whose IP is copied.")
-    host_name_2: str = Field(description="Target host to misconfigure.")
+    host_name: str = Field(description="Source params.host_name whose IP is copied.")
+    host_name_2: str = Field(description="Target params.host_name to misconfigure.")
 
 
-class HostIPConflictBase:
+class HostIPConflict(ProblemBase):
     root_cause_category: RootCauseCategory = RootCauseCategory.END_HOST_FAILURE
     root_cause_name: str = "host_ip_conflict"
     TAGS: str = ["pc"]
@@ -129,15 +112,14 @@ class HostIPConflictBase:
     symptom_desc = "Some hosts experience intermittent connectivity issues."
 
     def __init__(self, scenario_name: str | None, **kwargs):
-        super().__init__()
-        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
-        self.faulty_devices: list[str] = []
+        super().__init__(scenario_name, **kwargs)
 
     def inject_fault(self, params: HostIPConflictParams):
         src_host = params.host_name
         dst_host = params.host_name_2
-        self.faulty_devices = [src_host, dst_host]
-        _inject_ip_change(self.runtime, 
+        self.set_faulty_devices([src_host, dst_host])
+        _inject_ip_change(
+            self.runtime,
             host_name=dst_host,
             old_ip=self.runtime.get_host_ip(dst_host, "eth0", with_prefix=True),
             new_ip=self.runtime.get_host_ip(src_host, "eth0", with_prefix=True),
@@ -163,46 +145,22 @@ class HostIPConflictBase:
         )
 
 
-class HostIPConflictDetection(HostIPConflictBase, DetectionTask):
-    META = ProblemMeta(
-        root_cause_category=HostIPConflictBase.root_cause_category,
-        root_cause_name=HostIPConflictBase.root_cause_name,
-        task_level=TaskLevel.DETECTION,
-        description=TaskDescription.DETECTION,
-    )
-
-
-class HostIPConflictLocalization(HostIPConflictBase, LocalizationTask):
-    META = ProblemMeta(
-        root_cause_category=HostIPConflictBase.root_cause_category,
-        root_cause_name=HostIPConflictBase.root_cause_name,
-        task_level=TaskLevel.LOCALIZATION,
-        description=TaskDescription.LOCALIZATION,
-    )
-
-
-class HostIPConflictRCA(HostIPConflictBase, RCATask):
-    META = ProblemMeta(
-        root_cause_category=HostIPConflictBase.root_cause_category,
-        root_cause_name=HostIPConflictBase.root_cause_name,
-        task_level=TaskLevel.RCA,
-        description=TaskDescription.RCA,
-    )
-
-
 # ==========================================
 # Problem: Incorrect Host IP
 # ==========================================
 
 
 class HostIncorrectIPParams(BaseModel):
-    """Parameters for injecting an incorrect host IP fault."""
+    """Parameters for injecting an incorrect params.host_name IP fault."""
 
     host_name: str = Field(description="Target host name.")
-    incorrect_ip: Optional[str] = Field(default=None, description="Incorrect CIDR IP. Derived at inject time if omitted.")
+    incorrect_ip: Optional[str] = Field(
+        default=None,
+        description="Incorrect CIDR IP. Derived at inject time if omitted.",
+    )
 
 
-class HostIncorrectIPBase:
+class HostIncorrectIP(ProblemBase):
     root_cause_category: RootCauseCategory = RootCauseCategory.END_HOST_FAILURE
     root_cause_name: str = "host_incorrect_ip"
     TAGS: str = ["pc"]
@@ -212,30 +170,29 @@ class HostIncorrectIPBase:
     symptom_desc = "Some hosts seem to be unreachable in the network."
 
     def __init__(self, scenario_name: str | None, **kwargs):
-        super().__init__()
-        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
-        self.faulty_devices: list[str] = []
+        super().__init__(scenario_name, **kwargs)
         self._original_ip: str | None = None
 
     def inject_fault(self, params: HostIncorrectIPParams):
-        host = params.host_name
-        self.faulty_devices = [host]
-        old_ip = self.runtime.get_host_ip(host, "eth0", with_prefix=True)
+        self.set_faulty_devices([params.host_name])
+        old_ip = self.runtime.get_host_ip(params.host_name, "eth0", with_prefix=True)
         self._original_ip = old_ip
-        incorrect_ip = params.incorrect_ip or derive_incorrect_ip(self.runtime, host)
-        _inject_ip_change(self.runtime, 
-            host_name=host,
+        incorrect_ip = params.incorrect_ip or derive_incorrect_ip(
+            self.runtime, params.host_name
+        )
+        _inject_ip_change(
+            self.runtime,
+            host_name=params.host_name,
             old_ip=old_ip,
             new_ip=incorrect_ip,
             intf_name="eth0",
-            new_gateway=self.runtime.get_default_gateway(host),
+            new_gateway=self.runtime.get_default_gateway(params.host_name),
         )
 
     def verify_fault(self, params: HostIncorrectIPParams) -> dict:
-        """Verify that the host eth0 IP differs from the original address at inject time."""
-        host = params.host_name
+        """Verify that the params.host_name eth0 IP differs from the original address at inject time."""
         ip_line = self.runtime.exec(
-            host, "ip -4 -o addr show dev eth0 scope global"
+            params.host_name, "ip -4 -o addr show dev eth0 scope global"
         ).strip()
         current_ip = None
         if "inet " in ip_line:
@@ -249,35 +206,13 @@ class HostIncorrectIPBase:
             root_cause_name=self.root_cause_name,
             faulty_devices=self.faulty_devices,
             verified=verified,
-            details={"host": host, "ip_line": ip_line, "original_ip": self._original_ip, "current_ip": current_ip},
+            details={
+                "host": params.host_name,
+                "ip_line": ip_line,
+                "original_ip": self._original_ip,
+                "current_ip": current_ip,
+            },
         )
-
-
-class HostIncorrectIPDetection(HostIncorrectIPBase, DetectionTask):
-    META = ProblemMeta(
-        root_cause_category=HostIncorrectIPBase.root_cause_category,
-        root_cause_name=HostIncorrectIPBase.root_cause_name,
-        task_level=TaskLevel.DETECTION,
-        description=TaskDescription.DETECTION,
-    )
-
-
-class HostIncorrectIPLocalization(HostIncorrectIPBase, LocalizationTask):
-    META = ProblemMeta(
-        root_cause_category=HostIncorrectIPBase.root_cause_category,
-        root_cause_name=HostIncorrectIPBase.root_cause_name,
-        task_level=TaskLevel.LOCALIZATION,
-        description=TaskDescription.LOCALIZATION,
-    )
-
-
-class HostIncorrectIPRCA(HostIncorrectIPBase, RCATask):
-    META = ProblemMeta(
-        root_cause_category=HostIncorrectIPBase.root_cause_category,
-        root_cause_name=HostIncorrectIPBase.root_cause_name,
-        task_level=TaskLevel.RCA,
-        description=TaskDescription.RCA,
-    )
 
 
 # ==========================================
@@ -286,13 +221,16 @@ class HostIncorrectIPRCA(HostIncorrectIPBase, RCATask):
 
 
 class HostIncorrectGatewayParams(BaseModel):
-    """Parameters for injecting an incorrect host gateway fault."""
+    """Parameters for injecting an incorrect params.host_name gateway fault."""
 
     host_name: str = Field(description="Target host name.")
-    new_gateway: Optional[str] = Field(default=None, description="Incorrect gateway IP. Derived at inject time if omitted.")
+    new_gateway: Optional[str] = Field(
+        default=None,
+        description="Incorrect gateway IP. Derived at inject time if omitted.",
+    )
 
 
-class HostIncorrectGatewayBase:
+class HostIncorrectGateway(ProblemBase):
     root_cause_category: RootCauseCategory = RootCauseCategory.END_HOST_FAILURE
     root_cause_name: str = "host_incorrect_gateway"
     TAGS: str = ["pc", "frr"]
@@ -302,63 +240,41 @@ class HostIncorrectGatewayBase:
     symptom_desc = "Some hosts seem to be unreachable in the network."
 
     def __init__(self, scenario_name: str | None, **kwargs):
-        super().__init__()
-        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
-        self.faulty_devices: list[str] = []
+        super().__init__(scenario_name, **kwargs)
         self._injected_gateway: str | None = None
 
     def inject_fault(self, params: HostIncorrectGatewayParams):
-        host = params.host_name
-        self.faulty_devices = [host]
-        new_gateway = params.new_gateway or derive_wrong_gateway(self.runtime, host)
+        self.set_faulty_devices([params.host_name])
+        new_gateway = params.new_gateway or derive_wrong_gateway(
+            self.runtime, params.host_name
+        )
         self._injected_gateway = new_gateway
-        _inject_ip_change(self.runtime, 
-            host_name=host,
-            old_ip=self.runtime.get_host_ip(host, "eth0", with_prefix=True),
-            new_ip=self.runtime.get_host_ip(host, "eth0", with_prefix=True),
+        _inject_ip_change(
+            self.runtime,
+            host_name=params.host_name,
+            old_ip=self.runtime.get_host_ip(params.host_name, "eth0", with_prefix=True),
+            new_ip=self.runtime.get_host_ip(params.host_name, "eth0", with_prefix=True),
             intf_name="eth0",
             new_gateway=new_gateway,
         )
 
     def verify_fault(self, params: HostIncorrectGatewayParams) -> dict:
         """Verify that the default route uses the injected wrong gateway."""
-        host = params.host_name
-        route_line = self.runtime.exec(host, "ip route show default").strip()
+        route_line = self.runtime.exec(
+            params.host_name, "ip route show default"
+        ).strip()
         expected_gateway = params.new_gateway or self._injected_gateway
         verified = bool(expected_gateway) and expected_gateway in route_line
         return build_verify_result(
             root_cause_name=self.root_cause_name,
             faulty_devices=self.faulty_devices,
             verified=verified,
-            details={"host": host, "route_line": route_line, "expected_gateway": expected_gateway},
+            details={
+                "host": params.host_name,
+                "route_line": route_line,
+                "expected_gateway": expected_gateway,
+            },
         )
-
-
-class HostIncorrectGatewayDetection(HostIncorrectGatewayBase, DetectionTask):
-    META = ProblemMeta(
-        root_cause_category=HostIncorrectGatewayBase.root_cause_category,
-        root_cause_name=HostIncorrectGatewayBase.root_cause_name,
-        task_level=TaskLevel.DETECTION,
-        description=TaskDescription.DETECTION,
-    )
-
-
-class HostIncorrectGatewayLocalization(HostIncorrectGatewayBase, LocalizationTask):
-    META = ProblemMeta(
-        root_cause_category=HostIncorrectGatewayBase.root_cause_category,
-        root_cause_name=HostIncorrectGatewayBase.root_cause_name,
-        task_level=TaskLevel.LOCALIZATION,
-        description=TaskDescription.LOCALIZATION,
-    )
-
-
-class HostIncorrectGatewayRCA(HostIncorrectGatewayBase, RCATask):
-    META = ProblemMeta(
-        root_cause_category=HostIncorrectGatewayBase.root_cause_category,
-        root_cause_name=HostIncorrectGatewayBase.root_cause_name,
-        task_level=TaskLevel.RCA,
-        description=TaskDescription.RCA,
-    )
 
 
 # ==========================================
@@ -367,13 +283,13 @@ class HostIncorrectGatewayRCA(HostIncorrectGatewayBase, RCATask):
 
 
 class HostIncorrectNetmaskParams(BaseModel):
-    """Parameters for injecting an incorrect host netmask fault."""
+    """Parameters for injecting an incorrect params.host_name netmask fault."""
 
     host_name: str = Field(description="Target host name.")
     netmask_prefix: int = Field(default=8, description="Incorrect prefix length.")
 
 
-class HostIncorrectNetmaskBase:
+class HostIncorrectNetmask(ProblemBase):
     root_cause_category: RootCauseCategory = RootCauseCategory.END_HOST_FAILURE
     root_cause_name: str = "host_incorrect_netmask"
     TAGS: str = ["pc", "frr"]
@@ -383,31 +299,27 @@ class HostIncorrectNetmaskBase:
     symptom_desc = "Some hosts seem to be unreachable in the network."
 
     def __init__(self, scenario_name: str | None, **kwargs):
-        super().__init__()
-        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
-        self.faulty_devices: list[str] = []
+        super().__init__(scenario_name, **kwargs)
         self.netmask_prefix = 8
 
     def inject_fault(self, params: HostIncorrectNetmaskParams):
-        host = params.host_name
-        self.faulty_devices = [host]
-        old_ip = self.runtime.get_host_ip(host, "eth0", with_prefix=True)
+        self.set_faulty_devices([params.host_name])
+        old_ip = self.runtime.get_host_ip(params.host_name, "eth0", with_prefix=True)
         ip_part = old_ip.split("/")[0]
         new_ip = f"{ip_part}/{params.netmask_prefix}"
-        _inject_ip_change(self.runtime, 
-            host_name=host,
+        _inject_ip_change(
+            self.runtime,
+            host_name=params.host_name,
             old_ip=old_ip,
             new_ip=new_ip,
             intf_name="eth0",
-            new_gateway=self.runtime.get_default_gateway(host),
+            new_gateway=self.runtime.get_default_gateway(params.host_name),
         )
 
     def verify_fault(self, params: HostIncorrectNetmaskParams) -> dict:
         """Verify that eth0 has a non-/24 prefix (injected wrong netmask)."""
-        host = params.host_name
-        expected_prefix = params.netmask_prefix
         ip_line = self.runtime.exec(
-            host, "ip -4 -o addr show dev eth0 scope global"
+            params.host_name, "ip -4 -o addr show dev eth0 scope global"
         ).strip()
         prefix = None
         if "inet " in ip_line:
@@ -423,35 +335,13 @@ class HostIncorrectNetmaskBase:
             root_cause_name=self.root_cause_name,
             faulty_devices=self.faulty_devices,
             verified=verified,
-            details={"host": host, "ip_line": ip_line, "expected_prefix": expected_prefix, "actual_prefix": prefix},
+            details={
+                "host": params.host_name,
+                "ip_line": ip_line,
+                "expected_prefix": params.netmask_prefix,
+                "actual_prefix": prefix,
+            },
         )
-
-
-class HostIncorrectNetmaskDetection(HostIncorrectNetmaskBase, DetectionTask):
-    META = ProblemMeta(
-        root_cause_category=HostIncorrectNetmaskBase.root_cause_category,
-        root_cause_name=HostIncorrectNetmaskBase.root_cause_name,
-        task_level=TaskLevel.DETECTION,
-        description=TaskDescription.DETECTION,
-    )
-
-
-class HostIncorrectNetmaskLocalization(HostIncorrectNetmaskBase, LocalizationTask):
-    META = ProblemMeta(
-        root_cause_category=HostIncorrectNetmaskBase.root_cause_category,
-        root_cause_name=HostIncorrectNetmaskBase.root_cause_name,
-        task_level=TaskLevel.LOCALIZATION,
-        description=TaskDescription.LOCALIZATION,
-    )
-
-
-class HostIncorrectNetmaskRCA(HostIncorrectNetmaskBase, RCATask):
-    META = ProblemMeta(
-        root_cause_category=HostIncorrectNetmaskBase.root_cause_category,
-        root_cause_name=HostIncorrectNetmaskBase.root_cause_name,
-        task_level=TaskLevel.RCA,
-        description=TaskDescription.RCA,
-    )
 
 
 # ==========================================
@@ -466,7 +356,7 @@ class HostIncorrectDNSParams(BaseModel):
     fake_dns_ip: str = Field(default="8.8.8.8", description="Incorrect DNS IP.")
 
 
-class HostIncorrectDNSBase:
+class HostIncorrectDNS(ProblemBase):
     root_cause_category: RootCauseCategory = RootCauseCategory.END_HOST_FAILURE
     root_cause_name: str = "host_incorrect_dns"
     TAGS: str = ["dns"]
@@ -476,51 +366,29 @@ class HostIncorrectDNSBase:
     symptom_desc = "Some hosts are unable to access web services."
 
     def __init__(self, scenario_name: str | None, **kwargs):
-        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
-        self.faulty_devices: list[str] = []
-        self.fake_dns_ip = "8.8.8.8"
+        super().__init__(scenario_name, **kwargs)
+        self.params.fake_dns_ip = "8.8.8.8"
 
     def inject_fault(self, params: HostIncorrectDNSParams):
-        host = params.host_name
-        self.faulty_devices = [host]
-        self.runtime.exec(host, f"echo 'nameserver {params.fake_dns_ip}' > /etc/resolv.conf")
+        self.set_faulty_devices([params.host_name])
+        self.runtime.exec(
+            params.host_name,
+            f"echo 'nameserver {params.fake_dns_ip}' > /etc/resolv.conf",
+        )
 
     def verify_fault(self, params: HostIncorrectDNSParams) -> dict:
         """Verify the incorrect-DNS fault by checking /etc/resolv.conf contains the fake DNS IP."""
-        host = params.host_name
-        fake_dns_ip = params.fake_dns_ip
-        resolv = self.runtime.exec(host, "cat /etc/resolv.conf 2>/dev/null || echo ''")
-        verified = fake_dns_ip in resolv
+        resolv = self.runtime.exec(
+            params.host_name, "cat /etc/resolv.conf 2>/dev/null || echo ''"
+        )
+        verified = params.fake_dns_ip in resolv
         return build_verify_result(
             root_cause_name=self.root_cause_name,
             faulty_devices=self.faulty_devices,
             verified=verified,
-            details={"host": host, "fake_dns_ip": fake_dns_ip, "resolv_conf": resolv.strip()},
+            details={
+                "host": params.host_name,
+                "fake_dns_ip": params.fake_dns_ip,
+                "resolv_conf": resolv.strip(),
+            },
         )
-
-
-class HostIncorrectDNSDetection(HostIncorrectDNSBase, DetectionTask):
-    META = ProblemMeta(
-        root_cause_category=HostIncorrectDNSBase.root_cause_category,
-        root_cause_name=HostIncorrectDNSBase.root_cause_name,
-        task_level=TaskLevel.DETECTION,
-        description=TaskDescription.DETECTION,
-    )
-
-
-class HostIncorrectDNSLocalization(HostIncorrectDNSBase, LocalizationTask):
-    META = ProblemMeta(
-        root_cause_category=HostIncorrectDNSBase.root_cause_category,
-        root_cause_name=HostIncorrectDNSBase.root_cause_name,
-        task_level=TaskLevel.LOCALIZATION,
-        description=TaskDescription.LOCALIZATION,
-    )
-
-
-class HostIncorrectDNSRCA(HostIncorrectDNSBase, RCATask):
-    META = ProblemMeta(
-        root_cause_category=HostIncorrectDNSBase.root_cause_category,
-        root_cause_name=HostIncorrectDNSBase.root_cause_name,
-        task_level=TaskLevel.RCA,
-        description=TaskDescription.RCA,
-    )

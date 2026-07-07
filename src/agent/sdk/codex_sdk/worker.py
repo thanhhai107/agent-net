@@ -95,7 +95,9 @@ class CodexSdkWorker:
         if self.phase == SUBMISSION:
             servers = mcp_cfg.load_config(if_submit=True)
         else:
-            server_names = select_diagnosis_servers(self.scenario_name, self.problem_names)
+            server_names = select_diagnosis_servers(
+                self.scenario_name, self.problem_names
+            )
             servers = mcp_cfg.load_filtered_config(server_names)
 
         self._logger.log(
@@ -114,7 +116,11 @@ class CodexSdkWorker:
                 print(display, flush=True)
 
     async def _collect_turn_with_logging(self, stream: Any, *, turn_id: str) -> Any:
-        from openai_codex._run import TurnResult, _final_assistant_response_from_items, _raise_for_failed_turn
+        from openai_codex._run import (
+            TurnResult,
+            _final_assistant_response_from_items,
+            _raise_for_failed_turn,
+        )
         from openai_codex.generated.v2_all import (
             AgentMessageThreadItem,
             ItemCompletedNotification,
@@ -131,7 +137,10 @@ class CodexSdkWorker:
 
         async for event in stream:
             payload = event.payload
-            if isinstance(payload, ItemStartedNotification) and payload.turn_id == turn_id:
+            if (
+                isinstance(payload, ItemStartedNotification)
+                and payload.turn_id == turn_id
+            ):
                 item = _unwrap_thread_item(payload.item)
                 if isinstance(item, McpToolCallThreadItem):
                     self._logger.log(
@@ -154,7 +163,10 @@ class CodexSdkWorker:
                             },
                         }
                     )
-            elif isinstance(payload, ItemCompletedNotification) and payload.turn_id == turn_id:
+            elif (
+                isinstance(payload, ItemCompletedNotification)
+                and payload.turn_id == turn_id
+            ):
                 item = _unwrap_thread_item(payload.item)
                 items.append(payload.item)
                 if isinstance(item, McpToolCallThreadItem):
@@ -173,7 +185,9 @@ class CodexSdkWorker:
                                 "type": "mcp_tool_call",
                                 "server": item.server,
                                 "tool": item.tool,
-                                "status": getattr(item.status, "value", str(item.status)),
+                                "status": getattr(
+                                    item.status, "value", str(item.status)
+                                ),
                                 "result": output,
                             },
                         }
@@ -186,9 +200,15 @@ class CodexSdkWorker:
                             "item": {"type": "agent_message", "text": item.text},
                         }
                     )
-            elif isinstance(payload, ThreadTokenUsageUpdatedNotification) and payload.turn_id == turn_id:
+            elif (
+                isinstance(payload, ThreadTokenUsageUpdatedNotification)
+                and payload.turn_id == turn_id
+            ):
                 usage = payload.token_usage
-            elif isinstance(payload, TurnCompletedNotification) and payload.turn.id == turn_id:
+            elif (
+                isinstance(payload, TurnCompletedNotification)
+                and payload.turn.id == turn_id
+            ):
                 completed = payload
 
         if completed is None:
@@ -196,7 +216,9 @@ class CodexSdkWorker:
 
         _raise_for_failed_turn(completed.turn)
         turn = completed.turn
-        final_response = _final_assistant_response_from_items(items) or "\n".join(agent_text)
+        final_response = _final_assistant_response_from_items(items) or "\n".join(
+            agent_text
+        )
         if final_response:
             usage_md: dict[str, int] = {}
             if usage is not None:
@@ -204,7 +226,9 @@ class CodexSdkWorker:
                     "input_tokens": getattr(usage, "input_tokens", 0) or 0,
                     "output_tokens": getattr(usage, "output_tokens", 0) or 0,
                 }
-            self._logger.log("llm_end", {"text": final_response, "usage_metadata": usage_md})
+            self._logger.log(
+                "llm_end", {"text": final_response, "usage_metadata": usage_md}
+            )
 
         return TurnResult(
             id=turn.id,
@@ -257,7 +281,9 @@ class CodexSdkWorker:
                 turn = await thread.turn(prompt)
                 stream = turn.stream()
                 try:
-                    result = await self._collect_turn_with_logging(stream, turn_id=turn.id)
+                    result = await self._collect_turn_with_logging(
+                        stream, turn_id=turn.id
+                    )
                 finally:
                     await stream.aclose()
         except Exception as exc:
@@ -267,5 +293,7 @@ class CodexSdkWorker:
             return f"ERROR: {exc}"
 
         final = result.final_response or ""
-        self._logger.log("agent_done", {"phase": self.phase, "report_length": len(final)})
+        self._logger.log(
+            "agent_done", {"phase": self.phase, "report_length": len(final)}
+        )
         return final

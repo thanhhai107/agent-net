@@ -10,7 +10,9 @@ import os
 from dataclasses import dataclass, field
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(SCRIPT_DIR)))))
+PROJECT_ROOT = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(SCRIPT_DIR))))
+)
 P4_UTILS = os.path.join(PROJECT_ROOT, "src/nika/net_env/kathara/utils/p4")
 
 
@@ -85,28 +87,41 @@ def generate_p4_bloom_filter_topology(output_dir: str | None = None) -> str:
     switch_1.cmd_list = switch_startup_base.copy()
     switch_2.cmd_list = switch_startup_base.copy()
 
-    switch_1.extra_files["bloom_filter.p4"] = _read_file(os.path.join(SCRIPT_DIR, "bloom_filter.p4"))
-    switch_1.extra_files["commands.txt"] = _read_file(os.path.join(SCRIPT_DIR, "cmds/switch_1.txt"))
-    switch_2.extra_files["bloom_filter.p4"] = _read_file(os.path.join(SCRIPT_DIR, "bloom_filter.p4"))
-    switch_2.extra_files["commands.txt"] = _read_file(os.path.join(SCRIPT_DIR, "cmds/switch_2.txt"))
+    switch_1.extra_files["bloom_filter.p4"] = _read_file(
+        os.path.join(SCRIPT_DIR, "bloom_filter.p4")
+    )
+    switch_1.extra_files["commands.txt"] = _read_file(
+        os.path.join(SCRIPT_DIR, "cmds/switch_1.txt")
+    )
+    switch_2.extra_files["bloom_filter.p4"] = _read_file(
+        os.path.join(SCRIPT_DIR, "bloom_filter.p4")
+    )
+    switch_2.extra_files["commands.txt"] = _read_file(
+        os.path.join(SCRIPT_DIR, "cmds/switch_2.txt")
+    )
 
     if os.path.exists(os.path.join(P4_UTILS, "sswitch_thrift_API.py")):
-        switch_1.extra_files["usr/local/lib/python3.11/site-packages/sswitch_thrift_API.py"] = _read_file(
-            os.path.join(P4_UTILS, "sswitch_thrift_API.py")
-        )
-        switch_2.extra_files["usr/local/lib/python3.11/site-packages/sswitch_thrift_API.py"] = _read_file(
-            os.path.join(P4_UTILS, "sswitch_thrift_API.py")
-        )
+        switch_1.extra_files[
+            "usr/local/lib/python3.11/site-packages/sswitch_thrift_API.py"
+        ] = _read_file(os.path.join(P4_UTILS, "sswitch_thrift_API.py"))
+        switch_2.extra_files[
+            "usr/local/lib/python3.11/site-packages/sswitch_thrift_API.py"
+        ] = _read_file(os.path.join(P4_UTILS, "sswitch_thrift_API.py"))
     if os.path.exists(os.path.join(P4_UTILS, "thrift_API.py")):
-        switch_1.extra_files["usr/local/lib/python3.11/site-packages/thrift_API.py"] = _read_file(
-            os.path.join(P4_UTILS, "thrift_API.py")
+        switch_1.extra_files["usr/local/lib/python3.11/site-packages/thrift_API.py"] = (
+            _read_file(os.path.join(P4_UTILS, "thrift_API.py"))
         )
-        switch_2.extra_files["usr/local/lib/python3.11/site-packages/thrift_API.py"] = _read_file(
-            os.path.join(P4_UTILS, "thrift_API.py")
+        switch_2.extra_files["usr/local/lib/python3.11/site-packages/thrift_API.py"] = (
+            _read_file(os.path.join(P4_UTILS, "thrift_API.py"))
         )
 
     all_machines = [pc1, pc2, switch_1, switch_2]
-    return _write_lab(output_dir, all_machines, "p4_bloom_filter", "P4 Bloom Filter - 2 pcs, 2 switches")
+    return _write_lab(
+        output_dir,
+        all_machines,
+        "p4_bloom_filter",
+        "P4 Bloom Filter - 2 pcs, 2 switches",
+    )
 
 
 def _write_lab(
@@ -152,8 +167,14 @@ def _write_lab(
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="Generate Kathara lab config for P4 Bloom Filter")
-    parser.add_argument("-o", "--output", default=None, help="Output directory (default: topology/)")
+    parser = argparse.ArgumentParser(
+        description="Generate Kathara lab config for P4 Bloom Filter"
+    )
+    parser.add_argument(
+        "-o", "--output", default=None, help="Output directory (default: topology/)"
+    )
     args = parser.parse_args()
-    out = generate_p4_bloom_filter_topology(output_dir=args.output or os.path.join(SCRIPT_DIR, "topology"))
+    out = generate_p4_bloom_filter_topology(
+        output_dir=args.output or os.path.join(SCRIPT_DIR, "topology")
+    )
     print(f"Lab configuration generated at: {out}")

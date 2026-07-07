@@ -49,7 +49,9 @@ class AutogenDiagnosisPhase:
         self._session_dir = session_dir
         self._model = model
         self._max_steps = max_steps
-        self._server_configs = diagnosis_server_configs(session_id, scenario_name, problem_names)
+        self._server_configs = diagnosis_server_configs(
+            session_id, scenario_name, problem_names
+        )
 
     async def run(self, task_description: str) -> tuple[str, bool]:
         """Return ``(diagnosis_report, is_max_steps_reached)``."""

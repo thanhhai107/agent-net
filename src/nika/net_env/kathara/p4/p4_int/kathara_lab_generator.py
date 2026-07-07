@@ -10,7 +10,9 @@ import os
 from dataclasses import dataclass, field
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(SCRIPT_DIR)))))
+PROJECT_ROOT = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(SCRIPT_DIR))))
+)
 P4_UTILS = os.path.join(PROJECT_ROOT, "src/nika/net_env/kathara/utils/p4")
 
 
@@ -103,21 +105,27 @@ def generate_p4_int_topology(output_dir: str | None = None) -> str:
         "arp -s 10.0.0.2 00:00:0a:00:00:02",
         "python3 collector_src/int_collector.py &> int_collector.log",
     ]
-    collector.extra_files = _copy_dir_to_extra_files(os.path.join(SCRIPT_DIR, "collector_src"), "collector_src/")
+    collector.extra_files = _copy_dir_to_extra_files(
+        os.path.join(SCRIPT_DIR, "collector_src"), "collector_src/"
+    )
 
     # Switch files and startup
     switches = [spine1, spine2, leaf1, leaf2]
     intf_map = {"spine1": 2, "spine2": 2, "leaf1": 4, "leaf2": 4}
     for sw in switches:
-        sw.extra_files = _copy_dir_to_extra_files(os.path.join(SCRIPT_DIR, "p4_src"), "p4_src/")
-        sw.extra_files["commands.txt"] = _read_file(os.path.join(SCRIPT_DIR, f"cmds/{sw.name}.txt"))
+        sw.extra_files = _copy_dir_to_extra_files(
+            os.path.join(SCRIPT_DIR, "p4_src"), "p4_src/"
+        )
+        sw.extra_files["commands.txt"] = _read_file(
+            os.path.join(SCRIPT_DIR, f"cmds/{sw.name}.txt")
+        )
         if os.path.exists(os.path.join(P4_UTILS, "sswitch_thrift_API.py")):
-            sw.extra_files["usr/local/lib/python3.11/site-packages/sswitch_thrift_API.py"] = _read_file(
-                os.path.join(P4_UTILS, "sswitch_thrift_API.py")
-            )
+            sw.extra_files[
+                "usr/local/lib/python3.11/site-packages/sswitch_thrift_API.py"
+            ] = _read_file(os.path.join(P4_UTILS, "sswitch_thrift_API.py"))
         if os.path.exists(os.path.join(P4_UTILS, "thrift_API.py")):
-            sw.extra_files["usr/local/lib/python3.11/site-packages/thrift_API.py"] = _read_file(
-                os.path.join(P4_UTILS, "thrift_API.py")
+            sw.extra_files["usr/local/lib/python3.11/site-packages/thrift_API.py"] = (
+                _read_file(os.path.join(P4_UTILS, "thrift_API.py"))
             )
         intf_num = intf_map[sw.name]
         intf_str = " ".join(f"-i {i + 1}@eth{i}" for i in range(intf_num))
@@ -134,7 +142,9 @@ def generate_p4_int_topology(output_dir: str | None = None) -> str:
         ]
 
     all_machines = [pc1, pc2, collector, spine1, spine2, leaf1, leaf2]
-    return _write_lab(output_dir, all_machines, "p4_int", "P4 INT - 2 hosts, 4 switches, 1 collector")
+    return _write_lab(
+        output_dir, all_machines, "p4_int", "P4 INT - 2 hosts, 4 switches, 1 collector"
+    )
 
 
 def _write_lab(
@@ -180,8 +190,14 @@ def _write_lab(
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="Generate Kathara lab config for P4 INT")
-    parser.add_argument("-o", "--output", default=None, help="Output directory (default: topology/)")
+    parser = argparse.ArgumentParser(
+        description="Generate Kathara lab config for P4 INT"
+    )
+    parser.add_argument(
+        "-o", "--output", default=None, help="Output directory (default: topology/)"
+    )
     args = parser.parse_args()
-    out = generate_p4_int_topology(output_dir=args.output or os.path.join(SCRIPT_DIR, "topology"))
+    out = generate_p4_int_topology(
+        output_dir=args.output or os.path.join(SCRIPT_DIR, "topology")
+    )
     print(f"Lab configuration generated at: {out}")

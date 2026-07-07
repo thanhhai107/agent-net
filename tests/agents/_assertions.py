@@ -20,11 +20,25 @@ def assert_phase_messages(
     testcase.assertIn(SUBMISSION, agents)
 
     if require_diagnosis_tools:
-        diag_tools = [name for e in messages if e["agent"] == DIAGNOSIS for name in _extract_tool_names(e)]
-        testcase.assertTrue(diag_tools, "diagnosis phase must call at least one MCP tool")
+        diag_tools = [
+            name
+            for e in messages
+            if e["agent"] == DIAGNOSIS
+            for name in _extract_tool_names(e)
+        ]
+        testcase.assertTrue(
+            diag_tools, "diagnosis phase must call at least one MCP tool"
+        )
 
-    sub_tools = [name for e in messages if e["agent"] == SUBMISSION for name in _extract_tool_names(e)]
-    testcase.assertTrue(any("list_avail_problems" in name for name in sub_tools), sub_tools)
+    sub_tools = [
+        name
+        for e in messages
+        if e["agent"] == SUBMISSION
+        for name in _extract_tool_names(e)
+    ]
+    testcase.assertTrue(
+        any("list_avail_problems" in name for name in sub_tools), sub_tools
+    )
     testcase.assertTrue(any("submit" in name for name in sub_tools), sub_tools)
 
 
@@ -80,7 +94,9 @@ def skill_invoked(messages: list[dict], skill_name: str = "nika-test-skill") -> 
     for entry in messages:
         if entry.get("event") == "tool_start":
             tool = entry.get("tool") or {}
-            if tool.get("name") == "Skill" and skill_name in str(entry.get("input", "")):
+            if tool.get("name") == "Skill" and skill_name in str(
+                entry.get("input", "")
+            ):
                 return True
         claude_event = entry.get("claude_event")
         if isinstance(claude_event, dict) and claude_event.get("type") == "assistant":

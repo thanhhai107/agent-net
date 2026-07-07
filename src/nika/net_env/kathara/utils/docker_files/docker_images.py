@@ -68,7 +68,9 @@ def build_nika_image(image: str) -> None:
         raise RuntimeError(f"Failed to build Docker image {image}") from exc
 
 
-def ensure_nika_docker_images(required_images: Iterable[str], *, force_rebuild: bool = False) -> None:
+def ensure_nika_docker_images(
+    required_images: Iterable[str], *, force_rebuild: bool = False
+) -> None:
     """Build kathara/nika-* images needed by a lab.
 
     By default only missing images are built. With ``force_rebuild=True``, every
@@ -91,7 +93,10 @@ def ensure_nika_docker_images(required_images: Iterable[str], *, force_rebuild: 
 
     still_missing: Set[str] = {img for img in to_build if not image_exists(img)}
     if still_missing:
-        raise RuntimeError("Failed to build required Docker images: " + ", ".join(sorted(still_missing)))
+        raise RuntimeError(
+            "Failed to build required Docker images: "
+            + ", ".join(sorted(still_missing))
+        )
 
 
 def main() -> None:

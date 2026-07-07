@@ -51,7 +51,10 @@ SCRIPTS = SKILLS_DIR / "diagnosis-methodology-skill" / "scripts"
 
 # Special-purpose scripts that live outside the diagnosis-methodology folder.
 EXTRA_SCRIPTS = {
-    "parse_large": SKILLS_DIR / "big-return-skill" / "scripts" / "parse_large_output.py",
+    "parse_large": SKILLS_DIR
+    / "big-return-skill"
+    / "scripts"
+    / "parse_large_output.py",
     "bgp_snapshot": SKILLS_DIR / "bgp-fault-skill" / "scripts" / "bgp_snapshot.py",
 }
 
@@ -116,7 +119,9 @@ def main() -> int:
     name = sys.argv[1]
 
     if name in EXTRA_SCRIPTS:
-        return subprocess.call([PYTHON, str(EXTRA_SCRIPTS[name])] + sys.argv[2:], env=env)
+        return subprocess.call(
+            [PYTHON, str(EXTRA_SCRIPTS[name])] + sys.argv[2:], env=env
+        )
 
     if not name.endswith(".py"):
         name += ".py"

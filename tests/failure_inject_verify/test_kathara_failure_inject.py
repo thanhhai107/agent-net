@@ -47,7 +47,9 @@ class HostMisconfigVerifyTest(PerTestEnvTestCase):
         self._assert_failure_injected("host_missing_ip")
 
     def test_host_ip_conflict(self) -> None:
-        self._inject_failure("host_ip_conflict", {"host_name": HOST, "host_name_2": HOST2})
+        self._inject_failure(
+            "host_ip_conflict", {"host_name": HOST, "host_name_2": HOST2}
+        )
         self._assert_failure_injected("host_ip_conflict")
 
     def test_host_incorrect_ip(self) -> None:
@@ -129,13 +131,18 @@ class ACLBlockVerifyTest(PerTestEnvTestCase):
         self._inject_failure("icmp_acl_block")
         self._assert_failure_injected("icmp_acl_block")
 
-    def test_http_acl_block(self) -> None:
-        self._inject_failure("http_acl_block")
-        self._assert_failure_injected("http_acl_block")
-
     def test_arp_acl_block(self) -> None:
         self._inject_failure("arp_acl_block")
         self._assert_failure_injected("arp_acl_block")
+
+
+class HttpACLBlockVerifyTest(PerTestEnvTestCase):
+    SCENARIO = "ospf_enterprise_dhcp"
+    ENV_RUN_ARGS = ["-s", "s"]
+
+    def test_http_acl_block(self) -> None:
+        self._inject_failure("http_acl_block")
+        self._assert_failure_injected("http_acl_block")
 
 
 class P4MisconfigVerifyTest(PerTestEnvTestCase):

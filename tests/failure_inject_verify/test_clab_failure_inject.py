@@ -13,14 +13,14 @@ import unittest
 
 from tests.integration_base import PerTestEnvTestCase
 
-HOST = "srl"
+HOST = "leaf1"
 INTF = "e1-1"
 LINK_PARAMS = {"host_name": HOST, "intf_name": INTF}
 
 
 @unittest.skipUnless(shutil.which("clab"), "containerlab not installed")
 class ClabLinkFailureVerifyTest(PerTestEnvTestCase):
-    SCENARIO = "srlceos01"
+    SCENARIO = "min3clos"
     ENV_RUN_ARGS = ["--backend", "containerlab"]
 
     def test_link_down(self) -> None:

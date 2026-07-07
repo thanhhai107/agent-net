@@ -116,7 +116,9 @@ class TCMixin:
         command = f"tc qdisc show dev {intf_name}"
         return self.exec_cmd(host_name, command)
 
-    def tc_show_statistics(self: _SupportsBase, host_name: str, intf_name: str) -> list[str]:
+    def tc_show_statistics(
+        self: _SupportsBase, host_name: str, intf_name: str
+    ) -> list[str]:
         """
         Show traffic control (tc) statistics on a specific intf_name of a host.
         """

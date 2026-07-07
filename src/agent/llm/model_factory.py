@@ -9,7 +9,9 @@ from langchain_openai import ChatOpenAI
 load_dotenv()
 
 
-def load_model(llm_provider: str = "openai", model: str = "gpt-5-mini") -> BaseChatModel:
+def load_model(
+    llm_provider: str = "openai", model: str = "gpt-5-mini"
+) -> BaseChatModel:
     if llm_provider == "ollama":
         return ChatOllama(
             model=model,

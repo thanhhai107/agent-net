@@ -7,6 +7,7 @@ def _resolve_python() -> str:
     """Interpreter for stdio MCP subprocesses (must have ``mcp`` and ``nika`` installed)."""
     return sys.executable or "python3"
 
+
 # Keyword sets that trigger inclusion of each optional Kathara MCP server.
 _FRR_KEYWORDS = frozenset({"bgp", "ospf", "rip", "frr", "routing"})
 _BMV2_KEYWORDS = frozenset({"p4", "bmv2", "sdn", "bloom", "mpls", "int", "counter"})

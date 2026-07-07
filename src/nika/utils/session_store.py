@@ -42,7 +42,10 @@ class SessionStore:
 
     def _write(self, data: dict[str, Any]) -> None:
         path = self._path(data["session_id"])
-        path.write_text(json.dumps(data, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+        path.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2, default=str),
+            encoding="utf-8",
+        )
 
     # ------------------------------------------------------------------
     # Session CRUD
@@ -122,12 +125,16 @@ class SessionStore:
         self.index.increment_failure_count(session_id)
         return idx
 
-    def update_failure_injection(self, session_id: str, failure_idx: int, values: Mapping[str, Any]) -> None:
+    def update_failure_injection(
+        self, session_id: str, failure_idx: int, values: Mapping[str, Any]
+    ) -> None:
         """Update the failure injection at ``failure_idx`` within ``session_id``."""
         data = self._read(session_id)
         injections: list = data.get("failure_injections", [])
         if failure_idx >= len(injections):
-            raise FileNotFoundError(f"Failure injection index {failure_idx} not found in session '{session_id}'.")
+            raise FileNotFoundError(
+                f"Failure injection index {failure_idx} not found in session '{session_id}'."
+            )
         injections[failure_idx].update(values)
         injections[failure_idx]["updated_at"] = _now_iso()
         data["updated_at"] = _now_iso()
@@ -145,7 +152,11 @@ class SessionStore:
             injections = []
             for path in Path(self.sessions_dir).glob("*.json"):
                 try:
-                    injections.extend(json.loads(path.read_text(encoding="utf-8")).get("failure_injections", []))
+                    injections.extend(
+                        json.loads(path.read_text(encoding="utf-8")).get(
+                            "failure_injections", []
+                        )
+                    )
                 except Exception:
                     pass
         if status is not None:
@@ -159,7 +170,9 @@ class SessionStore:
             counts[s] = counts.get(s, 0) + 1
         return counts
 
-    def mark_session_failures_ended(self, session_id: str, *, end_time: float | None = None) -> int:
+    def mark_session_failures_ended(
+        self, session_id: str, *, end_time: float | None = None
+    ) -> int:
         data = self._read(session_id)
         ended_at = end_time if end_time is not None else datetime.now().timestamp()
         now_iso = _now_iso()

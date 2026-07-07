@@ -10,7 +10,9 @@ import os
 from dataclasses import dataclass, field
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(SCRIPT_DIR)))))
+PROJECT_ROOT = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(SCRIPT_DIR))))
+)
 P4_UTILS = os.path.join(PROJECT_ROOT, "src/nika/net_env/kathara/utils/p4")
 STARTUPS_DIR = os.path.join(SCRIPT_DIR, "startups")
 CMDS_DIR = os.path.join(SCRIPT_DIR, "cmds")
@@ -59,7 +61,9 @@ def generate_p4_mpls_topology(output_dir: str | None = None) -> str:
     for i in range(1, 4):
         machines[f"pc{i}"] = MachineMeta(name=f"pc{i}", image="kathara/base")
     for i in range(1, 8):
-        machines[f"switch_{i}"] = MachineMeta(name=f"switch_{i}", image="kathara/p4", cpus=0.5, mem="256m")
+        machines[f"switch_{i}"] = MachineMeta(
+            name=f"switch_{i}", image="kathara/p4", cpus=0.5, mem="256m"
+        )
 
     # Topology from lab.py
     _add_link(machines, "pc1", "switch_1")
@@ -76,31 +80,37 @@ def generate_p4_mpls_topology(output_dir: str | None = None) -> str:
 
     # Host startups from startups/ folder
     for i in range(1, 4):
-        machines[f"pc{i}"].cmd_list = _read_file(
-            os.path.join(STARTUPS_DIR, f"pc{i}.startup")
-        ).strip().split("\n")
+        machines[f"pc{i}"].cmd_list = (
+            _read_file(os.path.join(STARTUPS_DIR, f"pc{i}.startup")).strip().split("\n")
+        )
 
     # Switch startups and files from startups/ folder
     for i in range(1, 8):
         sw = machines[f"switch_{i}"]
-        sw.cmd_list = _read_file(os.path.join(STARTUPS_DIR, f"switch_{i}.startup")).strip().split("\n")
+        sw.cmd_list = (
+            _read_file(os.path.join(STARTUPS_DIR, f"switch_{i}.startup"))
+            .strip()
+            .split("\n")
+        )
         sw.extra_files["mpls.p4"] = _read_file(os.path.join(SCRIPT_DIR, "mpls.p4"))
         sw.extra_files["commands.txt"] = _read_file(
             os.path.join(CMDS_DIR, f"switch_{i}", "commands.txt")
         )
         if os.path.exists(os.path.join(P4_UTILS, "sswitch_thrift_API.py")):
-            sw.extra_files["usr/local/lib/python3.11/site-packages/sswitch_thrift_API.py"] = _read_file(
-                os.path.join(P4_UTILS, "sswitch_thrift_API.py")
-            )
+            sw.extra_files[
+                "usr/local/lib/python3.11/site-packages/sswitch_thrift_API.py"
+            ] = _read_file(os.path.join(P4_UTILS, "sswitch_thrift_API.py"))
         if os.path.exists(os.path.join(P4_UTILS, "thrift_API.py")):
-            sw.extra_files["usr/local/lib/python3.11/site-packages/thrift_API.py"] = _read_file(
-                os.path.join(P4_UTILS, "thrift_API.py")
+            sw.extra_files["usr/local/lib/python3.11/site-packages/thrift_API.py"] = (
+                _read_file(os.path.join(P4_UTILS, "thrift_API.py"))
             )
 
     all_machines = [machines[f"pc{i}"] for i in range(1, 4)] + [
         machines[f"switch_{i}"] for i in range(1, 8)
     ]
-    return _write_lab(output_dir, all_machines, "p4_mpls", "P4 MPLS - 3 pcs, 7 switches")
+    return _write_lab(
+        output_dir, all_machines, "p4_mpls", "P4 MPLS - 3 pcs, 7 switches"
+    )
 
 
 def _write_lab(
@@ -146,8 +156,14 @@ def _write_lab(
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="Generate Kathara lab config for P4 MPLS")
-    parser.add_argument("-o", "--output", default=None, help="Output directory (default: topology/)")
+    parser = argparse.ArgumentParser(
+        description="Generate Kathara lab config for P4 MPLS"
+    )
+    parser.add_argument(
+        "-o", "--output", default=None, help="Output directory (default: topology/)"
+    )
     args = parser.parse_args()
-    out = generate_p4_mpls_topology(output_dir=args.output or os.path.join(SCRIPT_DIR, "topology"))
+    out = generate_p4_mpls_topology(
+        output_dir=args.output or os.path.join(SCRIPT_DIR, "topology")
+    )
     print(f"Lab configuration generated at: {out}")

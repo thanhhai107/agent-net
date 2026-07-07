@@ -15,7 +15,6 @@ from nika.utils.session import Session
 from nika.utils.session_store import SessionStore
 from nika.net_env.net_env_pool import scenario_requires_topo_size
 from nika.orchestrator.problems.prob_pool import get_problem_instance
-from nika.orchestrator.problems.problem_base import TaskLevel
 from nika.workflows.agent.run import start_agent
 from nika.workflows.benchmark.load_config import load_benchmark_yaml
 from nika.workflows.benchmark.resume import (
@@ -56,7 +55,6 @@ def validate_inject_params(
         kwargs["topo_size"] = topo_size
     problem_inst = get_problem_instance(
         problem_names=[problem],
-        task_level=TaskLevel.DETECTION,
         scenario_name=scenario,
         **kwargs,
     )
@@ -106,7 +104,13 @@ def _benchmark_row_cli_args(
     for key, value in inject.items():
         args += ["--set", f"{key}={value}"]
     if run_judge:
-        args += ["--judge", "--judge-provider", judge_llm_provider, "--judge-model", judge_model]
+        args += [
+            "--judge",
+            "--judge-provider",
+            judge_llm_provider,
+            "--judge-model",
+            judge_model,
+        ]
     if result_dir:
         args += ["--result_dir", result_dir]
     return args
@@ -207,11 +211,15 @@ def run_single_case(
     Returns:
         The session id and session directory for the completed run.
     """
-    print(f"Running benchmark for Problem: {problem}, Scenario: {scenario}, Topo Size: {topo_size}")
+    print(
+        f"Running benchmark for Problem: {problem}, Scenario: {scenario}, Topo Size: {topo_size}"
+    )
 
     size = topo_size if topo_size else None
     if scenario_requires_topo_size(scenario) and not size:
-        raise ValueError(f"Scenario '{scenario}' requires a non-empty topology size (-s s|m|l).")
+        raise ValueError(
+            f"Scenario '{scenario}' requires a non-empty topology size (-s s|m|l)."
+        )
     if not scenario_requires_topo_size(scenario):
         size = None
 
@@ -221,7 +229,9 @@ def run_single_case(
     session_id = start_net_env(scenario, size, redeploy=True, result_dir=result_dir)
     session_dir = Path(SessionStore().get_session(session_id)["session_dir"])
 
-    inject_failure(problem_names=[problem], session_id=session_id, param_overrides=params)
+    inject_failure(
+        problem_names=[problem], session_id=session_id, param_overrides=params
+    )
 
     row = benchmark_row_from_case(
         scenario=scenario,

@@ -69,7 +69,9 @@ class P4_MPLS(NetworkEnvBase):
                 os.path.join(cur_path, "mpls.p4"),
                 "mpls.p4",
             )
-            sw.create_file_from_path(os.path.join(cur_path, f"cmds/switch_{i}/commands.txt"), "commands.txt")
+            sw.create_file_from_path(
+                os.path.join(cur_path, f"cmds/switch_{i}/commands.txt"), "commands.txt"
+            )
 
             # add the switch_thrift_API.py file to the Kathara image
             sw.create_file_from_path(

@@ -10,13 +10,21 @@ eval_app = typer.Typer(help="Evaluate a completed agent session.")
 
 @eval_app.command("metrics")
 def eval_metrics(
-    session_id: str | None = typer.Option(None, "--session_id", help="Target session id."),
+    session_id: str | None = typer.Option(
+        None, "--session_id", help="Target session id."
+    ),
+    result_dir: str | None = typer.Option(
+        None,
+        "--result_dir",
+        envvar=ENV_RESULT_DIR,
+        help="Results parent directory (default: results/). When set without --session_id, evaluate all closed sessions under this directory.",
+    ),
 ) -> None:
-    """Compute rule-based scores and trace stats on a closed session; write eval_metrics.json."""
+    """Compute rule-based scores and trace stats on closed session(s); write eval_metrics.json."""
     from nika.workflows.eval.session import run_eval_metrics
 
     try:
-        run_eval_metrics(session_id=session_id)
+        run_eval_metrics(session_id=session_id, result_dir=result_dir)
     except (FileNotFoundError, ValueError) as exc:
         raise typer.BadParameter(str(exc)) from exc
 
@@ -37,9 +45,17 @@ def eval_judge(
         envvar=ENV_JUDGE_MODEL,
         help="Judge model id.",
     ),
-    session_id: str | None = typer.Option(None, "--session_id", help="Target session id."),
+    session_id: str | None = typer.Option(
+        None, "--session_id", help="Target session id."
+    ),
+    result_dir: str | None = typer.Option(
+        None,
+        "--result_dir",
+        envvar=ENV_RESULT_DIR,
+        help="Results parent directory (default: results/). When set without --session_id, judge all closed sessions under this directory.",
+    ),
 ) -> None:
-    """Run LLM-as-judge on a closed session; write llm_judge.json."""
+    """Run LLM-as-judge on closed session(s); write llm_judge.json."""
     from nika.utils.agent_config import resolve_judge_model, resolve_judge_provider
     from nika.workflows.eval.session import run_llm_judge
 
@@ -47,7 +63,9 @@ def eval_judge(
     judge_model = resolve_judge_model(judge_model)
 
     try:
-        run_llm_judge(judge_provider, judge_model, session_id=session_id)
+        run_llm_judge(
+            judge_provider, judge_model, session_id=session_id, result_dir=result_dir
+        )
     except (FileNotFoundError, ValueError) as exc:
         raise typer.BadParameter(str(exc)) from exc
 
@@ -101,7 +119,7 @@ def eval_summary(
         help="Results parent directory (default: results/). Session output goes to {result_dir}/{session_id}.",
     ),
 ) -> None:
-    """Aggregate finished sessions under results/ into one CSV file."""
+    """Aggregate finished sessions under the results directory into one CSV file."""
     from nika.workflows.eval.summary import run_eval_summary
 
     try:
@@ -113,7 +131,7 @@ def eval_summary(
             session_ids=session_id,
             agent_types=agent,
             models=model,
-            results_dir=result_dir
+            results_dir=result_dir,
         )
     except (FileNotFoundError, ValueError) as exc:
         raise typer.BadParameter(str(exc)) from exc
@@ -123,7 +141,9 @@ def eval_summary(
 
 @eval_app.command("clean")
 def eval_clean(
-    yes: bool = typer.Option(False, "-y", "--yes", help="Skip the confirmation prompt."),
+    yes: bool = typer.Option(
+        False, "-y", "--yes", help="Skip the confirmation prompt."
+    ),
     force: bool = typer.Option(
         False,
         "--force",

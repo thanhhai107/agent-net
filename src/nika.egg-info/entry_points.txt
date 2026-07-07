@@ -1,0 +1,2 @@
+[console_scripts]
+nika = nika.cli.main:main

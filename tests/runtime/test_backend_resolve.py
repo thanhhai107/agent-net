@@ -33,9 +33,9 @@ class BackendResolveTest(unittest.TestCase):
     def test_containerlab_only_scenario_infers_backend(self) -> None:
         meta = {
             "session_id": "clab-1",
-            "lab_name": "min5clos__abc123",
-            "scenario_name": "min5clos",
-            "scenario_params": {"lab_name": "min5clos__abc123"},
+            "lab_name": "min3clos__abc123",
+            "scenario_name": "min3clos",
+            "scenario_params": {"lab_name": "min3clos__abc123"},
         }
         self.assertEqual(resolve_backend(meta), "containerlab")
 
@@ -49,10 +49,13 @@ class BackendResolveTest(unittest.TestCase):
             session.store = store
             session.init_session(
                 session_id="20260706-120000-abc123",
-                scenario_name="srlceos01",
-                lab_name="srlceos01__tag",
+                scenario_name="min3clos",
+                lab_name="min3clos__tag",
                 scenario_topo_size=None,
-                scenario_params={"lab_name": "srlceos01__tag", "backend": "containerlab"},
+                scenario_params={
+                    "lab_name": "min3clos__tag",
+                    "backend": "containerlab",
+                },
                 result_dir=results_root,
                 backend="containerlab",
                 topology_file="/tmp/topo.clab.yml",
@@ -71,8 +74,8 @@ class BackendResolveTest(unittest.TestCase):
             runtime_for_session(
                 {
                     "backend": "containerlab",
-                    "lab_name": "srlceos01__x",
-                    "scenario_name": "srlceos01",
+                    "lab_name": "min3clos__x",
+                    "scenario_name": "min3clos",
                 }
             )
 

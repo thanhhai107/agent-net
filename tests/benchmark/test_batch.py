@@ -199,7 +199,9 @@ class ParallelBenchmarkIntegrationTest(IntegrationTestCase):
                 session_id, session_dir = self._result(case)
                 sub = self._load_json(session_dir, "submission.json")
                 for field in ("is_anomaly", "faulty_devices", "root_cause_name"):
-                    self.assertIn(field, sub, f"Missing field '{field}' in submission.json")
+                    self.assertIn(
+                        field, sub, f"Missing field '{field}' in submission.json"
+                    )
                 self.assertIn(session_id, str(session_dir))
 
     def test_eval_metrics_fields_and_scores(self) -> None:
@@ -216,7 +218,9 @@ class ParallelBenchmarkIntegrationTest(IntegrationTestCase):
                 _, session_dir = self._result(case)
                 metrics = self._load_json(session_dir, "eval_metrics.json")
                 for field in required_fields:
-                    self.assertIn(field, metrics, f"Missing field '{field}' in eval_metrics.json")
+                    self.assertIn(
+                        field, metrics, f"Missing field '{field}' in eval_metrics.json"
+                    )
                 self.assertEqual(metrics["detection_score"], 1.0)
                 self.assertEqual(metrics["rca_accuracy"], 1.0)
                 self.assertGreater(metrics["tool_calls"], 0)

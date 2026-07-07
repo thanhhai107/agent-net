@@ -29,8 +29,7 @@ def _format_system_event(event: dict[str, Any]) -> str | None:
         raw_servers = event.get("mcp_servers") or []
         # mcp_servers may be a list of strings or a list of dicts with a "name" key.
         server_names = [
-            s["name"] if isinstance(s, dict) else str(s)
-            for s in raw_servers
+            s["name"] if isinstance(s, dict) else str(s) for s in raw_servers
         ]
         suffix = f" | mcp: {', '.join(server_names)}" if server_names else ""
         return f"▶ Claude session started (model={model}){suffix}"

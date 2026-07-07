@@ -1,13 +1,10 @@
-import logging
-
-from nika.orchestrator.problems.context import init_problem
 from pydantic import BaseModel, Field
 
-from nika.generator.traffic.od_flows import ODFLowGenerator
-from nika.orchestrator.problems.problem_base import ProblemMeta, RootCauseCategory, TaskDescription, TaskLevel, build_verify_result
-from nika.orchestrator.tasks.detection import DetectionTask
-from nika.orchestrator.tasks.localization import LocalizationTask
-from nika.orchestrator.tasks.rca import RCATask
+from nika.orchestrator.problems.problem_base import (
+    RootCauseCategory,
+    build_verify_result,
+    ProblemBase,
+)
 from nika.utils.logger import system_logger
 
 # ==================================================================
@@ -22,7 +19,7 @@ class LinkHighPacketCorruptionParams(BaseModel):
     corruption_percentage: int = Field(default=60, description="Corruption percentage.")
 
 
-class LinkHighPacketCorruptionBase:
+class LinkHighPacketCorruption(ProblemBase):
     root_cause_category: RootCauseCategory = RootCauseCategory.RESOURCE_CONTENTION
     root_cause_name: str = "link_high_packet_corruption"
     TAGS: str = ["link"]
@@ -30,56 +27,28 @@ class LinkHighPacketCorruptionBase:
     Params = LinkHighPacketCorruptionParams
 
     def __init__(self, scenario_name: str | None, **kwargs):
-        super().__init__()
-        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
-        self.faulty_devices: list[str] = []
+        super().__init__(scenario_name, **kwargs)
 
     def inject_fault(self, params: LinkHighPacketCorruptionParams):
-        host = params.host_name
-        self.faulty_devices = [host]
-        intf_name = self.runtime.get_host_interfaces(host)[-1]
-        self.runtime.tc_set_netem(host, intf_name, corrupt=params.corruption_percentage,
+        self.set_faulty_devices([params.host_name])
+        intf_name = self.runtime.get_host_interfaces(params.host_name)[-1]
+        self.runtime.tc_set_netem(
+            params.host_name,
+            intf_name,
+            corrupt=params.corruption_percentage,
         )
 
     def verify_fault(self, params: LinkHighPacketCorruptionParams) -> dict:
         """Verify tc qdisc on the host's last interface has corruption configured."""
-        host = params.host_name
-        intf = self.runtime.get_host_interfaces(host)[-1]
-        tc_output = self.runtime.exec(host, f"tc qdisc show dev {intf}").strip()
-        verified = "corrupt" in tc_output
+        intf = self.runtime.get_host_interfaces(params.host_name)[-1]
+        verified = self.runtime.tc_qdisc_contains(params.host_name, intf, "corrupt")
+        tc_output = self.runtime.tc_show_intf(params.host_name, intf).strip()
         return build_verify_result(
             root_cause_name=self.root_cause_name,
             faulty_devices=self.faulty_devices,
             verified=verified,
-            details={"host": host, "intf": intf, "tc_output": tc_output},
+            details={"host": params.host_name, "intf": intf, "tc_output": tc_output},
         )
-
-
-class LinkHighPacketCorruptionDetection(LinkHighPacketCorruptionBase, DetectionTask):
-    META = ProblemMeta(
-        root_cause_category=LinkHighPacketCorruptionBase.root_cause_category,
-        root_cause_name=LinkHighPacketCorruptionBase.root_cause_name,
-        task_level=TaskLevel.DETECTION,
-        description=TaskDescription.DETECTION,
-    )
-
-
-class LinkHighPacketCorruptionLocalization(LinkHighPacketCorruptionBase, LocalizationTask):
-    META = ProblemMeta(
-        root_cause_category=LinkHighPacketCorruptionBase.root_cause_category,
-        root_cause_name=LinkHighPacketCorruptionBase.root_cause_name,
-        task_level=TaskLevel.LOCALIZATION,
-        description=TaskDescription.LOCALIZATION,
-    )
-
-
-class LinkHighPacketCorruptionRCA(LinkHighPacketCorruptionBase, RCATask):
-    META = ProblemMeta(
-        root_cause_category=LinkHighPacketCorruptionBase.root_cause_category,
-        root_cause_name=LinkHighPacketCorruptionBase.root_cause_name,
-        task_level=TaskLevel.RCA,
-        description=TaskDescription.RCA,
-    )
 
 
 # ==================================================================
@@ -96,7 +65,7 @@ class LinkBandwidthThrottlingParams(BaseModel):
     limit: str = Field(default="500kb", description="TBF limit.")
 
 
-class LinkBandwidthThrottlingBase:
+class LinkBandwidthThrottling(ProblemBase):
     root_cause_category: RootCauseCategory = RootCauseCategory.RESOURCE_CONTENTION
     root_cause_name: str = "link_bandwidth_throttling"
     TAGS: str = ["link"]
@@ -104,66 +73,43 @@ class LinkBandwidthThrottlingBase:
     Params = LinkBandwidthThrottlingParams
 
     def __init__(self, scenario_name: str | None, **kwargs):
-        super().__init__()
-        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
-        self.faulty_devices: list[str] = []
+        super().__init__(scenario_name, **kwargs)
         self.scenario_name = scenario_name
 
     def inject_fault(self, params: LinkBandwidthThrottlingParams):
-        host = params.host_name
-        self.faulty_devices = [host]
-        intf_name = self.runtime.get_host_interfaces(host)[0]
-        self.runtime.tc_set_tbf(host, intf_name, rate=params.rate, burst=params.burst, limit=params.limit,
+        self.set_faulty_devices([params.host_name])
+        intf_name = self.runtime.get_host_interfaces(params.host_name)[0]
+        self.runtime.tc_set_tbf(
+            params.host_name,
+            intf_name,
+            rate=params.rate,
+            burst=params.burst,
+            limit=params.limit,
         )
-        generator = ODFLowGenerator(lab_name=self.net_env.lab.name)
-        od_dict = {}
+        od_dict: dict[str, dict[str, int]] = {}
         mbps = 20
         for h in self.net_env.hosts:
-            if h != host:
+            if h != params.host_name:
                 od_dict.setdefault(h, {})
-                od_dict[h][host] = mbps
-        res = generator.start_traffic_background(od_dicts=od_dict, interval=300, unit="M", udp=True)
-        system_logger.info(f"Started background traffic generation {res} to amplify the bandwidth throttling effect.")
+                od_dict[h][params.host_name] = mbps
+        labels = self.runtime.start_background_od_traffic(
+            od_dict, interval=300, unit="M", udp=True
+        )
+        system_logger.info(
+            f"Started background traffic generation {labels} to amplify the bandwidth throttling effect."
+        )
 
     def verify_fault(self, params: LinkBandwidthThrottlingParams) -> dict:
         """Verify tc qdisc on the host's first interface has TBF (token bucket filter) configured."""
-        host = params.host_name
-        intf = self.runtime.get_host_interfaces(host)[0]
-        tc_output = self.runtime.exec(host, f"tc qdisc show dev {intf}").strip()
-        verified = "tbf" in tc_output
+        intf = self.runtime.get_host_interfaces(params.host_name)[0]
+        verified = self.runtime.tc_qdisc_contains(params.host_name, intf, "tbf")
+        tc_output = self.runtime.tc_show_intf(params.host_name, intf).strip()
         return build_verify_result(
             root_cause_name=self.root_cause_name,
             faulty_devices=self.faulty_devices,
             verified=verified,
-            details={"host": host, "intf": intf, "tc_output": tc_output},
+            details={"host": params.host_name, "intf": intf, "tc_output": tc_output},
         )
-
-
-class LinkBandwidthThrottlingDetection(LinkBandwidthThrottlingBase, DetectionTask):
-    META = ProblemMeta(
-        root_cause_category=LinkBandwidthThrottlingBase.root_cause_category,
-        root_cause_name=LinkBandwidthThrottlingBase.root_cause_name,
-        task_level=TaskLevel.DETECTION,
-        description=TaskDescription.DETECTION,
-    )
-
-
-class LinkBandwidthThrottlingLocalization(LinkBandwidthThrottlingBase, LocalizationTask):
-    META = ProblemMeta(
-        root_cause_category=LinkBandwidthThrottlingBase.root_cause_category,
-        root_cause_name=LinkBandwidthThrottlingBase.root_cause_name,
-        task_level=TaskLevel.LOCALIZATION,
-        description=TaskDescription.LOCALIZATION,
-    )
-
-
-class LinkBandwidthThrottlingRCA(LinkBandwidthThrottlingBase, RCATask):
-    META = ProblemMeta(
-        root_cause_category=LinkBandwidthThrottlingBase.root_cause_category,
-        root_cause_name=LinkBandwidthThrottlingBase.root_cause_name,
-        task_level=TaskLevel.RCA,
-        description=TaskDescription.RCA,
-    )
 
 
 # ==================================================================
@@ -181,7 +127,7 @@ class IncastTrafficNetworkLimitationParams(BaseModel):
     delay_ms: int = Field(default=20, description="Netem delay milliseconds.")
 
 
-class IncastTrafficNetworkLimitationBase:
+class IncastTrafficNetworkLimitation(ProblemBase):
     root_cause_category: RootCauseCategory = RootCauseCategory.RESOURCE_CONTENTION
     root_cause_name: str = "incast_traffic_network_limitation"
     TAGS: str = ["http"]
@@ -189,17 +135,19 @@ class IncastTrafficNetworkLimitationBase:
     Params = IncastTrafficNetworkLimitationParams
 
     def __init__(self, scenario_name: str = "dc_clos_service", **kwargs):
-        super().__init__()
+        super().__init__(scenario_name, **kwargs)
         self.scenario_name = scenario_name
-        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
-        self.faulty_devices: list[str] = []
 
     def inject_fault(self, params: IncastTrafficNetworkLimitationParams):
-        host = params.host_name
-        self.faulty_devices = [host]
-        self.runtime.tc_set_netem(host_name=host, intf_name="eth0", delay_ms=params.delay_ms, handle="1")
+        self.set_faulty_devices([params.host_name])
+        self.runtime.tc_set_netem(
+            host_name=params.host_name,
+            intf_name="eth0",
+            delay_ms=params.delay_ms,
+            handle="1",
+        )
         self.runtime.tc_set_tbf(
-            host_name=host,
+            host_name=params.host_name,
             intf_name="eth0",
             rate=params.rate,
             burst=params.burst,
@@ -207,52 +155,31 @@ class IncastTrafficNetworkLimitationBase:
             handle="10",
             parent="1:1",
         )
-        system_logger.info(f"Injected network limitation on host {host}")
-        generator = ODFLowGenerator(lab_name=self.net_env.lab.name)
-        od_dict = {}
+        system_logger.info(
+            f"Injected network limitation on params.host_name {params.host_name}"
+        )
+        od_dict: dict[str, dict[str, int]] = {}
         mbps = 20
         for h in self.net_env.hosts:
-            if h != host:
+            if h != params.host_name:
                 od_dict.setdefault(h, {})
-                od_dict[h][host] = mbps
-        res = generator.start_traffic_background(od_dicts=od_dict, interval=300, unit="M", udp=True)
-        system_logger.info(f"Started background traffic generation {res} to amplify the network limitation effect.")
+                od_dict[h][params.host_name] = mbps
+        labels = self.runtime.start_background_od_traffic(
+            od_dict, interval=300, unit="M", udp=True
+        )
+        system_logger.info(
+            f"Started background traffic generation {labels} to amplify the network limitation effect."
+        )
 
     def verify_fault(self, params: IncastTrafficNetworkLimitationParams) -> dict:
         """Verify tc qdisc on eth0 has netem or tbf (incast network limitation)."""
-        host = params.host_name
-        tc_output = self.runtime.exec(host, "tc qdisc show dev eth0").strip()
-        verified = "netem" in tc_output or "tbf" in tc_output
+        tc_output = self.runtime.tc_show_intf(params.host_name, "eth0").strip()
+        verified = self.runtime.tc_qdisc_contains(
+            params.host_name, "eth0", "netem"
+        ) or self.runtime.tc_qdisc_contains(params.host_name, "eth0", "tbf")
         return build_verify_result(
             root_cause_name=self.root_cause_name,
             faulty_devices=self.faulty_devices,
             verified=verified,
-            details={"host": host, "tc_output": tc_output},
+            details={"host": params.host_name, "tc_output": tc_output},
         )
-
-
-class IncastTrafficNetworkLimitationDetection(IncastTrafficNetworkLimitationBase, DetectionTask):
-    META = ProblemMeta(
-        root_cause_category=IncastTrafficNetworkLimitationBase.root_cause_category,
-        root_cause_name=IncastTrafficNetworkLimitationBase.root_cause_name,
-        task_level=TaskLevel.DETECTION,
-        description=TaskDescription.DETECTION,
-    )
-
-
-class IncastTrafficNetworkLimitationLocalization(IncastTrafficNetworkLimitationBase, LocalizationTask):
-    META = ProblemMeta(
-        root_cause_category=IncastTrafficNetworkLimitationBase.root_cause_category,
-        root_cause_name=IncastTrafficNetworkLimitationBase.root_cause_name,
-        task_level=TaskLevel.LOCALIZATION,
-        description=TaskDescription.LOCALIZATION,
-    )
-
-
-class IncastTrafficNetworkLimitationRCA(IncastTrafficNetworkLimitationBase, RCATask):
-    META = ProblemMeta(
-        root_cause_category=IncastTrafficNetworkLimitationBase.root_cause_category,
-        root_cause_name=IncastTrafficNetworkLimitationBase.root_cause_name,
-        task_level=TaskLevel.RCA,
-        description=TaskDescription.RCA,
-    )

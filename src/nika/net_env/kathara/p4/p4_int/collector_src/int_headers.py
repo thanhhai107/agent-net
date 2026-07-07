@@ -86,7 +86,10 @@ class INTNodeID(Packet):
 class INTLevel1InterfaceIDs(Packet):
     name = "Level 1 interface IDs"
 
-    fields_desc = [ShortField("l1_ingress_interface_id", 0), ShortField("l1_egress_interface_id", 0)]
+    fields_desc = [
+        ShortField("l1_ingress_interface_id", 0),
+        ShortField("l1_egress_interface_id", 0),
+    ]
 
 
 class INTHopLatency(Packet):
@@ -125,7 +128,10 @@ class INTEgressTstamp(Packet):
 class INTLevel2InterfaceIDs(Packet):
     name = "Level 2 Interface Ids"
 
-    fields_desc = [IntField("l2_ingress_interface_id", 0), IntField("l2_egress_interface_id", 0)]
+    fields_desc = [
+        IntField("l2_ingress_interface_id", 0),
+        IntField("l2_egress_interface_id", 0),
+    ]
 
 
 class INTEgressInterfaceTxUtil(Packet):

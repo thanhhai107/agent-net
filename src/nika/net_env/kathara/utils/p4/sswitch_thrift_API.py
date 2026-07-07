@@ -33,7 +33,11 @@ from functools import wraps
 
 import thrift_API
 from sswitch_runtime import SimpleSwitch
-from sswitch_runtime.ttypes import InvalidMirroringOperation, MirroringOperationErrorCode, MirroringSessionConfig
+from sswitch_runtime.ttypes import (
+    InvalidMirroringOperation,
+    MirroringOperationErrorCode,
+    MirroringSessionConfig,
+)
 
 
 def handle_bad_input(f):
@@ -98,7 +102,9 @@ class SimpleSwitchThriftAPI(thrift_API.ThriftAPI):
         try:
             return int(arg)
         except ValueError:
-            raise thrift_API.UIn_Error("Bad format for {}, expected integer".format(name))
+            raise thrift_API.UIn_Error(
+                "Bad format for {}, expected integer".format(name)
+            )
 
     @handle_bad_input
     def set_queue_depth(self, queue_depth, egress_port=None, priority=None):
@@ -116,7 +122,9 @@ class SimpleSwitchThriftAPI(thrift_API.ThriftAPI):
         if egress_port and priority:
             priority = self.parse_int(priority, "priority")
             egress_port = self.parse_int(egress_port, "egress_port")
-            self.sswitch_client.set_egress_priority_queue_depth(egress_port, priority, depth)
+            self.sswitch_client.set_egress_priority_queue_depth(
+                egress_port, priority, depth
+            )
         elif egress_port:
             egress_port = self.parse_int(egress_port, "egress_port")
             self.sswitch_client.set_egress_queue_depth(egress_port, depth)
@@ -139,7 +147,9 @@ class SimpleSwitchThriftAPI(thrift_API.ThriftAPI):
         if egress_port and priority:
             priority = self.parse_int(priority, "priority")
             egress_port = self.parse_int(egress_port, "egress_port")
-            self.sswitch_client.set_egress_priority_queue_rate(egress_port, priority, rate)
+            self.sswitch_client.set_egress_priority_queue_rate(
+                egress_port, priority, rate
+            )
         elif egress_port:
             egress_port = self.parse_int(egress_port, "egress_port")
             self.sswitch_client.set_egress_queue_rate(egress_port, rate)
@@ -154,7 +164,10 @@ class SimpleSwitchThriftAPI(thrift_API.ThriftAPI):
             mirror_id (int)  : *mirror id* to use
             egress_port (int): *egress port* to associate with the mirror
         """
-        mirror_id, egress_port = self.parse_int(mirror_id, "mirror_id"), self.parse_int(egress_port, "egress_port")
+        mirror_id, egress_port = (
+            self.parse_int(mirror_id, "mirror_id"),
+            self.parse_int(egress_port, "egress_port"),
+        )
         config = MirroringSessionConfig(port=egress_port)
         self.sswitch_client.mirroring_session_add(mirror_id, config)
 
@@ -166,7 +179,10 @@ class SimpleSwitchThriftAPI(thrift_API.ThriftAPI):
             mirror_id (int): *mirror id* to associate
             mgrp (int)     : *multicast group*
         """
-        mirror_id, mgrp = self.parse_int(mirror_id, "mirror_id"), self.parse_int(mgrp, "mgrp")
+        mirror_id, mgrp = (
+            self.parse_int(mirror_id, "mirror_id"),
+            self.parse_int(mgrp, "mgrp"),
+        )
         config = MirroringSessionConfig(mgid=mgrp)
         self.sswitch_client.mirroring_session_add(mirror_id, config)
 

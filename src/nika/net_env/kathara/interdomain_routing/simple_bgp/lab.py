@@ -22,8 +22,12 @@ class SimpleBGP(NetworkEnvBase):
         self.instance = Kathara.get_instance()
         self.desc = "A simple BGP network with two routers and two pcs."
 
-        router1 = self.lab.new_machine("router1", **{"image": "kathara/nika-frr", "cpus": 1})
-        router2 = self.lab.new_machine("router2", **{"image": "kathara/nika-frr", "cpus": 1})
+        router1 = self.lab.new_machine(
+            "router1", **{"image": "kathara/nika-frr", "cpus": 1}
+        )
+        router2 = self.lab.new_machine(
+            "router2", **{"image": "kathara/nika-frr", "cpus": 1}
+        )
 
         pc1 = self.lab.new_machine("pc1", **{"image": "kathara/nika-base"})
         pc2 = self.lab.new_machine("pc2", **{"image": "kathara/nika-base"})
@@ -39,18 +43,25 @@ class SimpleBGP(NetworkEnvBase):
 
         # Add basic configuration to the machines
         for i, router in enumerate([router1, router2], start=1):
-            router.copy_directory_from_path(os.path.join(cur_path, f"router{i}/etc"), "/etc")
+            router.copy_directory_from_path(
+                os.path.join(cur_path, f"router{i}/etc"), "/etc"
+            )
             router.create_file_from_path(
                 str(pkg_path("net_env/kathara/utils/bgp/daemons")), "/etc/frr/daemons"
             )
             router.create_file_from_path(
-                str(pkg_path("net_env/kathara/utils/bgp/vtysh.conf")), "/etc/frr/vtysh.conf"
+                str(pkg_path("net_env/kathara/utils/bgp/vtysh.conf")),
+                "/etc/frr/vtysh.conf",
             )
             # to create the startup file, use self.lab instead of host
-            self.lab.create_file_from_path(os.path.join(cur_path, f"router{i}.startup"), f"router{i}.startup")
+            self.lab.create_file_from_path(
+                os.path.join(cur_path, f"router{i}.startup"), f"router{i}.startup"
+            )
 
         for i, host in enumerate([pc1, pc2], start=1):
-            self.lab.create_file_from_path(os.path.join(cur_path, f"pc{i}.startup"), f"pc{i}.startup")
+            self.lab.create_file_from_path(
+                os.path.join(cur_path, f"pc{i}.startup"), f"pc{i}.startup"
+            )
 
         # load machines
         self.load_machines()

@@ -1,10 +1,10 @@
 from pydantic import BaseModel, Field
 
-from nika.orchestrator.problems.context import init_problem
-from nika.orchestrator.problems.problem_base import ProblemMeta, RootCauseCategory, TaskDescription, TaskLevel, build_verify_result
-from nika.orchestrator.tasks.detection import DetectionTask
-from nika.orchestrator.tasks.localization import LocalizationTask
-from nika.orchestrator.tasks.rca import RCATask
+from nika.orchestrator.problems.problem_base import (
+    RootCauseCategory,
+    build_verify_result,
+    ProblemBase,
+)
 from nika.utils.logger import system_logger
 
 logger = system_logger
@@ -22,66 +22,31 @@ class DNSServiceDownParams(BaseModel):
     service_name: str = Field(default="named", description="Service name.")
 
 
-class DNSServiceDownBase:
+class DNSServiceDown(ProblemBase):
     root_cause_category: RootCauseCategory = RootCauseCategory.LINK_FAILURE
     root_cause_name: str = "dns_service_down"
-
-    faulty_devices = "dns_server"
     symptom_desc = "Some hosts cannot access external websites."
     TAGS: str = ["dns"]
 
     Params = DNSServiceDownParams
 
     def __init__(self, scenario_name: str | None, **kwargs):
-        super().__init__()
-        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
-        self.faulty_devices: list[str] = []
+        super().__init__(scenario_name, **kwargs)
         self.service_name = "named"
 
     def inject_fault(self, params: DNSServiceDownParams):
-        host = params.host_name
-        self.faulty_devices = [host]
-        self.runtime.kill_process(host, "named")
+        self.set_faulty_devices([params.host_name])
+        self.runtime.kill_process(params.host_name, "named")
 
     def verify_fault(self, params: DNSServiceDownParams) -> dict:
         """Verify named process is not running."""
-        host = params.host_name
-        service = params.service_name
-        pgrep_output = self.runtime.exec(host, "pgrep -a named 2>/dev/null || echo NONE").strip()
-        verified = "named" not in pgrep_output or pgrep_output == "NONE"
+        verified = self.runtime.process_not_running(params.host_name, "named")
         return build_verify_result(
             root_cause_name=self.root_cause_name,
             faulty_devices=self.faulty_devices,
             verified=verified,
-            details={"host": host, "service": service, "pgrep_output": pgrep_output},
+            details={"host": params.host_name, "service": params.service_name},
         )
-
-
-class DNSServiceDownDetection(DNSServiceDownBase, DetectionTask):
-    META = ProblemMeta(
-        root_cause_category=DNSServiceDownBase.root_cause_category,
-        root_cause_name=DNSServiceDownBase.root_cause_name,
-        task_level=TaskLevel.DETECTION,
-        description=TaskDescription.DETECTION,
-    )
-
-
-class DNSServiceDownLocalization(DNSServiceDownBase, LocalizationTask):
-    META = ProblemMeta(
-        root_cause_category=DNSServiceDownBase.root_cause_category,
-        root_cause_name=DNSServiceDownBase.root_cause_name,
-        task_level=TaskLevel.LOCALIZATION,
-        description=TaskDescription.LOCALIZATION,
-    )
-
-
-class DNSServiceDownRCA(DNSServiceDownBase, RCATask):
-    META = ProblemMeta(
-        root_cause_category=DNSServiceDownBase.root_cause_category,
-        root_cause_name=DNSServiceDownBase.root_cause_name,
-        task_level=TaskLevel.RCA,
-        description=TaskDescription.RCA,
-    )
 
 
 # ==================================================================
@@ -96,7 +61,7 @@ class DHCPServiceDownParams(BaseModel):
     service_name: str = Field(default="isc-dhcp-server", description="Service name.")
 
 
-class DHCPServiceDownBase:
+class DHCPServiceDown(ProblemBase):
     root_cause_category: RootCauseCategory = RootCauseCategory.LINK_FAILURE
     root_cause_name: str = "dhcp_service_down"
 
@@ -105,54 +70,19 @@ class DHCPServiceDownBase:
     Params = DHCPServiceDownParams
 
     def __init__(self, scenario_name: str | None, **kwargs):
-        super().__init__()
-        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
-        self.faulty_devices: list[str] = []
+        super().__init__(scenario_name, **kwargs)
         self.service_name = "isc-dhcp-server"
 
     def inject_fault(self, params: DHCPServiceDownParams):
-        host = params.host_name
-        self.faulty_devices = [host]
-        self.runtime.kill_process(host, "dhcpd")
+        self.set_faulty_devices([params.host_name])
+        self.runtime.kill_process(params.host_name, "dhcpd")
 
     def verify_fault(self, params: DHCPServiceDownParams) -> dict:
         """Verify DHCP server process is not running."""
-        host = params.host_name
-        service = params.service_name
-        pgrep_output = self.runtime.exec(
-            host, "pgrep -a dhcpd 2>/dev/null || echo NONE"
-        ).strip()
-        verified = "dhcpd" not in pgrep_output or pgrep_output == "NONE"
+        verified = self.runtime.process_not_running(params.host_name, "dhcpd")
         return build_verify_result(
             root_cause_name=self.root_cause_name,
             faulty_devices=self.faulty_devices,
             verified=verified,
-            details={"host": host, "service": service, "pgrep_output": pgrep_output},
+            details={"host": params.host_name, "service": params.service_name},
         )
-
-
-class DHCPServiceDownDetection(DHCPServiceDownBase, DetectionTask):
-    META = ProblemMeta(
-        root_cause_category=DHCPServiceDownBase.root_cause_category,
-        root_cause_name=DHCPServiceDownBase.root_cause_name,
-        task_level=TaskLevel.DETECTION,
-        description=TaskDescription.DETECTION,
-    )
-
-
-class DHCPServiceDownLocalization(DHCPServiceDownBase, LocalizationTask):
-    META = ProblemMeta(
-        root_cause_category=DHCPServiceDownBase.root_cause_category,
-        root_cause_name=DHCPServiceDownBase.root_cause_name,
-        task_level=TaskLevel.LOCALIZATION,
-        description=TaskDescription.LOCALIZATION,
-    )
-
-
-class DHCPServiceDownRCA(DHCPServiceDownBase, RCATask):
-    META = ProblemMeta(
-        root_cause_category=DHCPServiceDownBase.root_cause_category,
-        root_cause_name=DHCPServiceDownBase.root_cause_name,
-        task_level=TaskLevel.RCA,
-        description=TaskDescription.RCA,
-    )

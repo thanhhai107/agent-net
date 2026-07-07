@@ -12,7 +12,9 @@ from ipaddress import IPv4Interface, IPv4Network
 from typing import Literal
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(SCRIPT_DIR)))))
+PROJECT_ROOT = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(SCRIPT_DIR))))
+)
 BGP_UTILS = os.path.join(PROJECT_ROOT, "src/nika/net_env/kathara/utils/bgp")
 
 
@@ -60,7 +62,9 @@ class RouterMeta:
     image: str = "kathara/nika-frr"
     cpus: float = 0.5
     mem: str = "256m"
-    links: list[tuple[int, str]] = field(default_factory=list)  # (eth_idx, collision_domain)
+    links: list[tuple[int, str]] = field(
+        default_factory=list
+    )  # (eth_idx, collision_domain)
     extra_files: dict[str, str] = field(default_factory=dict)  # path -> content
 
 
@@ -137,7 +141,9 @@ def generate_dc_clos_service_topology(
         pod_spines[pod] = []
         for spine_id in range(spine_count):
             spine_name = f"spine_router_{pod}_{spine_id}"
-            spine_meta = RouterMeta(name=spine_name, AS_number=65100 + 10 * pod + spine_id)
+            spine_meta = RouterMeta(
+                name=spine_name, AS_number=65100 + 10 * pod + spine_id
+            )
             pod_spines[pod].append(spine_meta)
             tot_spines.append(spine_meta)
 
@@ -177,9 +183,13 @@ def generate_dc_clos_service_topology(
 
             subnet = subnets31.pop(0)
             a_ip, b_ip = assign_p2p_ips(subnet)
-            super_spine_meta.cmd_list.append(f"ip addr add {a_ip} dev eth{super_spine_meta.eth_index}")
+            super_spine_meta.cmd_list.append(
+                f"ip addr add {a_ip} dev eth{super_spine_meta.eth_index}"
+            )
             super_spine_meta.eth_index += 1
-            spine_meta.cmd_list.append(f"ip addr add {b_ip} dev eth{spine_meta.eth_index}")
+            spine_meta.cmd_list.append(
+                f"ip addr add {b_ip} dev eth{spine_meta.eth_index}"
+            )
             spine_meta.eth_index += 1
 
             super_spine_meta.frr_neighbor_configs.append(
@@ -209,9 +219,13 @@ def generate_dc_clos_service_topology(
 
                 subnet = subnets31.pop(0)
                 a_ip, b_ip = assign_p2p_ips(subnet)
-                spine_meta.cmd_list.append(f"ip addr add {a_ip} dev eth{spine_meta.eth_index}")
+                spine_meta.cmd_list.append(
+                    f"ip addr add {a_ip} dev eth{spine_meta.eth_index}"
+                )
                 spine_meta.eth_index += 1
-                leaf_meta.cmd_list.append(f"ip addr add {b_ip} dev eth{leaf_meta.eth_index}")
+                leaf_meta.cmd_list.append(
+                    f"ip addr add {b_ip} dev eth{leaf_meta.eth_index}"
+                )
                 leaf_meta.eth_index += 1
 
                 spine_meta.frr_neighbor_configs.append(
@@ -244,10 +258,14 @@ def generate_dc_clos_service_topology(
             subnet = IPv4Network(f"10.{pod}.{idx}.0/24")
             leaf_ip = IPv4Interface(f"{subnet.network_address + 1}/{subnet.prefixlen}")
             host_ip = IPv4Interface(f"{subnet.network_address + 2}/{subnet.prefixlen}")
-            leaf_meta.cmd_list.append(f"ip addr add {leaf_ip} dev eth{leaf_meta.eth_index}")
+            leaf_meta.cmd_list.append(
+                f"ip addr add {leaf_ip} dev eth{leaf_meta.eth_index}"
+            )
             leaf_meta.eth_index += 1
             host.cmd_list.append(f"ip addr add {host_ip} dev eth{host.eth_index}")
-            host.cmd_list.append(f"ip route add default via {leaf_ip.ip} dev eth{host.eth_index}")
+            host.cmd_list.append(
+                f"ip route add default via {leaf_ip.ip} dev eth{host.eth_index}"
+            )
             host.eth_index += 1
             leaf_meta.host_network = str(subnet)
             host.ip_address = str(host_ip.ip)
@@ -263,10 +281,16 @@ def generate_dc_clos_service_topology(
         subnet = IPv4Network(f"192.168.{pod}.0/24")
         ss_ip = IPv4Interface(f"{subnet.network_address + 1}/{subnet.prefixlen}")
         client_ip = IPv4Interface(f"{subnet.network_address + 2}/{subnet.prefixlen}")
-        super_spine_meta.cmd_list.append(f"ip addr add {ss_ip} dev eth{super_spine_meta.eth_index}")
+        super_spine_meta.cmd_list.append(
+            f"ip addr add {ss_ip} dev eth{super_spine_meta.eth_index}"
+        )
         super_spine_meta.eth_index += 1
-        client_meta.cmd_list.append(f"ip addr add {client_ip} dev eth{client_meta.eth_index}")
-        client_meta.cmd_list.append(f"ip route add default via {ss_ip.ip} dev eth{client_meta.eth_index}")
+        client_meta.cmd_list.append(
+            f"ip addr add {client_ip} dev eth{client_meta.eth_index}"
+        )
+        client_meta.cmd_list.append(
+            f"ip route add default via {ss_ip.ip} dev eth{client_meta.eth_index}"
+        )
         client_meta.eth_index += 1
         super_spine_meta.host_network = str(subnet)
         client_meta.ip_address = str(client_ip.ip)
@@ -356,7 +380,12 @@ def generate_dc_clos_service_topology(
     os.makedirs(out_path, exist_ok=True)
 
     all_machines: list[RouterMeta | HostMeta] = (
-        tot_super_spines + tot_spines + tot_leaves + tot_dns + tot_webservers + tot_clients
+        tot_super_spines
+        + tot_spines
+        + tot_leaves
+        + tot_dns
+        + tot_webservers
+        + tot_clients
     )
 
     lab_conf_lines = [
@@ -401,7 +430,9 @@ def generate_dc_clos_service_topology(
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="Generate Kathara lab config for DC Clos BGP")
+    parser = argparse.ArgumentParser(
+        description="Generate Kathara lab config for DC Clos BGP"
+    )
     parser.add_argument(
         "-s",
         "--size",

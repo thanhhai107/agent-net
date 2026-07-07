@@ -51,7 +51,9 @@ class McpAgent:
             problem_names=self._problem_names,
             model=self.model,
         )
-        app = MCPApp(name="nika_mcp_agent", settings=settings, session_id=self.session_id)
+        app = MCPApp(
+            name="nika_mcp_agent", settings=settings, session_id=self.session_id
+        )
         async with app.run() as running_app:
             workflow = NikaTroubleshootingWorkflow(
                 context=running_app.context,

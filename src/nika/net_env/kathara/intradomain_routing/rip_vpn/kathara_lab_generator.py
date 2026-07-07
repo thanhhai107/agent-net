@@ -12,9 +12,13 @@ from ipaddress import IPv4Interface, IPv4Network
 from typing import Literal
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(SCRIPT_DIR)))))
+PROJECT_ROOT = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(SCRIPT_DIR))))
+)
 RIP_UTILS = os.path.join(PROJECT_ROOT, "src/nika/net_env/kathara/utils/rip")
-WIREGUARD_KEYS_PATH = os.path.join(PROJECT_ROOT, "src/nika/net_env/kathara/utils/", "wireguard", "keys.txt")
+WIREGUARD_KEYS_PATH = os.path.join(
+    PROJECT_ROOT, "src/nika/net_env/kathara/utils/", "wireguard", "keys.txt"
+)
 WG_VPN_NET = "172.16.1.0/24"
 WG_SERVER_IP = "172.16.1.1"
 WG_SERVER_PORT = 51820
@@ -133,16 +137,18 @@ def _wg_conf_client(
     client_address: str,
 ) -> str:
     """Build wg0.conf for VPN client (host or web_server)."""
-    return "\n".join([
-        "[Interface]",
-        f"Address = {client_address}/24",
-        f"PrivateKey = {client_private}",
-        "",
-        "[Peer]",
-        f"PublicKey = {server_public}",
-        f"Endpoint = {WG_SERVER_ENDPOINT_IP}:{WG_SERVER_PORT}",
-        f"AllowedIPs = {WG_VPN_NET}",
-    ])
+    return "\n".join(
+        [
+            "[Interface]",
+            f"Address = {client_address}/24",
+            f"PrivateKey = {client_private}",
+            "",
+            "[Peer]",
+            f"PublicKey = {server_public}",
+            f"Endpoint = {WG_SERVER_ENDPOINT_IP}:{WG_SERVER_PORT}",
+            f"AllowedIPs = {WG_VPN_NET}",
+        ]
+    )
 
 
 def generate_rip_vpn_topology(
@@ -203,7 +209,6 @@ def generate_rip_vpn_topology(
             )
 
     vpn_server_meta = HostMeta(name="vpn_server_1")
-    tot_vpn_dict = {f"external_router_{1}": vpn_server_meta}
 
     # Connect internal routers full mesh
     for i in range(internal_router_num):
@@ -230,7 +235,9 @@ def generate_rip_vpn_topology(
         a_ip, b_ip = assign_p2p_ips(subnet)
         r_internal.cmd_list.append(f"ip addr add {a_ip} dev eth{r_internal.eth_index}")
         r_internal.eth_index += 1
-        gateway_router_meta.cmd_list.append(f"ip addr add {b_ip} dev eth{gateway_router_meta.eth_index}")
+        gateway_router_meta.cmd_list.append(
+            f"ip addr add {b_ip} dev eth{gateway_router_meta.eth_index}"
+        )
         gateway_router_meta.eth_index += 1
 
     # Connect internal hosts to internal routers
@@ -243,7 +250,9 @@ def generate_rip_vpn_topology(
         subnet = IPv4Network(f"10.0.{i}.0/24")
         router_ip = str(IPv4Interface(f"{subnet.network_address + 1}/24"))
         pc_ip = str(IPv4Interface(f"{subnet.network_address + 2}/24"))
-        router_meta.cmd_list.append(f"ip addr add {router_ip} dev eth{router_meta.eth_index}")
+        router_meta.cmd_list.append(
+            f"ip addr add {router_ip} dev eth{router_meta.eth_index}"
+        )
         router_meta.eth_index += 1
         router_meta.host_network = subnet
         host_meta.cmd_list.append(f"ip addr add {pc_ip} dev eth{host_meta.eth_index}")
@@ -259,7 +268,9 @@ def generate_rip_vpn_topology(
         a_ip, b_ip = assign_p2p_ips(subnet)
         ext_router.cmd_list.append(f"ip addr add {a_ip} dev eth{ext_router.eth_index}")
         ext_router.eth_index += 1
-        gateway_router_meta.cmd_list.append(f"ip addr add {b_ip} dev eth{gateway_router_meta.eth_index}")
+        gateway_router_meta.cmd_list.append(
+            f"ip addr add {b_ip} dev eth{gateway_router_meta.eth_index}"
+        )
         gateway_router_meta.eth_index += 1
 
     # Connect web servers and VPN server to external routers (bridged)
@@ -281,8 +292,12 @@ def generate_rip_vpn_topology(
             ext_router.eth_index += 1
             vpn_server_ip = str(IPv4Interface(f"{zone_ip_base[ip_idx]}/24"))
             ip_idx += 1
-            vpn_server_meta.cmd_list.append(f"ip addr add {vpn_server_ip} dev eth{vpn_server_meta.eth_index}")
-            vpn_server_meta.cmd_list.append(f"ip route add default via {ext_router_ip.split('/')[0]}")
+            vpn_server_meta.cmd_list.append(
+                f"ip addr add {vpn_server_ip} dev eth{vpn_server_meta.eth_index}"
+            )
+            vpn_server_meta.cmd_list.append(
+                f"ip route add default via {ext_router_ip.split('/')[0]}"
+            )
             vpn_server_meta.eth_index += 1
 
         for server_meta in external_server_dict[ext_router.name]:
@@ -293,8 +308,12 @@ def generate_rip_vpn_topology(
             ext_router.eth_index += 1
             server_ip = str(IPv4Interface(f"{zone_ip_base[ip_idx]}/24"))
             ip_idx += 1
-            server_meta.cmd_list.append(f"ip addr add {server_ip} dev eth{server_meta.eth_index}")
-            server_meta.cmd_list.append(f"ip route add default via {ext_router_ip.split('/')[0]}")
+            server_meta.cmd_list.append(
+                f"ip addr add {server_ip} dev eth{server_meta.eth_index}"
+            )
+            server_meta.cmd_list.append(
+                f"ip route add default via {ext_router_ip.split('/')[0]}"
+            )
             server_meta.eth_index += 1
 
     # Router FRR config and startup
@@ -305,7 +324,9 @@ def generate_rip_vpn_topology(
         router_meta.extra_files["/etc/frr/daemons"] = daemons_content
         router_meta.extra_files["/etc/frr/vtysh.conf"] = vtysh_content
         network_str = str(router_meta.host_network) if router_meta.host_network else ""
-        router_meta.extra_files["/etc/frr/frr.conf"] = FRR_BASE_TEMPLATE_RIP.format(network=network_str)
+        router_meta.extra_files["/etc/frr/frr.conf"] = FRR_BASE_TEMPLATE_RIP.format(
+            network=network_str
+        )
         router_meta.cmd_list.append("service frr start")
 
     # WireGuard: key index 0=vpn_server_1, 1=pc1, 2=web_server_1_1, 3=web_server_1_2
@@ -332,7 +353,9 @@ def generate_rip_vpn_topology(
         for server_meta in external_server_dict[ext_router.name]:
             if server_meta.name == "web_server_1_1":
                 server_meta.extra_files.update(
-                    _copy_dir_to_extra_files(os.path.join(SCRIPT_DIR, "confs", server_meta.name))
+                    _copy_dir_to_extra_files(
+                        os.path.join(SCRIPT_DIR, "confs", server_meta.name)
+                    )
                 )
                 server_meta.extra_files["/etc/wireguard/wg0.conf"] = _wg_conf_client(
                     key_pairs[2][0], server_pub, "172.16.1.21"
@@ -341,7 +364,9 @@ def generate_rip_vpn_topology(
                 server_meta.cmd_list.append("ping -c 3 172.16.1.1")
             elif server_meta.name == "web_server_1_2":
                 server_meta.extra_files.update(
-                    _copy_dir_to_extra_files(os.path.join(SCRIPT_DIR, "confs", server_meta.name))
+                    _copy_dir_to_extra_files(
+                        os.path.join(SCRIPT_DIR, "confs", server_meta.name)
+                    )
                 )
                 server_meta.extra_files["/etc/wireguard/wg0.conf"] = _wg_conf_client(
                     key_pairs[3][0], server_pub, "172.16.1.22"
@@ -351,7 +376,11 @@ def generate_rip_vpn_topology(
             server_meta.cmd_list.append("service apache2 start")
 
     all_machines: list[RouterMeta | HostMeta] = (
-        internal_router_list + [gateway_router_meta] + external_routers + tot_host_list + [vpn_server_meta]
+        internal_router_list
+        + [gateway_router_meta]
+        + external_routers
+        + tot_host_list
+        + [vpn_server_meta]
     )
     for _ext_router in external_routers:
         all_machines.extend(external_server_dict[_ext_router.name])
@@ -376,7 +405,9 @@ def generate_rip_vpn_topology(
         f.write("\n".join(lab_conf_lines))
 
     for meta in all_machines:
-        with open(os.path.join(out_path, f"{meta.name}.startup"), "w", encoding="utf-8") as f:
+        with open(
+            os.path.join(out_path, f"{meta.name}.startup"), "w", encoding="utf-8"
+        ) as f:
             f.write("\n".join(meta.cmd_list))
         if meta.extra_files:
             host_dir = os.path.join(out_path, meta.name)
@@ -393,11 +424,16 @@ def generate_rip_vpn_topology(
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="Generate Kathara lab config for RIP Small Internet VPN")
-    parser.add_argument("-s", "--size", choices=["s", "m", "l"], default="s", help="Topology size")
+    parser = argparse.ArgumentParser(
+        description="Generate Kathara lab config for RIP Small Internet VPN"
+    )
+    parser.add_argument(
+        "-s", "--size", choices=["s", "m", "l"], default="s", help="Topology size"
+    )
     parser.add_argument("-o", "--output", default=None, help="Output directory")
     parser.add_argument(
-        "-k", "--wireguard-keys",
+        "-k",
+        "--wireguard-keys",
         default=None,
         help="Path to WireGuard keys file (default: src/nika/net_env/kathara/utils/wireguard/keys.txt). Format: one line per key pair: private_key,public_key; need at least 4 pairs.",
     )

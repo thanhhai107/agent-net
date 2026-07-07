@@ -26,6 +26,7 @@ def _short_tool_name(name: str) -> str:
             return name.removeprefix(prefix)
     return name
 
+
 _KATHARA_PREFIXES = (
     "kathara_base_mcp_server_",
     "kathara_frr_mcp_server_",
@@ -47,7 +48,9 @@ def _short_tool_name(name: str) -> str:
 class NikaOpenAIAugmentedLLM(OpenAIAugmentedLLM):
     """OpenAIAugmentedLLM that writes tool events to ``messages.jsonl``."""
 
-    def __init__(self, *args, nika_logger: MessageLogger | None = None, **kwargs) -> None:
+    def __init__(
+        self, *args, nika_logger: MessageLogger | None = None, **kwargs
+    ) -> None:
         super().__init__(*args, **kwargs)
         self._nika_logger = nika_logger
         self._max_iterations_reached = False

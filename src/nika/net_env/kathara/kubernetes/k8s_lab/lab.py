@@ -135,7 +135,10 @@ class K8sFatTreeBGP(NetworkEnvBase):
             m.add_meta("shell", "/bin/sh")
             if name == "controller":
                 m.add_meta("env", "K3S_TOKEN=secret")
-                m.add_meta("args", "server --disable servicelb --disable traefik --write-kubeconfig-mode 644")
+                m.add_meta(
+                    "args",
+                    "server --disable servicelb --disable traefik --write-kubeconfig-mode 644",
+                )
             else:
                 m.add_meta("env", "K3S_URL=https://controller:6443")
                 m.add_meta("env", "K3S_TOKEN=secret")
@@ -166,4 +169,6 @@ class K8sFatTreeBGP(NetworkEnvBase):
 
     def load_machines(self):
         super().load_machines()
-        self.kubernetes_nodes = sorted(name for name, m in self.lab.machines.items() if "k3s" in m.get_image())
+        self.kubernetes_nodes = sorted(
+            name for name, m in self.lab.machines.items() if "k3s" in m.get_image()
+        )

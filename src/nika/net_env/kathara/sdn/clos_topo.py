@@ -75,7 +75,9 @@ class SDNClos(NetworkEnvBase):
         # Spine
         for i in range(SPINE_NUM):
             switch_name = f"spine_{i + 1}"
-            switch = self.lab.new_machine(switch_name, **{"image": "kathara/sdn", "cpus": 0.5, "mem": "256m"})
+            switch = self.lab.new_machine(
+                switch_name, **{"image": "kathara/sdn", "cpus": 0.5, "mem": "256m"}
+            )
             switch_meta = SwitchMeta(
                 name=switch_name,
                 machine=switch,
@@ -87,7 +89,9 @@ class SDNClos(NetworkEnvBase):
         # Leaf
         for i in range(LEAF_NUM):
             switch_name = f"leaf_{i + 1}"
-            switch = self.lab.new_machine(switch_name, **{"image": "kathara/sdn", "cpus": 0.5, "mem": "256m"})
+            switch = self.lab.new_machine(
+                switch_name, **{"image": "kathara/sdn", "cpus": 0.5, "mem": "256m"}
+            )
             switch_meta = SwitchMeta(
                 name=switch_name,
                 machine=switch,
@@ -104,7 +108,8 @@ class SDNClos(NetworkEnvBase):
             for host_id in range(HOST_PER_LEAF):
                 host_name = f"pc_{leaf_id + 1}_{host_id + 1}"
                 host_machine = self.lab.new_machine(
-                    host_name, **{"image": "kathara/nika-base", "cpus": 0.5, "mem": "256m"}
+                    host_name,
+                    **{"image": "kathara/nika-base", "cpus": 0.5, "mem": "256m"},
                 )
                 host_meta = HostMeta(
                     name=host_name,
@@ -115,22 +120,34 @@ class SDNClos(NetworkEnvBase):
                 tot_host_list.append(host_meta)
 
         # ---------- Controller ----------
-        controller = self.lab.new_machine(  
-            "controller", **{"image": "kathara/nika-pox", "cpus": 0.5, "mem": "256m", "bridged": True}
+        controller = self.lab.new_machine(
+            "controller",
+            **{
+                "image": "kathara/nika-pox",
+                "cpus": 0.5,
+                "mem": "256m",
+                "bridged": True,
+            },
         )
 
         # ---------- Switch initialize ----------
         for switch_meta in tot_switch_list:
-            switch_meta.cmd_list.append("/usr/share/openvswitch/scripts/ovs-ctl --system-id=random start")
+            switch_meta.cmd_list.append(
+                "/usr/share/openvswitch/scripts/ovs-ctl --system-id=random start"
+            )
             switch_meta.cmd_list.append(f"ovs-vsctl add-br {switch_meta.name}")
-            switch_meta.cmd_list.append(f"ovs-vsctl set-fail-mode {switch_meta.name} secure")
+            switch_meta.cmd_list.append(
+                f"ovs-vsctl set-fail-mode {switch_meta.name} secure"
+            )
 
         # ---------- Host-leaf connection ----------
         host_network = IPv4Network("10.0.0.0/24")
         host_pool = host_network.hosts()
         for leaf_idx, leaf_switch in enumerate(leaf_switches, start=1):
             # find hosts belong to this leaf
-            leaf_hosts = [h for h in tot_host_list if h.name.startswith(f"pc_{leaf_idx}_")]
+            leaf_hosts = [
+                h for h in tot_host_list if h.name.startswith(f"pc_{leaf_idx}_")
+            ]
 
             for host_meta in leaf_hosts:
                 link_name = f"{host_meta.name}_{leaf_switch.name}"
@@ -141,14 +158,20 @@ class SDNClos(NetworkEnvBase):
                 # eth<host_meta.eth_index>
                 host_ip = str(next(host_pool))
                 host_meta.ip_address = host_ip
-                host_meta.cmd_list.append(f"ip addr add {host_ip}/24 dev eth{host_meta.eth_index}")
+                host_meta.cmd_list.append(
+                    f"ip addr add {host_ip}/24 dev eth{host_meta.eth_index}"
+                )
                 host_meta.cmd_list.append(f"ip link set eth{host_meta.eth_index} up")
                 host_meta.ip_address = host_ip
                 host_meta.eth_index += 1
 
                 # OVS port on leaf switch
-                leaf_switch.cmd_list.append(f"ovs-vsctl add-port {leaf_switch.name} eth{leaf_switch.eth_index}")
-                leaf_switch.cmd_list.append(f"ip link set eth{leaf_switch.eth_index} up")
+                leaf_switch.cmd_list.append(
+                    f"ovs-vsctl add-port {leaf_switch.name} eth{leaf_switch.eth_index}"
+                )
+                leaf_switch.cmd_list.append(
+                    f"ip link set eth{leaf_switch.eth_index} up"
+                )
                 leaf_switch.eth_index += 1
 
         # ---------- Spine-Leaf mesh  ----------
@@ -160,11 +183,15 @@ class SDNClos(NetworkEnvBase):
                 self.lab.connect_machine_to_link(leaf.machine.name, link_name)
 
                 # Spine
-                spine.cmd_list.append(f"ovs-vsctl add-port {spine.name} eth{spine.eth_index}")
+                spine.cmd_list.append(
+                    f"ovs-vsctl add-port {spine.name} eth{spine.eth_index}"
+                )
                 spine.eth_index += 1
 
                 # Leaf
-                leaf.cmd_list.append(f"ovs-vsctl add-port {leaf.name} eth{leaf.eth_index}")
+                leaf.cmd_list.append(
+                    f"ovs-vsctl add-port {leaf.name} eth{leaf.eth_index}"
+                )
                 leaf.eth_index += 1
 
         # ---------- Control plane ----------
@@ -175,11 +202,17 @@ class SDNClos(NetworkEnvBase):
         for switch_meta in tot_switch_list:
             switch_ip = str(next(infra_network))
 
-            self.lab.connect_machine_to_link(switch_meta.machine.name, "switch_controller")
+            self.lab.connect_machine_to_link(
+                switch_meta.machine.name, "switch_controller"
+            )
 
-            switch_meta.cmd_list.append(f"ip addr add {switch_ip}/24 dev eth{switch_meta.eth_index}")
+            switch_meta.cmd_list.append(
+                f"ip addr add {switch_ip}/24 dev eth{switch_meta.eth_index}"
+            )
             switch_meta.cmd_list.append(f"ip link set eth{switch_meta.eth_index} up")
-            switch_meta.cmd_list.append(f"ovs-vsctl set-controller {switch_meta.name} tcp:{controller_ip}:6633")
+            switch_meta.cmd_list.append(
+                f"ovs-vsctl set-controller {switch_meta.name} tcp:{controller_ip}:6633"
+            )
             switch_meta.eth_index += 1
 
         self.lab.connect_machine_to_link(controller.name, "switch_controller")

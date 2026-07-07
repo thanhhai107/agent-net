@@ -94,7 +94,9 @@ def _format_item_event(phase: str, item: dict[str, Any]) -> str | None:
         changes = item.get("changes") or []
         if not changes:
             return "📄 File change (no paths)"
-        parts = [f"{change.get('kind', '?')} {change.get('path', '?')}" for change in changes]
+        parts = [
+            f"{change.get('kind', '?')} {change.get('path', '?')}" for change in changes
+        ]
         return "📄 " + ", ".join(parts)
 
     if item_type == "web_search" and phase == "item.completed":

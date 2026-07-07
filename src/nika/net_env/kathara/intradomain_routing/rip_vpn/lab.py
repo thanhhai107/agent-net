@@ -66,11 +66,26 @@ class RIPSmallInternetVPN(NetworkEnvBase):
         self.instance = Kathara.get_instance()
         match topo_size:
             case "s":
-                self.internal_router_num, self.host_num, self.ext_router_num, self.ext_server_num = 2, 2, 1, 2
+                (
+                    self.internal_router_num,
+                    self.host_num,
+                    self.ext_router_num,
+                    self.ext_server_num,
+                ) = 2, 2, 1, 2
             case "m":
-                self.internal_router_num, self.host_num, self.ext_router_num, self.ext_server_num = 4, 4, 2, 4
+                (
+                    self.internal_router_num,
+                    self.host_num,
+                    self.ext_router_num,
+                    self.ext_server_num,
+                ) = 4, 4, 2, 4
             case "l":
-                self.internal_router_num, self.host_num, self.ext_router_num, self.ext_server_num = 8, 8, 4, 8
+                (
+                    self.internal_router_num,
+                    self.host_num,
+                    self.ext_router_num,
+                    self.ext_server_num,
+                ) = 8, 8, 4, 8
             case _:
                 raise ValueError("topo_size should be one of 's', 'm', 'l'.")
 
@@ -81,7 +96,9 @@ class RIPSmallInternetVPN(NetworkEnvBase):
         internal_router_list: list[RIPRouterMeta] = []
         for range_idx in range(1, self.internal_router_num + 1):
             router_name = f"router{range_idx}"
-            router_machine = self.lab.new_machine(router_name, **{"image": "kathara/frr", "cpu": 0.5, "mem": "256m"})
+            router_machine = self.lab.new_machine(
+                router_name, **{"image": "kathara/frr", "cpu": 0.5, "mem": "256m"}
+            )
             router_meta = RIPRouterMeta(
                 name=router_name,
                 machine=router_machine,
@@ -94,7 +111,10 @@ class RIPSmallInternetVPN(NetworkEnvBase):
         tot_host_list: list[HostMeta] = []
         for host_idx in range(1, self.host_num + 1):
             host_name = f"pc{host_idx}"
-            host_machine = self.lab.new_machine(host_name, **{"image": "kathara/nika-wireguard", "cpu": 0.5, "mem": "256m"})
+            host_machine = self.lab.new_machine(
+                host_name,
+                **{"image": "kathara/nika-wireguard", "cpu": 0.5, "mem": "256m"},
+            )
             host_meta = HostMeta(
                 name=host_name,
                 machine=host_machine,
@@ -118,7 +138,9 @@ class RIPSmallInternetVPN(NetworkEnvBase):
         external_routers: list[RIPRouterMeta] = []
         for i in range(1, self.ext_router_num + 1):
             router_name = f"external_router_{i}"
-            router_machine = self.lab.new_machine(router_name, **{"image": "kathara/frr", "cpu": 0.5, "mem": "256m"})
+            router_machine = self.lab.new_machine(
+                router_name, **{"image": "kathara/frr", "cpu": 0.5, "mem": "256m"}
+            )
             router_meta = RIPRouterMeta(
                 name=router_name,
                 machine=router_machine,
@@ -133,7 +155,8 @@ class RIPSmallInternetVPN(NetworkEnvBase):
             for server_idx in range(1, self.ext_server_num + 1):
                 server_name = f"web_server_{i}_{server_idx}"
                 server_machine = self.lab.new_machine(
-                    server_name, **{"image": "kathara/nika-wireguard", "cpu": 0.5, "mem": "256m"}
+                    server_name,
+                    **{"image": "kathara/nika-wireguard", "cpu": 0.5, "mem": "256m"},
                 )
                 server_meta = HostMeta(
                     name=server_name,
@@ -147,7 +170,8 @@ class RIPSmallInternetVPN(NetworkEnvBase):
         tot_vpn_dict = {}
         vpn_server_name = "vpn_server_1"
         vpn_server_machine = self.lab.new_machine(
-            vpn_server_name, **{"image": "kathara/nika-wireguard", "cpu": 0.5, "mem": "256m"}
+            vpn_server_name,
+            **{"image": "kathara/nika-wireguard", "cpu": 0.5, "mem": "256m"},
         )
         vpn_server_meta = HostMeta(
             name=vpn_server_name,
@@ -183,9 +207,13 @@ class RIPSmallInternetVPN(NetworkEnvBase):
 
             subnet = infra_pool.pop(0)
             a_ip, b_ip = assign_p2p_ips(subnet)
-            r_internal.cmd_list.append(f"ip addr add {a_ip} dev eth{r_internal.eth_index}")
+            r_internal.cmd_list.append(
+                f"ip addr add {a_ip} dev eth{r_internal.eth_index}"
+            )
             r_internal.eth_index += 1
-            r_gateway.cmd_list.append(f"ip addr add {b_ip} dev eth{r_gateway.eth_index}")
+            r_gateway.cmd_list.append(
+                f"ip addr add {b_ip} dev eth{r_gateway.eth_index}"
+            )
             r_gateway.eth_index += 1
 
         # connect internal hosts to internal routers
@@ -193,34 +221,48 @@ class RIPSmallInternetVPN(NetworkEnvBase):
             router_meta = internal_router_list[i]
             host_meta = tot_host_list[i]
             self.lab.connect_machine_to_link(
-                router_meta.machine.name, f"{router_meta.machine.name}_{host_meta.machine.name}"
+                router_meta.machine.name,
+                f"{router_meta.machine.name}_{host_meta.machine.name}",
             )
             self.lab.connect_machine_to_link(
-                host_meta.machine.name, f"{router_meta.machine.name}_{host_meta.machine.name}"
+                host_meta.machine.name,
+                f"{router_meta.machine.name}_{host_meta.machine.name}",
             )
 
             subnet = IPv4Network(f"10.0.{i}.0/24")
             router_ip = str(IPv4Interface(f"{subnet.network_address + 1}/24"))
             pc_ip = str(IPv4Interface(f"{subnet.network_address + 2}/24"))
-            router_meta.cmd_list.append(f"ip addr add {router_ip} dev eth{router_meta.eth_index}")
+            router_meta.cmd_list.append(
+                f"ip addr add {router_ip} dev eth{router_meta.eth_index}"
+            )
             router_meta.eth_index += 1
             router_meta.host_network = subnet
 
-            host_meta.cmd_list.append(f"ip addr add {pc_ip} dev eth{host_meta.eth_index}")
+            host_meta.cmd_list.append(
+                f"ip addr add {pc_ip} dev eth{host_meta.eth_index}"
+            )
             host_meta.eth_index += 1
-            host_meta.cmd_list.append(f"ip route add default via {router_ip.split('/')[0]}")
+            host_meta.cmd_list.append(
+                f"ip route add default via {router_ip.split('/')[0]}"
+            )
 
         # connect external routers to gateway router
         for ext_router in external_routers:
             link_name = f"{ext_router.machine.name}_{gateway_router_meta.machine.name}"
             self.lab.connect_machine_to_link(ext_router.machine.name, link_name)
-            self.lab.connect_machine_to_link(gateway_router_meta.machine.name, link_name)
+            self.lab.connect_machine_to_link(
+                gateway_router_meta.machine.name, link_name
+            )
 
             subnet = infra_pool.pop(0)
             a_ip, b_ip = assign_p2p_ips(subnet)
-            ext_router.cmd_list.append(f"ip addr add {a_ip} dev eth{ext_router.eth_index}")
+            ext_router.cmd_list.append(
+                f"ip addr add {a_ip} dev eth{ext_router.eth_index}"
+            )
             ext_router.eth_index += 1
-            gateway_router_meta.cmd_list.append(f"ip addr add {b_ip} dev eth{gateway_router_meta.eth_index}")
+            gateway_router_meta.cmd_list.append(
+                f"ip addr add {b_ip} dev eth{gateway_router_meta.eth_index}"
+            )
             gateway_router_meta.eth_index += 1
 
         # connect web servers to external routers
@@ -238,47 +280,64 @@ class RIPSmallInternetVPN(NetworkEnvBase):
             # connect vpn servers to the first external router to get the 20.0.0.2/24 address
             if ext_idx == 0:
                 self.lab.connect_machine_to_link(
-                    vpn_server_meta.machine.name, f"{ext_router.machine.name}_{vpn_server_meta.machine.name}"
+                    vpn_server_meta.machine.name,
+                    f"{ext_router.machine.name}_{vpn_server_meta.machine.name}",
                 )
                 self.lab.connect_machine_to_link(
-                    ext_router.machine.name, f"{ext_router.machine.name}_{vpn_server_meta.machine.name}"
+                    ext_router.machine.name,
+                    f"{ext_router.machine.name}_{vpn_server_meta.machine.name}",
                 )
                 ext_router.cmd_list.append(f"brctl addif br0 eth{ext_router.eth_index}")
                 ext_router.eth_index += 1
                 vpn_server_ip = str(IPv4Interface(f"{next(zone_ip_base)}/24"))
-                vpn_server_meta.cmd_list.append(f"ip addr add {vpn_server_ip} dev eth{vpn_server_meta.eth_index}")
-                vpn_server_meta.cmd_list.append(f"ip route add default via {ext_router_ip.split('/')[0]}")
+                vpn_server_meta.cmd_list.append(
+                    f"ip addr add {vpn_server_ip} dev eth{vpn_server_meta.eth_index}"
+                )
+                vpn_server_meta.cmd_list.append(
+                    f"ip route add default via {ext_router_ip.split('/')[0]}"
+                )
                 vpn_server_meta.eth_index += 1
                 vpn_server_meta.ip_address = vpn_server_ip.split("/")[0]
 
             # connect server to the bridge
             for server_meta in external_server_dict[ext_router.name]:
                 self.lab.connect_machine_to_link(
-                    server_meta.machine.name, f"{ext_router.machine.name}_{server_meta.machine.name}"
+                    server_meta.machine.name,
+                    f"{ext_router.machine.name}_{server_meta.machine.name}",
                 )
                 self.lab.connect_machine_to_link(
-                    ext_router.machine.name, f"{ext_router.machine.name}_{server_meta.machine.name}"
+                    ext_router.machine.name,
+                    f"{ext_router.machine.name}_{server_meta.machine.name}",
                 )
                 ext_router.cmd_list.append(f"brctl addif br0 eth{ext_router.eth_index}")
                 ext_router.eth_index += 1
                 server_ip = str(IPv4Interface(f"{next(zone_ip_base)}/24"))
-                server_meta.cmd_list.append(f"ip addr add {server_ip} dev eth{server_meta.eth_index}")
-                server_meta.cmd_list.append(f"ip route add default via {ext_router_ip.split('/')[0]}")
+                server_meta.cmd_list.append(
+                    f"ip addr add {server_ip} dev eth{server_meta.eth_index}"
+                )
+                server_meta.cmd_list.append(
+                    f"ip route add default via {ext_router_ip.split('/')[0]}"
+                )
                 server_meta.eth_index += 1
 
         # Add basic configuration to the routers
-        for router_meta in internal_router_list + [gateway_router_meta] + external_routers:
+        for router_meta in (
+            internal_router_list + [gateway_router_meta] + external_routers
+        ):
             # general conf for frr
             router_meta.machine.create_file_from_path(
                 str(pkg_path("net_env/kathara/utils/rip/daemons")), "/etc/frr/daemons"
             )
             router_meta.machine.create_file_from_path(
-                str(pkg_path("net_env/kathara/utils/rip/vtysh.conf")), "/etc/frr/vtysh.conf"
+                str(pkg_path("net_env/kathara/utils/rip/vtysh.conf")),
+                "/etc/frr/vtysh.conf",
             )
             router_meta.frr_config = FRR_BASE_TEMPLATE_RIP.format(
                 network=str(router_meta.host_network),
             )
-            router_meta.machine.create_file_from_string(router_meta.frr_config, "/etc/frr/frr.conf")
+            router_meta.machine.create_file_from_string(
+                router_meta.frr_config, "/etc/frr/frr.conf"
+            )
 
             # startup file
             router_meta.cmd_list.append("service frr start")
@@ -324,7 +383,9 @@ class RIPSmallInternetVPN(NetworkEnvBase):
                         "/",
                     )
                     server_meta.cmd_list.append("wg-quick up wg0")
-                    server_meta.cmd_list.append("ping -c 3 172.16.1.1")  # test vpn connection
+                    server_meta.cmd_list.append(
+                        "ping -c 3 172.16.1.1"
+                    )  # test vpn connection
 
                 server_meta.cmd_list.append("service apache2 start")
                 self.lab.create_file_from_list(

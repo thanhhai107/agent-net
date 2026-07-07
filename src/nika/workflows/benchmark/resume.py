@@ -20,7 +20,9 @@ def benchmark_row_fingerprint(row: dict[str, Any]) -> str:
         "scenario": row["scenario"],
         "problem": row["problem"],
         "topo_size": row.get("topo_size") or "",
-        "inject": {str(k): str(v) for k, v in sorted((row.get("inject") or {}).items())},
+        "inject": {
+            str(k): str(v) for k, v in sorted((row.get("inject") or {}).items())
+        },
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
@@ -141,7 +143,9 @@ def scan_benchmark_cases(
                 continue
             if session_matches_row(run_meta, row):
                 print(f"{label} cleaning incomplete session")
-                cleanup_benchmark_session(str(run_meta.get("session_id") or session_dir.name), session_dir)
+                cleanup_benchmark_session(
+                    str(run_meta.get("session_id") or session_dir.name), session_dir
+                )
 
         pending.append(index)
 

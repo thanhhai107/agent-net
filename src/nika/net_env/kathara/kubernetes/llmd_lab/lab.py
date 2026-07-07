@@ -71,7 +71,10 @@ class LLMDInferenceCluster(NetworkEnvBase):
                 m.add_meta("env", "K3S_TOKEN=secret")
                 m.add_meta("env", "VERIFY_CHECKSUM=false")
                 m.add_meta("env", "KUBECONFIG=/etc/rancher/k3s/k3s.yaml")
-                m.add_meta("args", "server --disable servicelb --disable traefik --write-kubeconfig-mode 644")
+                m.add_meta(
+                    "args",
+                    "server --disable servicelb --disable traefik --write-kubeconfig-mode 644",
+                )
             else:
                 m.add_meta("env", "K3S_URL=https://controller:6443")
                 m.add_meta("env", "K3S_TOKEN=secret")

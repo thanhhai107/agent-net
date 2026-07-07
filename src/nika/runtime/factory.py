@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from nika.runtime.base import LabRuntime
 from nika.runtime.containerlab.runtime import ContainerlabRuntime
 from nika.runtime.kathara.runtime import KatharaRuntime
+from nika.runtime.meta import meta_get, meta_lab_name, meta_path
 
 if TYPE_CHECKING:
     from nika.net_env.base import NetworkEnvBase
@@ -15,14 +15,9 @@ if TYPE_CHECKING:
 
 def resolve_backend(meta: dict[str, Any] | Any) -> str:
     """Return session backend; infer from scenario when metadata is missing."""
-    if isinstance(meta, dict):
-        backend = meta.get("backend")
-        scenario_params = meta.get("scenario_params") or {}
-        scenario_name = meta.get("scenario_name")
-    else:
-        backend = getattr(meta, "backend", None)
-        scenario_params = getattr(meta, "scenario_params", None) or {}
-        scenario_name = getattr(meta, "scenario_name", None)
+    backend = meta_get(meta, "backend")
+    scenario_params = meta_get(meta, "scenario_params") or {}
+    scenario_name = meta_get(meta, "scenario_name")
 
     if backend:
         return str(backend)
@@ -43,61 +38,24 @@ def resolve_backend(meta: dict[str, Any] | Any) -> str:
     return "kathara"
 
 
-def _topology_file_from_meta(meta: dict[str, Any] | Any) -> Path | None:
-    if isinstance(meta, dict):
-        raw = meta.get("topology_file") or (meta.get("scenario_params") or {}).get("topology_file")
-    else:
-        raw = getattr(meta, "topology_file", None) or (getattr(meta, "scenario_params", None) or {}).get(
-            "topology_file"
-        )
-    if not raw:
-        return None
-    return Path(str(raw))
-
-
-def _runtime_workdir_from_meta(meta: dict[str, Any] | Any) -> Path | None:
-    if isinstance(meta, dict):
-        raw = meta.get("runtime_workdir") or (meta.get("scenario_params") or {}).get("runtime_workdir")
-    else:
-        raw = getattr(meta, "runtime_workdir", None) or (getattr(meta, "scenario_params", None) or {}).get(
-            "runtime_workdir"
-        )
-    if not raw:
-        return None
-    return Path(str(raw))
-
-
-def _lab_name_from_meta(meta: dict[str, Any] | Any) -> str:
-    if isinstance(meta, dict):
-        lab_name = meta.get("lab_name")
-    else:
-        lab_name = getattr(meta, "lab_name", None)
-    if not lab_name:
-        raise ValueError("Session metadata has no lab_name.")
-    return str(lab_name)
-
-
 def runtime_for_session(meta: dict[str, Any] | Any) -> LabRuntime:
     """Build a runtime from persisted session metadata."""
     backend = resolve_backend(meta)
-    lab_name = _lab_name_from_meta(meta)
+    lab_name = meta_lab_name(meta)
     if backend == "containerlab":
-        topology_file = _topology_file_from_meta(meta)
+        topology_file = meta_path(meta, "topology_file", scenario_params=True)
         if topology_file is None:
             raise ValueError(f"Containerlab session {lab_name!r} has no topology_file.")
         return ContainerlabRuntime(
             lab_name=lab_name,
             topology_file=topology_file,
-            runtime_workdir=_runtime_workdir_from_meta(meta),
+            runtime_workdir=meta_path(meta, "runtime_workdir", scenario_params=True),
         )
     from nika.net_env.net_env_pool import get_net_env_instance
 
-    scenario_name = meta.get("scenario_name") if isinstance(meta, dict) else getattr(meta, "scenario_name", None)
+    scenario_name = meta_get(meta, "scenario_name")
     kwargs: dict[str, Any] = {"lab_name": lab_name, "backend": backend}
-    if isinstance(meta, dict):
-        scenario_params = dict(meta.get("scenario_params") or {})
-    else:
-        scenario_params = dict(getattr(meta, "scenario_params", None) or {})
+    scenario_params = dict(meta_get(meta, "scenario_params") or {})
     scenario_params.pop("backend", None)
     scenario_params.pop("topology_file", None)
     scenario_params.pop("runtime_workdir", None)

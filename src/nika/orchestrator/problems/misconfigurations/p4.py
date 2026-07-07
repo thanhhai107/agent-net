@@ -1,12 +1,12 @@
 from typing import Optional
 
-from nika.orchestrator.problems.context import init_problem
 from pydantic import BaseModel, Field
 
-from nika.orchestrator.problems.problem_base import ProblemMeta, RootCauseCategory, TaskDescription, TaskLevel, build_verify_result
-from nika.orchestrator.tasks.detection import DetectionTask
-from nika.orchestrator.tasks.localization import LocalizationTask
-from nika.orchestrator.tasks.rca import RCATask
+from nika.orchestrator.problems.problem_base import (
+    RootCauseCategory,
+    build_verify_result,
+    ProblemBase,
+)
 from nika.utils.logger import system_logger
 
 logger = system_logger
@@ -21,10 +21,13 @@ class P4AggressiveDetectionThresholdsParams(BaseModel):
     """Parameters for injecting a P4 aggressive detection thresholds fault."""
 
     host_name: str = Field(description="Target BMv2 switch name.")
-    p4_name: Optional[str] = Field(default=None, description="P4 program name (without suffix). Defaults to runtime detection.")
+    p4_name: Optional[str] = Field(
+        default=None,
+        description="P4 program name (without suffix). Defaults to runtime detection.",
+    )
 
 
-class P4AggressiveDetectionThresholdsBase:
+class P4AggressiveDetectionThresholds(ProblemBase):
     root_cause_category = RootCauseCategory.NETWORK_NODE_ERROR
     root_cause_name = "p4_aggressive_detection_thresholds"
     TAGS: str = ["p4", "bloom_filter"]
@@ -32,38 +35,47 @@ class P4AggressiveDetectionThresholdsBase:
     Params = P4AggressiveDetectionThresholdsParams
 
     def __init__(self, scenario_name: str | None, **kwargs):
-        super().__init__()
-        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
-        self.faulty_devices: list[str] = []
+        super().__init__(scenario_name, **kwargs)
 
     def inject_fault(self, params: P4AggressiveDetectionThresholdsParams):
-        host = params.host_name
-        self.faulty_devices = [host]
-        p4_name = params.p4_name if params.p4_name is not None else getattr(self, "p4_name", None)
+        self.set_faulty_devices([params.host_name])
+        p4_name = (
+            params.p4_name
+            if params.p4_name is not None
+            else getattr(self, "p4_name", None)
+        )
         if p4_name is None:
-            p4_name = self.runtime.exec(host, "echo *.p4 | sed 's/\\.p4//'").strip()
+            p4_name = self.runtime.exec(
+                params.host_name, "echo *.p4 | sed 's/\\.p4//'"
+            ).strip()
         self.runtime.exec(
-            host,
+            params.host_name,
             f"cp {p4_name}.p4 {p4_name}.p4.bak && "
             f"rm {p4_name}.json && "
             f"sed -Ei 's/#define PACKET_THRESHOLD 1000/#define PACKET_THRESHOLD 100/g' {p4_name}.p4 ",
         )
-        self.runtime.exec(host, "pkill -f simple_switch")
-        self.runtime.exec(host, f"./hostlab/{host}.startup")
+        self.runtime.exec(params.host_name, "pkill -f simple_switch")
+        self.runtime.exec(params.host_name, f"./hostlab/{params.host_name}.startup")
 
     def verify_fault(self, params: P4AggressiveDetectionThresholdsParams) -> dict:
         """Verify PACKET_THRESHOLD was changed to 100 in the P4 source."""
-        host = params.host_name
-        self.faulty_devices = [host]
-        p4_name = params.p4_name if params.p4_name is not None else getattr(self, "p4_name", None)
+        self.set_faulty_devices([params.host_name])
+        p4_name = (
+            params.p4_name
+            if params.p4_name is not None
+            else getattr(self, "p4_name", None)
+        )
         if p4_name is None:
-            p4_name = self.runtime.exec(host, "echo *.p4 | sed 's/\\.p4//'").strip()
+            p4_name = self.runtime.exec(
+                params.host_name, "echo *.p4 | sed 's/\\.p4//'"
+            ).strip()
         threshold_check = self.runtime.exec(
-            host,
+            params.host_name,
             f"grep 'PACKET_THRESHOLD 100' {p4_name}.p4 2>/dev/null && echo found || echo absent",
         ).strip()
         json_check = self.runtime.exec(
-            host, f"ls {p4_name}.json 2>/dev/null && echo exists || echo missing"
+            params.host_name,
+            f"ls {p4_name}.json 2>/dev/null && echo exists || echo missing",
         ).strip()
         threshold_modified = "found" in threshold_check
         json_exists = "exists" in json_check
@@ -72,32 +84,9 @@ class P4AggressiveDetectionThresholdsBase:
             root_cause_name=self.root_cause_name,
             faulty_devices=self.faulty_devices,
             verified=verified,
-            details={"host": host, "threshold_modified": threshold_modified, "json_exists": json_exists},
+            details={
+                "host": params.host_name,
+                "threshold_modified": threshold_modified,
+                "json_exists": json_exists,
+            },
         )
-
-
-class P4AggressiveDetectionThresholdsDetection(P4AggressiveDetectionThresholdsBase, DetectionTask):
-    META = ProblemMeta(
-        root_cause_category=P4AggressiveDetectionThresholdsBase.root_cause_category,
-        root_cause_name=P4AggressiveDetectionThresholdsBase.root_cause_name,
-        task_level=TaskLevel.DETECTION,
-        description=TaskDescription.DETECTION,
-    )
-
-
-class P4AggressiveDetectionThresholdsLocalization(P4AggressiveDetectionThresholdsBase, LocalizationTask):
-    META = ProblemMeta(
-        root_cause_category=P4AggressiveDetectionThresholdsBase.root_cause_category,
-        root_cause_name=P4AggressiveDetectionThresholdsBase.root_cause_name,
-        task_level=TaskLevel.LOCALIZATION,
-        description=TaskDescription.LOCALIZATION,
-    )
-
-
-class P4AggressiveDetectionThresholdsRCA(P4AggressiveDetectionThresholdsBase, RCATask):
-    META = ProblemMeta(
-        root_cause_category=P4AggressiveDetectionThresholdsBase.root_cause_category,
-        root_cause_name=P4AggressiveDetectionThresholdsBase.root_cause_name,
-        task_level=TaskLevel.RCA,
-        description=TaskDescription.RCA,
-    )

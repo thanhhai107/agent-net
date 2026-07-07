@@ -10,7 +10,9 @@ import os
 from dataclasses import dataclass, field
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(SCRIPT_DIR)))))
+PROJECT_ROOT = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(SCRIPT_DIR))))
+)
 P4_UTILS = os.path.join(PROJECT_ROOT, "src/nika/net_env/kathara/utils/p4")
 
 
@@ -115,19 +117,25 @@ def generate_p4_counter_topology(output_dir: str | None = None) -> str:
     ]
 
     for i, sw in enumerate([s1, s2, s3, s4], start=1):
-        sw.extra_files[p4_file] = _read_file(os.path.join(SCRIPT_DIR, "p4_src", p4_file))
-        sw.extra_files["commands.txt"] = _read_file(os.path.join(SCRIPT_DIR, f"cmds/s{i}.txt"))
+        sw.extra_files[p4_file] = _read_file(
+            os.path.join(SCRIPT_DIR, "p4_src", p4_file)
+        )
+        sw.extra_files["commands.txt"] = _read_file(
+            os.path.join(SCRIPT_DIR, f"cmds/s{i}.txt")
+        )
         if os.path.exists(os.path.join(P4_UTILS, "sswitch_thrift_API.py")):
-            sw.extra_files["usr/local/lib/python3.11/site-packages/sswitch_thrift_API.py"] = _read_file(
-                os.path.join(P4_UTILS, "sswitch_thrift_API.py")
-            )
+            sw.extra_files[
+                "usr/local/lib/python3.11/site-packages/sswitch_thrift_API.py"
+            ] = _read_file(os.path.join(P4_UTILS, "sswitch_thrift_API.py"))
         if os.path.exists(os.path.join(P4_UTILS, "thrift_API.py")):
-            sw.extra_files["usr/local/lib/python3.11/site-packages/thrift_API.py"] = _read_file(
-                os.path.join(P4_UTILS, "thrift_API.py")
+            sw.extra_files["usr/local/lib/python3.11/site-packages/thrift_API.py"] = (
+                _read_file(os.path.join(P4_UTILS, "thrift_API.py"))
             )
 
     all_machines = [pc1, pc2, pc3, s1, s2, s3, s4]
-    return _write_lab(output_dir, all_machines, "p4_counter", "P4 Counter - 3 hosts, 4 switches")
+    return _write_lab(
+        output_dir, all_machines, "p4_counter", "P4 Counter - 3 hosts, 4 switches"
+    )
 
 
 def _write_lab(
@@ -173,8 +181,14 @@ def _write_lab(
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="Generate Kathara lab config for P4 Counter")
-    parser.add_argument("-o", "--output", default=None, help="Output directory (default: topology/)")
+    parser = argparse.ArgumentParser(
+        description="Generate Kathara lab config for P4 Counter"
+    )
+    parser.add_argument(
+        "-o", "--output", default=None, help="Output directory (default: topology/)"
+    )
     args = parser.parse_args()
-    out = generate_p4_counter_topology(output_dir=args.output or os.path.join(SCRIPT_DIR, "topology"))
+    out = generate_p4_counter_topology(
+        output_dir=args.output or os.path.join(SCRIPT_DIR, "topology")
+    )
     print(f"Lab configuration generated at: {out}")

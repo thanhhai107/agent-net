@@ -1,10 +1,10 @@
 from pydantic import BaseModel, Field
 
-from nika.orchestrator.problems.context import init_problem
-from nika.orchestrator.problems.problem_base import ProblemMeta, RootCauseCategory, TaskDescription, TaskLevel, build_verify_result
-from nika.orchestrator.tasks.detection import DetectionTask
-from nika.orchestrator.tasks.localization import LocalizationTask
-from nika.orchestrator.tasks.rca import RCATask
+from nika.orchestrator.problems.problem_base import (
+    RootCauseCategory,
+    build_verify_result,
+    ProblemBase,
+)
 from nika.utils.logger import system_logger
 
 # ==================================================================
@@ -19,7 +19,7 @@ class WebDoSParams(BaseModel):
     attacker_device: str = Field(description="Attacker host name.")
 
 
-class WebDoSBase:
+class WebDoS(ProblemBase):
     root_cause_category: RootCauseCategory = RootCauseCategory.NETWORK_UNDER_ATTACK
     root_cause_name: str = "web_dos_attack"
     symptom_desc: str = "Users reports high latency when accessing some web services."
@@ -28,15 +28,13 @@ class WebDoSBase:
     Params = WebDoSParams
 
     def __init__(self, scenario_name: str | None, **kwargs):
-        super().__init__()
+        super().__init__(scenario_name, **kwargs)
         self.logger = system_logger
-        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
-        self.faulty_devices: list[str] = []
 
     def inject_fault(self, params: WebDoSParams):
         web_server = params.host_name
         attacker = params.attacker_device
-        self.faulty_devices = [web_server]
+        self.set_faulty_devices([web_server])
         target_ip = self.runtime.get_host_ip(web_server, with_prefix=False)
         cmd = (
             f"nohup bash -c 'while true; do ab -n 200000000 -c 1000 -k http://{target_ip}/; done'"
@@ -49,38 +47,17 @@ class WebDoSBase:
         web_server = params.host_name
         attacker = params.attacker_device
         target_ip = self.runtime.get_host_ip(web_server, with_prefix=False)
-        pgrep_output = self.runtime.exec(attacker, "pgrep -a ab 2>/dev/null || echo NONE").strip()
+        pgrep_output = self.runtime.exec(
+            attacker, "pgrep -a ab 2>/dev/null || echo NONE"
+        ).strip()
         verified = "ab" in pgrep_output and pgrep_output != "NONE"
         return build_verify_result(
             root_cause_name=self.root_cause_name,
             faulty_devices=self.faulty_devices,
             verified=verified,
-            details={"attacker": attacker, "target_ip": target_ip, "pgrep_output": pgrep_output},
+            details={
+                "attacker": attacker,
+                "target_ip": target_ip,
+                "pgrep_output": pgrep_output,
+            },
         )
-
-
-class WebDoSDetection(WebDoSBase, DetectionTask):
-    META = ProblemMeta(
-        root_cause_category=WebDoSBase.root_cause_category,
-        root_cause_name=WebDoSBase.root_cause_name,
-        task_level=TaskLevel.DETECTION,
-        description=TaskDescription.DETECTION,
-    )
-
-
-class WebDoSLocalization(WebDoSBase, LocalizationTask):
-    META = ProblemMeta(
-        root_cause_category=WebDoSBase.root_cause_category,
-        root_cause_name=WebDoSBase.root_cause_name,
-        task_level=TaskLevel.LOCALIZATION,
-        description=TaskDescription.LOCALIZATION,
-    )
-
-
-class WebDoSRCA(WebDoSBase, RCATask):
-    META = ProblemMeta(
-        root_cause_category=WebDoSBase.root_cause_category,
-        root_cause_name=WebDoSBase.root_cause_name,
-        task_level=TaskLevel.RCA,
-        description=TaskDescription.RCA,
-    )

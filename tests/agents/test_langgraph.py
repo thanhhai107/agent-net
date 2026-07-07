@@ -15,7 +15,11 @@ from nika.utils.agent_config import (
 from nika.utils.session_store import SessionStore
 from tests.agents._assertions import assert_phase_messages, assert_submission_fields
 from tests.integration_base import OrderedPipelineTestCase
-from tests.integration_pipeline import CommonPipelineSteps, deepseek_api_key_available, load_test_env
+from tests.integration_pipeline import (
+    CommonPipelineSteps,
+    deepseek_api_key_available,
+    load_test_env,
+)
 
 load_test_env()
 
@@ -37,7 +41,9 @@ class LangGraphAgentConfigTest(unittest.TestCase):
             {ENV_LLM_PROVIDER: "deepseek", ENV_LANGGRAPH_MODEL: "deepseek-chat"},
             clear=True,
         ):
-            self.assertEqual(resolve_llm_provider("openai", agent_type="byo.langgraph"), "openai")
+            self.assertEqual(
+                resolve_llm_provider("openai", agent_type="byo.langgraph"), "openai"
+            )
 
     def test_llm_provider_required(self) -> None:
         with unittest.mock.patch.dict(os.environ, {}, clear=True):
@@ -45,9 +51,15 @@ class LangGraphAgentConfigTest(unittest.TestCase):
                 resolve_llm_provider(None, agent_type="byo.langgraph")
 
     def test_model_from_env(self) -> None:
-        with unittest.mock.patch.dict(os.environ, {ENV_LANGGRAPH_MODEL: "deepseek-chat"}, clear=True):
-            self.assertEqual(resolve_agent_model("byo.langgraph", None), "deepseek-chat")
-            self.assertEqual(resolve_agent_model("byo.langgraph", "override"), "override")
+        with unittest.mock.patch.dict(
+            os.environ, {ENV_LANGGRAPH_MODEL: "deepseek-chat"}, clear=True
+        ):
+            self.assertEqual(
+                resolve_agent_model("byo.langgraph", None), "deepseek-chat"
+            )
+            self.assertEqual(
+                resolve_agent_model("byo.langgraph", "override"), "override"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -55,7 +67,9 @@ class LangGraphAgentConfigTest(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 
-@unittest.skipUnless(deepseek_api_key_available(), "DEEPSEEK_API_KEY required for byo.langgraph agent")
+@unittest.skipUnless(
+    deepseek_api_key_available(), "DEEPSEEK_API_KEY required for byo.langgraph agent"
+)
 class LangGraphAgentPipelineTest(CommonPipelineSteps, OrderedPipelineTestCase):
     """Full pipeline with the LangGraph agent."""
 

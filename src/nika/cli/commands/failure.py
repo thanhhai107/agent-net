@@ -17,7 +17,9 @@ def _parse_set_options(raw_items: list[str] | None) -> dict[str, str]:
         key, value = raw.split("=", 1)
         key = key.strip()
         if not key:
-            raise typer.BadParameter(f"Invalid --set value {raw!r}. Key cannot be empty.")
+            raise typer.BadParameter(
+                f"Invalid --set value {raw!r}. Key cannot be empty."
+            )
         overrides[key] = value.strip()
     return overrides
 
@@ -38,7 +40,9 @@ def failure_inject(
         metavar="PROBLEM",
         help="One or more problem ids (see `nika failure list`).",
     ),
-    session_id: str | None = typer.Option(None, "--session_id", help="Target session id."),
+    session_id: str | None = typer.Option(
+        None, "--session_id", help="Target session id."
+    ),
     sets: list[str] | None = typer.Option(
         None,
         "--set",
@@ -59,13 +63,14 @@ def failure_inject(
 
 @failure_app.command("describe")
 def failure_describe(
-    problem: str = typer.Argument(..., metavar="PROBLEM", help="Problem id to inspect."),
+    problem: str = typer.Argument(
+        ..., metavar="PROBLEM", help="Problem id to inspect."
+    ),
 ) -> None:
     """Describe supported parameters for one failure type."""
     from nika.orchestrator.problems.prob_pool import get_problem_class
-    from nika.orchestrator.problems.problem_base import TaskLevel
 
-    cls = get_problem_class(problem, TaskLevel.DETECTION)
+    cls = get_problem_class(problem)
     if cls is None:
         typer.echo(f"Unknown problem: {problem}", err=True)
         raise typer.Exit(1)
@@ -82,13 +87,17 @@ def failure_describe(
         typer.echo(schema["description"])
     typer.echo("\nParameter schema (JSON Schema):")
     typer.echo(json.dumps(schema, indent=2))
-    params_hint = " ".join(f"--set {name}=<value>" for name in schema.get("properties", {}))
+    params_hint = " ".join(
+        f"--set {name}=<value>" for name in schema.get("properties", {})
+    )
     typer.echo(f"\nUsage example:\n  nika failure inject {problem} {params_hint}")
 
 
 @failure_app.command("ps")
 def failure_ps(
-    session_id: str | None = typer.Option(None, "--session_id", help="Target session id."),
+    session_id: str | None = typer.Option(
+        None, "--session_id", help="Target session id."
+    ),
 ) -> None:
     """List persisted failure injection states for one session."""
     from nika.utils.session_store import SessionStore

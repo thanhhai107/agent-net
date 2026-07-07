@@ -11,7 +11,7 @@ from nika.config import RESULTS_DIR
 from nika.evaluator.llm_judge import JudgeResponse
 from nika.evaluator.trace_parser import AgentTraceParser
 from nika.orchestrator.problems.prob_pool import get_problem_instance
-from nika.utils.session_artifacts import RUN_FILENAME, is_finished_session, iter_session_dirs
+from nika.utils.session_artifacts import RUN_FILENAME, is_finished_session
 
 load_dotenv()
 
@@ -21,7 +21,11 @@ SUBMISSION_FILENAME = "submission.json"
 LLM_JUDGE_FILENAME = "llm_judge.json"
 MESSAGES_FILENAME = "messages.jsonl"
 
-SUMMARY_REQUIRED_ARTIFACTS = (RUN_FILENAME, GROUND_TRUTH_FILENAME, EVAL_METRICS_FILENAME)
+SUMMARY_REQUIRED_ARTIFACTS = (
+    RUN_FILENAME,
+    GROUND_TRUTH_FILENAME,
+    EVAL_METRICS_FILENAME,
+)
 
 
 @dataclass
@@ -74,7 +78,9 @@ def default_summary_csv_path(result_dir=None) -> str:
 
 
 def missing_summary_artifacts(session_dir: Path) -> list[str]:
-    return [name for name in SUMMARY_REQUIRED_ARTIFACTS if not (session_dir / name).exists()]
+    return [
+        name for name in SUMMARY_REQUIRED_ARTIFACTS if not (session_dir / name).exists()
+    ]
 
 
 def resolve_root_cause_category(run_meta: dict) -> str | None:
@@ -82,12 +88,11 @@ def resolve_root_cause_category(run_meta: dict) -> str | None:
     if category:
         return str(category)
     problem_names = run_meta.get("problem_names") or []
-    if not problem_names:
+    if len(problem_names) != 1:
         return None
     try:
         problem = get_problem_instance(
             problem_names=problem_names,
-            task_level="detection",
             scenario_name=run_meta.get("scenario_name", ""),
             **(run_meta.get("scenario_params") or {}),
         )
@@ -105,14 +110,20 @@ def build_eval_result_from_session_dir(session_dir: Path) -> EvalResult:
 
     run_meta = json.loads((session_dir / RUN_FILENAME).read_text(encoding="utf-8"))
     if not is_finished_session(run_meta):
-        raise ValueError(f"Session {run_meta.get('session_id', session_dir.name)} is not finished.")
+        raise ValueError(
+            f"Session {run_meta.get('session_id', session_dir.name)} is not finished."
+        )
 
-    metrics_blob = json.loads((session_dir / EVAL_METRICS_FILENAME).read_text(encoding="utf-8"))
+    metrics_blob = json.loads(
+        (session_dir / EVAL_METRICS_FILENAME).read_text(encoding="utf-8")
+    )
 
     judge_response: JudgeResponse | None = None
     judge_path = session_dir / LLM_JUDGE_FILENAME
     if judge_path.exists():
-        judge_response = JudgeResponse.model_validate_json(judge_path.read_text(encoding="utf-8"))
+        judge_response = JudgeResponse.model_validate_json(
+            judge_path.read_text(encoding="utf-8")
+        )
 
     trace_metrics = {
         "in_tokens": metrics_blob.get("in_tokens"),
@@ -150,7 +161,9 @@ def build_eval_result_from_session_dir(session_dir: Path) -> EvalResult:
         steps=trace_metrics.get("steps"),
         tool_calls=trace_metrics.get("tool_calls"),
         tool_errors=trace_metrics.get("tool_errors"),
-        time_taken=_session_duration_seconds(run_meta.get("start_time"), run_meta.get("end_time")),
+        time_taken=_session_duration_seconds(
+            run_meta.get("start_time"), run_meta.get("end_time")
+        ),
         llm_judge_relevance_score=relevance_score,
         llm_judge_correctness_score=correctness_score,
         llm_judge_efficiency_score=efficiency_score,
@@ -169,7 +182,9 @@ def build_eval_result_from_session_dir(session_dir: Path) -> EvalResult:
     )
 
 
-def write_eval_summary_csv(eval_results: list[EvalResult], output_path: str | Path) -> Path:
+def write_eval_summary_csv(
+    eval_results: list[EvalResult], output_path: str | Path
+) -> Path:
     out = Path(output_path)
     out.parent.mkdir(parents=True, exist_ok=True)
     fieldnames = list(asdict(EvalResult()).keys())

@@ -11,7 +11,9 @@ session_app = typer.Typer(help="Active session management.")
 
 def _failure_summary(session: dict) -> str:
     """Summarise injected failures: name when there is one, count otherwise."""
-    n_failures = session.get("failure_count", len(session.get("failure_injections", [])))
+    n_failures = session.get(
+        "failure_count", len(session.get("failure_injections", []))
+    )
     if n_failures == 0:
         return "0"
     if n_failures == 1:
@@ -75,7 +77,9 @@ def _echo_containers_table(containers: list[dict], *, prefix: str = "") -> None:
 
 @session_app.command("ps")
 def session_ps(
-    all_sessions: bool = typer.Option(False, "--all", "-a", help="Include finished sessions."),
+    all_sessions: bool = typer.Option(
+        False, "--all", "-a", help="Include finished sessions."
+    ),
 ) -> None:
     """List sessions and their runtime status.
 
@@ -146,7 +150,9 @@ def session_inspect(
     typer.echo(json.dumps(data, indent=2, default=str))
 
     if injections:
-        typer.echo(f"\nfailure_injections  ({len(injections)} record{'s' if len(injections) != 1 else ''}):")
+        typer.echo(
+            f"\nfailure_injections  ({len(injections)} record{'s' if len(injections) != 1 else ''}):"
+        )
         hdr = ["IDX", "PROBLEM", "STATUS", "PARAMS"]
         fi_rows: list[list[str]] = []
         for i, inj in enumerate(injections):
@@ -218,7 +224,9 @@ def session_close(
         "--session_id",
         help="Target session id. Auto-selects when only one is running.",
     ),
-    yes: bool = typer.Option(False, "-y", "--yes", help="Skip the confirmation prompt."),
+    yes: bool = typer.Option(
+        False, "-y", "--yes", help="Skip the confirmation prompt."
+    ),
 ) -> None:
     """Close one session: stop containers and clean up runtime state.
 
@@ -250,7 +258,9 @@ def session_close(
 
 @session_app.command("wipe")
 def session_wipe(
-    yes: bool = typer.Option(False, "-y", "--yes", help="Skip the confirmation prompt."),
+    yes: bool = typer.Option(
+        False, "-y", "--yes", help="Skip the confirmation prompt."
+    ),
 ) -> None:
     """Close all running sessions and wipe leftover lab resources.
 
@@ -269,7 +279,9 @@ def session_wipe(
     else:
         label = leftover
     if not yes:
-        confirmed = typer.confirm(f"Stop lab containers and wipe {label}?", default=False)
+        confirmed = typer.confirm(
+            f"Stop lab containers and wipe {label}?", default=False
+        )
         if not confirmed:
             raise typer.Abort()
     try:

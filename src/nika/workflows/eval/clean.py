@@ -44,7 +44,9 @@ def run_eval_clean(
     sessions_root = Path(sessions_dir or SESSIONS_DIR)
     index = SessionIndex(db_path)
 
-    running = SessionStore(sessions_root, db_path or index.db_path).list_running_sessions()
+    running = SessionStore(
+        sessions_root, db_path or index.db_path
+    ).list_running_sessions()
     if running and not force:
         ids = ", ".join(str(row.get("session_id", "?")) for row in running)
         raise ValueError(

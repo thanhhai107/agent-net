@@ -76,7 +76,9 @@ class P4Counter(NetworkEnvBase):
                 os.path.join(cur_path, "p4_src/l2_basic_forwarding_counter.p4"),
                 "l2_basic_forwarding_counter.p4",
             )
-            s_i.create_file_from_path(os.path.join(cur_path, f"cmds/s{i}.txt"), "commands.txt")
+            s_i.create_file_from_path(
+                os.path.join(cur_path, f"cmds/s{i}.txt"), "commands.txt"
+            )
 
             # add the sswitch_thrift_API.py file to the Kathara image
             s_i.create_file_from_path(

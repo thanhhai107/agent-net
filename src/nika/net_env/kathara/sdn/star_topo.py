@@ -68,7 +68,9 @@ class SDNStar(NetworkEnvBase):
         tot_switch_list = []
         for i in range(SWITCH_NUM + 1):
             switch_name = f"switch_{i}"
-            switch = self.lab.new_machine(switch_name, **{"image": "kathara/sdn", "cpus": 0.5, "mem": "256m"})
+            switch = self.lab.new_machine(
+                switch_name, **{"image": "kathara/sdn", "cpus": 0.5, "mem": "256m"}
+            )
             switch_meta = SwitchMeta(
                 name=switch_name,
                 machine=switch,
@@ -94,14 +96,24 @@ class SDNStar(NetworkEnvBase):
 
         # add controller
         controller = self.lab.new_machine(
-            "controller", **{"image": "kathara/nika-pox", "cpus": 0.5, "mem": "256m", "bridged": True}
+            "controller",
+            **{
+                "image": "kathara/nika-pox",
+                "cpus": 0.5,
+                "mem": "256m",
+                "bridged": True,
+            },
         )
 
         for switch_meta in tot_switch_list:
-            switch_meta.cmd_list.append("/usr/share/openvswitch/scripts/ovs-ctl --system-id=random start")
+            switch_meta.cmd_list.append(
+                "/usr/share/openvswitch/scripts/ovs-ctl --system-id=random start"
+            )
             switch_meta.cmd_list.append(f"ovs-vsctl add-br {switch_meta.name}")
             # add fail mode
-            switch_meta.cmd_list.append(f"ovs-vsctl set-fail-mode {switch_meta.name} secure")
+            switch_meta.cmd_list.append(
+                f"ovs-vsctl set-fail-mode {switch_meta.name} secure"
+            )
 
         # connect hosts to switches
         host_pool = IPv4Network("10.0.0.0/24").hosts()
@@ -109,14 +121,18 @@ class SDNStar(NetworkEnvBase):
             host_meta = tot_host_list[i]
             switch_meta = tot_switch_list[i + 1]
             self.lab.connect_machine_to_link(
-                host_meta.machine.name, f"{host_meta.machine.name}_{switch_meta.machine.name}"
+                host_meta.machine.name,
+                f"{host_meta.machine.name}_{switch_meta.machine.name}",
             )
             self.lab.connect_machine_to_link(
-                switch_meta.machine.name, f"{host_meta.machine.name}_{switch_meta.machine.name}"
+                switch_meta.machine.name,
+                f"{host_meta.machine.name}_{switch_meta.machine.name}",
             )
             host_ip = str(next(host_pool))
             host_meta.cmd_list.append(f"ip addr add {host_ip}/24 dev eth0")
-            switch_meta.cmd_list.append(f"ovs-vsctl add-port {switch_meta.name} eth{switch_meta.eth_index}")
+            switch_meta.cmd_list.append(
+                f"ovs-vsctl add-port {switch_meta.name} eth{switch_meta.eth_index}"
+            )
             switch_meta.eth_index += 1
 
         center = tot_switch_list[0]  # switch_1
@@ -127,7 +143,9 @@ class SDNStar(NetworkEnvBase):
             self.lab.connect_machine_to_link(leaf.machine.name, link_name)
 
             center.cmd_list.append(f"ip link set eth{center.eth_index} up")
-            center.cmd_list.append(f"ovs-vsctl add-port {center.name} eth{center.eth_index}")
+            center.cmd_list.append(
+                f"ovs-vsctl add-port {center.name} eth{center.eth_index}"
+            )
             center.eth_index += 1
 
             leaf.cmd_list.append(f"ip link set eth{leaf.eth_index} up")
@@ -139,13 +157,23 @@ class SDNStar(NetworkEnvBase):
         controller_ip = "20.0.0.100"
         for switch_meta in tot_switch_list:
             switch_ip = str(next(infra_network))
-            self.lab.connect_machine_to_link(switch_meta.machine.name, "switch_controller")
-            switch_meta.cmd_list.append(f"ip addr add {switch_ip}/24 dev eth{switch_meta.eth_index}")
-            switch_meta.cmd_list.append(f"ovs-vsctl set-controller {switch_meta.name} tcp:{controller_ip}:6633")
+            self.lab.connect_machine_to_link(
+                switch_meta.machine.name, "switch_controller"
+            )
+            switch_meta.cmd_list.append(
+                f"ip addr add {switch_ip}/24 dev eth{switch_meta.eth_index}"
+            )
+            switch_meta.cmd_list.append(
+                f"ovs-vsctl set-controller {switch_meta.name} tcp:{controller_ip}:6633"
+            )
         self.lab.connect_machine_to_link(controller.name, "switch_controller")
 
         self.lab.create_file_from_list(
-            ["ip addr add 20.0.0.100/24 dev eth0", "ip link set eth0 up", "python3 /pox/pox.py forwarding.l2_learning &"],
+            [
+                "ip addr add 20.0.0.100/24 dev eth0",
+                "ip link set eth0 up",
+                "python3 /pox/pox.py forwarding.l2_learning &",
+            ],
             f"{controller.name}.startup",
         )
 

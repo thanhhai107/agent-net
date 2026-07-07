@@ -4,9 +4,18 @@ from datetime import datetime
 from typing import Literal
 from uuid import uuid4
 
-from nika.net_env.net_env_pool import get_net_env_instance, scenario_requires_topo_size, scenario_supported_backends
+from nika.net_env.net_env_pool import (
+    get_net_env_instance,
+    scenario_requires_topo_size,
+    scenario_supported_backends,
+)
 from nika.net_env.verify import verify_lab_with_retry
-from nika.utils.logger import bind_session_dir, log_error_event, log_event, refresh_logger
+from nika.utils.logger import (
+    bind_session_dir,
+    log_error_event,
+    log_event,
+    refresh_logger,
+)
 from nika.utils.session import Session
 
 
@@ -31,9 +40,13 @@ def start_net_env(
     """Deploy the lab for ``scenario`` and create a new runtime session."""
     size = _normalize_topo_size(topo_size)
     if scenario_requires_topo_size(scenario) and size is None:
-        raise ValueError(f"Scenario '{scenario}' requires an explicit topology size (-s s|m|l).")
+        raise ValueError(
+            f"Scenario '{scenario}' requires an explicit topology size (-s s|m|l)."
+        )
     if not scenario_requires_topo_size(scenario) and size is not None:
-        raise ValueError(f"Scenario '{scenario}' does not use topology sizes; omit -s/--size.")
+        raise ValueError(
+            f"Scenario '{scenario}' does not use topology sizes; omit -s/--size."
+        )
 
     supported = scenario_supported_backends(scenario)
     if backend not in supported:
@@ -43,10 +56,18 @@ def start_net_env(
 
     refresh_logger()
     suffix = uuid4().hex[:6]
-    tag = f"{instance_tag}-{suffix}" if instance_tag else f"{datetime.now().strftime('%m%d%H%M%S')}-{suffix}"
+    tag = (
+        f"{instance_tag}-{suffix}"
+        if instance_tag
+        else f"{datetime.now().strftime('%m%d%H%M%S')}-{suffix}"
+    )
     lab_name = f"{scenario}__{tag}"
     session_id = datetime.now().strftime("%Y%m%d-%H%M%S") + f"-{suffix}"
-    net_env = get_net_env_instance(scenario, backend=backend, topo_size=size, lab_name=lab_name)
+    net_env = get_net_env_instance(
+        scenario, backend=backend, topo_size=size, lab_name=lab_name
+    )
+    if backend == "containerlab":
+        net_env._ensure_runtime_files()
 
     session = Session()
     scenario_params: dict = {"lab_name": net_env.name, "backend": backend}

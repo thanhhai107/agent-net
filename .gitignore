@@ -9,7 +9,7 @@ tmp/
 **/results/**
 .env
 /.venv
-*.egg-info/
+**/.egg-info/**
 /runtime/
 /.vscode/
 /figs/
@@ -24,3 +24,4 @@ uv.lock
 !src/agent/skills/.claude/
 !src/agent/skills/.claude/**
 .pytest_cache/
+.ruff_cache/

@@ -12,7 +12,9 @@ from ipaddress import IPv4Interface, IPv4Network
 from typing import Literal
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(SCRIPT_DIR)))))
+PROJECT_ROOT = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(SCRIPT_DIR))))
+)
 OSPF_UTILS = os.path.join(PROJECT_ROOT, "src/nika/net_env/kathara/utils/ospf")
 
 
@@ -156,8 +158,12 @@ def generate_ospf_enterprise_static_topology(
             core_meta2.links.append((core_meta2.eth_index, link_name))
             subnet = subnets_infra.pop(0)
             a_ip, b_ip = assign_p2p_ips(subnet)
-            core_meta1.cmd_list.append(f"ip addr add {a_ip} dev eth{core_meta1.eth_index}")
-            core_meta2.cmd_list.append(f"ip addr add {b_ip} dev eth{core_meta2.eth_index}")
+            core_meta1.cmd_list.append(
+                f"ip addr add {a_ip} dev eth{core_meta1.eth_index}"
+            )
+            core_meta2.cmd_list.append(
+                f"ip addr add {b_ip} dev eth{core_meta2.eth_index}"
+            )
             core_meta1.frr_ospf_configs.append(f"network {subnet} area 0")
             core_meta2.frr_ospf_configs.append(f"network {subnet} area 0")
             if core_meta1.router_id == "":
@@ -175,9 +181,13 @@ def generate_ospf_enterprise_static_topology(
             dist_meta.links.append((dist_meta.eth_index, link_name))
             subnet = subnets_infra.pop(0)
             a_ip, b_ip = assign_p2p_ips(subnet)
-            core_meta.cmd_list.append(f"ip addr add {a_ip} dev eth{core_meta.eth_index}")
+            core_meta.cmd_list.append(
+                f"ip addr add {a_ip} dev eth{core_meta.eth_index}"
+            )
             core_meta.eth_index += 1
-            dist_meta.cmd_list.append(f"ip addr add {b_ip} dev eth{dist_meta.eth_index}")
+            dist_meta.cmd_list.append(
+                f"ip addr add {b_ip} dev eth{dist_meta.eth_index}"
+            )
             core_meta.frr_ospf_configs.append(f"network {subnet} area 1")
             dist_meta.frr_ospf_configs.append(f"network {subnet} area 1")
             if core_meta.router_id == "":
@@ -199,7 +209,9 @@ def generate_ospf_enterprise_static_topology(
                 dist_meta.cmd_list.append(f"brctl addif br0 eth{dist_meta.eth_index}")
                 access_meta.cmd_list.append("brctl addbr br0")
                 access_meta.cmd_list.append("ip link set br0 up")
-                access_meta.cmd_list.append(f"brctl addif br0 eth{access_meta.eth_index}")
+                access_meta.cmd_list.append(
+                    f"brctl addif br0 eth{access_meta.eth_index}"
+                )
                 dist_meta.eth_index += 1
                 access_meta.eth_index += 1
 
@@ -211,7 +223,9 @@ def generate_ospf_enterprise_static_topology(
             dist_meta = core_dists[core_id][dist_id - 1]
             dist_meta.frr_ospf_configs.append(f"network {dist_network} area 1")
             default_gateway_ip = host_ip_gen.pop(0)
-            dist_meta.cmd_list.append(f"ip addr add {default_gateway_ip}/{dist_network.prefixlen} dev br0")
+            dist_meta.cmd_list.append(
+                f"ip addr add {default_gateway_ip}/{dist_network.prefixlen} dev br0"
+            )
             for access_id in range(1, ACCESS_SW_PER_DIST + 1):
                 access_key = f"{core_id}_{dist_id}_{access_id}"
                 access_meta = dist_accesses[dist_key][access_id - 1]
@@ -229,24 +243,32 @@ def generate_ospf_enterprise_static_topology(
                         f"ip route add default via {default_gateway_ip} dev eth{host_meta.eth_index}"
                     )
                     host_meta.eth_index += 1
-                    access_meta.cmd_list.append(f"brctl addif br0 eth{access_meta.eth_index}")
+                    access_meta.cmd_list.append(
+                        f"brctl addif br0 eth{access_meta.eth_index}"
+                    )
                     access_meta.eth_index += 1
 
     server_access_meta.cmd_list.append("brctl addbr br0")
     server_access_meta.cmd_list.append("ip link set br0 up")
     server_access_meta.frr_ospf_configs.append(f"network {server_network} area 0")
-    server_access_meta.cmd_list.append(f"ip addr add {server_gateway_ip}/{server_network.prefixlen} dev br0")
+    server_access_meta.cmd_list.append(
+        f"ip addr add {server_gateway_ip}/{server_network.prefixlen} dev br0"
+    )
     for server_name, server_meta in servers.items():
         link_name = f"{server_access_meta.name}_{server_meta.name}"
         server_access_meta.links.append((server_access_meta.eth_index, link_name))
         server_meta.links.append((0, link_name))
-        server_access_meta.cmd_list.append(f"brctl addif br0 eth{server_access_meta.eth_index}")
+        server_access_meta.cmd_list.append(
+            f"brctl addif br0 eth{server_access_meta.eth_index}"
+        )
         server_ip = server_ip_gen.pop(0)
         server_meta.cmd_list.append(
             f"ip addr add {server_ip}/{server_network.prefixlen} dev eth{server_meta.eth_index}"
         )
         server_meta.ip_address = str(server_ip)
-        server_meta.cmd_list.append(f"ip route add default via {server_gateway_ip} dev eth{server_meta.eth_index}")
+        server_meta.cmd_list.append(
+            f"ip route add default via {server_gateway_ip} dev eth{server_meta.eth_index}"
+        )
         server_meta.eth_index += 1
         server_access_meta.eth_index += 1
 
@@ -257,7 +279,9 @@ def generate_ospf_enterprise_static_topology(
     subnet = subnets_infra.pop(0)
     a_ip, b_ip = assign_p2p_ips(subnet)
     core3_meta.cmd_list.append(f"ip addr add {a_ip} dev eth{core3_meta.eth_index}")
-    server_access_meta.cmd_list.append(f"ip addr add {b_ip} dev eth{server_access_meta.eth_index}")
+    server_access_meta.cmd_list.append(
+        f"ip addr add {b_ip} dev eth{server_access_meta.eth_index}"
+    )
     core3_meta.frr_ospf_configs.append(f"network {subnet} area 0")
     server_access_meta.frr_ospf_configs.append(f"network {subnet} area 0")
     if core3_meta.router_id == "":
@@ -368,7 +392,9 @@ def generate_ospf_enterprise_static_topology(
     with open(os.path.join(out_path, "lab.conf"), "w", encoding="utf-8") as f:
         f.write("\n".join(lab_conf_lines))
     for meta in all_machines:
-        with open(os.path.join(out_path, f"{meta.name}.startup"), "w", encoding="utf-8") as f:
+        with open(
+            os.path.join(out_path, f"{meta.name}.startup"), "w", encoding="utf-8"
+        ) as f:
             f.write("\n".join(meta.cmd_list))
         if hasattr(meta, "extra_files") and meta.extra_files:
             host_dir = os.path.join(out_path, meta.name)
@@ -384,7 +410,9 @@ def generate_ospf_enterprise_static_topology(
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="Generate Kathara lab config for OSPF Enterprise Static")
+    parser = argparse.ArgumentParser(
+        description="Generate Kathara lab config for OSPF Enterprise Static"
+    )
     parser.add_argument("-s", "--size", choices=["s", "m", "l"], default="s")
     parser.add_argument("-o", "--output", default=None)
     args = parser.parse_args()

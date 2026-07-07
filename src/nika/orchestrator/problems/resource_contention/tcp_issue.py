@@ -1,11 +1,8 @@
-from pathlib import Path
-
-from nika.config import pkg_path
-from nika.orchestrator.problems.context import init_problem
-from nika.orchestrator.problems.problem_base import ProblemMeta, RootCauseCategory, TaskDescription, TaskLevel, build_verify_result
-from nika.orchestrator.tasks.detection import DetectionTask
-from nika.orchestrator.tasks.localization import LocalizationTask
-from nika.orchestrator.tasks.rca import RCATask
+from nika.orchestrator.problems.problem_base import (
+    RootCauseCategory,
+    build_verify_result,
+    ProblemBase,
+)
 from nika.utils.logger import system_logger
 from pydantic import BaseModel, Field
 
@@ -13,6 +10,29 @@ _STRESS_CMD = (
     "nohup stress-ng --cpu 0 --cpu-load 100 --iomix 0 --sock 0 --hdd 2 "
     "--vm 0 --vm-bytes 75% --timeout {duration} </dev/null >/dev/null 2>&1 &"
 )
+
+_SLOW_SENDER_SERVER = """\
+import time
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+CHUNK = b"x" * 1024
+DELAY = 0.1
+
+
+class SlowSenderHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "application/octet-stream")
+        self.end_headers()
+
+        for _ in range(5 * 1024):
+            time.sleep(DELAY)
+            self.wfile.write(CHUNK)
+
+
+server = HTTPServer(("", 80), SlowSenderHandler)
+server.serve_forever()
+"""
 
 
 # ==================================================================
@@ -27,7 +47,7 @@ class SenderResourceContentionParams(BaseModel):
     duration: int = Field(default=600, description="Stress duration in seconds.")
 
 
-class SenderResourceContentionBase:
+class SenderResourceContention(ProblemBase):
     root_cause_category: RootCauseCategory = RootCauseCategory.RESOURCE_CONTENTION
     root_cause_name: str = "sender_resource_contention"
     TAGS: str = ["http"]
@@ -35,54 +55,26 @@ class SenderResourceContentionBase:
     Params = SenderResourceContentionParams
 
     def __init__(self, scenario_name: str | None, **kwargs):
-        super().__init__()
-        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
-        self.faulty_devices: list[str] = []
+        super().__init__(scenario_name, **kwargs)
 
     def inject_fault(self, params: SenderResourceContentionParams):
-        host = params.host_name
-        self.faulty_devices = [host]
-        self.runtime.exec(host, _STRESS_CMD.format(duration=params.duration))
-        system_logger.info(f"Injected TCP slow sender issue on host {host}")
+        self.set_faulty_devices([params.host_name])
+        self.runtime.exec(
+            params.host_name, _STRESS_CMD.format(duration=params.duration)
+        )
+        system_logger.info(
+            f"Injected TCP slow sender issue on params.host_name {params.host_name}"
+        )
 
     def verify_fault(self, params: SenderResourceContentionParams) -> dict:
-        """Verify stress-ng is running on the sender host."""
-        host = params.host_name
-        pgrep_output = self.runtime.exec(host, "pgrep -a stress-ng 2>/dev/null || echo NONE").strip()
-        verified = "stress-ng" in pgrep_output and pgrep_output != "NONE"
+        """Verify stress-ng is running on the sender params.host_name."""
+        verified = self.runtime.process_running(params.host_name, "stress-ng")
         return build_verify_result(
             root_cause_name=self.root_cause_name,
             faulty_devices=self.faulty_devices,
             verified=verified,
-            details={"host": host, "pgrep_output": pgrep_output},
+            details={"host": params.host_name},
         )
-
-
-class SenderResourceContentionDetection(SenderResourceContentionBase, DetectionTask):
-    META = ProblemMeta(
-        root_cause_category=SenderResourceContentionBase.root_cause_category,
-        root_cause_name=SenderResourceContentionBase.root_cause_name,
-        task_level=TaskLevel.DETECTION,
-        description=TaskDescription.DETECTION,
-    )
-
-
-class SenderResourceContentionLocalization(SenderResourceContentionBase, LocalizationTask):
-    META = ProblemMeta(
-        root_cause_category=SenderResourceContentionBase.root_cause_category,
-        root_cause_name=SenderResourceContentionBase.root_cause_name,
-        task_level=TaskLevel.LOCALIZATION,
-        description=TaskDescription.LOCALIZATION,
-    )
-
-
-class SenderResourceContentionRCA(SenderResourceContentionBase, RCATask):
-    META = ProblemMeta(
-        root_cause_category=SenderResourceContentionBase.root_cause_category,
-        root_cause_name=SenderResourceContentionBase.root_cause_name,
-        task_level=TaskLevel.RCA,
-        description=TaskDescription.RCA,
-    )
 
 
 # ==================================================================
@@ -96,7 +88,7 @@ class SenderApplicationDelayParams(BaseModel):
     host_name: str = Field(description="Target sender host name.")
 
 
-class SenderApplicationDelayBase:
+class SenderApplicationDelay(ProblemBase):
     root_cause_category: RootCauseCategory = RootCauseCategory.RESOURCE_CONTENTION
     root_cause_name: str = "sender_application_delay"
     TAGS: str = ["http"]
@@ -104,59 +96,30 @@ class SenderApplicationDelayBase:
     Params = SenderApplicationDelayParams
 
     def __init__(self, scenario_name: str | None, **kwargs):
-        super().__init__()
-        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
-        self.faulty_devices: list[str] = []
+        super().__init__(scenario_name, **kwargs)
 
     def inject_fault(self, params: SenderApplicationDelayParams):
-        host = params.host_name
-        self.faulty_devices = [host]
-        self.runtime.exec(host, "cp web_server.py web_server.py.bak")
-        src_path = Path(pkg_path("net_env/kathara/utils/web/slow_sender_server.py"))
-        self.runtime.write_file(host, "/web_server.py", src_path.read_text())
-        self.runtime.systemctl(host, "web_server.service", "restart")
-        system_logger.info(f"Injected TCP sender application delay issue on host {host}")
+        self.set_faulty_devices([params.host_name])
+        self.runtime.exec(params.host_name, "cp web_server.py web_server.py.bak")
+        self.runtime.write_file(
+            params.host_name, "/web_server.py", _SLOW_SENDER_SERVER
+        )
+        self.runtime.systemctl(params.host_name, "web_server.service", "restart")
+        system_logger.info(
+            f"Injected TCP sender application delay issue on params.host_name {params.host_name}"
+        )
 
     def verify_fault(self, params: SenderApplicationDelayParams) -> dict:
         """Verify the web_server.py has a sleep call injected."""
-        host = params.host_name
-        has_sleep = self.runtime.exec(
-            host, "grep -l 'time.sleep' /web_server.py 2>/dev/null && echo yes || echo no"
-        ).strip()
-        verified = has_sleep.endswith("yes") or has_sleep == "yes"
+        verified = self.runtime.file_contains(
+            params.host_name, "/web_server.py", "time.sleep"
+        )
         return build_verify_result(
             root_cause_name=self.root_cause_name,
             faulty_devices=self.faulty_devices,
             verified=verified,
-            details={"host": host, "has_sleep": has_sleep},
+            details={"host": params.host_name},
         )
-
-
-class SenderApplicationDelayDetection(SenderApplicationDelayBase, DetectionTask):
-    META = ProblemMeta(
-        root_cause_category=SenderApplicationDelayBase.root_cause_category,
-        root_cause_name=SenderApplicationDelayBase.root_cause_name,
-        task_level=TaskLevel.DETECTION,
-        description=TaskDescription.DETECTION,
-    )
-
-
-class SenderApplicationDelayLocalization(SenderApplicationDelayBase, LocalizationTask):
-    META = ProblemMeta(
-        root_cause_category=SenderApplicationDelayBase.root_cause_category,
-        root_cause_name=SenderApplicationDelayBase.root_cause_name,
-        task_level=TaskLevel.LOCALIZATION,
-        description=TaskDescription.LOCALIZATION,
-    )
-
-
-class SenderApplicationDelayRCA(SenderApplicationDelayBase, RCATask):
-    META = ProblemMeta(
-        root_cause_category=SenderApplicationDelayBase.root_cause_category,
-        root_cause_name=SenderApplicationDelayBase.root_cause_name,
-        task_level=TaskLevel.RCA,
-        description=TaskDescription.RCA,
-    )
 
 
 # ==================================================================
@@ -171,7 +134,7 @@ class ReceiverResourceContentionParams(BaseModel):
     duration: int = Field(default=600, description="Stress duration in seconds.")
 
 
-class ReceiverResourceContentionBase:
+class ReceiverResourceContention(ProblemBase):
     root_cause_category: RootCauseCategory = RootCauseCategory.RESOURCE_CONTENTION
     root_cause_name: str = "receiver_resource_contention"
     TAGS: str = ["http"]
@@ -179,51 +142,26 @@ class ReceiverResourceContentionBase:
     Params = ReceiverResourceContentionParams
 
     def __init__(self, scenario_name: str | None, **kwargs):
-        super().__init__()
-        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
-        self.faulty_devices: list[str] = []
+        super().__init__(scenario_name, **kwargs)
 
     def inject_fault(self, params: ReceiverResourceContentionParams):
-        host = params.host_name
-        self.faulty_devices = [host]
-        self.runtime.exec(host, _STRESS_CMD.format(duration=params.duration))
-        system_logger.info(f"Injected TCP receiver resource contention on host {host}")
+        self.set_faulty_devices([params.host_name])
+        self.runtime.exec(
+            params.host_name, _STRESS_CMD.format(duration=params.duration)
+        )
+        system_logger.info(
+            f"Injected TCP receiver resource contention on params.host_name {params.host_name}"
+        )
 
     def verify_fault(self, params: ReceiverResourceContentionParams) -> dict:
-        """Verify stress-ng is running on the receiver host."""
-        host = params.host_name
-        pgrep_output = self.runtime.exec(host, "pgrep -a stress-ng 2>/dev/null || echo NONE").strip()
+        """Verify stress-ng is running on the receiver params.host_name."""
+        pgrep_output = self.runtime.exec(
+            params.host_name, "pgrep -a stress-ng 2>/dev/null || echo NONE"
+        ).strip()
         verified = "stress-ng" in pgrep_output and pgrep_output != "NONE"
         return build_verify_result(
             root_cause_name=self.root_cause_name,
             faulty_devices=self.faulty_devices,
             verified=verified,
-            details={"host": host, "pgrep_output": pgrep_output},
+            details={"host": params.host_name, "pgrep_output": pgrep_output},
         )
-
-
-class ReceiverResourceContentionDetection(ReceiverResourceContentionBase, DetectionTask):
-    META = ProblemMeta(
-        root_cause_category=ReceiverResourceContentionBase.root_cause_category,
-        root_cause_name=ReceiverResourceContentionBase.root_cause_name,
-        task_level=TaskLevel.DETECTION,
-        description=TaskDescription.DETECTION,
-    )
-
-
-class ReceiverResourceContentionLocalization(ReceiverResourceContentionBase, LocalizationTask):
-    META = ProblemMeta(
-        root_cause_category=ReceiverResourceContentionBase.root_cause_category,
-        root_cause_name=ReceiverResourceContentionBase.root_cause_name,
-        task_level=TaskLevel.LOCALIZATION,
-        description=TaskDescription.LOCALIZATION,
-    )
-
-
-class ReceiverResourceContentionRCA(ReceiverResourceContentionBase, RCATask):
-    META = ProblemMeta(
-        root_cause_category=ReceiverResourceContentionBase.root_cause_category,
-        root_cause_name=ReceiverResourceContentionBase.root_cause_name,
-        task_level=TaskLevel.RCA,
-        description=TaskDescription.RCA,
-    )

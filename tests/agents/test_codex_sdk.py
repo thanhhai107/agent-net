@@ -7,12 +7,23 @@ import unittest
 import unittest.mock
 
 from agent.local_cli.codex_cli.codex_worker import _build_mcp_toml
-from agent.sdk.codex_sdk.config import codex_sdk_local_auth_available, validate_reasoning_effort
-from nika.utils.agent_config import ENV_CODEX_SDK_MODEL, ENV_CODEX_MODEL, resolve_agent_model
+from agent.sdk.codex_sdk.config import (
+    codex_sdk_local_auth_available,
+    validate_reasoning_effort,
+)
+from nika.utils.agent_config import (
+    ENV_CODEX_SDK_MODEL,
+    ENV_CODEX_MODEL,
+    resolve_agent_model,
+)
 from nika.utils.session_store import SessionStore
 from tests.agents._assertions import assert_phase_messages, assert_submission_fields
 from tests.integration_base import OrderedPipelineTestCase
-from tests.integration_pipeline import CommonPipelineSteps, codex_sdk_available, load_test_env
+from tests.integration_pipeline import (
+    CommonPipelineSteps,
+    codex_sdk_available,
+    load_test_env,
+)
 
 load_test_env()
 
@@ -28,7 +39,9 @@ class CodexSdkConfigTest(unittest.TestCase):
     """CLI env resolution for the sdk.codex_sdk agent."""
 
     def test_model_from_nika_codex_model_env(self) -> None:
-        with unittest.mock.patch.dict(os.environ, {ENV_CODEX_MODEL: CODEX_MODEL}, clear=True):
+        with unittest.mock.patch.dict(
+            os.environ, {ENV_CODEX_MODEL: CODEX_MODEL}, clear=True
+        ):
             self.assertEqual(resolve_agent_model("sdk.codex_sdk", None), CODEX_MODEL)
 
     def test_model_from_nika_codex_sdk_model_env(self) -> None:
@@ -75,7 +88,9 @@ class CodexSdkMcpTest(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 
-@unittest.skipUnless(codex_sdk_available(), "openai-codex + ~/.codex/auth.json required")
+@unittest.skipUnless(
+    codex_sdk_available(), "openai-codex + ~/.codex/auth.json required"
+)
 class CodexSdkAgentPipelineTest(CommonPipelineSteps, OrderedPipelineTestCase):
     """Full pipeline with the sdk.codex_sdk agent."""
 

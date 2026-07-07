@@ -2,12 +2,17 @@ from collections import defaultdict
 from pathlib import Path
 from typing import ClassVar, Dict, Set
 
-from Kathara.manager.Kathara import Kathara, Machine
+from Kathara.manager.Kathara import Machine
 
-from nika.net_env.kathara.utils.docker_files.docker_images import ensure_nika_docker_images
+from nika.compat.kathara import patch_kathara_file_conversion
+from nika.net_env.kathara.utils.docker_files.docker_images import (
+    ensure_nika_docker_images,
+)
 from nika.runtime.base import LabRuntime
 from nika.runtime.factory import runtime_for_net_env
 from nika.runtime.spec import LabSpec
+
+patch_kathara_file_conversion()
 
 
 class NetworkEnvBase:
@@ -132,12 +137,16 @@ class NetworkEnvBase:
             summary += f"PCs: {', '.join(self.hosts)}\n"
         if self.servers:
             for server_type, server_list in self.servers.items():
-                summary += f"{server_type.capitalize()} Servers: {', '.join(server_list)}\n"
+                summary += (
+                    f"{server_type.capitalize()} Servers: {', '.join(server_list)}\n"
+                )
         if self.routers:
             summary += f"Routers (FRRRouting): {', '.join(self.routers)}\n"
         if self.links:
             summary += f"Links: {', '.join(self.links)}\n"
-        summary += f"Topology: {', '.join(f'({a}, {b})' for a, b in self.get_topology())}"
+        summary += (
+            f"Topology: {', '.join(f'({a}, {b})' for a, b in self.get_topology())}"
+        )
         return summary
 
     def __str__(self):

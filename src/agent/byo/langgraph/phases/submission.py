@@ -14,8 +14,12 @@ load_dotenv()
 class SubmissionPhase:
     """LangChain ReAct worker for the submission phase."""
 
-    def __init__(self, session_id: str, llm_provider: str = "openai", model: str = "gpt-5-mini"):
-        mcp_server_config = MCPServerConfig(session_id=session_id).load_config(if_submit=True)
+    def __init__(
+        self, session_id: str, llm_provider: str = "openai", model: str = "gpt-5-mini"
+    ):
+        mcp_server_config = MCPServerConfig(session_id=session_id).load_config(
+            if_submit=True
+        )
         self.client = MultiServerMCPClient(connections=mcp_server_config)
         self.tools = None
 
@@ -29,6 +33,9 @@ class SubmissionPhase:
 
     def get_agent(self):
         agent = create_agent(
-            model=self.llm, system_prompt=SUBMIT_PROMPT_TEMPLATE, tools=self.tools, name=SUBMISSION
+            model=self.llm,
+            system_prompt=SUBMIT_PROMPT_TEMPLATE,
+            tools=self.tools,
+            name=SUBMISSION,
         )
         return agent

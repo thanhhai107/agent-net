@@ -10,7 +10,11 @@ from nika.utils.agent_config import ENV_AUTOGEN_MODEL, resolve_agent_model
 from nika.utils.session_store import SessionStore
 from tests.agents._assertions import assert_phase_messages, assert_submission_fields
 from tests.integration_base import OrderedPipelineTestCase
-from tests.integration_pipeline import CommonPipelineSteps, deepseek_api_key_available, load_test_env
+from tests.integration_pipeline import (
+    CommonPipelineSteps,
+    deepseek_api_key_available,
+    load_test_env,
+)
 
 load_test_env()
 
@@ -26,7 +30,9 @@ class AutogenAgentConfigTest(unittest.TestCase):
     """CLI env resolution for the AutoGen agent."""
 
     def test_model_from_env(self) -> None:
-        with unittest.mock.patch.dict(os.environ, {ENV_AUTOGEN_MODEL: "deepseek-chat"}, clear=True):
+        with unittest.mock.patch.dict(
+            os.environ, {ENV_AUTOGEN_MODEL: "deepseek-chat"}, clear=True
+        ):
             self.assertEqual(resolve_agent_model("byo.autogen", None), "deepseek-chat")
             self.assertEqual(resolve_agent_model("byo.autogen", "override"), "override")
 
@@ -36,7 +42,9 @@ class AutogenAgentConfigTest(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 
-@unittest.skipUnless(deepseek_api_key_available(), "DEEPSEEK_API_KEY required for byo.autogen")
+@unittest.skipUnless(
+    deepseek_api_key_available(), "DEEPSEEK_API_KEY required for byo.autogen"
+)
 class AutogenAgentPipelineTest(CommonPipelineSteps, OrderedPipelineTestCase):
     """Full pipeline with the AutoGen AgentChat agent using DeepSeek."""
 

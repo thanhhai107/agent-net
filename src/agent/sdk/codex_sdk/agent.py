@@ -75,7 +75,9 @@ class CodexSdkAgent:
             diagnosis_report = await self._diagnosis_phase.run(task_description)
             self._print_phase(
                 DIAGNOSIS,
-                "completed" if not diagnosis_report.startswith("ERROR:") else diagnosis_report[:120],
+                "completed"
+                if not diagnosis_report.startswith("ERROR:")
+                else diagnosis_report[:120],
             )
 
             self._print_phase(SUBMISSION, "recording structured result")

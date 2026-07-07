@@ -9,7 +9,9 @@ import os
 from dataclasses import dataclass, field
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(SCRIPT_DIR)))))
+PROJECT_ROOT = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(SCRIPT_DIR))))
+)
 BGP_UTILS = os.path.join(PROJECT_ROOT, "src/nika/net_env/kathara/utils/bgp")
 
 
@@ -30,7 +32,9 @@ def _read_file(path: str) -> str:
         return f.read()
 
 
-def generate_simple_bgp_topology(output_dir: str | None = None, bgp_utils_path: str | None = None) -> str:
+def generate_simple_bgp_topology(
+    output_dir: str | None = None, bgp_utils_path: str | None = None
+) -> str:
     """
     Generate Kathara-compatible lab configuration for Simple BGP (2 routers, 2 hosts).
     Returns the absolute path to the output directory.
@@ -55,20 +59,34 @@ def generate_simple_bgp_topology(output_dir: str | None = None, bgp_utils_path: 
     pc2.links.append((0, "C"))
 
     # Startup and FRR from existing files
-    router1.cmd_list = _read_file(os.path.join(SCRIPT_DIR, "router1.startup")).strip().split("\n")
-    router2.cmd_list = _read_file(os.path.join(SCRIPT_DIR, "router2.startup")).strip().split("\n")
-    pc1.cmd_list = _read_file(os.path.join(SCRIPT_DIR, "pc1.startup")).strip().split("\n")
-    pc2.cmd_list = _read_file(os.path.join(SCRIPT_DIR, "pc2.startup")).strip().split("\n")
+    router1.cmd_list = (
+        _read_file(os.path.join(SCRIPT_DIR, "router1.startup")).strip().split("\n")
+    )
+    router2.cmd_list = (
+        _read_file(os.path.join(SCRIPT_DIR, "router2.startup")).strip().split("\n")
+    )
+    pc1.cmd_list = (
+        _read_file(os.path.join(SCRIPT_DIR, "pc1.startup")).strip().split("\n")
+    )
+    pc2.cmd_list = (
+        _read_file(os.path.join(SCRIPT_DIR, "pc2.startup")).strip().split("\n")
+    )
 
     for i, router in enumerate([router1, router2], start=1):
-        router.extra_files["/etc/frr/daemons"] = _read_file(os.path.join(bgp_utils, "daemons"))
-        router.extra_files["/etc/frr/vtysh.conf"] = _read_file(os.path.join(bgp_utils, "vtysh.conf"))
+        router.extra_files["/etc/frr/daemons"] = _read_file(
+            os.path.join(bgp_utils, "daemons")
+        )
+        router.extra_files["/etc/frr/vtysh.conf"] = _read_file(
+            os.path.join(bgp_utils, "vtysh.conf")
+        )
         router.extra_files["/etc/frr/frr.conf"] = _read_file(
             os.path.join(SCRIPT_DIR, f"router{i}/etc/frr/frr.conf")
         )
 
     all_machines = [router1, router2, pc1, pc2]
-    return _write_lab(output_dir, all_machines, "simple_bgp", "Simple BGP - 2 routers, 2 hosts")
+    return _write_lab(
+        output_dir, all_machines, "simple_bgp", "Simple BGP - 2 routers, 2 hosts"
+    )
 
 
 def _write_lab(
@@ -115,8 +133,14 @@ def _write_lab(
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="Generate Kathara lab config for Simple BGP")
-    parser.add_argument("-o", "--output", default=None, help="Output directory (default: topology/)")
+    parser = argparse.ArgumentParser(
+        description="Generate Kathara lab config for Simple BGP"
+    )
+    parser.add_argument(
+        "-o", "--output", default=None, help="Output directory (default: topology/)"
+    )
     args = parser.parse_args()
-    out = generate_simple_bgp_topology(output_dir=args.output or os.path.join(SCRIPT_DIR, "topology"))
+    out = generate_simple_bgp_topology(
+        output_dir=args.output or os.path.join(SCRIPT_DIR, "topology")
+    )
     print(f"Lab configuration generated at: {out}")

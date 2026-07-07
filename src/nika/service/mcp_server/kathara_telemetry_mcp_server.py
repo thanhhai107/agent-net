@@ -49,7 +49,9 @@ def influx_count_measurements(measurement: str) -> list[str]:
 
 @safe_tool
 @mcp.tool()
-def influx_query_measurement(measurement: str, limit: int = 10, offset: int = 0) -> list[str]:
+def influx_query_measurement(
+    measurement: str, limit: int = 10, offset: int = 0
+) -> list[str]:
     """Query an InfluxDB measurement.
     Large Dataset Warning: InfluxDB might contain massive time-series data.
     Always use influx_count_measurements() first to check size, then LIMIT/OFFSET for large results (>1000 rows).

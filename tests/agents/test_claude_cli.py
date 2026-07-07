@@ -20,7 +20,11 @@ from nika.utils.agent_config import resolve_agent_model
 from nika.utils.session_store import SessionStore
 from tests.agents._assertions import assert_submission_fields
 from tests.integration_base import OrderedPipelineTestCase
-from tests.integration_pipeline import CommonPipelineSteps, claude_cli_available, load_test_env
+from tests.integration_pipeline import (
+    CommonPipelineSteps,
+    claude_cli_available,
+    load_test_env,
+)
 
 load_test_env()
 
@@ -51,7 +55,9 @@ class ClaudeConfigTest(unittest.TestCase):
         self.assertEqual(env["ANTHROPIC_API_KEY"], "tok")
 
     def test_use_bare_mode_when_env_credentials_present(self) -> None:
-        with unittest.mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "key"}, clear=True):
+        with unittest.mock.patch.dict(
+            os.environ, {"ANTHROPIC_API_KEY": "key"}, clear=True
+        ):
             self.assertTrue(use_bare_claude_mode())
             self.assertTrue(has_env_claude_credentials())
 
@@ -60,8 +66,12 @@ class ClaudeAgentConfigTest(unittest.TestCase):
     """CLI env resolution for the Claude CLI agent."""
 
     def test_model_from_env(self) -> None:
-        with unittest.mock.patch.dict(os.environ, {"ANTHROPIC_MODEL": "deepseek-v4-pro[1m]"}, clear=True):
-            self.assertEqual(resolve_agent_model("local_cli.claude_cli", None), "deepseek-v4-pro[1m]")
+        with unittest.mock.patch.dict(
+            os.environ, {"ANTHROPIC_MODEL": "deepseek-v4-pro[1m]"}, clear=True
+        ):
+            self.assertEqual(
+                resolve_agent_model("local_cli.claude_cli", None), "deepseek-v4-pro[1m]"
+            )
 
 
 class ClaudeMcpJsonTest(unittest.TestCase):
@@ -88,7 +98,10 @@ class ClaudeMcpJsonTest(unittest.TestCase):
     def test_multiple_servers_all_present(self) -> None:
         json_str = _build_mcp_json(
             {
-                "kathara_base_mcp_server": {"command": "python3", "args": ["/path/base.py"]},
+                "kathara_base_mcp_server": {
+                    "command": "python3",
+                    "args": ["/path/base.py"],
+                },
                 "task_mcp_server": {"command": "python3", "args": ["/path/task.py"]},
             }
         )
@@ -97,7 +110,9 @@ class ClaudeMcpJsonTest(unittest.TestCase):
         self.assertIn("task_mcp_server", config["mcpServers"])
 
     def test_server_without_env_omits_env_key(self) -> None:
-        json_str = _build_mcp_json({"task_mcp_server": {"command": "python3", "args": ["/path/task.py"]}})
+        json_str = _build_mcp_json(
+            {"task_mcp_server": {"command": "python3", "args": ["/path/task.py"]}}
+        )
         config = json.loads(json_str)
         self.assertNotIn("env", config["mcpServers"]["task_mcp_server"])
 
@@ -160,7 +175,9 @@ class ClaudeDisplayTest(unittest.TestCase):
     def test_assistant_text_message(self) -> None:
         event = {
             "type": "assistant",
-            "message": {"content": [{"type": "text", "text": "BGP peer is unreachable."}]},
+            "message": {
+                "content": [{"type": "text", "text": "BGP peer is unreachable."}]
+            },
         }
         rendered = format_claude_event(event)
         self.assertIn("BGP peer is unreachable.", rendered or "")
@@ -271,10 +288,14 @@ class ClaudeAgentPipelineTest(CommonPipelineSteps, OrderedPipelineTestCase):
 
         claude_events = [e for e in messages if "claude_event" in e]
         self.assertGreater(len(claude_events), 0)
-        rendered_count = sum(1 for e in claude_events if format_claude_event(e["claude_event"]))
+        rendered_count = sum(
+            1 for e in claude_events if format_claude_event(e["claude_event"])
+        )
         self.assertGreater(rendered_count, 0)
 
-        result_events = [e for e in claude_events if e["claude_event"].get("type") == "result"]
+        result_events = [
+            e for e in claude_events if e["claude_event"].get("type") == "result"
+        ]
         self.assertTrue(result_events)
 
     def test_step_05_check_submission(self) -> None:

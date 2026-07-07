@@ -17,7 +17,11 @@ from nika.utils.agent_config import ENV_CLAUDE_SDK_MODEL, resolve_agent_model
 from nika.utils.session_store import SessionStore
 from tests.agents._assertions import assert_phase_messages, assert_submission_fields
 from tests.integration_base import OrderedPipelineTestCase
-from tests.integration_pipeline import CommonPipelineSteps, claude_sdk_available, load_test_env
+from tests.integration_pipeline import (
+    CommonPipelineSteps,
+    claude_sdk_available,
+    load_test_env,
+)
 
 load_test_env()
 
@@ -31,26 +35,40 @@ class ClaudeSdkConfigTest(unittest.TestCase):
     """Model and credential resolution for sdk.claude_sdk."""
 
     def test_model_from_anthropic_model_env(self) -> None:
-        with unittest.mock.patch.dict(os.environ, {"ANTHROPIC_MODEL": "deepseek-v4-pro[1m]"}, clear=True):
-            self.assertEqual(resolve_agent_model("sdk.claude_sdk", None), "deepseek-v4-pro[1m]")
+        with unittest.mock.patch.dict(
+            os.environ, {"ANTHROPIC_MODEL": "deepseek-v4-pro[1m]"}, clear=True
+        ):
+            self.assertEqual(
+                resolve_agent_model("sdk.claude_sdk", None), "deepseek-v4-pro[1m]"
+            )
 
     def test_model_from_nika_claude_sdk_model_env(self) -> None:
         with unittest.mock.patch.dict(
             os.environ,
-            {ENV_CLAUDE_SDK_MODEL: "deepseek-v4-flash", "ANTHROPIC_MODEL": "other-model"},
+            {
+                ENV_CLAUDE_SDK_MODEL: "deepseek-v4-flash",
+                "ANTHROPIC_MODEL": "other-model",
+            },
             clear=True,
         ):
-            self.assertEqual(resolve_agent_model("sdk.claude_sdk", None), "deepseek-v4-flash")
+            self.assertEqual(
+                resolve_agent_model("sdk.claude_sdk", None), "deepseek-v4-flash"
+            )
 
     def test_prepare_env_maps_auth_token_to_api_key(self) -> None:
         with unittest.mock.patch.dict(
             os.environ,
-            {"ANTHROPIC_AUTH_TOKEN": "tok", "ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic"},
+            {
+                "ANTHROPIC_AUTH_TOKEN": "tok",
+                "ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic",
+            },
             clear=True,
         ):
             env = prepare_claude_sdk_env(session_id="sess-abc")
         self.assertEqual(env["ANTHROPIC_API_KEY"], "tok")
-        self.assertEqual(env["ANTHROPIC_BASE_URL"], "https://api.deepseek.com/anthropic")
+        self.assertEqual(
+            env["ANTHROPIC_BASE_URL"], "https://api.deepseek.com/anthropic"
+        )
         self.assertEqual(env["NIKA_SESSION_ID"], "sess-abc")
 
     def test_prepare_env_requires_credentials(self) -> None:
@@ -84,7 +102,9 @@ class ClaudeSdkMcpTest(unittest.TestCase):
         self.assertEqual(srv["env"]["NIKA_SESSION_ID"], "sess-abc")
 
     def test_credentials_available_with_auth_token(self) -> None:
-        with unittest.mock.patch.dict(os.environ, {"ANTHROPIC_AUTH_TOKEN": "tok"}, clear=True):
+        with unittest.mock.patch.dict(
+            os.environ, {"ANTHROPIC_AUTH_TOKEN": "tok"}, clear=True
+        ):
             self.assertTrue(claude_sdk_credentials_available())
 
 
@@ -93,7 +113,9 @@ class ClaudeSdkMcpTest(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 
-@unittest.skipUnless(claude_sdk_available(), "claude-agent-sdk + ANTHROPIC credentials required")
+@unittest.skipUnless(
+    claude_sdk_available(), "claude-agent-sdk + ANTHROPIC credentials required"
+)
 class ClaudeSdkAgentPipelineTest(CommonPipelineSteps, OrderedPipelineTestCase):
     """Full pipeline with the sdk.claude_sdk agent."""
 

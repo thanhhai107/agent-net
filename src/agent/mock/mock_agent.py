@@ -130,7 +130,9 @@ class MockAgent:
         client = MultiServerMCPClient(connections=config)
         tools = {tool.name: tool for tool in await client.get_tools()}
 
-        logger.log("tool_start", {"tool": {"name": "list_avail_problems"}, "input": "{}"})
+        logger.log(
+            "tool_start", {"tool": {"name": "list_avail_problems"}, "input": "{}"}
+        )
         avail_raw = await tools["list_avail_problems"].ainvoke({})
         avail = _tool_text_list(avail_raw)
         session_root_cause = getattr(self.session, "root_cause_name", None)

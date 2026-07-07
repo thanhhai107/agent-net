@@ -9,6 +9,7 @@
 | `tests/integration/` | End-to-end session pipeline (env → inject → agent → eval) |
 | `tests/failure_inject_verify/` | Failure injection smoke tests (Kathara + Containerlab) |
 | `tests/net_env_verify/` | Network environment deploy and topology checks |
+| `tests/orchestrator/` | Problem registry and scoring unit tests |
 | `tests/runtime/` | Runtime/backend unit tests and session index |
 
 Shared helpers: [`integration_base.py`](integration_base.py), [`integration_pipeline.py`](integration_pipeline.py)
@@ -86,4 +87,12 @@ Pure Python tests (no Docker): backend resolution, session index, system logger,
 ```shell
 uv run --with pytest pytest tests/runtime/ -v
 uv run python -m unittest tests.runtime.test_session_index -v
+```
+
+## Orchestrator unit tests (`tests/orchestrator/`)
+
+Pure Python tests for problem registration (`prob_pool` auto-discovers `ProblemBase` subclasses by `root_cause_name`) and scoring helpers.
+
+```shell
+uv run --with pytest pytest tests/orchestrator/ -v
 ```

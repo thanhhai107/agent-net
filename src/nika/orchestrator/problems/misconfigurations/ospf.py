@@ -1,12 +1,12 @@
 import re
 
-from nika.orchestrator.problems.context import init_problem
 from pydantic import BaseModel, Field
 
-from nika.orchestrator.problems.problem_base import ProblemMeta, RootCauseCategory, TaskDescription, TaskLevel, build_verify_result
-from nika.orchestrator.tasks.detection import DetectionTask
-from nika.orchestrator.tasks.localization import LocalizationTask
-from nika.orchestrator.tasks.rca import RCATask
+from nika.orchestrator.problems.problem_base import (
+    RootCauseCategory,
+    build_verify_result,
+    ProblemBase,
+)
 from nika.utils.logger import system_logger
 
 # ==================================================================
@@ -20,7 +20,7 @@ class OSPFAreaMisconfigParams(BaseModel):
     host_name: str = Field(description="Target router host name.")
 
 
-class OSPFAreaMisconfigBase:
+class OSPFAreaMisconfig(ProblemBase):
     root_cause_category: RootCauseCategory = RootCauseCategory.MISCONFIGURATION
     root_cause_name: str = "ospf_area_misconfiguration"
 
@@ -29,47 +29,51 @@ class OSPFAreaMisconfigBase:
     Params = OSPFAreaMisconfigParams
 
     def __init__(self, scenario_name: str | None, **kwargs):
-        super().__init__()
-        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
+        super().__init__(scenario_name, **kwargs)
         self.logger = system_logger
-        self.faulty_devices: list[str] = []
 
     def inject_fault(self, params: OSPFAreaMisconfigParams):
-        host = params.host_name
-        self.faulty_devices = [host]
-        running_cfg = self.runtime.exec(host, "vtysh -c 'show running-config'")
+        self.set_faulty_devices([params.host_name])
+        running_cfg = self.runtime.exec(
+            params.host_name, "vtysh -c 'show running-config'"
+        )
         pattern = re.compile(r"^\s*network\s+\S+\s+area\s+(\S+)", re.MULTILINE)
         m = pattern.search(running_cfg)
         if not m:
-            self.logger.error(f"Could not find OSPF area on {host}")
+            self.logger.error(f"Could not find OSPF area on {params.host_name}")
         correct_area = m.group(1)
         wrong_area = "66" if correct_area != "66" else "99"
         self.runtime.exec(
-            host,
+            params.host_name,
             f"sed -i.bak -E 's/(area ){correct_area}$/\\1{wrong_area}/g' /etc/frr/frr.conf && service frr restart 2>/dev/null || true",
         )
-        self.logger.info(f"Injected OSPF area misconfiguration on {host} from area {correct_area} to {wrong_area}.")
+        self.logger.info(
+            f"Injected OSPF area misconfiguration on {params.host_name} from area {correct_area} to {wrong_area}."
+        )
 
     def verify_fault(self, params: OSPFAreaMisconfigParams) -> dict:
         """Verify the OSPF area in frr.conf and in the running daemon was changed."""
-        host = params.host_name
-        self.faulty_devices = [host]
+        self.set_faulty_devices([params.host_name])
         file_areas_raw = self.runtime.exec(
-            host,
+            params.host_name,
             "grep -E '^[[:space:]]*network .* area ' /etc/frr/frr.conf 2>/dev/null | awk '{print $NF}' | sort -u",
         ).strip()
         orig_areas_raw = self.runtime.exec(
-            host,
+            params.host_name,
             "grep -E '^[[:space:]]*network .* area ' /etc/frr/frr.conf.bak 2>/dev/null | awk '{print $NF}' | sort -u",
         ).strip()
         running_areas_raw = self.runtime.exec(
-            host,
+            params.host_name,
             "vtysh -c 'show running-config' 2>/dev/null | grep -E '^[[:space:]]*network .* area ' | awk '{print $NF}' | sort -u",
         ).strip()
         file_areas = set(file_areas_raw.splitlines()) if file_areas_raw else set()
         orig_areas = set(orig_areas_raw.splitlines()) if orig_areas_raw else set()
-        running_areas = set(running_areas_raw.splitlines()) if running_areas_raw else set()
-        file_changed = bool(file_areas) and bool(orig_areas) and file_areas != orig_areas
+        running_areas = (
+            set(running_areas_raw.splitlines()) if running_areas_raw else set()
+        )
+        file_changed = (
+            bool(file_areas) and bool(orig_areas) and file_areas != orig_areas
+        )
         daemon_changed = bool(running_areas) and running_areas != orig_areas
         verified = file_changed and daemon_changed
         return build_verify_result(
@@ -77,39 +81,12 @@ class OSPFAreaMisconfigBase:
             faulty_devices=self.faulty_devices,
             verified=verified,
             details={
-                "host": host,
+                "host": params.host_name,
                 "file_areas": list(file_areas),
                 "orig_areas": list(orig_areas),
                 "running_areas": list(running_areas),
             },
         )
-
-
-class OSPFAreaMisconfigDetection(OSPFAreaMisconfigBase, DetectionTask):
-    META = ProblemMeta(
-        root_cause_category=OSPFAreaMisconfigBase.root_cause_category,
-        root_cause_name=OSPFAreaMisconfigBase.root_cause_name,
-        task_level=TaskLevel.DETECTION,
-        description=TaskDescription.DETECTION,
-    )
-
-
-class OSPFAreaMisconfigLocalization(OSPFAreaMisconfigBase, LocalizationTask):
-    META = ProblemMeta(
-        root_cause_category=OSPFAreaMisconfigBase.root_cause_category,
-        root_cause_name=OSPFAreaMisconfigBase.root_cause_name,
-        task_level=TaskLevel.LOCALIZATION,
-        description=TaskDescription.LOCALIZATION,
-    )
-
-
-class OSPFAreaMisconfigRCA(OSPFAreaMisconfigBase, RCATask):
-    META = ProblemMeta(
-        root_cause_category=OSPFAreaMisconfigBase.root_cause_category,
-        root_cause_name=OSPFAreaMisconfigBase.root_cause_name,
-        task_level=TaskLevel.RCA,
-        description=TaskDescription.RCA,
-    )
 
 
 # ==================================================================
@@ -123,7 +100,7 @@ class OSPFNeighborMissingParams(BaseModel):
     host_name: str = Field(description="Target router host name.")
 
 
-class OSPFNeighborMissingBase:
+class OSPFNeighborMissing(ProblemBase):
     root_cause_category: RootCauseCategory = RootCauseCategory.MISCONFIGURATION
     root_cause_name: str = "ospf_neighbor_missing"
 
@@ -132,29 +109,25 @@ class OSPFNeighborMissingBase:
     Params = OSPFNeighborMissingParams
 
     def __init__(self, scenario_name: str | None, **kwargs):
-        super().__init__()
-        self.net_env, self.runtime = init_problem(scenario_name, **kwargs)
+        super().__init__(scenario_name, **kwargs)
         self.logger = system_logger
-        self.faulty_devices: list[str] = []
 
     def inject_fault(self, params: OSPFNeighborMissingParams):
-        host = params.host_name
-        self.faulty_devices = [host]
+        self.set_faulty_devices([params.host_name])
         cmd = (
             "sed -i.bak -E "
             "'s|^([[:space:]]*)network([[:space:]])|\\1# network\\2|' "
             "/etc/frr/frr.conf"
         )
-        self.runtime.exec(host, cmd)
-        self.runtime.exec(host, "service frr restart 2>/dev/null || true")
-        self.logger.info(f"Injected OSPF neighbor missing on {host}.")
+        self.runtime.exec(params.host_name, cmd)
+        self.runtime.exec(params.host_name, "service frr restart 2>/dev/null || true")
+        self.logger.info(f"Injected OSPF neighbor missing on {params.host_name}.")
 
     def verify_fault(self, params: OSPFNeighborMissingParams) -> dict:
         """Verify network lines are commented in frr.conf and removed from the running daemon."""
-        host = params.host_name
-        self.faulty_devices = [host]
+        self.set_faulty_devices([params.host_name])
         commented_count_raw = self.runtime.exec(
-            host,
+            params.host_name,
             "grep -c '^[[:space:]]*# network' /etc/frr/frr.conf 2>/dev/null || echo 0",
         ).strip()
         try:
@@ -162,7 +135,7 @@ class OSPFNeighborMissingBase:
         except ValueError:
             commented_count = 0
         running_network_count_raw = self.runtime.exec(
-            host,
+            params.host_name,
             "vtysh -c 'show running-config' 2>/dev/null | grep -c '^[[:space:]]*network' || echo 0",
         ).strip()
         try:
@@ -175,35 +148,8 @@ class OSPFNeighborMissingBase:
             faulty_devices=self.faulty_devices,
             verified=verified,
             details={
-                "host": host,
+                "host": params.host_name,
                 "commented_network_count": commented_count,
                 "running_network_count": running_network_count,
             },
         )
-
-
-class OSPFNeighborMissingDetection(OSPFNeighborMissingBase, DetectionTask):
-    META = ProblemMeta(
-        root_cause_category=OSPFNeighborMissingBase.root_cause_category,
-        root_cause_name=OSPFNeighborMissingBase.root_cause_name,
-        task_level=TaskLevel.DETECTION,
-        description=TaskDescription.DETECTION,
-    )
-
-
-class OSPFNeighborMissingLocalization(OSPFNeighborMissingBase, LocalizationTask):
-    META = ProblemMeta(
-        root_cause_category=OSPFNeighborMissingBase.root_cause_category,
-        root_cause_name=OSPFNeighborMissingBase.root_cause_name,
-        task_level=TaskLevel.LOCALIZATION,
-        description=TaskDescription.LOCALIZATION,
-    )
-
-
-class OSPFNeighborMissingRCA(OSPFNeighborMissingBase, RCATask):
-    META = ProblemMeta(
-        root_cause_category=OSPFNeighborMissingBase.root_cause_category,
-        root_cause_name=OSPFNeighborMissingBase.root_cause_name,
-        task_level=TaskLevel.RCA,
-        description=TaskDescription.RCA,
-    )

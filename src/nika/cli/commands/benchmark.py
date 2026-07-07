@@ -21,7 +21,9 @@ from nika.workflows.benchmark.run import (
     validate_inject_params,
 )
 
-benchmark_app = typer.Typer(help="Run curated benchmark cases (env → fault → agent → eval).")
+benchmark_app = typer.Typer(
+    help="Run curated benchmark cases (env → fault → agent → eval)."
+)
 
 
 def _parse_set_options(raw_items: list[str] | None) -> dict[str, str]:
@@ -32,7 +34,9 @@ def _parse_set_options(raw_items: list[str] | None) -> dict[str, str]:
         key, value = raw.split("=", 1)
         key = key.strip()
         if not key:
-            raise typer.BadParameter(f"Invalid --set value {raw!r}. Key cannot be empty.")
+            raise typer.BadParameter(
+                f"Invalid --set value {raw!r}. Key cannot be empty."
+            )
         overrides[key] = value.strip()
     return overrides
 
@@ -141,22 +145,32 @@ def benchmark_run(
         judge_provider = resolve_judge_provider(judge_provider)
         judge_model = resolve_judge_model(judge_model)
     elif judge_provider is not None or judge_model is not None:
-        raise typer.BadParameter("Pass --judge to enable LLM judge; omit --judge-provider/--judge-model otherwise.")
+        raise typer.BadParameter(
+            "Pass --judge to enable LLM judge; omit --judge-provider/--judge-model otherwise."
+        )
 
     if scenario is not None and config is not None:
-        raise typer.BadParameter("Use either SCENARIO (single-case mode) or --config (batch mode), not both.")
+        raise typer.BadParameter(
+            "Use either SCENARIO (single-case mode) or --config (batch mode), not both."
+        )
 
     single_mode = scenario is not None
 
     if single_mode:
         if batch_size != 1:
-            raise typer.BadParameter("--batch-size applies to YAML batch mode only; omit it for a single case.")
+            raise typer.BadParameter(
+                "--batch-size applies to YAML batch mode only; omit it for a single case."
+            )
         if not problem:
             raise typer.BadParameter("--problem is required when SCENARIO is given.")
         if scenario_requires_topo_size(scenario) and not size:
-            raise typer.BadParameter(f"Scenario '{scenario}' requires -s/--size (s, m, or l).")
+            raise typer.BadParameter(
+                f"Scenario '{scenario}' requires -s/--size (s, m, or l)."
+            )
         if not scenario_requires_topo_size(scenario) and size is not None:
-            raise typer.BadParameter(f"Scenario '{scenario}' does not use sizes; omit -s/--size.")
+            raise typer.BadParameter(
+                f"Scenario '{scenario}' does not use sizes; omit -s/--size."
+            )
         topo = size or ""
         inject_params = _parse_set_options(sets)
         if not inject_params:
@@ -185,9 +199,13 @@ def benchmark_run(
         return
 
     if problem is not None:
-        raise typer.BadParameter("--problem without SCENARIO is invalid; pass SCENARIO or use batch mode with --config.")
+        raise typer.BadParameter(
+            "--problem without SCENARIO is invalid; pass SCENARIO or use batch mode with --config."
+        )
 
-    benchmark_path = str(config) if config is not None else default_benchmark_yaml_path()
+    benchmark_path = (
+        str(config) if config is not None else default_benchmark_yaml_path()
+    )
     run_benchmark_from_yaml(
         benchmark_file=benchmark_path,
         agent_type=agent_type,

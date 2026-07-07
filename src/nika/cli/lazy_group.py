@@ -63,7 +63,10 @@ class LazyTyperGroup(TyperGroup):
             or len(target.registered_commands) > 1
         ):
             click_cmd = get_group(target)
-        elif len(target.registered_commands) == 1 and target.registered_commands[0].name == cmd_name:
+        elif (
+            len(target.registered_commands) == 1
+            and target.registered_commands[0].name == cmd_name
+        ):
             # Root alias for a single-command Typer (e.g. exec_app -> `nika exec`).
             click_cmd = get_command(target)
         else:
@@ -90,12 +93,17 @@ class LazyTyperGroup(TyperGroup):
         finally:
             self._defer_lazy_load = False
 
-    def format_commands(self, ctx: _click.Context, formatter: _click.HelpFormatter) -> None:
+    def format_commands(
+        self, ctx: _click.Context, formatter: _click.HelpFormatter
+    ) -> None:
         self._defer_lazy_load = True
         try:
             commands: list[tuple[str, _click.Command | None, str | None]] = []
             for subcommand in self.list_commands(ctx):
-                if subcommand in LAZY_COMMANDS and subcommand not in self._loaded_commands:
+                if (
+                    subcommand in LAZY_COMMANDS
+                    and subcommand not in self._loaded_commands
+                ):
                     commands.append((subcommand, None, LAZY_COMMANDS[subcommand].help))
                     continue
                 cmd = self.get_command(ctx, subcommand)

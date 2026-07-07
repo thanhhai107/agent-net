@@ -11,7 +11,7 @@
 
 - `src/nika/cli/`: Typer CLI groups for `session`, `env`, `failure`, `exec`, `agent`, `eval`, `benchmark`, and `traffic`.
 - `src/nika/workflows/`: command workflows that coordinate CLI actions.
-- `src/nika/orchestrator/`: task definitions and injectable problem classes.
+- `src/nika/orchestrator/`: injectable `ProblemBase` fault classes and registration via `prob_pool`.
 - `src/nika/net_env/`: Network lab definitions split by backend — `kathara/` (Kathara labs) and `containerlab/` (Containerlab labs).
 - `src/nika/service/`: Kathara APIs and MCP servers exposed to troubleshooting agents.
 - `src/nika/generator/`: fault and traffic generators.
@@ -28,6 +28,7 @@
 - Run unittest agent tests: `uv run python -m unittest discover -s tests/agents -p 'test_*.py' -v`
 - Run a focused unittest module: `uv run python -m unittest tests.agents.test_mock -v`
 - Regenerate benchmark YAML: `uv run python benchmark/generate_benchmark.py`
+- Auto-fix safe Ruff issues: `uv run ruff check . --fix`
 
 ## Architecture Rules
 
@@ -36,7 +37,7 @@
 - Runtime state belongs under `runtime/`; experiment artifacts belong under `results/{session_id}/`.
 - Relative result paths must resolve from the repository root, matching `resolve_results_root()`.
 - New Kathara network scenarios belong under `src/nika/net_env/kathara/`; Containerlab scenarios under `src/nika/net_env/containerlab/`. Both must be registered in the environment pool.
-- New injectable problems belong under `src/nika/orchestrator/problems/` and should expose explicit typed injection parameters.
+- New injectable problems belong under `src/nika/orchestrator/problems/`, subclass `ProblemBase`, set `root_cause_category` / `root_cause_name`, optional `symptom_desc`, and typed `Params`. Registration in `prob_pool` keys on `root_cause_name`; `META` is auto-built from those class variables.
 - New agents must implement the shared troubleshooting contract, register in `agent.registry.create_agent()`, and write standard artifacts.
 
 ## Agent System Rules
@@ -48,6 +49,12 @@
 - Agent runs should write `messages.jsonl` and `submission.json` in the session result directory.
 - MCP server behavior lives under `src/nika/service/mcp_server/`; avoid duplicating tool behavior in agent code.
 - Shared agent skills live under `src/agent/skills/`; helpers in `agent.utils.skills`. See `docs/agent-skills.md`. SADE keeps its own skill library under `src/agent/community/sade/.claude/`.
+
+## Formatting and Linting
+
+- Python code must be formatted with Ruff using `uv run ruff format .`.
+- Run `uv run ruff check .` before submitting changes when practical.
+- Prefer Ruff auto-fixes only for mechanical cleanup; avoid unrelated style churn in files outside the task scope.
 
 ## Testing Guidance
 

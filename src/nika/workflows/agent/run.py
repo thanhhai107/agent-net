@@ -53,7 +53,9 @@ def start_agent(
         model=model,
     )
     if agent_type == "local_cli.codex_cli" and stream_output:
-        effort_line = f" | Reasoning effort: {reasoning_effort}" if reasoning_effort else ""
+        effort_line = (
+            f" | Reasoning effort: {reasoning_effort}" if reasoning_effort else ""
+        )
         print(
             f"Session {session.session_id}\n"
             f"Agent: local_cli.codex_cli | Model: {model}{effort_line}\n"
