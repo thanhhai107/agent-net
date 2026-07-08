@@ -21,6 +21,8 @@ _K3S_ULIMITS = ["nproc=65535", "nofile=65535"]
 
 class LLMDInferenceCluster(NetworkEnvBase):
     LAB_NAME = "llmd_lab"
+    VERIFY_MAX_WAIT_SEC = 1200
+    VERIFY_RETRY_DELAY_SEC = 20
     TOPO_LEVEL = "hard"
     TOPO_SIZE = None
     TAGS = [
@@ -103,3 +105,8 @@ class LLMDInferenceCluster(NetworkEnvBase):
         self.kubernetes_nodes = sorted(
             name for name, m in self.lab.machines.items() if "k3s" in m.get_image()
         )
+
+    def verify_lab(self) -> dict:
+        from nika.net_env.kathara.kubernetes.llmd_lab.verify import verify_llmd_lab
+
+        return verify_llmd_lab(self._build_runtime(), scenario_name=self.LAB_NAME)

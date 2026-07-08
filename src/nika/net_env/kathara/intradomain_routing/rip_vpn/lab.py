@@ -403,3 +403,10 @@ class RIPSmallInternetVPN(NetworkEnvBase):
             "establishing an encrypted tunnel to the external VPN server and allowing secure access to the external web services."
         )
         self.load_machines()
+
+    def verify_lab(self) -> dict:
+        from nika.net_env.kathara.intradomain_routing.rip_vpn.verify import (
+            verify_rip_vpn_lab,
+        )
+
+        return verify_rip_vpn_lab(self._build_runtime(), scenario_name=self.LAB_NAME)

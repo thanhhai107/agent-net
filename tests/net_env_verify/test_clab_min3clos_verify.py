@@ -12,10 +12,8 @@ Deploy via ``start_net_env`` (``verify_lab`` runs during startup). Run via:
 
 from __future__ import annotations
 
-import shutil
 import unittest
-
-import docker
+from typing import ClassVar
 
 from nika.net_env.containerlab.min3clos.verify import (
     CLIENT1,
@@ -24,18 +22,11 @@ from nika.net_env.containerlab.min3clos.verify import (
 )
 from nika.runtime.factory import resolve_backend, runtime_for_session
 from tests.integration_base import SharedSessionTestCase
-
-
-def _min3clos_prerequisites() -> bool:
-    try:
-        docker.from_env().ping()
-    except Exception:
-        return False
-    return bool(shutil.which("clab") and shutil.which("gnmic"))
+from tests.net_env_verify.helpers import containerlab_prerequisites
 
 
 @unittest.skipUnless(
-    _min3clos_prerequisites(), "containerlab, gnmic, or Docker not available"
+    containerlab_prerequisites(), "containerlab, gnmic, or Docker not available"
 )
 class Min3ClosVerifyIntegrationTest(SharedSessionTestCase):
     SCENARIO = "min3clos"

@@ -85,3 +85,8 @@ class P4_MPLS(NetworkEnvBase):
 
         # load machines
         self.load_machines()
+
+    def verify_lab(self) -> dict:
+        from nika.net_env.kathara.p4.p4_mpls.verify import verify_p4_mpls_lab
+
+        return verify_p4_mpls_lab(self._build_runtime(), scenario_name=self.LAB_NAME)

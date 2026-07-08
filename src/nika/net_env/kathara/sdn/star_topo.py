@@ -193,3 +193,8 @@ class SDNStar(NetworkEnvBase):
 
         # load lab machines info
         self.load_machines()
+
+    def verify_lab(self) -> dict:
+        from nika.net_env.kathara.sdn.verify import verify_sdn_star_lab
+
+        return verify_sdn_star_lab(self._build_runtime(), scenario_name=self.LAB_NAME)

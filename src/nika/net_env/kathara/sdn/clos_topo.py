@@ -242,3 +242,8 @@ class SDNClos(NetworkEnvBase):
             )
 
         self.load_machines()
+
+    def verify_lab(self) -> dict:
+        from nika.net_env.kathara.sdn.verify import verify_sdn_clos_lab
+
+        return verify_sdn_clos_lab(self._build_runtime(), scenario_name=self.LAB_NAME)

@@ -19,8 +19,6 @@ import unittest
 from typing import ClassVar
 from unittest.mock import MagicMock
 
-import docker
-
 from nika.net_env.kathara.intradomain_routing.ospf_enterprise.lab_dhcp import (
     OSPFEnterpriseDHCP,
 )
@@ -42,14 +40,10 @@ from nika.net_env.kathara.intradomain_routing.ospf_enterprise.verify import (
 )
 from nika.runtime.factory import resolve_backend
 from tests.integration_base import SharedSessionTestCase
-
-
-def _docker_available() -> bool:
-    try:
-        docker.from_env().ping()
-        return True
-    except Exception:
-        return False
+from tests.net_env_verify.helpers import (
+    docker_available,
+    instantiate_with_mocked_kathara,
+)
 
 
 class _OSPFEnterpriseVerifyBase(SharedSessionTestCase):
@@ -62,6 +56,12 @@ class _OSPFEnterpriseVerifyBase(SharedSessionTestCase):
     CORE_ROUTERS = ("router_core_1", "router_core_2", "router_core_3")
     ACCESS_SWITCHES = ("switch_access_1_1_1", "switch_access_2_1_1")
     HOSTS = ("pc_1_1_1_1", "pc_2_1_1_1")
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        if cls is _OSPFEnterpriseVerifyBase:
+            raise unittest.SkipTest("base test class")
+        super().setUpClass()
 
     def _runtime(self):
         from nika.runtime.factory import runtime_for_session
@@ -204,8 +204,14 @@ class OSPFEnterpriseLabVerifyUnitTest(unittest.TestCase):
 
 
 class OSPFEnterpriseStaticUnitTest(unittest.TestCase):
+    def _inst(self) -> OSPFEnterpriseStatic:
+        return instantiate_with_mocked_kathara(
+            "nika.net_env.kathara.intradomain_routing.ospf_enterprise.lab_static.Kathara.get_instance",
+            lambda: OSPFEnterpriseStatic(topo_size="s"),
+        )
+
     def test_size_s_key_routers(self) -> None:
-        inst = OSPFEnterpriseStatic(topo_size="s")
+        inst = self._inst()
         self.assertEqual(
             set(inst.routers),
             {
@@ -219,7 +225,7 @@ class OSPFEnterpriseStaticUnitTest(unittest.TestCase):
         )
 
     def test_size_s_hosts_and_servers(self) -> None:
-        inst = OSPFEnterpriseStatic(topo_size="s")
+        inst = self._inst()
         self.assertEqual(set(inst.hosts), {"pc_1_1_1_1", "pc_2_1_1_1"})
         self.assertIn("dns_server", inst.servers["dns"])
         self.assertEqual(len(inst.servers["web"]), 4)
@@ -227,8 +233,14 @@ class OSPFEnterpriseStaticUnitTest(unittest.TestCase):
 
 
 class OSPFEnterpriseDHCPUnitTest(unittest.TestCase):
+    def _inst(self) -> OSPFEnterpriseDHCP:
+        return instantiate_with_mocked_kathara(
+            "nika.net_env.kathara.intradomain_routing.ospf_enterprise.lab_dhcp.Kathara.get_instance",
+            lambda: OSPFEnterpriseDHCP(topo_size="s"),
+        )
+
     def test_size_s_key_routers(self) -> None:
-        inst = OSPFEnterpriseDHCP(topo_size="s")
+        inst = self._inst()
         self.assertEqual(
             set(inst.routers),
             {
@@ -242,14 +254,14 @@ class OSPFEnterpriseDHCPUnitTest(unittest.TestCase):
         )
 
     def test_size_s_dhcp_and_load_balancer(self) -> None:
-        inst = OSPFEnterpriseDHCP(topo_size="s")
+        inst = self._inst()
         self.assertIn("dhcp_server", inst.servers["dhcp"])
         self.assertIn("load_balancer", inst.servers["load_balancer"])
         self.assertEqual(len(inst.servers["web"]), 4)
         self.assertIn("http://web99.local", inst.web_urls)
 
 
-@unittest.skipUnless(_docker_available(), "Docker not available")
+@unittest.skipUnless(docker_available(), "Docker not available")
 class OSPFEnterpriseStaticVerifyTest(_OSPFEnterpriseVerifyBase):
     SCENARIO = OSPFEnterpriseStatic.LAB_NAME
 
@@ -265,7 +277,7 @@ class OSPFEnterpriseStaticVerifyTest(_OSPFEnterpriseVerifyBase):
             self.assertIn(name, nodes, f"Expected node {name!r} in deployed lab")
 
 
-@unittest.skipUnless(_docker_available(), "Docker not available")
+@unittest.skipUnless(docker_available(), "Docker not available")
 class OSPFEnterpriseDHCPVerifyTest(_OSPFEnterpriseVerifyBase):
     SCENARIO = OSPFEnterpriseDHCP.LAB_NAME
 

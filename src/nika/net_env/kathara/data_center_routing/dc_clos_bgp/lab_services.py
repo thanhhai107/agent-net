@@ -489,3 +489,12 @@ class DCClosService(NetworkEnvBase):
         for pod_idx in range(self.super_spine_count):
             for web_idx in range(self.leaf_count - 1):
                 self.web_urls.append(f"http://web{web_idx}.pod{pod_idx}")
+
+    def verify_lab(self) -> dict:
+        from nika.net_env.kathara.data_center_routing.dc_clos_bgp.verify import (
+            verify_dc_clos_service_lab,
+        )
+
+        return verify_dc_clos_service_lab(
+            self._build_runtime(), scenario_name=self.LAB_NAME
+        )

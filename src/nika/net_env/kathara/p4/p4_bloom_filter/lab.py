@@ -123,3 +123,12 @@ class P4BloomFilter(NetworkEnvBase):
 
         # load machines
         self.load_machines()
+
+    def verify_lab(self) -> dict:
+        from nika.net_env.kathara.p4.p4_bloom_filter.verify import (
+            verify_p4_bloom_filter_lab,
+        )
+
+        return verify_p4_bloom_filter_lab(
+            self._build_runtime(), scenario_name=self.LAB_NAME
+        )

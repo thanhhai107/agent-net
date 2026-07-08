@@ -347,3 +347,12 @@ class DCClosBGP(NetworkEnvBase):
             "Each leaf connects to one host via a /24 subnet (10.<pod>.<leaf>.0/24) and advertises this network via BGP. "
             "All inter-router links use /31 subnets from 172.16.0.0/16. Routing is entirely EBGP using FRR."
         )
+
+    def verify_lab(self) -> dict:
+        from nika.net_env.kathara.data_center_routing.dc_clos_bgp.verify import (
+            verify_dc_clos_bgp_lab,
+        )
+
+        return verify_dc_clos_bgp_lab(
+            self._build_runtime(), scenario_name=self.LAB_NAME
+        )

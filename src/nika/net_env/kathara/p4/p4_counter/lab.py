@@ -152,3 +152,8 @@ class P4Counter(NetworkEnvBase):
 
         # load machines
         self.load_machines()
+
+    def verify_lab(self) -> dict:
+        from nika.net_env.kathara.p4.p4_counter.verify import verify_p4_counter_lab
+
+        return verify_p4_counter_lab(self._build_runtime(), scenario_name=self.LAB_NAME)

@@ -18,37 +18,34 @@ Prerequisites:
 
 from __future__ import annotations
 
-import os
 import time
 import unittest
 
-import docker
 
 from nika.net_env.kathara.kubernetes.k8s_lab.lab import K8sFatTreeBGP
 from nika.service.kathara.base_api import KatharaBaseAPI
 
 from tests.integration_base import SharedSessionTestCase
-
-
-def _docker_available() -> bool:
-    try:
-        docker.from_env().ping()
-        return True
-    except Exception:
-        return False
-
-
-def _privileged_lab_supported() -> bool:
-    """k3s machines require privileged containers; Kathara needs root for that."""
-    return os.geteuid() == 0
+from tests.net_env_verify.helpers import (
+    docker_available,
+    instantiate_with_mocked_kathara,
+    privileged_lab_supported,
+    ready_node_count,
+)
 
 
 class K8sLabUnitTest(unittest.TestCase):
     """Verify k8s_lab lab structure without Docker."""
 
+    def _inst(self) -> K8sFatTreeBGP:
+        return instantiate_with_mocked_kathara(
+            "nika.net_env.kathara.kubernetes.k8s_lab.lab.Kathara.get_instance",
+            K8sFatTreeBGP,
+        )
+
     def test_has_frr_routers(self) -> None:
         """k8s_lab must expose its FRR routers through the base-class routers list."""
-        inst = K8sFatTreeBGP()
+        inst = self._inst()
         self.assertTrue(len(inst.routers) > 0, "Expected at least one FRR router")
         expected_routers = {
             "leaf_1_1",
@@ -69,7 +66,7 @@ class K8sLabUnitTest(unittest.TestCase):
 
     def test_has_kubernetes_nodes(self) -> None:
         """k8s_lab must classify k3s machines into kubernetes_nodes."""
-        inst = K8sFatTreeBGP()
+        inst = self._inst()
         expected_k8s = {
             "controller",
             "worker1",
@@ -82,17 +79,17 @@ class K8sLabUnitTest(unittest.TestCase):
 
     def test_has_client_host(self) -> None:
         """k8s_lab must have the client node classified as a host."""
-        inst = K8sFatTreeBGP()
+        inst = self._inst()
         self.assertIn("client", inst.hosts)
 
     def test_as2r1_is_bridged(self) -> None:
         """as2r1 must be bridged to provide internet connectivity."""
-        inst = K8sFatTreeBGP()
+        inst = self._inst()
         self.assertTrue(inst.lab.machines["as2r1"].is_bridged())
 
     def test_k3s_nodes_are_privileged(self) -> None:
         """k3s nodes must run in privileged mode."""
-        inst = K8sFatTreeBGP()
+        inst = self._inst()
         for node_name in inst.kubernetes_nodes:
             machine = inst.lab.machines[node_name]
             self.assertTrue(
@@ -102,7 +99,7 @@ class K8sLabUnitTest(unittest.TestCase):
 
 
 @unittest.skipUnless(
-    _docker_available() and _privileged_lab_supported(),
+    docker_available() and privileged_lab_supported(),
     "Requires Docker and root (privileged k3s containers)",
 )
 class K8sLabIntegrationTest(SharedSessionTestCase):
@@ -139,13 +136,9 @@ class K8sLabIntegrationTest(SharedSessionTestCase):
                 nodes = cls._exec(
                     "controller", "kubectl get nodes --no-headers", timeout=60
                 )
-                ready_nodes = [
-                    line
-                    for line in nodes.splitlines()
-                    if line.strip().endswith(" Ready")
-                ]
-                if len(ready_nodes) < 6:
-                    last_error = f"k3s nodes not ready ({len(ready_nodes)}/6)"
+                ready_nodes = ready_node_count(nodes)
+                if ready_nodes < 6:
+                    last_error = f"k3s nodes not ready ({ready_nodes}/6)"
                     time.sleep(15)
                     continue
 
@@ -191,10 +184,7 @@ class K8sLabIntegrationTest(SharedSessionTestCase):
     def test_k3s_cluster_ready(self) -> None:
         """All six k3s nodes must report Ready."""
         output = self._exec("controller", "kubectl get nodes --no-headers")
-        ready = [
-            line for line in output.splitlines() if line.strip().endswith(" Ready")
-        ]
-        self.assertEqual(len(ready), 6, output)
+        self.assertEqual(ready_node_count(output), 6, output)
 
     def test_ingress_loadbalancer_vip(self) -> None:
         """Ingress controller must receive a MetalLB IP in 101.0.0.0/8."""

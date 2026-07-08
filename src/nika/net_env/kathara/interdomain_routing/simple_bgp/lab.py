@@ -65,3 +65,10 @@ class SimpleBGP(NetworkEnvBase):
 
         # load machines
         self.load_machines()
+
+    def verify_lab(self) -> dict:
+        from nika.net_env.kathara.interdomain_routing.simple_bgp.verify import (
+            verify_simple_bgp_lab,
+        )
+
+        return verify_simple_bgp_lab(self._build_runtime(), scenario_name=self.LAB_NAME)

@@ -11,13 +11,15 @@ from docker.errors import BuildError, ImageNotFound
 NIKA_IMAGE_PREFIX = "kathara/nika-"
 DOCKER_FILES_DIR = Path(__file__).resolve().parent
 
-# Mirrors src/nika/net_env/kathara/utils/DockerFiles/build_dockers.sh
+# Mirrors src/nika/net_env/kathara/utils/DockerFiles/build_dockers.sh, plus
+# scenario-local images that are required at deploy time.
 NIKA_IMAGE_DOCKERFILES: dict[str, str] = {
     "kathara/nika-frr": "Dockerfile.frr",
     "kathara/nika-base": "Dockerfile.base",
     "kathara/nika-nginx": "Dockerfile.nginx",
     "kathara/nika-wireguard": "Dockerfile.wireguard",
     "kathara/nika-pox": "Dockerfile.pox",
+    "kathara/influxdb": "../../p4/p4_int/Dockerfile",
 }
 
 _client: docker.DockerClient | None = None
@@ -43,7 +45,7 @@ def _dockerfile_for_image(image: str) -> Path:
     if dockerfile_name is None:
         suffix = image.removeprefix(NIKA_IMAGE_PREFIX)
         dockerfile_name = f"Dockerfile.{suffix}"
-    dockerfile = DOCKER_FILES_DIR / dockerfile_name
+    dockerfile = (DOCKER_FILES_DIR / dockerfile_name).resolve()
     if not dockerfile.is_file():
         raise FileNotFoundError(f"No Dockerfile for image {image}: {dockerfile}")
     return dockerfile
@@ -54,9 +56,10 @@ def build_nika_image(image: str) -> None:
     print(f"Building Docker image {image} from {dockerfile.name}...")
     try:
         _, build_log = _get_client().images.build(
-            path=str(DOCKER_FILES_DIR),
+            path=str(dockerfile.parent),
             dockerfile=dockerfile.name,
             tag=image,
+            network_mode="host",
             rm=True,
         )
         for chunk in build_log:
@@ -76,7 +79,11 @@ def ensure_nika_docker_images(
     By default only missing images are built. With ``force_rebuild=True``, every
     required NIKA image is rebuilt even if it already exists locally.
     """
-    nika_images = {img for img in required_images if img.startswith(NIKA_IMAGE_PREFIX)}
+    nika_images = {
+        img
+        for img in required_images
+        if img.startswith(NIKA_IMAGE_PREFIX) or img in NIKA_IMAGE_DOCKERFILES
+    }
     if force_rebuild:
         to_build = nika_images
     else:

@@ -16,34 +16,31 @@ Prerequisites:
 
 from __future__ import annotations
 
-import os
 import unittest
 
-import docker
 
 from nika.net_env.kathara.kubernetes.llmd_lab.lab import LLMDInferenceCluster
 
 from tests.integration_base import CliIntegrationTestCase, PerTestEnvTestCase
-
-
-def _docker_available() -> bool:
-    try:
-        docker.from_env().ping()
-        return True
-    except Exception:
-        return False
-
-
-def _privileged_lab_supported() -> bool:
-    return os.geteuid() == 0
+from tests.net_env_verify.helpers import (
+    docker_available,
+    instantiate_with_mocked_kathara,
+    privileged_lab_supported,
+)
 
 
 class LLMDLabUnitTest(unittest.TestCase):
     """Verify llmd_lab lab structure without Docker."""
 
+    def _inst(self) -> LLMDInferenceCluster:
+        return instantiate_with_mocked_kathara(
+            "nika.net_env.kathara.kubernetes.llmd_lab.lab.Kathara.get_instance",
+            LLMDInferenceCluster,
+        )
+
     def test_has_kubernetes_nodes(self) -> None:
         """llmd_lab must classify all k3s machines into kubernetes_nodes."""
-        inst = LLMDInferenceCluster()
+        inst = self._inst()
         expected_k8s = {
             "controller",
             "worker1",
@@ -56,12 +53,12 @@ class LLMDLabUnitTest(unittest.TestCase):
 
     def test_has_client_host(self) -> None:
         """llmd_lab must have the client node classified as a host."""
-        inst = LLMDInferenceCluster()
+        inst = self._inst()
         self.assertIn("client", inst.hosts)
 
     def test_all_k3s_nodes_are_bridged(self) -> None:
         """All k3s nodes must have bridged=True for internet access."""
-        inst = LLMDInferenceCluster()
+        inst = self._inst()
         for node_name in inst.kubernetes_nodes:
             machine = inst.lab.machines[node_name]
             self.assertTrue(
@@ -71,7 +68,7 @@ class LLMDLabUnitTest(unittest.TestCase):
 
     def test_k3s_nodes_are_privileged(self) -> None:
         """k3s nodes must run in privileged mode."""
-        inst = LLMDInferenceCluster()
+        inst = self._inst()
         for node_name in inst.kubernetes_nodes:
             machine = inst.lab.machines[node_name]
             self.assertTrue(
@@ -81,7 +78,7 @@ class LLMDLabUnitTest(unittest.TestCase):
 
 
 @unittest.skipUnless(
-    _docker_available() and _privileged_lab_supported(),
+    docker_available() and privileged_lab_supported(),
     "Requires Docker and root (privileged k3s containers)",
 )
 class LLMDLabStartupVerifyTest(CliIntegrationTestCase, PerTestEnvTestCase):

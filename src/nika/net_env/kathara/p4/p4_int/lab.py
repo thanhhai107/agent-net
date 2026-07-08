@@ -137,3 +137,10 @@ class P4INT(NetworkEnvBase):
                 ],
                 f"{switch.name}.startup",
             )
+
+        self.load_machines()
+
+    def verify_lab(self) -> dict:
+        from nika.net_env.kathara.p4.p4_int.verify import verify_p4_int_lab
+
+        return verify_p4_int_lab(self._build_runtime(), scenario_name=self.LAB_NAME)
