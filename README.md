@@ -2,6 +2,8 @@
 
 <img src="./assets/images/nika-banner.svg" alt="NIKA" width="100%"/>
 
+<br />
+
 [🤖Overview](#🤖overview) | 
 [📦Installation](#📦installation) | 
 [🚀Quick Start](#🚀quick-start) | 
@@ -35,7 +37,7 @@ It helps different users answer questions like:
 - 💬 **ML Engineer** "I want to fine-tune an open-source model on network troubleshooting and need a structured dataset paired with a rigorous evaluation framework."
 - 💬 **Open-Source Contributor** "I want to contribute a new network scenario or fault type to the community and have it evaluated systematically."
 
-
+<br />
 <h1 id="🤖overview">🤖 Overview</h1>
 
 ![NIKA Architecture](./assets/images/architecture.png)
@@ -58,7 +60,7 @@ This repository is a unified platform that can offer:
 - **Multi-session scalability**: Session-based workflow with multi-session support (`nika session`, `--session_id`). Run isolated sessions in parallel to speed-up evaluations.
 - **NIKA SDK**: Extend with your own network topology and configuration, and reproduce your failure case using NIKA's modules for traffic generation and fault injection. 
 
-
+<br />
 <h1 id="📦installation">📦 Installation</h1>
 
 ## Requirements
@@ -98,6 +100,7 @@ Login again or activate temporaily with
 newgrp docker
 ```
 
+<br />
 <h1 id="🚀quick-start">🚀 Quick Start</h1>
 
 ## Configure environment variables
