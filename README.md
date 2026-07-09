@@ -1,10 +1,14 @@
 <div align="center">
-<h1>A Network Arena for Benchmarking AI Agents on Network Troubleshooting</h1>
+
+<img src="./assets/images/nika-banner.svg" alt="NIKA" width="100%"/>
+
+<br />
 
 [🤖Overview](#🤖overview) | 
 [📦Installation](#📦installation) | 
 [🚀Quick Start](#🚀quick-start) | 
 [🛠️Usage](#🛠️usage) | 
+[🌐 Website](https://sands-lab.github.io/nika/) | 
 [📚Cite](#📚cite)
 
 [![ArXiv Link](https://img.shields.io/badge/arXiv-2512.16381-red?logo=arxiv)](https://arxiv.org/abs/2512.16381) 
@@ -13,30 +17,50 @@
 
 </div>
 
+## What is NIKA?
+
+Think about SWE-bench, but for network troubleshooting. 
+
+NIKA, **N**etwork **I**ncident Benchmar**k** for **A**I Agents,
+it is an open benchmark for agentic evaluations on network troubleshooting tasks. It connects any agent directly to a live network stack: routers, switches, hosts, and telemetry tools, all running on general-purpose computer. NIKA reproduces hundreds of realistic faults covering data center networks, campus networks, ISP backbones, SDN fabrics, overlay networks, and CNIs. 
+
+
+## 🙋 Why NIKA?
+
+NIKA lets you plug in any LLM or agent framework and measure its operational capability under identical, reproducible conditions. 
+
+It helps different users answer questions like:
+
+- 💬 **Telecom Manager** "A vendor is pitching me an AI solution for network operations. It passes all the standard telecom benchmarks (TeleQnA, TeleLogs, TeleMath, 3GPP-TSG), but I need objective evidence it can handle real incidents before I sign off."
+- 💬 **Network Engineer and SREs** "I respond to network incidents every day. I want an AI agent to help, but I'm not sure it will understand my topology or make things worse."
+- 💬 **AI Researcher** "I'm designing a new agent architecture for long-horizon network tasks. I need a benchmark to ablate components, measure reproducibly, and compare against published baselines."
+- 💬 **ML Engineer** "I want to fine-tune an open-source model on network troubleshooting and need a structured dataset paired with a rigorous evaluation framework."
+- 💬 **Open-Source Contributor** "I want to contribute a new network scenario or fault type to the community and have it evaluated systematically."
+
+<br />
 <h1 id="🤖overview">🤖 Overview</h1>
 
-![alt text](./assets/images/nika_arch_gpt.png)
+![NIKA Architecture](./assets/images/architecture.png)
 
 This repository is a unified platform that can offer: 
-1. A benchmark suite of curated network incidents that covers 56 realistic network issues, ranging from link and host failures to resource contention, and includes 15 registered network scenarios (including Kubernetes and Containerlab labs), seven of which can be instantiated at different topology sizes, spanning campus, data center, and cloud-native networks. The full benchmark YAML currently contains 702 troubleshooting incidents for evaluating AI agents. Each incident specifies deterministic inject parameters (device names, etc.); IP and netmask values are derived from the live lab at inject time.
-2. A modular plug-and-play orchestration platform that connects AI agents with the network environment, enabling real-time troubleshooting in realistic conditions, and providing a human-facing interface to monitor agent performance.
+1. **NIKA Benchmark**: A benchmark suite of curated network incidents that covers 56 realistic network issues, ranging from link and host failures to resource contention. It is shipped with 15 registered network scenarios spanning campus, data center, and cloud-native networks. The full benchmark YAML currently contains 702 troubleshooting incidents for evaluating AI agents. Each incident specifies deterministic inject parameters (device names, etc.); IP and netmask values are derived from the live lab at inject time.
+2. **NIKA Orchestrator**: A modular plug-and-play orchestration platform that connects AI agents with the *network environment*, enabling real-time access to telemetry interfaces via MCP telemetry severs, and providing a human-facing interface to judge agent performance. 
 
-
-💡 **Note:** We are actively developing this framework. If you have any suggestions or are interested in contributing, feel free to reach out to us!
+<!-- 💡 **Note:** We are actively developing this framework. If you have any suggestions or are interested in contributing, feel free to reach out to us! -->
 
 ## Features
 
-- Standardized network troubleshooting environments based on Kathará and Containerlab
-- Unified `nika` CLI for env deploy, fault injection, agent runs, and evaluation
-- Session-based workflow with multi-session support (`nika session`, `--session_id`)
-- Parameterized fault injection (`nika failure describe`, `--set key=value`)
-- MCP-based tool support
-- Pre-built network scenarios and fault injection mechanisms
-- Reproducible evaluation framework with batch summary (`nika eval summary`)
-- Support for various network topologies and configurations
-- Easy integration of custom AI agents
-- Automatic evaluation mechanism
+- **Network emulators**: NIKA attaches to network emulators to orchestrate failures. If you are a [Kathará](https://www.kathara.org) or[containerlab](https://containerlab.dev) user, you can use NIKA with both.
+- **Fault injection**: Parameterized fault injection (`nika failure describe`, `--set key=value`)
+- **Bring any AI agent**: Easy integration of custom AI agent.
+- **Zero-touch eval**: Pre-built network scenarios and fault injection mechanisms, with automatic evaluation mechanism.
+- **MCP**: native MCP-based tool support
+- **Reproducibility**: Reproducible evaluation framework with batch summary (`nika eval summary`). Easy to add new agents to the leaderboard. 
+- **CLI**: Unified `nika` CLI for env deploy, fault injection, agent runs, and evaluation
+- **Multi-session scalability**: Session-based workflow with multi-session support (`nika session`, `--session_id`). Run isolated sessions in parallel to speed-up evaluations.
+- **NIKA SDK**: Extend with your own network topology and configuration, and reproduce your failure case using NIKA's modules for traffic generation and fault injection. 
 
+<br />
 <h1 id="📦installation">📦 Installation</h1>
 
 ## Requirements
@@ -76,6 +100,7 @@ Login again or activate temporaily with
 newgrp docker
 ```
 
+<br />
 <h1 id="🚀quick-start">🚀 Quick Start</h1>
 
 ## Configure environment variables
