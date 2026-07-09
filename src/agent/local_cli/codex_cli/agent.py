@@ -19,11 +19,9 @@ Select with ``nika agent run -a local_cli.codex_cli``.
 """
 
 import logging
-import os
 import sys
 from typing import Any
 
-import langsmith as ls
 from langchain_core.messages import BaseMessage, HumanMessage
 from langgraph.graph import END, START, StateGraph
 from pydantic import Field
@@ -114,20 +112,9 @@ class CodexCliAgent:
 
     async def run(self, task_description: str) -> dict[str, Any]:
         """Execute the two-phase pipeline and return the final graph state."""
-        with ls.tracing_context(
-            project_name=os.getenv("LANGSMITH_PROJECT", "NIKA"),
-            metadata={
-                "scenario": getattr(self.session, "scenario_name", ""),
-                "problem": getattr(self.session, "problem_names", [""])[0],
-                "topo_size": getattr(self.session, "scenario_topo_size", ""),
-                "model": self.model,
-                "reasoning_effort": self.reasoning_effort,
-                "agent": "local_cli.codex_cli",
-            },
-        ):
-            return await self.graph.ainvoke(
-                {"messages": [HumanMessage(content=task_description)]}
-            )
+        return await self.graph.ainvoke(
+            {"messages": [HumanMessage(content=task_description)]}
+        )
 
     # ------------------------------------------------------------------
     # Graph nodes

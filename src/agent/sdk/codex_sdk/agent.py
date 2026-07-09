@@ -6,11 +6,8 @@ Select with ``nika agent run -a sdk.codex_sdk``.
 
 from __future__ import annotations
 
-import os
 import sys
 from typing import Any
-
-import langsmith as ls
 
 from agent.sdk.codex_sdk.phases.diagnosis import CodexSdkDiagnosisPhase
 from agent.sdk.codex_sdk.phases.submission import CodexSdkSubmissionPhase
@@ -58,34 +55,23 @@ class CodexSdkAgent:
         )
 
     async def run(self, task_description: str) -> dict[str, Any]:
-        with ls.tracing_context(
-            project_name=os.getenv("LANGSMITH_PROJECT", "NIKA"),
-            metadata={
-                "scenario": getattr(self.session, "scenario_name", ""),
-                "problem": getattr(self.session, "problem_names", [""])[0],
-                "topo_size": getattr(self.session, "scenario_topo_size", ""),
-                "model": self.model,
-                "reasoning_effort": self.reasoning_effort,
-                "agent": "sdk.codex_sdk",
-            },
-        ):
-            self._print_phase(DIAGNOSIS, "starting network fault analysis")
-            diagnosis_report = await self._diagnosis_phase.run(task_description)
-            self._print_phase(
-                DIAGNOSIS,
-                "completed"
-                if not diagnosis_report.startswith("ERROR:")
-                else diagnosis_report[:120],
-            )
+        self._print_phase(DIAGNOSIS, "starting network fault analysis")
+        diagnosis_report = await self._diagnosis_phase.run(task_description)
+        self._print_phase(
+            DIAGNOSIS,
+            "completed"
+            if not diagnosis_report.startswith("ERROR:")
+            else diagnosis_report[:120],
+        )
 
-            self._print_phase(SUBMISSION, "recording structured result")
-            submission_result = await self._submission_phase.run(diagnosis_report)
-            self._print_phase(SUBMISSION, "completed")
+        self._print_phase(SUBMISSION, "recording structured result")
+        submission_result = await self._submission_phase.run(diagnosis_report)
+        self._print_phase(SUBMISSION, "completed")
 
-            return {
-                "diagnosis_report": diagnosis_report,
-                "submission_result": submission_result,
-            }
+        return {
+            "diagnosis_report": diagnosis_report,
+            "submission_result": submission_result,
+        }
 
     def _print_phase(self, phase: str, message: str) -> None:
         if not self._stream_output:

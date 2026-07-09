@@ -140,12 +140,6 @@ class ParallelBenchmarkIntegrationTest(IntegrationTestCase):
         finally:
             Path(yaml_path).unlink(missing_ok=True)
 
-    @classmethod
-    def tearDownClass(cls) -> None:
-        for result in cls._pipeline_results.values():
-            if isinstance(result, tuple):
-                cls._remove_session_results(result[0])
-
     def _result(self, case: ScenarioCase) -> tuple[str, Path]:
         result = self._pipeline_results.get(_case_key(case))
         if isinstance(result, BaseException):

@@ -1,7 +1,6 @@
 import json
 
 from dotenv import load_dotenv
-from langsmith import tracing_context
 from pydantic import BaseModel, Field
 
 # from agent.llm.langchain_deepseek import DeepSeekLLM
@@ -117,8 +116,7 @@ class LLMJudge:
             ground_truth=ground_truth,
             trace=trace,
         )
-        with tracing_context(enabled=False):
-            evaluation: JudgeResponse = self.llm.invoke(self.prompt)
+        evaluation: JudgeResponse = self.llm.invoke(self.prompt)
 
         # Save evaluation result to file
         with open(save_path, "w+") as f:

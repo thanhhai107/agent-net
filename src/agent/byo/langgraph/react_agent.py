@@ -1,12 +1,10 @@
 import asyncio
 import logging
 import os
+from typing import Any
 
-import langsmith as ls
 from dotenv import load_dotenv
 from langchain_core.messages import BaseMessage, HumanMessage
-from langfuse import get_client
-from langfuse.langchain import CallbackHandler
 from langgraph.errors import GraphRecursionError
 from langgraph.graph import END, START, StateGraph
 from pydantic import Field, ValidationError
@@ -24,6 +22,10 @@ load_dotenv()
 
 
 logging.basicConfig(level=logging.INFO)
+
+
+def _env_flag_enabled(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 class AgentState(TypedDict):
@@ -56,19 +58,7 @@ class BasicReActAgent:
         self.session.load_running_session(session_id=session_id)
         self.session_dir = self.session.session_dir
 
-        # Set up Langfuse callback handler
-        # Initialize Langfuse client
-        langfuse = get_client()
-
-        # Initialize Langfuse CallbackHandler for Langchain (tracing)
-        self.langfuse_handler = CallbackHandler()
-
-        if langfuse.auth_check():
-            system_logger.info("Authentication to Langfuse successful.")
-        else:
-            system_logger.warning(
-                "Authentication to Langfuse failed. Please check your LANGFUSE_API_KEY."
-            )
+        self.langfuse_handler = self._load_langfuse_handler()
 
         diagnosis_phase = DiagnosisPhase(
             session_id=session_id,
@@ -99,22 +89,41 @@ class BasicReActAgent:
         self.graph = worker_builder.compile()
 
     async def run(self, task_description: str):
-        with ls.tracing_context(
-            project_name=os.getenv("LANGSMITH_PROJECT", "NIKA"),
-            metadata={
-                "scenario": self.session.scenario_name,
-                "problem": self.session.problem_names[0],
-                "topo_size": self.session.scenario_topo_size,
-                "model": self.session.model,
+        callbacks: list[Any] = []
+        if self.langfuse_handler is not None:
+            callbacks.append(self.langfuse_handler)
+
+        result = await self.graph.ainvoke(
+            {
+                "messages": [HumanMessage(content=task_description)],
             },
-        ):
-            result = await self.graph.ainvoke(
-                {
-                    "messages": [HumanMessage(content=task_description)],
-                },
-                config={"callbacks": [self.langfuse_handler]},
+            config={"callbacks": callbacks},
+        )
+        return result
+
+    def _load_langfuse_handler(self) -> Any | None:
+        if not _env_flag_enabled("NIKA_LANGFUSE_ENABLED"):
+            return None
+
+        try:
+            from langfuse import get_client
+            from langfuse.langchain import CallbackHandler
+        except ImportError as exc:
+            raise RuntimeError(
+                "NIKA_LANGFUSE_ENABLED is true, but langfuse is not installed. "
+                "Install the observability extra or disable NIKA_LANGFUSE_ENABLED."
+            ) from exc
+
+        langfuse = get_client()
+        handler = CallbackHandler()
+
+        if langfuse.auth_check():
+            system_logger.info("Authentication to Langfuse successful.")
+        else:
+            system_logger.warning(
+                "Authentication to Langfuse failed. Please check your LANGFUSE_API_KEY."
             )
-            return result
+        return handler
 
     async def _run_diagnosis(self, state: AgentState):
         try:

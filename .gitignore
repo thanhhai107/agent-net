@@ -8,6 +8,7 @@ tmp/
 .vscode/
 **/results/**
 .env
+.env.sandbox.local
 /.venv
 **/*egg-info/**
 /runtime/

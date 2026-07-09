@@ -297,7 +297,7 @@ nika agent run -a byo.langgraph -p openai -m gpt-5-mini -n 20
 nika agent run -a byo.langgraph -p ollama -m qwen2.5:7b -n 20
 ```
 
-Observability: LangSmith (`byo.langgraph`, `local_cli.codex_cli`, `local_cli.claude_cli`); Langfuse (`byo.langgraph` only). See `.env.example`.
+Observability: optional Langfuse (`byo.langgraph` only, enable with `NIKA_LANGFUSE_ENABLED=true`). See `.env.example`.
 
 ### `byo.mcp_agent` (`byo/mcp_agent`)
 
@@ -582,7 +582,7 @@ Each session directory under `{result_dir}/{session_id}/` (default `{result_dir}
 - **`events.jsonl`**: pipeline events (env deploy, fault inject, agent start/end, eval).
 - **`messages.jsonl`**: agent conversation and tool traces.
 
-LangSmith / Langfuse keys: `.env.example`. Custom loggers: `src/agent/utils/loggers.py` and **[src/agent/README.md](src/agent/README.md)**.
+Langfuse is optional and loaded only when `NIKA_LANGFUSE_ENABLED=true`. Keys: `.env.example`. Custom loggers: `src/agent/utils/loggers.py` and **[src/agent/README.md](src/agent/README.md)**.
 
 <h1 id="📚cite">📚 Cite</h1>
 

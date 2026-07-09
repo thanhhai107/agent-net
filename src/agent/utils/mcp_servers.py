@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 
-from nika.service.mcp_gateway.lifecycle import ENV_GATEWAY_URL
+from nika.service.mcp_gateway.lifecycle import ENV_GATEWAY_AGENT_URL, ENV_GATEWAY_URL
 from nika.service.mcp_server.registry import (
     MCP_SERVER_SPECS,
     SUBMISSION_SERVER,
@@ -26,6 +26,10 @@ def session_http_headers(session_id: str) -> dict[str, str]:
 
 
 def _gateway_base_url() -> str:
+    if os.environ.get("NIKA_SANDBOX_EXECUTION") == "1":
+        agent_base = os.environ.get(ENV_GATEWAY_AGENT_URL, "").strip().rstrip("/")
+        if agent_base:
+            return agent_base
     base = os.environ.get(ENV_GATEWAY_URL, "").strip().rstrip("/")
     if not base:
         raise RuntimeError(

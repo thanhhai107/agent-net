@@ -2,9 +2,17 @@
 
 import asyncio
 import logging
+import os
 
 from agent.registry import create_agent
-from nika.service.mcp_gateway.lifecycle import mcp_gateway_for_session
+from agent.sandbox import SANDBOX_SUPPORTED_AGENTS
+from agent.sandbox.config import resolve_sandbox_config, sandbox_gateway_agent_host
+from agent.sandbox.image import ensure_sandbox_image
+from agent.sandbox.manager import SandboxManager
+from nika.service.mcp_gateway.lifecycle import (
+    ENV_GATEWAY_AGENT_URL,
+    mcp_gateway_for_session,
+)
 from nika.utils.agent_config import (
     resolve_agent_model,
     resolve_agent_type,
@@ -31,6 +39,13 @@ def start_agent(
     session_id: str | None = None,
     reasoning_effort: str | None = None,
     stream_output: bool = True,
+    sandbox: bool | None = None,
+    sandbox_image: str | None = None,
+    sandbox_env_file: str | None = None,
+    sandbox_keep_container: bool | None = None,
+    sandbox_cpus: str | None = None,
+    sandbox_memory: str | None = None,
+    sandbox_network: str | None = None,
 ) -> None:
     """Load the running session, run the agent on ``task_description``, then end the session."""
     agent_type = resolve_agent_type(agent_type)
@@ -38,6 +53,15 @@ def start_agent(
     reasoning_effort = resolve_reasoning_effort(reasoning_effort)
     model = resolve_agent_model(agent_type, model)
     llm_provider = resolve_llm_provider(llm_provider, agent_type=agent_type)
+    sandbox_config = resolve_sandbox_config(
+        enabled=sandbox,
+        image=sandbox_image,
+        env_file=sandbox_env_file,
+        network=sandbox_network,
+        keep_container=sandbox_keep_container,
+        cpus=sandbox_cpus,
+        memory=sandbox_memory,
+    )
 
     session = Session()
     session.load_running_session(session_id=session_id)
@@ -52,18 +76,21 @@ def start_agent(
     bind_session_dir(session.session_dir)
     log_event(
         "agent_start",
-        f"Starting agent: {agent_type} (model={model}) in session {session.session_id}",
+        f"Starting agent: {agent_type} (model={model}) in session {session.session_id}"
+        + (" [sandbox]" if sandbox_config.enabled else ""),
         session_id=session.session_id,
         agent_type=agent_type,
         model=model,
+        sandbox=sandbox_config.enabled,
     )
     if agent_type == "local_cli.codex_cli" and stream_output:
         effort_line = (
             f" | Reasoning effort: {reasoning_effort}" if reasoning_effort else ""
         )
+        mode_line = " | Sandbox: enabled" if sandbox_config.enabled else ""
         print(
             f"Session {session.session_id}\n"
-            f"Agent: local_cli.codex_cli | Model: {model}{effort_line}\n"
+            f"Agent: local_cli.codex_cli | Model: {model}{effort_line}{mode_line}\n"
             f"Results: {session.session_dir}\n",
             flush=True,
         )
@@ -72,17 +99,45 @@ def start_agent(
             session.session_id,
             scenario_name=session.scenario_name,
             policy_mode=_gateway_policy_mode(agent_type),  # type: ignore[arg-type]
+            sandbox=sandbox_config.enabled,
+            sandbox_agent_host=sandbox_gateway_agent_host(sandbox_config.network),
         ):
-            agent = create_agent(
-                agent_type,
-                session_id=session.session_id,
-                llm_provider=llm_provider,
-                model=model,
-                max_steps=max_steps,
-                reasoning_effort=reasoning_effort,
-                stream_output=stream_output,
-            )
-            asyncio.run(agent.run(task_description=session.task_description))
+            if sandbox_config.enabled:
+                if agent_type not in SANDBOX_SUPPORTED_AGENTS:
+                    raise ValueError(
+                        f"Sandbox mode supports {SANDBOX_SUPPORTED_AGENTS}, got {agent_type!r}"
+                    )
+                ensure_sandbox_image(
+                    sandbox_config.image,
+                    http_proxy=sandbox_config.http_proxy,
+                    https_proxy=sandbox_config.https_proxy,
+                )
+                gateway_agent_url = os.environ.get(ENV_GATEWAY_AGENT_URL, "")
+                if not gateway_agent_url:
+                    raise RuntimeError(
+                        f"{ENV_GATEWAY_AGENT_URL} was not set for sandbox execution"
+                    )
+                SandboxManager(sandbox_config).run(
+                    session=session,
+                    agent_type=agent_type,
+                    model=model,
+                    max_steps=max_steps,
+                    reasoning_effort=reasoning_effort,
+                    llm_provider=llm_provider,
+                    mcp_gateway_agent_url=gateway_agent_url,
+                    stream_output=stream_output,
+                )
+            else:
+                agent = create_agent(
+                    agent_type,
+                    session_id=session.session_id,
+                    llm_provider=llm_provider,
+                    model=model,
+                    max_steps=max_steps,
+                    reasoning_effort=reasoning_effort,
+                    stream_output=stream_output,
+                )
+                asyncio.run(agent.run(task_description=session.task_description))
     except Exception as exc:
         log_error_event(
             "agent_error",

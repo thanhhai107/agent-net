@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# Security checks for the NIKA agent sandbox container (used by tests).
+set -euo pipefail
+
+failures=0
+
+check() {
+    local name="$1"
+    shift
+    if "$@"; then
+        echo "PASS: $name"
+    else
+        echo "FAIL: $name"
+        failures=$((failures + 1))
+    fi
+}
+
+# Docker socket must not be accessible.
+check "no_docker_socket" test ! -S /var/run/docker.sock
+
+# Host home must not be mounted (agent user home is /home/agent only).
+check "no_host_home_mount" test ! -d /root/.ssh
+
+# Unauthorized host probe file must not be readable.
+if [ -n "${NIKA_SANDBOX_PROBE_FILE:-}" ]; then
+    check "no_host_probe_file" test ! -r "$NIKA_SANDBOX_PROBE_FILE"
+fi
+
+# If gateway health check fails, print URL for debugging.
+if [ -n "${NIKA_MCP_GATEWAY_AGENT_URL:-}" ]; then
+    health_url="${NIKA_MCP_GATEWAY_AGENT_URL%/}/gateway/health"
+    if curl -sf "$health_url" >/dev/null; then
+        echo "PASS: gateway_health"
+    else
+        echo "FAIL: gateway_health ($health_url)"
+        failures=$((failures + 1))
+    fi
+fi
+
+# Docker CLI must not be available inside sandbox.
+check "no_docker_cli" test -z "$(command -v docker || true)"
+
+# Kathara CLI must not be available inside sandbox.
+check "no_kathara_cli" test -z "$(command -v kathara || true)"
+
+# Secrets must be redacted in env dump artifact when present.
+if [ -f /workspace/env_dump.txt ]; then
+    if grep -qE 'sk-[A-Za-z0-9_-]{10,}' /workspace/env_dump.txt; then
+        echo "FAIL: env_dump_contains_secrets"
+        failures=$((failures + 1))
+    else
+        echo "PASS: env_dump_no_raw_secrets"
+    fi
+fi
+
+if [ "$failures" -gt 0 ]; then
+    echo "Security probe failures: $failures"
+    exit 1
+fi
+
+echo "All security probes passed"

@@ -24,6 +24,7 @@ src/agent/
 ├── sdk/                  # SDK agents (claude-agent-sdk, openai-codex)
 │   ├── claude_sdk/       # -a sdk.claude_sdk
 │   └── codex_sdk/        # -a sdk.codex_sdk
+├── sandbox/              # Docker sandbox image, runner, and manager
 ├── skills/               # Shared skill library (.claude/ + .agents/)
 ├── llm/                  # LangChain model factory (langgraph path)
 └── utils/                # MCP config, phases, loggers, skills helpers
@@ -76,13 +77,34 @@ Every agent runs **diagnosis** (Kathara MCP, `if_submit=False`) then **submissio
 | `-m` / `--model` | `NIKA_MODEL` | No | Overrides agent-specific model env when set |
 | `--session_id` | — | No | Target session (default: current running session) |
 
+### Sandbox (CLI/SDK agents)
+
+Run supported agents inside Docker while MCP tools and the network lab stay on the host. See **[docs/agent-sandbox.md](../../docs/agent-sandbox.md)**.
+
+| Flag | Env | Notes |
+|------|-----|-------|
+| `--sandbox` | `NIKA_AGENT_SANDBOX` | Enable container execution |
+| `--sandbox-image` | `NIKA_SANDBOX_IMAGE` | Default `nika/agent-sandbox:latest` |
+| `--sandbox-env-file` | `NIKA_SANDBOX_ENV_FILE` | Whitelisted credential injection (default repo `.env`) |
+| `--sandbox-keep-container` | `NIKA_SANDBOX_KEEP` | Keep container after agent exit |
+| `--sandbox-cpus` | `NIKA_SANDBOX_CPUS` | Docker CPU limit |
+| `--sandbox-memory` | `NIKA_SANDBOX_MEMORY` | Docker memory limit |
+
+Default sandbox networking is `bridge` with **direct** LLM API access (no proxy). Optional outbound proxy for restricted networks: set `NIKA_SANDBOX_HTTP_PROXY` / `NIKA_SANDBOX_AUTO_PROXY` in gitignored `.env.sandbox.local` — see **[docs/agent-sandbox.md](../../docs/agent-sandbox.md)**.
+
+The sandbox image is built automatically on the first `--sandbox` run when missing locally.
+
+```bash
+uv run nika agent run --sandbox -a local_cli.codex_cli -m gpt-5.4-mini -n 20
+```
+
 Model resolution order: `-m` → `NIKA_MODEL` → agent-specific env (below).
 
-### Observability (byo.langgraph, local_cli.codex_cli, local_cli.claude_cli)
+### Observability (byo.langgraph)
 
-LangSmith: `LANGSMITH_TRACING`, `LANGSMITH_API_KEY`, `LANGSMITH_PROJECT` (default `NIKA`).
+Langfuse is optional and imported only when `NIKA_LANGFUSE_ENABLED=true`.
 
-Langfuse (byo.langgraph only): `LANGFUSE_SECRET_KEY`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_HOST`.
+Install with `uv sync --extra observability`, then configure `LANGFUSE_SECRET_KEY`, `LANGFUSE_PUBLIC_KEY`, and `LANGFUSE_HOST`.
 
 ---
 
@@ -228,7 +250,7 @@ OPENAI_API_KEY=sk-...
 nika agent run -a byo.mcp_agent -m gpt-4.1-mini -n 20
 ```
 
-No LangSmith / Langfuse integration in this path (observability deferred).
+No Langfuse integration in this path (observability deferred).
 
 ---
 
@@ -254,7 +276,7 @@ OPENAI_API_KEY=sk-...
 nika agent run -a byo.autogen -m gpt-4.1-mini -n 20
 ```
 
-No LangSmith / Langfuse integration in this path (observability deferred).
+No Langfuse integration in this path (observability deferred).
 
 ---
 

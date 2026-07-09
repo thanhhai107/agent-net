@@ -158,6 +158,13 @@ class CodexWorker:
         global_auth = Path.home() / ".codex" / "auth.json"
         if not auth_link.exists() and global_auth.exists():
             auth_link.symlink_to(global_auth)
+        elif not auth_link.exists():
+            api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+            if api_key:
+                auth_link.write_text(
+                    json.dumps({"OPENAI_API_KEY": api_key, "auth_mode": "apikey"}),
+                    encoding="utf-8",
+                )
 
         prepare_codex_workspace(self.workspace)
         self._write_mcp_config()

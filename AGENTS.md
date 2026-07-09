@@ -3,66 +3,78 @@
 ## Project Snapshot
 
 - NIKA is a Python 3.12 network troubleshooting benchmark and orchestration platform.
-- It uses Kathara and Docker to deploy network labs, inject failures, run troubleshooting agents, and evaluate results.
+- It deploys Kathara or Containerlab labs, injects reproducible network faults, runs troubleshooting agents, and evaluates their submissions.
 - The package uses a `src/` layout. The console entry point is `nika = nika.cli.main:main`.
 - Dependencies are managed with `uv`; `.env` is loaded from the repository root by `src/nika/config.py`.
 
 ## Repository Map
 
-- `src/nika/cli/`: Typer CLI groups for `session`, `env`, `failure`, `exec`, `agent`, `eval`, `benchmark`, and `traffic`.
-- `src/nika/workflows/`: command workflows that coordinate CLI actions.
-- `src/nika/problems/`: injectable `ProblemBase` fault classes and registration via `prob_pool`.
-- `src/nika/net_env/`: Network lab definitions split by backend — `kathara/` (Kathara labs) and `containerlab/` (Containerlab labs).
-- `src/nika/service/`: Kathara APIs and MCP servers exposed to troubleshooting agents.
-- `src/nika/generator/`: fault and traffic generators.
-- `src/nika/evaluator/`: rule-based scoring, submission schemas, trace parsing, and LLM judge support.
-- `src/agent/`: troubleshooting agent implementations and shared agent utilities.
+- `src/nika/cli/`: Typer command groups for `session`, `env`, `failure`, `exec`, `agent`, `eval`, `benchmark`, and `traffic`.
+- `src/nika/workflows/`: command orchestration split by domain (`agent/`, `benchmark/`, `env/`, `eval/`, `exec/`, `failure/`, `session/`).
+- `src/nika/runtime/`: backend-neutral runtime contracts plus Kathara and Containerlab runtime implementations.
+- `src/nika/net_env/`: registered network lab definitions under `kathara/` and `containerlab/`.
+- `src/nika/problems/`: injectable `ProblemBase` fault classes grouped by root-cause category and registered through `prob_pool`.
+- `src/nika/service/`: lab APIs, backend adapters, MCP gateway/server code, shell helpers, and pingmesh telemetry.
+- `src/nika/generator/`: fault and traffic generation utilities.
+- `src/nika/evaluator/`: metrics, submission schemas, trace parsing, summaries, and LLM judge support.
+- `src/agent/`: troubleshooting agents, agent registry, shared protocols, SDK/local-CLI integrations, sandbox runner, and shared skills.
 - `benchmark/`: benchmark YAML cases and regeneration script.
-- `tests/`: unit tests plus Docker/Kathara integration tests, mirroring `src/` (`tests/agent/`, `tests/nika/...`, `tests/support/`).
+- `tests/`: unit and integration tests mirroring `src/`, with shared fixtures in `tests/support/`.
 
 ## Common Commands
 
 - Install dependencies: `uv sync`
+- Install SDK-agent extras: `uv sync --extra sdk --prerelease=allow`
 - Run the CLI during development: `uv run nika --help`
-- Run all pytest tests: `uv run --with pytest pytest`
-- Run unittest agent tests: `uv run python -m unittest discover -s tests/agent -p 'test_*.py' -v`
-- Run a focused unittest module: `uv run python -m unittest tests.agent.test_mock -v`
+- List available scenarios/problems/agents: `uv run nika env list`, `uv run nika failure list`, `uv run nika agent list`
 - Regenerate benchmark YAML: `uv run python benchmark/generate_benchmark.py`
-- Auto-fix safe Ruff issues: `uv run ruff check . --fix`
+- Format Python code: `uv run ruff format .`
+- Lint Python code: `uv run ruff check .`
+
+## Testing Commands
+
+- Run all pytest tests: `uv run --with pytest pytest`
+- Run a focused pytest path: `uv run --with pytest pytest tests/nika/runtime/ -v`
+- Run all agent unittest tests: `uv run python -m unittest discover -s tests/agent -p 'test_*.py' -v`
+- Run a focused unittest module: `uv run python -m unittest tests.agent.test_mock -v`
+- Prefer focused tests near the changed behavior before broader suites.
+- Docker, Kathara, Containerlab, local CLIs, or API credentials are required for many integration and agent tests; report unavailable prerequisites instead of treating them as code failures.
 
 ## Architecture Rules
 
-- Keep CLI parsing in `src/nika/cli/commands/`; put reusable behavior in `src/nika/workflows/` or lower-level modules.
-- Session-scoped workflows should accept or resolve `session_id` consistently with the existing CLI behavior.
+- Keep CLI parsing and option handling in `src/nika/cli/commands/`; put reusable behavior in `src/nika/workflows/` or lower-level modules.
+- Session-scoped workflows should accept or resolve `session_id` consistently with the CLI auto-selection behavior: use the sole running session when unambiguous, otherwise require `--session_id`.
 - Runtime state belongs under `runtime/`; experiment artifacts belong under `results/{session_id}/`.
 - Relative result paths must resolve from the repository root, matching `resolve_results_root()`.
-- New Kathara network scenarios belong under `src/nika/net_env/kathara/`; Containerlab scenarios under `src/nika/net_env/containerlab/`. Both must be registered in the environment pool.
-- New injectable problems belong under `src/nika/problems/`, subclass `ProblemBase`, set `root_cause_category` / `root_cause_name`, optional `symptom_desc`, and typed `Params`. Registration in `prob_pool` keys on `root_cause_name`; `META` is auto-built from those class variables.
-- New agents must implement the shared troubleshooting contract, register in `agent.registry.create_agent()`, and write standard artifacts.
+- Backend-specific lab lifecycle behavior belongs in `src/nika/runtime/kathara/` or `src/nika/runtime/containerlab/`; shared runtime contracts belong in `src/nika/runtime/base.py`, `spec.py`, `meta.py`, or helpers.
+- Backend-specific low-level APIs belong under `src/nika/service/kathara/` or `src/nika/service/containerlab/`; backend-neutral lab adapters belong under `src/nika/service/lab/`.
+- MCP tool behavior belongs under `src/nika/service/mcp_server/` or `src/nika/service/mcp_gateway/`; avoid duplicating tool behavior in agent implementations.
+- New Kathara network scenarios belong under `src/nika/net_env/kathara/`; Containerlab scenarios belong under `src/nika/net_env/containerlab/`. Register new scenarios in the environment pool.
+- New injectable problems belong under `src/nika/problems/`, subclass `ProblemBase`, set `root_cause_category` and `root_cause_name`, optionally set `symptom_desc`, and define typed `Params`. Registration in `prob_pool` keys on `root_cause_name`; `META` is auto-built from class variables.
 
 ## Agent System Rules
 
-- Agent implementations live under `src/agent/` and share a two-phase pipeline: diagnosis, then submission.
-- Supported production agent ids include `byo.langgraph`, `byo.mcp_agent`, `byo.autogen`, `local_cli.codex_cli`, `local_cli.claude_cli`, `community.sade`, `sdk.claude_sdk`, and `sdk.codex_sdk`.
-- The `mock` agent is test-only and deterministic; prefer it for no-credential pipeline tests.
-- SDK agents require `uv sync --extra sdk --prerelease=allow` (`claude-agent-sdk` + `openai-codex`).
-- Agent runs should write `messages.jsonl` and `submission.json` in the session result directory.
-- MCP server behavior lives under `src/nika/service/mcp_server/`; avoid duplicating tool behavior in agent code.
-- Shared agent skills live under `src/agent/skills/`; helpers in `agent.utils.skills`. See `docs/agent-skills.md`. SADE keeps its own skill library under `src/agent/community/sade/.claude/`.
+- Agent implementations live under `src/agent/` and implement the shared troubleshooting contract in `agent.protocols`.
+- Production agent ids include `byo.langgraph`, `byo.mcp_agent`, `byo.autogen`, `local_cli.codex_cli`, `local_cli.claude_cli`, `community.sade`, `sdk.claude_sdk`, and `sdk.codex_sdk`.
+- The `mock` agent is deterministic and test-only; prefer it for no-credential pipeline tests.
+- Agent runs should write standard artifacts such as `messages.jsonl` and `submission.json` in the session result directory.
+- Shared agent skills live under `src/agent/skills/`; helpers live in `agent.utils.skills`. See `docs/agent-skills.md`.
+- SADE keeps its own skill library under `src/agent/community/sade/.claude/`.
+- Sandbox execution is implemented under `src/agent/sandbox/` and documented in `docs/agent-sandbox.md`; keep repository-level guidance focused on behavior, not image build details.
 
 ## Formatting and Linting
 
 - Python code must be formatted with Ruff using `uv run ruff format .`.
 - Run `uv run ruff check .` before submitting changes when practical.
-- Prefer Ruff auto-fixes only for mechanical cleanup; avoid unrelated style churn in files outside the task scope.
+- Prefer Ruff auto-fixes only for mechanical cleanup; avoid unrelated style churn outside the task scope.
+- Keep documentation concise and point detailed usage to `README.md`, `src/nika/cli/README.md`, `docs/custom-agents.md`, `docs/agent-skills.md`, and `docs/creating-benchmark-tasks.md`.
 
 ## Testing Guidance
 
-- Prefer focused tests near the changed behavior. Many integration tests require Docker, Kathara, CLIs, or API credentials.
 - For pure Python changes, use targeted `pytest` or `unittest` commands before broader suites.
-- For CLI behavior, test through the CLI path when practical because config resolution and session selection are part of the behavior.
+- For CLI behavior, test through the CLI path when practical because config resolution, repository-root path resolution, and session selection are part of the behavior.
 - For benchmark resume or artifact logic, verify against a temporary or isolated `--result_dir`.
-- Do not assume Docker/Kathara integration tests can run in every environment; report skipped or unavailable checks clearly.
+- Do not assume Docker/Kathara/Containerlab integration tests can run in every environment; report skipped or unavailable checks clearly.
 
 ## Environment and Secrets
 
@@ -70,12 +82,12 @@
 - CLI flags override `.env` values.
 - Common agent variables include `NIKA_AGENT_TYPE`, `NIKA_MAX_STEPS`, `NIKA_MODEL`, and agent-specific model/provider variables.
 - Claude and Codex local CLI agents require their respective CLIs on `PATH` plus configured authentication.
+- SDK agents require the `sdk` optional dependency group.
 
 ## Operational Cautions
 
-- Do not delete `runtime/` or `results/` broadly unless the user explicitly asks; these may contain active sessions or experiment outputs.
-- Use `nika session close` or `nika session wipe` for lab cleanup instead of manually removing Docker/Kathara state.
+- Do not delete `runtime/` or `results/` broadly unless the user explicitly asks; they may contain active sessions or experiment outputs.
+- Use `nika session close` or `nika session wipe` for lab cleanup instead of manually removing Docker/Kathara/Containerlab state.
 - Avoid changing generated benchmark YAML by hand unless the task is specifically about benchmark cases.
-- Preserve existing lab config files, startup files, P4 programs, and Kubernetes manifests unless the change directly targets them.
+- Preserve existing lab config files, startup files, P4 programs, Kubernetes manifests, and Containerlab topology files unless the change directly targets them.
 - Network tests can be slow and environment-sensitive; keep verification commands specific and explain any external prerequisites.
-

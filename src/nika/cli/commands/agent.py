@@ -3,6 +3,15 @@
 import typer
 
 from agent.local_cli.codex_cli.codex_worker import REASONING_EFFORT_LEVELS
+from agent.sandbox.config import (
+    ENV_AGENT_SANDBOX,
+    ENV_SANDBOX_CPUS,
+    ENV_SANDBOX_ENV_FILE,
+    ENV_SANDBOX_IMAGE,
+    ENV_SANDBOX_KEEP,
+    ENV_SANDBOX_MEMORY,
+    ENV_SANDBOX_NETWORK,
+)
 from nika.utils.agent_config import (
     ENV_AGENT_TYPE,
     ENV_CODEX_REASONING_EFFORT,
@@ -80,6 +89,48 @@ def agent_run(
     session_id: str | None = typer.Option(
         None, "--session_id", help="Target session id."
     ),
+    sandbox: bool = typer.Option(
+        False,
+        "--sandbox",
+        envvar=ENV_AGENT_SANDBOX,
+        help="Run the agent inside the Docker sandbox container.",
+    ),
+    sandbox_image: str | None = typer.Option(
+        None,
+        "--sandbox-image",
+        envvar=ENV_SANDBOX_IMAGE,
+        help="Docker image for sandbox execution (default: nika/agent-sandbox:latest).",
+    ),
+    sandbox_env_file: str | None = typer.Option(
+        None,
+        "--sandbox-env-file",
+        envvar=ENV_SANDBOX_ENV_FILE,
+        help="Env file for whitelisted credential injection into the sandbox.",
+    ),
+    sandbox_keep_container: bool = typer.Option(
+        False,
+        "--sandbox-keep-container",
+        envvar=ENV_SANDBOX_KEEP,
+        help="Do not remove the sandbox container after the agent exits.",
+    ),
+    sandbox_cpus: str | None = typer.Option(
+        None,
+        "--sandbox-cpus",
+        envvar=ENV_SANDBOX_CPUS,
+        help="CPU limit for the sandbox container (docker --cpus).",
+    ),
+    sandbox_memory: str | None = typer.Option(
+        None,
+        "--sandbox-memory",
+        envvar=ENV_SANDBOX_MEMORY,
+        help="Memory limit for the sandbox container (docker --memory).",
+    ),
+    sandbox_network: str | None = typer.Option(
+        None,
+        "--sandbox-network",
+        envvar=ENV_SANDBOX_NETWORK,
+        help="Docker network mode for sandbox (bridge or host; use host with Clash TUN).",
+    ),
 ) -> None:
     """Run the agent on the current session task."""
     from nika.workflows.agent.run import start_agent
@@ -97,6 +148,13 @@ def agent_run(
             max_steps,
             session_id=session_id,
             reasoning_effort=reasoning_effort,
+            sandbox=sandbox,
+            sandbox_image=sandbox_image,
+            sandbox_env_file=sandbox_env_file,
+            sandbox_keep_container=sandbox_keep_container,
+            sandbox_cpus=sandbox_cpus,
+            sandbox_memory=sandbox_memory,
+            sandbox_network=sandbox_network,
         )
     except (FileNotFoundError, ValueError) as exc:
         raise typer.BadParameter(str(exc)) from exc

@@ -17,16 +17,12 @@ from nika.utils.session_id import (
     resolve_session_tag,
     session_id_pattern,
 )
-from nika.utils.session_index import SessionIndex
 from nika.utils.session_store import SessionStore
 from nika.workflows.env.start import start_net_env
-from nika.workflows.eval.clean import remove_session_results
 from nika.workflows.failure.inject import inject_failure as inject_failure_workflow
 from nika.workflows.session.close import close_session
 
 TEST_SESSION_ID_RE = session_id_pattern(TEST_SESSION_TAG)
-
-
 def _parse_env_run_args(extra_args: list[str] | None) -> dict[str, Any]:
     kwargs: dict[str, Any] = {}
     args = list(extra_args or [])
@@ -90,34 +86,14 @@ class IntegrationTestCase(unittest.TestCase):
         )
 
     def _close_session(self, session_id: str) -> None:
-        session_dir = self._session_result_dir(session_id)
         close_session(session_id=session_id)
-        self._remove_session_results(session_id, session_dir=session_dir)
 
     @classmethod
     def _close_session_class(cls, session_id: str) -> None:
-        session_dir = cls._session_result_dir(session_id)
         try:
             close_session(session_id=session_id)
         except Exception:
             pass
-        cls._remove_session_results(session_id, session_dir=session_dir)
-
-    @staticmethod
-    def _session_result_dir(session_id: str) -> str | None:
-        try:
-            return SessionStore().get_session(session_id).get("session_dir")
-        except FileNotFoundError:
-            row = SessionIndex().get_row(session_id)
-            if row:
-                return row.get("session_dir")
-        return None
-
-    @staticmethod
-    def _remove_session_results(
-        session_id: str, *, session_dir: str | Path | None = None
-    ) -> None:
-        remove_session_results(session_id, session_dir=session_dir)
 
     def _inject_failure(
         self,
@@ -151,6 +127,7 @@ class IntegrationTestCase(unittest.TestCase):
         max_steps: int | None = None,
         reasoning_effort: str | None = None,
         session_id: str | None = None,
+        sandbox: bool = False,
     ) -> None:
         from nika.workflows.agent.run import start_agent
 
@@ -162,6 +139,7 @@ class IntegrationTestCase(unittest.TestCase):
             session_id=session_id or getattr(self, "session_id", None),
             reasoning_effort=reasoning_effort,
             stream_output=False,
+            sandbox=sandbox,
         )
 
     def _session_row(self, session_id: str | None = None) -> dict:
@@ -334,10 +312,6 @@ class OrderedPipelineTestCase(IntegrationTestCase):
     def tearDownClass(cls) -> None:
         if cls.session_id and not cls.env_destroyed:
             cls._close_session_class(cls.session_id)
-        elif cls.session_id:
-            cls._remove_session_results(
-                cls.session_id, session_dir=cls._session_result_dir(cls.session_id)
-            )
 
     def _load_json(self, filename: str) -> dict:
         assert self.session_dir is not None

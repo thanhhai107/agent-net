@@ -2,13 +2,6 @@
 
 from typing import Any
 
-from agent.local_cli.codex_cli.agent import CodexCliAgent
-from agent.local_cli.claude_cli.agent import ClaudeAgent
-from agent.byo.langgraph.react_agent import BasicReActAgent
-from agent.byo.autogen.agent import AutogenAgent
-from agent.byo.mcp_agent.agent import McpAgent
-from agent.mock.mock_agent import MockAgent
-
 
 def create_agent(
     agent_type: str,
@@ -23,6 +16,8 @@ def create_agent(
     """Instantiate an agent for ``agent_type``."""
     match agent_type.lower():
         case "byo.langgraph":
+            from agent.byo.langgraph.react_agent import BasicReActAgent
+
             if not llm_provider:
                 raise ValueError(
                     "byo.langgraph agent requires an LLM provider: set NIKA_LLM_PROVIDER in .env or pass -p/--provider."
@@ -34,6 +29,8 @@ def create_agent(
                 max_steps=max_steps,
             )
         case "mock":
+            from agent.mock.mock_agent import MockAgent
+
             return MockAgent(
                 session_id=session_id,
                 model=model,
@@ -58,6 +55,8 @@ def create_agent(
                 stream_output=stream_output,
             )
         case "local_cli.codex_cli":
+            from agent.local_cli.codex_cli.agent import CodexCliAgent
+
             return CodexCliAgent(
                 session_id=session_id,
                 model=model,
@@ -65,12 +64,16 @@ def create_agent(
                 stream_output=stream_output,
             )
         case "local_cli.claude_cli":
+            from agent.local_cli.claude_cli.agent import ClaudeAgent
+
             return ClaudeAgent(
                 session_id=session_id,
                 model=model,
                 stream_output=stream_output,
             )
         case "byo.mcp_agent":
+            from agent.byo.mcp_agent.agent import McpAgent
+
             return McpAgent(
                 session_id=session_id,
                 model=model,
@@ -78,6 +81,8 @@ def create_agent(
                 stream_output=stream_output,
             )
         case "byo.autogen":
+            from agent.byo.autogen.agent import AutogenAgent
+
             return AutogenAgent(
                 session_id=session_id,
                 model=model,
