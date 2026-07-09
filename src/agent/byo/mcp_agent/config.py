@@ -4,10 +4,18 @@ from __future__ import annotations
 
 from mcp_agent.config import MCPServerSettings, MCPSettings, OpenAISettings, Settings
 
-from agent.utils.mcp_servers import MCPServerConfig, select_diagnosis_servers
+from agent.utils.mcp_client import load_session_mcp_config
+from agent.utils.mcp_servers import select_diagnosis_servers
 
 
 def _to_server_settings(server: dict) -> MCPServerSettings:
+    transport = server.get("transport", "stdio")
+    if transport == "http":
+        return MCPServerSettings(
+            transport="streamable_http",
+            url=server["url"],
+            headers=dict(server.get("headers") or {}),
+        )
     return MCPServerSettings(
         transport=server.get("transport", "stdio"),
         command=server["command"],
@@ -19,16 +27,10 @@ def _to_server_settings(server: dict) -> MCPServerSettings:
 def build_mcp_agent_settings(
     session_id: str,
     scenario_name: str,
-    problem_names: list[str],
     model: str,
 ) -> Settings:
     """Build mcp-agent Settings for a NIKA troubleshooting session."""
-    mcp_cfg = MCPServerConfig(session_id=session_id)
-    diag_cfg = mcp_cfg.load_filtered_config(
-        select_diagnosis_servers(scenario_name, problem_names)
-    )
-    submit_cfg = mcp_cfg.load_config(if_submit=True)
-    servers = {**diag_cfg, **submit_cfg}
+    servers = load_session_mcp_config(session_id, scenario_name)
 
     return Settings(
         execution_engine="asyncio",
@@ -39,8 +41,11 @@ def build_mcp_agent_settings(
     )
 
 
-def diagnosis_server_names(scenario_name: str, problem_names: list[str]) -> list[str]:
-    return select_diagnosis_servers(scenario_name, problem_names)
+def session_server_names(scenario_name: str) -> list[str]:
+    from agent.utils.mcp_servers import select_session_servers
+
+    return select_session_servers(scenario_name)
 
 
-SUBMISSION_SERVER_NAMES = ["task_mcp_server"]
+def diagnosis_server_names(scenario_name: str) -> list[str]:
+    return select_diagnosis_servers(scenario_name)

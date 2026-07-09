@@ -37,27 +37,30 @@ from agent.local_cli.claude_cli.config import (
     use_bare_claude_mode,
 )
 from agent.utils.loggers import MessageLogger
-from agent.utils.mcp_servers import MCPServerConfig, select_diagnosis_servers
+from agent.utils.mcp_client import begin_submission_mcp_phase, load_session_mcp_config
 from agent.utils.phases import PHASES, SUBMISSION
 from agent.utils.skills import prepare_claude_workspace, skills_enabled
 
 
 def _build_mcp_json(servers: dict) -> str:
-    """Serialise an MCP server dict (from MCPServerConfig) as JSON.
-
-    Claude's ``--mcp-config`` expects the ``mcpServers`` key convention from
-    the MCP specification, with ``type``, ``command``, ``args``, and ``env``
-    per-server.
-    """
+    """Serialise an MCP server dict (from MCPServerConfig) as JSON."""
     mcp_servers: dict = {}
     for name, srv in servers.items():
-        entry: dict = {
-            "type": "stdio",
-            "command": srv["command"],
-            "args": srv["args"],
-        }
-        if srv.get("env"):
-            entry["env"] = srv["env"]
+        if srv.get("transport") == "http":
+            entry: dict = {
+                "type": "http",
+                "url": srv["url"],
+            }
+            if srv.get("headers"):
+                entry["headers"] = srv["headers"]
+        else:
+            entry = {
+                "type": "stdio",
+                "command": srv["command"],
+                "args": srv["args"],
+            }
+            if srv.get("env"):
+                entry["env"] = srv["env"]
         mcp_servers[name] = entry
     return json.dumps({"mcpServers": mcp_servers}, indent=2)
 
@@ -83,8 +86,6 @@ class ClaudeWorker:
     scenario_name:
         Used by :func:`~agent.utils.mcp_servers.select_diagnosis_servers` to pick
         relevant servers.  Ignored for the submission phase.
-    problem_names:
-        Used together with *scenario_name* for server selection.
     """
 
     def __init__(
@@ -95,7 +96,6 @@ class ClaudeWorker:
         model: str | None = None,
         timeout: int = 600,
         scenario_name: str = "",
-        problem_names: list[str] | None = None,
         *,
         stream_output: bool = True,
     ) -> None:
@@ -107,7 +107,6 @@ class ClaudeWorker:
         self.model = resolve_claude_model(model)
         self.timeout = timeout
         self.scenario_name = scenario_name
-        self.problem_names = problem_names or []
 
         self.workspace = Path(session_dir) / "claude_workspace"
         self._logger = MessageLogger(agent=phase, session_dir=session_dir)
@@ -124,15 +123,12 @@ class ClaudeWorker:
         self._write_mcp_config()
 
     def _write_mcp_config(self) -> None:
-        mcp_cfg = MCPServerConfig(session_id=self.session_id)
-
         if self.phase == SUBMISSION:
-            servers = mcp_cfg.load_config(if_submit=True)
-        else:
-            server_names = select_diagnosis_servers(
-                self.scenario_name, self.problem_names
-            )
-            servers = mcp_cfg.load_filtered_config(server_names)
+            begin_submission_mcp_phase(self.session_id)
+        servers = load_session_mcp_config(
+            self.session_id,
+            self.scenario_name,
+        )
 
         self._logger.log(
             "mcp_config",

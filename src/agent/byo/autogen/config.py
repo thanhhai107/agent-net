@@ -1,13 +1,22 @@
-"""Bridge NIKA MCP server config to AutoGen StdioServerParams."""
+"""Bridge NIKA MCP server config to AutoGen MCP server params."""
 
 from __future__ import annotations
 
-from autogen_ext.tools.mcp import StdioServerParams
+from autogen_ext.tools.mcp import (
+    StdioServerParams,
+    StreamableHttpServerParams,
+)
 
-from agent.utils.mcp_servers import MCPServerConfig, select_diagnosis_servers
+from agent.utils.mcp_client import load_session_mcp_config
 
 
-def to_stdio_params(server: dict) -> StdioServerParams:
+def to_mcp_params(server: dict) -> StdioServerParams | StreamableHttpServerParams:
+    transport = server.get("transport", "stdio")
+    if transport == "http":
+        return StreamableHttpServerParams(
+            url=server["url"],
+            headers=dict(server.get("headers") or {}),
+        )
     return StdioServerParams(
         command=server["command"],
         args=server.get("args", []),
@@ -15,20 +24,11 @@ def to_stdio_params(server: dict) -> StdioServerParams:
     )
 
 
-def diagnosis_server_configs(
-    session_id: str, scenario_name: str, problem_names: list[str]
-) -> dict:
-    mcp_cfg = MCPServerConfig(session_id=session_id)
-    server_names = select_diagnosis_servers(scenario_name, problem_names)
-    return mcp_cfg.load_filtered_config(server_names)
+def session_server_configs(session_id: str, scenario_name: str) -> dict:
+    return load_session_mcp_config(session_id, scenario_name)
 
 
-def submission_server_configs(session_id: str) -> dict:
-    return MCPServerConfig(session_id=session_id).load_config(if_submit=True)
+def diagnosis_server_names(scenario_name: str) -> list[str]:
+    from agent.utils.mcp_servers import select_diagnosis_servers
 
-
-def diagnosis_server_names(scenario_name: str, problem_names: list[str]) -> list[str]:
-    return select_diagnosis_servers(scenario_name, problem_names)
-
-
-SUBMISSION_SERVER_NAMES = ["task_mcp_server"]
+    return select_diagnosis_servers(scenario_name)

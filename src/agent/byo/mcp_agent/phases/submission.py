@@ -5,9 +5,9 @@ from __future__ import annotations
 from mcp_agent.agents.agent import Agent
 from mcp_agent.workflows.llm.augmented_llm import RequestParams
 
-from agent.byo.mcp_agent.config import SUBMISSION_SERVER_NAMES
 from agent.byo.mcp_agent.llm import NikaOpenAIAugmentedLLM
 from agent.utils.loggers import MessageLogger
+from agent.utils.mcp_client import begin_submission_mcp_phase
 from agent.utils.phases import SUBMISSION
 from agent.utils.template import SUBMIT_PROMPT_TEMPLATE
 
@@ -17,15 +17,20 @@ class McpSubmissionPhase:
 
     def __init__(
         self,
+        session_id: str,
         session_dir: str,
         model: str,
         max_steps: int,
+        server_names: list[str],
     ) -> None:
+        self._session_id = session_id
         self._session_dir = session_dir
         self._model = model
         self._max_steps = max_steps
+        self._server_names = server_names
 
     async def run(self, diagnosis_report: str) -> str:
+        begin_submission_mcp_phase(self._session_id)
         logger = MessageLogger(agent=SUBMISSION, session_dir=self._session_dir)
         request_params = RequestParams(
             model=self._model,
@@ -42,7 +47,7 @@ class McpSubmissionPhase:
         agent = Agent(
             name=SUBMISSION,
             instruction=SUBMIT_PROMPT_TEMPLATE,
-            server_names=SUBMISSION_SERVER_NAMES,
+            server_names=self._server_names,
         )
         async with agent:
             llm = NikaOpenAIAugmentedLLM(

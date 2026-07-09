@@ -15,6 +15,7 @@ from typing_extensions import TypedDict
 from agent.byo.langgraph.phases.diagnosis import DiagnosisPhase
 from agent.byo.langgraph.phases.submission import SubmissionPhase
 from agent.utils.loggers import AgentCallbackLogger, MessageLogger
+from agent.utils.mcp_client import begin_submission_mcp_phase
 from agent.utils.phases import DIAGNOSIS, SUBMISSION
 from nika.utils.logger import system_logger
 from nika.utils.session import Session
@@ -49,6 +50,8 @@ class BasicReActAgent:
     ):
         self.session_id = session_id
         self.max_steps = max_steps
+        self.llm_provider = llm_provider
+        self.model = model
         self.session = Session()
         self.session.load_running_session(session_id=session_id)
         self.session_dir = self.session.session_dir
@@ -72,16 +75,9 @@ class BasicReActAgent:
             llm_provider=llm_provider,
             model=model,
             scenario_name=self.session.scenario_name,
-            problem_names=self.session.problem_names,
         )
         asyncio.run(diagnosis_phase.load_tools())
         self._diagnosis_runner = diagnosis_phase.get_agent()
-
-        submission_phase = SubmissionPhase(
-            session_id=session_id, llm_provider=llm_provider, model=model
-        )
-        asyncio.run(submission_phase.load_tools())
-        self._submission_runner = submission_phase.get_agent()
 
         worker_builder = StateGraph(AgentState)
         worker_builder.add_node(DIAGNOSIS, self._run_diagnosis)
@@ -160,8 +156,18 @@ class BasicReActAgent:
             }
 
     async def _run_submission(self, state: AgentState):
+        begin_submission_mcp_phase(self.session_id)
+        submission_phase = SubmissionPhase(
+            session_id=self.session_id,
+            llm_provider=self.llm_provider,
+            model=self.model,
+            scenario_name=self.session.scenario_name,
+        )
+        await submission_phase.load_tools()
+        submission_runner = submission_phase.get_agent()
+
         diag_text = state["diagnosis_report"][-1]
-        result = await self._submission_runner.ainvoke(
+        result = await submission_runner.ainvoke(
             {
                 "messages": [
                     HumanMessage(

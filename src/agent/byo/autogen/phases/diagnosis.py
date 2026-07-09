@@ -8,7 +8,7 @@ from typing import AsyncIterator
 from autogen_agentchat.agents import AssistantAgent
 from autogen_ext.tools.mcp import create_mcp_server_session, mcp_server_tools
 
-from agent.byo.autogen.config import diagnosis_server_configs, to_stdio_params
+from agent.byo.autogen.config import session_server_configs, to_mcp_params
 from agent.byo.autogen.runner import create_model_client, run_logged_agent
 from agent.utils.loggers import MessageLogger
 from agent.utils.phases import DIAGNOSIS
@@ -21,7 +21,7 @@ async def _open_mcp_tools(server_configs: dict) -> AsyncIterator[list]:
     tools: list = []
     try:
         for cfg in server_configs.values():
-            params = to_stdio_params(cfg)
+            params = to_mcp_params(cfg)
             session_cm = create_mcp_server_session(params)
             session = await session_cm.__aenter__()
             await session.initialize()
@@ -43,14 +43,13 @@ class AutogenDiagnosisPhase:
         model: str,
         max_steps: int,
         scenario_name: str,
-        problem_names: list[str],
     ) -> None:
         self._session_id = session_id
         self._session_dir = session_dir
         self._model = model
         self._max_steps = max_steps
-        self._server_configs = diagnosis_server_configs(
-            session_id, scenario_name, problem_names
+        self._server_configs = session_server_configs(
+            session_id, scenario_name
         )
 
     async def run(self, task_description: str) -> tuple[str, bool]:

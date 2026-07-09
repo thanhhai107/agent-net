@@ -35,7 +35,7 @@ from dotenv import load_dotenv
 
 from agent.sdk.mcp import to_sdk_mcp_servers
 from agent.utils.loggers import MessageLogger
-from agent.utils.mcp_servers import MCPServerConfig
+from agent.utils.mcp_client import load_session_mcp_config
 from agent.utils.phases import DIAGNOSIS
 from agent.utils.skills import CLAUDE_SETTING_SOURCES, skills_enabled
 from nika.utils.logger import system_logger
@@ -108,9 +108,12 @@ class SadeAgent:
         self.session = Session()
         self.session.load_running_session(session_id=session_id)
 
-        mcp = MCPServerConfig(session_id=session_id)
-        merged = {**mcp.load_config(if_submit=False), **mcp.load_config(if_submit=True)}
-        self.mcp_servers = to_sdk_mcp_servers(merged)
+        self.mcp_servers = to_sdk_mcp_servers(
+            load_session_mcp_config(
+                session_id,
+                self.session.scenario_name,
+            )
+        )
 
     async def run(self, task_description: str) -> dict[str, Any]:
         sdk_env = prepare_sade_sdk_env(session_id=self.session_id)

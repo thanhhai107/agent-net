@@ -14,7 +14,6 @@ class CodexSdkDiagnosisPhase:
         model: str = "gpt-5.4-mini",
         reasoning_effort: str | None = None,
         scenario_name: str = "",
-        problem_names: list[str] | None = None,
         *,
         stream_output: bool = True,
     ) -> None:
@@ -27,7 +26,6 @@ class CodexSdkDiagnosisPhase:
             model=model,
             reasoning_effort=reasoning_effort,
             scenario_name=scenario_name,
-            problem_names=problem_names,
             system_prompt=diagnosis_prompt,
             stream_output=stream_output,
         )

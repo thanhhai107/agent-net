@@ -234,8 +234,9 @@ def session_close(
     only one session is running it is selected automatically.
 
     The Kathará lab is undeployed, all failure records are marked ended,
-    and the runtime session file is removed. Use ``nika session wipe`` to
-    close every running session and remove leftover Kathara and Containerlab resources.
+    the runtime workdir is removed when present, and the runtime session
+    file is removed. Use ``nika session wipe`` to close every running session
+    and remove leftover Kathara, Containerlab, and runtime resources.
     """
     from nika.workflows.session.close import close_session
 
@@ -265,9 +266,9 @@ def session_wipe(
     """Close all running sessions and wipe leftover lab resources.
 
     Every running session is closed (lab undeployed, failure records ended,
-    runtime session file removed). Also runs ``kathara wipe`` and
-    ``clab destroy --all`` to remove leftover containers and networks when
-    session files are missing.
+    runtime workdir removed, runtime session file removed). Also runs
+    ``kathara wipe``, ``clab destroy --all``, and removes leftover files
+    under ``runtime/`` when session files are missing.
     """
     from nika.utils.session_store import SessionStore
     from nika.workflows.session.close import close_session

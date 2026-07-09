@@ -5,8 +5,9 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 
 from agent.utils.template import SUBMIT_PROMPT_TEMPLATE
 from agent.llm.model_factory import load_model
-from agent.utils.mcp_servers import MCPServerConfig
+from agent.utils.mcp_client import load_session_mcp_config
 from agent.utils.phases import SUBMISSION
+from nika.utils.session import Session
 
 load_dotenv()
 
@@ -15,10 +16,17 @@ class SubmissionPhase:
     """LangChain ReAct worker for the submission phase."""
 
     def __init__(
-        self, session_id: str, llm_provider: str = "openai", model: str = "gpt-5-mini"
+        self,
+        session_id: str,
+        llm_provider: str = "openai",
+        model: str = "gpt-5-mini",
+        scenario_name: str = "",
     ):
-        mcp_server_config = MCPServerConfig(session_id=session_id).load_config(
-            if_submit=True
+        session = Session()
+        session.load_running_session(session_id=session_id)
+        mcp_server_config = load_session_mcp_config(
+            session_id,
+            scenario_name or session.scenario_name,
         )
         self.client = MultiServerMCPClient(connections=mcp_server_config)
         self.tools = None

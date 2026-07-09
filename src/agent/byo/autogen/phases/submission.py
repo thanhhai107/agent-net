@@ -8,9 +8,10 @@ from typing import AsyncIterator
 from autogen_agentchat.agents import AssistantAgent
 from autogen_ext.tools.mcp import create_mcp_server_session, mcp_server_tools
 
-from agent.byo.autogen.config import submission_server_configs, to_stdio_params
+from agent.byo.autogen.config import session_server_configs, to_mcp_params
 from agent.byo.autogen.runner import create_model_client, run_logged_agent
 from agent.utils.loggers import MessageLogger
+from agent.utils.mcp_client import begin_submission_mcp_phase
 from agent.utils.phases import SUBMISSION
 from agent.utils.template import SUBMIT_PROMPT_TEMPLATE
 
@@ -21,7 +22,7 @@ async def _open_mcp_tools(server_configs: dict) -> AsyncIterator[list]:
     tools: list = []
     try:
         for cfg in server_configs.values():
-            params = to_stdio_params(cfg)
+            params = to_mcp_params(cfg)
             session_cm = create_mcp_server_session(params)
             session = await session_cm.__aenter__()
             await session.initialize()
@@ -42,14 +43,20 @@ class AutogenSubmissionPhase:
         session_dir: str,
         model: str,
         max_steps: int,
+        scenario_name: str,
     ) -> None:
         self._session_id = session_id
         self._session_dir = session_dir
         self._model = model
         self._max_steps = max_steps
-        self._server_configs = submission_server_configs(session_id)
+        self._scenario_name = scenario_name
 
     async def run(self, diagnosis_report: str) -> str:
+        begin_submission_mcp_phase(self._session_id)
+        server_configs = session_server_configs(
+            self._session_id,
+            self._scenario_name,
+        )
         logger = MessageLogger(agent=SUBMISSION, session_dir=self._session_dir)
         model_client = create_model_client(self._model)
         prompt = (
@@ -57,7 +64,7 @@ class AutogenSubmissionPhase:
             "please provide the submission. Do not submit if no report available."
         )
 
-        async with _open_mcp_tools(self._server_configs) as tools:
+        async with _open_mcp_tools(server_configs) as tools:
             agent = AssistantAgent(
                 name=SUBMISSION,
                 model_client=model_client,

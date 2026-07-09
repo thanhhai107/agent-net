@@ -7,7 +7,7 @@ from typing import Any
 
 from mcp_agent.executor.workflow import Workflow, WorkflowResult
 
-from agent.byo.mcp_agent.config import diagnosis_server_names
+from agent.byo.mcp_agent.config import session_server_names
 from agent.byo.mcp_agent.phases.diagnosis import McpDiagnosisPhase
 from agent.byo.mcp_agent.phases.submission import McpSubmissionPhase
 from agent.utils.loggers import MessageLogger
@@ -25,7 +25,6 @@ class NikaTroubleshootingWorkflow(Workflow[dict[str, Any]]):
         model: str,
         max_steps: int,
         scenario_name: str,
-        problem_names: list[str],
         stream_output: bool = True,
         **kwargs: Any,
     ) -> None:
@@ -35,11 +34,8 @@ class NikaTroubleshootingWorkflow(Workflow[dict[str, Any]]):
         self._model = model
         self._max_steps = max_steps
         self._scenario_name = scenario_name
-        self._problem_names = problem_names
         self._stream_output = stream_output
-        self._diagnosis_server_names = diagnosis_server_names(
-            scenario_name, problem_names
-        )
+        self._server_names = session_server_names(scenario_name)
 
     async def run(self, task_description: str) -> WorkflowResult[dict[str, Any]]:
         diagnosis_report, is_max_steps_reached = await self._run_diagnosis(
@@ -73,7 +69,7 @@ class NikaTroubleshootingWorkflow(Workflow[dict[str, Any]]):
             session_dir=self._session_dir,
             model=self._model,
             max_steps=self._max_steps,
-            server_names=self._diagnosis_server_names,
+            server_names=self._server_names,
         )
         try:
             report, is_max_steps_reached = await phase.run(task_description)
@@ -109,9 +105,11 @@ class NikaTroubleshootingWorkflow(Workflow[dict[str, Any]]):
         logger.log("agent_start", {"phase": SUBMISSION})
 
         phase = McpSubmissionPhase(
+            session_id=self._session_id,
             session_dir=self._session_dir,
             model=self._model,
             max_steps=self._max_steps,
+            server_names=self._server_names,
         )
         try:
             result = await phase.run(diagnosis_report)

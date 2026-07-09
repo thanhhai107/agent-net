@@ -31,7 +31,6 @@ class DiagnosisPhaseAgent(BaseChatAgent):
         model: str,
         max_steps: int,
         scenario_name: str,
-        problem_names: list[str],
         print_phase: Callable[[str, str], None],
     ) -> None:
         super().__init__(
@@ -44,7 +43,6 @@ class DiagnosisPhaseAgent(BaseChatAgent):
             model=model,
             max_steps=max_steps,
             scenario_name=scenario_name,
-            problem_names=problem_names,
         )
         self._session_dir = session_dir
         self._print_phase = print_phase
@@ -122,6 +120,7 @@ class SubmissionPhaseAgent(BaseChatAgent):
         session_dir: str,
         model: str,
         max_steps: int,
+        scenario_name: str,
         print_phase: Callable[[str, str], None],
     ) -> None:
         super().__init__(
@@ -133,6 +132,7 @@ class SubmissionPhaseAgent(BaseChatAgent):
             session_dir=session_dir,
             model=model,
             max_steps=max_steps,
+            scenario_name=scenario_name,
         )
         self._session_dir = session_dir
         self._print_phase = print_phase
@@ -184,7 +184,6 @@ async def run_troubleshooting_flow(
     model: str,
     max_steps: int,
     scenario_name: str,
-    problem_names: list[str],
     stream_output: bool,
 ) -> dict[str, Any]:
     """Execute diagnosis → submission via AutoGen ``GraphFlow``."""
@@ -196,7 +195,6 @@ async def run_troubleshooting_flow(
         model=model,
         max_steps=max_steps,
         scenario_name=scenario_name,
-        problem_names=problem_names,
         print_phase=print_phase,
     )
     submission_agent = SubmissionPhaseAgent(
@@ -204,6 +202,7 @@ async def run_troubleshooting_flow(
         session_dir=session_dir,
         model=model,
         max_steps=max_steps,
+        scenario_name=scenario_name,
         print_phase=print_phase,
     )
 

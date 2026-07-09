@@ -12,7 +12,8 @@ from typing import Any
 
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
-from agent.utils.mcp_servers import MCPServerConfig, select_diagnosis_servers
+from agent.utils.mcp_client import begin_submission_mcp_phase, load_session_mcp_config
+from agent.utils.mcp_servers import select_diagnosis_servers
 from agent.utils.phases import DIAGNOSIS, SUBMISSION
 from nika.runtime.factory import resolve_backend
 from nika.utils.session import Session
@@ -120,23 +121,18 @@ class MockAgent:
         session_row = SessionStore().get_session(self.session_id)
         backend = resolve_backend(session_row)
         scenario = str(session_row.get("scenario_name") or "")
-        problems = list(session_row.get("problem_names") or [])
-        server_names = select_diagnosis_servers(scenario, problems, backend=backend)
+        server_names = select_diagnosis_servers(scenario, backend=backend)
 
-        mcp_config = MCPServerConfig(session_id=self.session_id)
-        diagnosis_config = {
-            k: v
-            for k, v in mcp_config.load_config(if_submit=False).items()
-            if k in server_names
-        }
-
-        client = MultiServerMCPClient(connections=diagnosis_config)
+        config = load_session_mcp_config(self.session_id, scenario, backend=backend)
+        client = MultiServerMCPClient(connections=config)
         tools = {tool.name: tool for tool in await client.get_tools()}
 
         tool_calls = _mock_diagnosis_tool_calls(backend, server_names)
         diagnosis_report = _mock_diagnosis_report(backend)
 
         for tool_name, tool_input in tool_calls:
+            if tool_name not in tools:
+                continue
             logger.log(
                 "tool_start",
                 {"tool": {"name": tool_name}, "input": json.dumps(tool_input)},
@@ -159,6 +155,7 @@ class MockAgent:
         session_row = SessionStore().get_session(self.session_id)
         backend = resolve_backend(session_row)
         faulty_device = _mock_faulty_device(backend)
+        scenario = str(session_row.get("scenario_name") or "")
 
         logger.log(
             "llm_start",
@@ -173,8 +170,10 @@ class MockAgent:
             },
         )
 
-        config = MCPServerConfig(session_id=self.session_id).load_config(if_submit=True)
-
+        begin_submission_mcp_phase(self.session_id)
+        config = load_session_mcp_config(
+            self.session_id, scenario, backend=backend
+        )
         client = MultiServerMCPClient(connections=config)
         tools = {tool.name: tool for tool in await client.get_tools()}
 

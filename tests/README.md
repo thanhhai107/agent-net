@@ -1,22 +1,34 @@
 # NIKA tests
 
+Test layout mirrors `src/`: `tests/agent/` for `src/agent/`, `tests/nika/` for `src/nika/`.
+Shared integration helpers live under `tests/support/`.
+
 ## Layout
 
-| Directory | Purpose |
-|-----------|---------|
-| `tests/agents/` | Per-agent unit tests and integration pipelines |
-| `tests/benchmark/` | Benchmark batch run and resume logic |
-| `tests/integration/` | End-to-end session pipeline (env → inject → agent → eval) |
-| `tests/service/` | Service-layer unit tests (PingMesh, MCP servers, Containerlab APIs) |
-| `tests/failure_inject_verify/` | Failure injection smoke tests (Kathara + Containerlab) |
-| `tests/net_env_verify/` | Network environment deploy and topology checks |
-| `tests/problems/` | Problem registry unit tests |
-| `tests/evaluator/` | Rule-based scoring unit tests |
-| `tests/runtime/` | Runtime/backend unit tests and session index |
+| Directory | Maps to `src/` | Purpose |
+|-----------|----------------|---------|
+| `tests/agent/` | `src/agent/` | Per-agent unit tests and integration pipelines |
+| `tests/nika/cli/` | `src/nika/cli/` | CLI smoke and import wiring |
+| `tests/nika/workflows/` | `src/nika/workflows/` | Benchmark, eval, and end-to-end pipeline tests |
+| `tests/nika/problems/` | `src/nika/problems/` | Failure injection smoke tests (Kathara + Containerlab) |
+| `tests/nika/net_env/` | `src/nika/net_env/` | Network environment deploy and topology checks |
+| `tests/nika/service/` | `src/nika/service/` | Service-layer unit and live API smoke tests |
+| `tests/nika/runtime/` | `src/nika/runtime/` | Runtime/backend unit tests and session index |
+| `tests/nika/evaluator/` | `src/nika/evaluator/` | Rule-based scoring unit tests |
+| `tests/support/` | — | Shared bases, prerequisites, and pipeline helpers |
 
-Shared helpers: [`integration_base.py`](integration_base.py), [`integration_pipeline.py`](integration_pipeline.py)
+## Shared support (`tests/support/`)
 
-## Agent tests (`tests/agents/`)
+| Module | Purpose |
+|--------|---------|
+| `integration_base.py` | Session/env/failure workflow test bases |
+| `integration_pipeline.py` | Ordered agent pipeline steps and credential probes |
+| `prerequisites.py` | Docker, Containerlab, and image availability checks |
+| `api_smoke.py` | Live API smoke mixin and JSON assertions |
+| `net_env.py` | `verify_lab` assertion helpers |
+| `kathara_api_base.py` | Shared Kathara API smoke test base class |
+
+## Agent tests (`tests/agent/`)
 
 Each module contains **unit tests** (no Docker) and, for LLM-backed agents, an **integration
 pipeline** on `simple_bgp` / `link_down`:
@@ -32,17 +44,19 @@ pipeline** on `simple_bgp` / `link_down`:
 | `test_sade.py` | `community.sade` | SDK env + MCP adapter | Docker + `claude-agent-sdk` + Anthropic creds |
 | `test_claude_sdk.py` | `sdk.claude_sdk` | SDK env + MCP adapter | Docker + `claude-agent-sdk` + Anthropic creds |
 | `test_codex_sdk.py` | `sdk.codex_sdk` | auth/reasoning + MCP TOML | Docker + `openai-codex` + `~/.codex/auth.json` |
-| `test_mcp_server_selection.py` | shared MCP | diagnosis server selection (`pingmesh_mcp_server`, routing/switch keywords) | — |
+| `test_mcp_server_selection.py` | shared MCP | diagnosis server selection | — |
 
 ```shell
 # All agent tests (unit + pipeline; missing credentials skip pipeline only)
-uv run python -m unittest discover -s tests/agents -p 'test_*.py' -v
+uv run python -m unittest discover -s tests/agent -p 'test_*.py' -v
 
 # Unit tests only (no Docker)
-uv run python -m unittest tests.agents.test_agent_config -v
+uv run python -m unittest tests.agent.test_agent_config -v
 ```
 
-## Benchmark tests (`tests/benchmark/`)
+## Workflow tests (`tests/nika/workflows/`)
+
+### Benchmark (`benchmark/`)
 
 | Module | Purpose |
 |--------|---------|
@@ -50,58 +64,74 @@ uv run python -m unittest tests.agents.test_agent_config -v
 | `test_resume.py` | Resume/fingerprint unit tests (no Docker) |
 
 ```shell
-uv run python -m unittest tests.benchmark.test_resume -v
-uv run python -m unittest tests.benchmark.test_batch -v   # requires Docker
+uv run python -m unittest tests.nika.workflows.benchmark.test_resume -v
+uv run python -m unittest tests.nika.workflows.benchmark.test_batch -v   # requires Docker
 ```
 
-## Integration pipeline (`tests/integration/`)
+### Eval (`eval/`)
+
+| Module | Purpose |
+|--------|---------|
+| `test_clean.py` | `remove_session_results` artifact cleanup |
+| `test_session_batch.py` | Batch eval session iteration and LLM judge wiring |
+
+### Integration pipeline (`integration/`)
 
 | Module | Purpose |
 |--------|---------|
 | `test_pipeline_kathara.py` | Kathara pipeline: env → inject → MCP → mock agent → close → eval |
 | `test_pipeline_clab.py` | Containerlab min3clos pipeline (same steps) |
-| `test_pingmesh.py` | PingMesh MCP snapshot: healthy mesh → inject `link_down` → faulty mesh |
 
 ```shell
-uv run python -m unittest tests.integration.test_pipeline_kathara -v   # requires Docker
-uv run python -m unittest tests.integration.test_pipeline_clab -v      # requires containerlab + gnmic
-uv run python -m unittest tests.integration.test_pingmesh -v           # requires Docker (+ containerlab for CLab case)
+uv run python -m unittest tests.nika.workflows.integration.test_pipeline_kathara -v   # requires Docker
+uv run python -m unittest tests.nika.workflows.integration.test_pipeline_clab -v      # requires containerlab + gnmic
 ```
 
-### PingMesh integration (`test_pingmesh.py`)
+## Service tests (`tests/nika/service/`)
 
-Exercises the `pingmesh_mcp_server` tool (`run_pingmesh_snapshot`) on a live session:
-
-| Test class | Scenario | Notes |
-|------------|----------|-------|
-| `KatharaPingMeshIntegrationTest` | `rip_small_internet_vpn` (`-s m`) | ≥ 6 endpoints (PCs + VPN/web servers); inject `link_down` on `pc1:eth0` |
-| `ContainerlabPingMeshIntegrationTest` | `min3clos` | `client1` / `client2`; inject `link_down` on `leaf1:e1-1` |
-
-Each case asserts a clean cross-endpoint mesh before fault injection, then anomalies
-from the affected endpoint after injection.
-
-```shell
-# Kathara only (~1 min with lab deploy)
-uv run python -m unittest tests.integration.test_pingmesh.KatharaPingMeshIntegrationTest -v
-
-# Containerlab only
-uv run python -m unittest tests.integration.test_pingmesh.ContainerlabPingMeshIntegrationTest -v
-```
-
-## Service unit tests (`tests/service/`)
+MCP gateway wiring and MCP server tool delegation are **not** unit-tested in isolation;
+they are covered by the workflow integration pipelines (`test_pipeline_kathara`,
+`test_pipeline_clab`, agent pipelines) and live API smokes where applicable.
 
 | Directory / module | Purpose |
 |--------------------|---------|
 | `pingmesh/test_parser.py` | Ping output parsing (`loss`, RTT, unreachable) |
 | `pingmesh/test_endpoints.py` | Endpoint discovery and Containerlab data-plane IP selection |
 | `pingmesh/test_engine.py` | Snapshot orchestration, anomaly summary, parameter bounds |
-| `mcp_server/test_pingmesh_mcp.py` | PingMesh MCP tool wiring |
-| `mcp_server/test_containerlab_srl_mcp.py` | Containerlab SR Linux MCP tools |
-| `containerlab/test_srl_api.py` | Containerlab SRL API helpers |
+| `pingmesh/test_integration.py` | Live PingMesh MCP: healthy mesh → inject `link_down` → faulty mesh |
+| `kathara/test_kathara_*.py` | Live Kathara API smoke tests (Docker) |
+| `containerlab/test_containerlab_api.py` | Live Containerlab API smoke tests |
+| `containerlab/test_srl_api.py` | SRL API parsing/script logic (mocked runtime) |
 
 ```shell
-uv run python -m unittest discover -s tests/service/pingmesh -p 'test_*.py' -v
-uv run python -m unittest tests.service.mcp_server.test_pingmesh_mcp -v
+uv run python -m unittest discover -s tests/nika/service/pingmesh -p 'test_*.py' -v
+uv run python -m unittest tests.nika.service.pingmesh.test_integration.KatharaPingMeshIntegrationTest -v
+```
+
+## Problem injection (`tests/nika/problems/`)
+
+| Module | Backend |
+|--------|---------|
+| `test_kathara_failure_inject.py` | Kathara (Docker) |
+| `test_clab_failure_inject.py` | Containerlab (skipped without `clab` on PATH) |
+
+## Network environment (`tests/nika/net_env/`)
+
+Deploy and `verify_lab` checks for Kathara and Containerlab scenarios.
+
+## Runtime unit tests (`tests/nika/runtime/`)
+
+Pure Python tests (no Docker): backend resolution, session index, system logger, etc.
+
+```shell
+uv run --with pytest pytest tests/nika/runtime/ -v
+uv run python -m unittest tests.nika.runtime.test_session_index -v
+```
+
+## Evaluator unit tests (`tests/nika/evaluator/`)
+
+```shell
+uv run --with pytest pytest tests/nika/evaluator/ -v
 ```
 
 ## Mock agent (test-only)
@@ -115,35 +145,3 @@ nika agent run -a mock -m mock-v1 -n 5 --session_id <id>
 
 Mock runs expect perfect detection/RCA scores (`detection_score == 1.0`,
 `rca_accuracy == 1.0`) because the agent reads ground truth from the session.
-
-## Failure injection verify (`tests/failure_inject_verify/`)
-
-| Module | Backend |
-|--------|---------|
-| `test_kathara_failure_inject.py` | Kathara (Docker) |
-| `test_clab_failure_inject.py` | Containerlab (skipped without `clab` on PATH) |
-
-## Runtime unit tests (`tests/runtime/`)
-
-Pure Python tests (no Docker): backend resolution, session index, system logger, etc.
-
-```shell
-uv run --with pytest pytest tests/runtime/ -v
-uv run python -m unittest tests.runtime.test_session_index -v
-```
-
-## Problem unit tests (`tests/problems/`)
-
-Pure Python tests for problem registration (`prob_pool` auto-discovers `ProblemBase` subclasses by `root_cause_name`).
-
-```shell
-uv run --with pytest pytest tests/problems/ -v
-```
-
-## Evaluator unit tests (`tests/evaluator/`)
-
-Pure Python tests for rule-based scoring helpers.
-
-```shell
-uv run --with pytest pytest tests/evaluator/ -v
-```

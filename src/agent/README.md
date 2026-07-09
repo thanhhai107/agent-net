@@ -56,7 +56,7 @@ Claude Code and Codex agents load the shared skill library from `src/agent/skill
 `NIKA_ENABLE_SKILLS=true` (default). Helpers live in `agent.utils.skills`.
 
 See **[docs/agent-skills.md](../../docs/agent-skills.md)** for authoring custom skills.
-Integration tests: `tests/agents/test_skills.py`.
+Integration tests: `tests/agent/test_skills.py`.
 
 ## Shared Pipeline
 

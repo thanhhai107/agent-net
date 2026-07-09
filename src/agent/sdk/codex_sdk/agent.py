@@ -40,7 +40,6 @@ class CodexSdkAgent:
         self.session_dir: str = session.session_dir
 
         scenario_name: str = getattr(session, "scenario_name", "")
-        problem_names: list[str] = getattr(session, "problem_names", [])
 
         self._diagnosis_phase = CodexSdkDiagnosisPhase(
             session_id=session_id,
@@ -48,7 +47,6 @@ class CodexSdkAgent:
             model=model,
             reasoning_effort=reasoning_effort,
             scenario_name=scenario_name,
-            problem_names=problem_names,
             stream_output=stream_output,
         )
         self._submission_phase = CodexSdkSubmissionPhase(

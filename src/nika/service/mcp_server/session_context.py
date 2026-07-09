@@ -1,4 +1,4 @@
-"""Resolve lab and result paths for MCP tools from ``NIKA_SESSION_ID``."""
+"""Resolve lab and result paths for MCP tools from session binding."""
 
 from __future__ import annotations
 
@@ -8,13 +8,16 @@ from typing import Any
 from nika.config import RESULTS_DIR
 from nika.runtime.factory import resolve_backend
 from nika.service.containerlab import ContainerlabSRLAPI, create_host_api
+from nika.service.mcp_gateway.context import get_bound_session_id
 from nika.utils.session_store import SessionStore
 
 SESSION_ID_ENV = "NIKA_SESSION_ID"
 
 
 def require_session_id() -> str:
-    session_id = os.getenv(SESSION_ID_ENV)
+    session_id = get_bound_session_id()
+    if not session_id:
+        session_id = os.getenv(SESSION_ID_ENV)
     if not session_id:
         raise ValueError(
             f"{SESSION_ID_ENV} is not set. MCP tools must be started with a bound session id."

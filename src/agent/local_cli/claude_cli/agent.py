@@ -77,14 +77,12 @@ class ClaudeAgent:
         self.session_dir: str = session.session_dir
 
         scenario_name: str = getattr(session, "scenario_name", "")
-        problem_names: list[str] = getattr(session, "problem_names", [])
 
         self._diagnosis_phase = ClaudeDiagnosisPhase(
             session_id=session_id,
             session_dir=self.session_dir,
             model=self.model,
             scenario_name=scenario_name,
-            problem_names=problem_names,
             stream_output=stream_output,
         )
         self._submission_phase = ClaudeSubmissionPhase(

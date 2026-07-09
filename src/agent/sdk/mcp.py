@@ -12,14 +12,18 @@ def _resolve_python() -> str:
 
 
 def to_sdk_mcp_servers(config: dict[str, Any]) -> dict[str, Any]:
-    """Adapt NIKA's MultiServerMCPClient config to claude-agent-sdk stdio format.
-
-    NIKA returns ``{"transport": "stdio", "command": ..., "args": ...}`` (the
-    langchain-mcp-adapters shape); claude-agent-sdk expects
-    ``{"type": "stdio", "command": ..., "args": ..., "env": ...}``.
-    """
+    """Adapt NIKA MCP client config to claude-agent-sdk format."""
     servers: dict[str, Any] = {}
     for name, spec in config.items():
+        transport = spec.get("transport", "stdio")
+        if transport == "http":
+            servers[name] = {
+                "type": "http",
+                "url": spec["url"],
+                "headers": dict(spec.get("headers") or {}),
+            }
+            continue
+
         command = spec.get("command")
         if command in ("python3", "python"):
             command = _resolve_python()

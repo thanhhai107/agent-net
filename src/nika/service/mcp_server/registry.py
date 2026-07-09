@@ -10,7 +10,7 @@ from nika.config import MCP_SERVER_DIR
 Backend = Literal["kathara", "containerlab"]
 Role = Literal["host", "routing", "switch", "telemetry", "task"]
 
-# Keyword tokens (split from scenario/problem names) that trigger optional servers.
+# Keyword tokens (from scenario name and net-env TAGS) that trigger optional servers.
 ROUTING_KEYWORDS = frozenset({"bgp", "ospf", "rip", "frr", "routing"})
 SWITCH_KEYWORDS = frozenset({"p4", "bmv2", "sdn", "bloom", "mpls", "int", "counter"})
 TELEMETRY_KEYWORDS = frozenset({"telemetry"})
@@ -86,18 +86,24 @@ DIAGNOSIS_PINGMESH_SERVER = "pingmesh_mcp_server"
 SUBMISSION_SERVER = "task_mcp_server"
 
 
-def _problem_tokens(scenario_name: str, problem_names: list[str]) -> set[str]:
-    combined = (scenario_name + " " + " ".join(problem_names)).lower()
+def _scenario_tokens(scenario_name: str) -> set[str]:
+    from nika.net_env.net_env_pool import scenario_tags
+
+    parts = [scenario_name.lower()]
+    try:
+        parts.extend(tag.lower() for tag in scenario_tags(scenario_name))
+    except ValueError:
+        pass
+    combined = " ".join(parts)
     return set(combined.replace("_", " ").replace("-", " ").split())
 
 
 def select_diagnosis_servers(
     scenario_name: str,
-    problem_names: list[str],
     *,
     backend: str | None = None,
 ) -> list[str]:
-    """Return MCP server names needed for diagnosis on *scenario* / *problems*."""
+    """Return MCP server names needed for diagnosis on *scenario*."""
     if backend is None:
         try:
             from nika.net_env.net_env_pool import scenario_supported_backends
@@ -109,7 +115,7 @@ def select_diagnosis_servers(
             backend = "kathara"
     backend = backend or "kathara"
 
-    tokens = _problem_tokens(scenario_name, problem_names)
+    tokens = _scenario_tokens(scenario_name)
     servers = [DIAGNOSIS_HOST_SERVER, DIAGNOSIS_PINGMESH_SERVER]
 
     if backend == "containerlab" and tokens & ROUTING_KEYWORDS:

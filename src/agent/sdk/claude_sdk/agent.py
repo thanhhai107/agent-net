@@ -41,7 +41,6 @@ class ClaudeSdkAgent:
         self.session_dir: str = session.session_dir
 
         scenario_name: str = getattr(session, "scenario_name", "")
-        problem_names: list[str] = getattr(session, "problem_names", [])
 
         self._diagnosis_phase = ClaudeSdkDiagnosisPhase(
             session_id=session_id,
@@ -49,7 +48,6 @@ class ClaudeSdkAgent:
             model=self.model,
             max_steps=max_steps,
             scenario_name=scenario_name,
-            problem_names=problem_names,
         )
         self._submission_phase = ClaudeSdkSubmissionPhase(
             session_id=session_id,

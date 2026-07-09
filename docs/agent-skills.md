@@ -98,7 +98,7 @@ uv run nika agent run -a sdk.claude_sdk -n 20
 
 Inspect `results/{session_id}/messages.jsonl` for `Skill` tool calls (Claude) or skill-name mentions (Codex).
 
-Unit and integration tests: `tests/agents/test_skills.py`.
+Unit and integration tests: `tests/agent/test_skills.py`.
 
 Integration coverage (real `simple_bgp` / `link_down` scenario):
 

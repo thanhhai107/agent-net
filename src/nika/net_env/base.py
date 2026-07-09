@@ -4,15 +4,12 @@ from typing import ClassVar, Dict, Set
 
 from Kathara.manager.Kathara import Machine
 
-from nika.compat.kathara import patch_kathara_file_conversion
 from nika.net_env.kathara.utils.docker_files.docker_images import (
     ensure_nika_docker_images,
 )
 from nika.runtime.base import LabRuntime
 from nika.runtime.factory import runtime_for_net_env
 from nika.runtime.spec import LabSpec
-
-patch_kathara_file_conversion()
 
 
 class NetworkEnvBase:

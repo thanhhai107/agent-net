@@ -28,8 +28,6 @@ class CodexCliDiagnosisPhase:
         Hard timeout in seconds for the subprocess.
     scenario_name:
         Scenario identifier used to select relevant Kathara MCP servers.
-    problem_names:
-        Problem identifiers used together with *scenario_name* for server selection.
     """
 
     def __init__(
@@ -40,7 +38,6 @@ class CodexCliDiagnosisPhase:
         reasoning_effort: str | None = None,
         timeout: int = 600,
         scenario_name: str = "",
-        problem_names: list[str] | None = None,
         *,
         stream_output: bool = True,
     ) -> None:
@@ -52,7 +49,6 @@ class CodexCliDiagnosisPhase:
             reasoning_effort=reasoning_effort,
             timeout=timeout,
             scenario_name=scenario_name,
-            problem_names=problem_names or [],
             stream_output=stream_output,
         )
         self._diagnosis_prompt = diagnosis_prompt_with_skills(OVERALL_DIAGNOSIS_PROMPT)

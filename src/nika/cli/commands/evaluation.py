@@ -150,8 +150,8 @@ def eval_clean(
         help="Delete session files even when running sessions exist.",
     ),
 ) -> None:
-    """Delete results/, runtime session JSON files, and the SQLite session index."""
-    from nika.config import RESULTS_DIR, SESSIONS_DB, SESSIONS_DIR
+    """Delete session results, runtime session JSON files, and the SQLite session index."""
+    from nika.config import resolve_results_root, SESSIONS_DB, SESSIONS_DIR
     from nika.utils.session_store import SessionStore
     from nika.workflows.eval.clean import run_eval_clean
 
@@ -163,8 +163,9 @@ def eval_clean(
             "Close them with `nika session close` first, or pass --force."
         )
 
+    results_root = resolve_results_root()
     label = (
-        f"all files under {RESULTS_DIR}, session files under {SESSIONS_DIR}, "
+        f"all files under {results_root}, session files under {SESSIONS_DIR}, "
         f"and the SQLite index at {SESSIONS_DB}"
     )
     if running and force:
@@ -181,6 +182,6 @@ def eval_clean(
 
     typer.echo(
         f"Removed {report.results_entries_removed} entr{'y' if report.results_entries_removed == 1 else 'ies'} "
-        f"under {RESULTS_DIR}, {report.session_files_removed} session file(s) under {SESSIONS_DIR}, "
+        f"under {results_root}, {report.session_files_removed} session file(s) under {SESSIONS_DIR}, "
         f"and cleared the SQLite index at {SESSIONS_DB}."
     )

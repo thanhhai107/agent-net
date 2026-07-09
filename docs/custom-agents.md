@@ -78,7 +78,6 @@ class MyAgent:
 
         servers = select_diagnosis_servers(
             self.session.scenario_name,
-            getattr(self.session, "problem_names", []),
         )
         config = MCPServerConfig(self.session_id).load_filtered_config(servers)
         client = MultiServerMCPClient(connections=config)

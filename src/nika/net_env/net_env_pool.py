@@ -43,6 +43,15 @@ _NET_ENVS: Dict[str, Type[NetworkEnvBase]] = {
 }
 
 
+def scenario_tags(scenario_name: str) -> list[str]:
+    """Return metadata tags declared by the network environment class."""
+    if scenario_name not in _NET_ENVS:
+        raise ValueError(
+            f"Network environment '{scenario_name}' not found in the pool."
+        )
+    return list(getattr(_NET_ENVS[scenario_name], "TAGS", []) or [])
+
+
 def scenario_supported_backends(scenario_name: str) -> list[str]:
     """Return backends supported by ``scenario_name``."""
     if scenario_name not in _NET_ENVS:

@@ -30,7 +30,7 @@ from pathlib import Path
 
 from agent.local_cli.codex_cli.codex_display import format_codex_event
 from agent.utils.loggers import MessageLogger
-from agent.utils.mcp_servers import MCPServerConfig, select_diagnosis_servers
+from agent.utils.mcp_client import begin_submission_mcp_phase, load_session_mcp_config
 from agent.utils.phases import PHASES, SUBMISSION
 from agent.utils.skills import prepare_codex_workspace
 
@@ -42,29 +42,33 @@ REASONING_EFFORT_LEVELS = ("none", "minimal", "low", "medium", "high", "xhigh")
 
 
 def _build_mcp_toml(servers: dict) -> str:
-    """Serialise an MCP server dict (from MCPServerConfig) as TOML.
-
-    Codex ``exec`` runs non-interactively, so each server must opt into
-    automatic MCP tool approval via ``default_tools_approval_mode``.  Without
-    it, closed stdin is treated as a user decline and tool calls fail with
-    ``user cancelled MCP tool call``.
-    """
+    """Serialise an MCP server dict (from MCPServerConfig) as TOML."""
     lines: list[str] = [
+        "experimental_use_rmcp_client = true",
         'approval_policy = "never"',
         'sandbox_mode = "workspace-write"',
         "",
     ]
     for name, srv in servers.items():
         lines.append(f"[mcp_servers.{name}]")
-        lines.append(f'command = "{srv["command"]}"')
-        args_toml = "[" + ", ".join(f'"{a}"' for a in srv["args"]) + "]"
-        lines.append(f"args = {args_toml}")
-        lines.append('default_tools_approval_mode = "approve"')
-        env: dict = srv.get("env", {})
-        if env:
-            lines.append(f"\n[mcp_servers.{name}.env]")
-            for k, v in env.items():
-                lines.append(f'{k} = "{v}"')
+        if srv.get("transport") == "http":
+            lines.append(f'url = "{srv["url"]}"')
+            lines.append('default_tools_approval_mode = "approve"')
+            headers: dict = srv.get("headers") or {}
+            if headers:
+                lines.append(f"\n[mcp_servers.{name}.http_headers]")
+                for k, v in headers.items():
+                    lines.append(f'{k} = "{v}"')
+        else:
+            lines.append(f'command = "{srv["command"]}"')
+            args_toml = "[" + ", ".join(f'"{a}"' for a in srv["args"]) + "]"
+            lines.append(f"args = {args_toml}")
+            lines.append('default_tools_approval_mode = "approve"')
+            env: dict = srv.get("env", {})
+            if env:
+                lines.append(f"\n[mcp_servers.{name}.env]")
+                for k, v in env.items():
+                    lines.append(f'{k} = "{v}"')
         lines.append("")
     return "\n".join(lines)
 
@@ -96,8 +100,6 @@ class CodexWorker:
     scenario_name:
         Used by :func:`~agent.utils.mcp_servers.select_diagnosis_servers` to pick relevant servers.
         Ignored for the submission phase (which always uses the task server).
-    problem_names:
-        Used together with *scenario_name* for server selection.
     """
 
     def __init__(
@@ -109,7 +111,6 @@ class CodexWorker:
         reasoning_effort: str | None = None,
         timeout: int = 600,
         scenario_name: str = "",
-        problem_names: list[str] | None = None,
         *,
         stream_output: bool = True,
     ) -> None:
@@ -129,7 +130,6 @@ class CodexWorker:
         self.reasoning_effort = reasoning_effort
         self.timeout = timeout
         self.scenario_name = scenario_name
-        self.problem_names = problem_names or []
 
         self.workspace = Path(session_dir) / "codex_workspace"
         self._codex_home = self.workspace / ".codex_home"
@@ -163,15 +163,12 @@ class CodexWorker:
         self._write_mcp_config()
 
     def _write_mcp_config(self) -> None:
-        mcp_cfg = MCPServerConfig(session_id=self.session_id)
-
         if self.phase == SUBMISSION:
-            servers = mcp_cfg.load_config(if_submit=True)
-        else:
-            server_names = select_diagnosis_servers(
-                self.scenario_name, self.problem_names
-            )
-            servers = mcp_cfg.load_filtered_config(server_names)
+            begin_submission_mcp_phase(self.session_id)
+        servers = load_session_mcp_config(
+            self.session_id,
+            self.scenario_name,
+        )
 
         self._logger.log(
             "mcp_config",

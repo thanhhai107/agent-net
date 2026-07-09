@@ -4,6 +4,7 @@ import asyncio
 import logging
 
 from agent.registry import create_agent
+from nika.service.mcp_gateway.lifecycle import mcp_gateway_for_session
 from nika.utils.agent_config import (
     resolve_agent_model,
     resolve_agent_type,
@@ -15,6 +16,10 @@ from nika.utils.logger import bind_session_dir, log_error_event, log_event
 from nika.utils.session import Session
 
 logging.basicConfig(level=logging.INFO)
+
+
+def _gateway_policy_mode(agent_type: str) -> str:
+    return "unified" if agent_type == "community.sade" else "two_phase"
 
 
 def start_agent(
@@ -62,17 +67,22 @@ def start_agent(
             f"Results: {session.session_dir}\n",
             flush=True,
         )
-    agent = create_agent(
-        agent_type,
-        session_id=session.session_id,
-        llm_provider=llm_provider,
-        model=model,
-        max_steps=max_steps,
-        reasoning_effort=reasoning_effort,
-        stream_output=stream_output,
-    )
     try:
-        asyncio.run(agent.run(task_description=session.task_description))
+        with mcp_gateway_for_session(
+            session.session_id,
+            scenario_name=session.scenario_name,
+            policy_mode=_gateway_policy_mode(agent_type),  # type: ignore[arg-type]
+        ):
+            agent = create_agent(
+                agent_type,
+                session_id=session.session_id,
+                llm_provider=llm_provider,
+                model=model,
+                max_steps=max_steps,
+                reasoning_effort=reasoning_effort,
+                stream_output=stream_output,
+            )
+            asyncio.run(agent.run(task_description=session.task_description))
     except Exception as exc:
         log_error_event(
             "agent_error",

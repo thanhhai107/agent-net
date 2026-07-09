@@ -41,14 +41,12 @@ class McpAgent:
         self.session_dir: str = session.session_dir
 
         self._scenario_name: str = getattr(session, "scenario_name", "")
-        self._problem_names: list[str] = getattr(session, "problem_names", [])
 
     async def run(self, task_description: str) -> dict[str, Any]:
         """Execute the two-phase pipeline inside an MCPApp context."""
         settings = build_mcp_agent_settings(
             session_id=self.session_id,
             scenario_name=self._scenario_name,
-            problem_names=self._problem_names,
             model=self.model,
         )
         app = MCPApp(
@@ -62,7 +60,6 @@ class McpAgent:
                 model=self.model,
                 max_steps=self.max_steps,
                 scenario_name=self._scenario_name,
-                problem_names=self._problem_names,
                 stream_output=self._stream_output,
             )
             await workflow.initialize()

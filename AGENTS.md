@@ -18,15 +18,15 @@
 - `src/nika/evaluator/`: rule-based scoring, submission schemas, trace parsing, and LLM judge support.
 - `src/agent/`: troubleshooting agent implementations and shared agent utilities.
 - `benchmark/`: benchmark YAML cases and regeneration script.
-- `tests/`: unit tests plus Docker/Kathara integration tests (`agents/`, `benchmark/`, `integration/`, `failure_inject_verify/`, `net_env_verify/`, `runtime/`).
+- `tests/`: unit tests plus Docker/Kathara integration tests, mirroring `src/` (`tests/agent/`, `tests/nika/...`, `tests/support/`).
 
 ## Common Commands
 
 - Install dependencies: `uv sync`
 - Run the CLI during development: `uv run nika --help`
 - Run all pytest tests: `uv run --with pytest pytest`
-- Run unittest agent tests: `uv run python -m unittest discover -s tests/agents -p 'test_*.py' -v`
-- Run a focused unittest module: `uv run python -m unittest tests.agents.test_mock -v`
+- Run unittest agent tests: `uv run python -m unittest discover -s tests/agent -p 'test_*.py' -v`
+- Run a focused unittest module: `uv run python -m unittest tests.agent.test_mock -v`
 - Regenerate benchmark YAML: `uv run python benchmark/generate_benchmark.py`
 - Auto-fix safe Ruff issues: `uv run ruff check . --fix`
 

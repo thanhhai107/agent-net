@@ -12,7 +12,7 @@ from agent.local_cli.codex_cli.codex_display import format_codex_event
 from agent.local_cli.codex_cli.codex_worker import _build_mcp_toml
 from agent.sdk.codex_sdk.config import validate_reasoning_effort
 from agent.utils.loggers import MessageLogger
-from agent.utils.mcp_servers import MCPServerConfig, select_diagnosis_servers
+from agent.utils.mcp_client import begin_submission_mcp_phase, load_session_mcp_config
 from agent.utils.phases import PHASES, SUBMISSION
 from agent.utils.skills import prepare_codex_workspace
 
@@ -51,7 +51,6 @@ class CodexSdkWorker:
         model: str = "gpt-5.4-mini",
         reasoning_effort: str | None = None,
         scenario_name: str = "",
-        problem_names: list[str] | None = None,
         *,
         system_prompt: str,
         stream_output: bool = True,
@@ -65,7 +64,6 @@ class CodexSdkWorker:
         self.model = model
         self.reasoning_effort = validate_reasoning_effort(reasoning_effort)
         self.scenario_name = scenario_name
-        self.problem_names = problem_names or []
         self.system_prompt = system_prompt
         self._stream_output = stream_output
         self.workspace = Path(session_dir) / "codex_sdk_workspace"
@@ -91,14 +89,12 @@ class CodexSdkWorker:
 
         prepare_codex_workspace(self.workspace)
 
-        mcp_cfg = MCPServerConfig(session_id=self.session_id)
         if self.phase == SUBMISSION:
-            servers = mcp_cfg.load_config(if_submit=True)
-        else:
-            server_names = select_diagnosis_servers(
-                self.scenario_name, self.problem_names
-            )
-            servers = mcp_cfg.load_filtered_config(server_names)
+            begin_submission_mcp_phase(self.session_id)
+        servers = load_session_mcp_config(
+            self.session_id,
+            self.scenario_name,
+        )
 
         self._logger.log(
             "mcp_config",

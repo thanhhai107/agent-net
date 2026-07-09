@@ -7,7 +7,7 @@ from typing import Any
 from agent.sdk.claude_sdk.config import prepare_claude_sdk_env
 from agent.sdk.mcp import to_sdk_mcp_servers
 from agent.utils.loggers import MessageLogger
-from agent.utils.mcp_servers import MCPServerConfig, select_diagnosis_servers
+from agent.utils.mcp_client import begin_submission_mcp_phase, load_session_mcp_config
 from agent.utils.phases import PHASES, SUBMISSION
 from agent.utils.skills import CLAUDE_SETTING_SOURCES, claude_skills_package_dir
 from nika.utils.logger import system_logger
@@ -46,7 +46,6 @@ class ClaudeSdkWorker:
         model: str,
         max_steps: int = 20,
         scenario_name: str = "",
-        problem_names: list[str] | None = None,
         *,
         system_prompt: str,
     ) -> None:
@@ -59,19 +58,16 @@ class ClaudeSdkWorker:
         self.model = model
         self.max_steps = max_steps
         self.scenario_name = scenario_name
-        self.problem_names = problem_names or []
         self.system_prompt = system_prompt
         self._logger = MessageLogger(agent=phase, session_dir=session_dir)
 
     def _load_mcp_servers(self) -> dict[str, Any]:
-        mcp = MCPServerConfig(session_id=self.session_id)
         if self.phase == SUBMISSION:
-            servers = mcp.load_config(if_submit=True)
-        else:
-            server_names = select_diagnosis_servers(
-                self.scenario_name, self.problem_names
-            )
-            servers = mcp.load_filtered_config(server_names)
+            begin_submission_mcp_phase(self.session_id)
+        servers = load_session_mcp_config(
+            self.session_id,
+            self.scenario_name,
+        )
         return to_sdk_mcp_servers(servers)
 
     async def run(self, prompt: str) -> str:
