@@ -8,6 +8,10 @@ from agent.utils.mcp_servers import select_diagnosis_servers
 
 
 class SelectDiagnosisServersTest(unittest.TestCase):
+    def test_always_includes_pingmesh_mcp(self) -> None:
+        servers = select_diagnosis_servers("simple_bgp", ["link_down"])
+        self.assertIn("pingmesh_mcp_server", servers)
+
     def test_min3clos_skips_frr_mcp(self) -> None:
         servers = select_diagnosis_servers("min3clos", ["bgp_asn_misconfig"])
         self.assertIn("kathara_base_mcp_server", servers)

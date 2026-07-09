@@ -7,6 +7,7 @@
 | `tests/agents/` | Per-agent unit tests and integration pipelines |
 | `tests/benchmark/` | Benchmark batch run and resume logic |
 | `tests/integration/` | End-to-end session pipeline (env → inject → agent → eval) |
+| `tests/service/` | Service-layer unit tests (PingMesh, MCP servers, Containerlab APIs) |
 | `tests/failure_inject_verify/` | Failure injection smoke tests (Kathara + Containerlab) |
 | `tests/net_env_verify/` | Network environment deploy and topology checks |
 | `tests/problems/` | Problem registry unit tests |
@@ -31,6 +32,7 @@ pipeline** on `simple_bgp` / `link_down`:
 | `test_sade.py` | `community.sade` | SDK env + MCP adapter | Docker + `claude-agent-sdk` + Anthropic creds |
 | `test_claude_sdk.py` | `sdk.claude_sdk` | SDK env + MCP adapter | Docker + `claude-agent-sdk` + Anthropic creds |
 | `test_codex_sdk.py` | `sdk.codex_sdk` | auth/reasoning + MCP TOML | Docker + `openai-codex` + `~/.codex/auth.json` |
+| `test_mcp_server_selection.py` | shared MCP | diagnosis server selection (`pingmesh_mcp_server`, routing/switch keywords) | — |
 
 ```shell
 # All agent tests (unit + pipeline; missing credentials skip pipeline only)
@@ -58,10 +60,48 @@ uv run python -m unittest tests.benchmark.test_batch -v   # requires Docker
 |--------|---------|
 | `test_pipeline_kathara.py` | Kathara pipeline: env → inject → MCP → mock agent → close → eval |
 | `test_pipeline_clab.py` | Containerlab min3clos pipeline (same steps) |
+| `test_pingmesh.py` | PingMesh MCP snapshot: healthy mesh → inject `link_down` → faulty mesh |
 
 ```shell
 uv run python -m unittest tests.integration.test_pipeline_kathara -v   # requires Docker
 uv run python -m unittest tests.integration.test_pipeline_clab -v      # requires containerlab + gnmic
+uv run python -m unittest tests.integration.test_pingmesh -v           # requires Docker (+ containerlab for CLab case)
+```
+
+### PingMesh integration (`test_pingmesh.py`)
+
+Exercises the `pingmesh_mcp_server` tool (`run_pingmesh_snapshot`) on a live session:
+
+| Test class | Scenario | Notes |
+|------------|----------|-------|
+| `KatharaPingMeshIntegrationTest` | `rip_small_internet_vpn` (`-s m`) | ≥ 6 endpoints (PCs + VPN/web servers); inject `link_down` on `pc1:eth0` |
+| `ContainerlabPingMeshIntegrationTest` | `min3clos` | `client1` / `client2`; inject `link_down` on `leaf1:e1-1` |
+
+Each case asserts a clean cross-endpoint mesh before fault injection, then anomalies
+from the affected endpoint after injection.
+
+```shell
+# Kathara only (~1 min with lab deploy)
+uv run python -m unittest tests.integration.test_pingmesh.KatharaPingMeshIntegrationTest -v
+
+# Containerlab only
+uv run python -m unittest tests.integration.test_pingmesh.ContainerlabPingMeshIntegrationTest -v
+```
+
+## Service unit tests (`tests/service/`)
+
+| Directory / module | Purpose |
+|--------------------|---------|
+| `pingmesh/test_parser.py` | Ping output parsing (`loss`, RTT, unreachable) |
+| `pingmesh/test_endpoints.py` | Endpoint discovery and Containerlab data-plane IP selection |
+| `pingmesh/test_engine.py` | Snapshot orchestration, anomaly summary, parameter bounds |
+| `mcp_server/test_pingmesh_mcp.py` | PingMesh MCP tool wiring |
+| `mcp_server/test_containerlab_srl_mcp.py` | Containerlab SR Linux MCP tools |
+| `containerlab/test_srl_api.py` | Containerlab SRL API helpers |
+
+```shell
+uv run python -m unittest discover -s tests/service/pingmesh -p 'test_*.py' -v
+uv run python -m unittest tests.service.mcp_server.test_pingmesh_mcp -v
 ```
 
 ## Mock agent (test-only)

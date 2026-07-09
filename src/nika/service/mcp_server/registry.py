@@ -38,6 +38,12 @@ MCP_SERVER_SPECS: dict[str, MCPServerSpec] = {
         role="host",
         module="common/host_server.py",
     ),
+    "pingmesh_mcp_server": MCPServerSpec(
+        name="pingmesh_mcp_server",
+        backend=None,
+        role="host",
+        module="common/pingmesh_server.py",
+    ),
     "task_mcp_server": MCPServerSpec(
         name="task_mcp_server",
         backend=None,
@@ -76,6 +82,7 @@ MCP_SERVER_SPECS: dict[str, MCPServerSpec] = {
 MCP_SERVER_PREFIXES: tuple[str, ...] = tuple(f"{name}_" for name in MCP_SERVER_SPECS)
 
 DIAGNOSIS_HOST_SERVER = "kathara_base_mcp_server"
+DIAGNOSIS_PINGMESH_SERVER = "pingmesh_mcp_server"
 SUBMISSION_SERVER = "task_mcp_server"
 
 
@@ -103,7 +110,7 @@ def select_diagnosis_servers(
     backend = backend or "kathara"
 
     tokens = _problem_tokens(scenario_name, problem_names)
-    servers = [DIAGNOSIS_HOST_SERVER]
+    servers = [DIAGNOSIS_HOST_SERVER, DIAGNOSIS_PINGMESH_SERVER]
 
     if backend == "containerlab" and tokens & ROUTING_KEYWORDS:
         servers.append("containerlab_srl_mcp_server")

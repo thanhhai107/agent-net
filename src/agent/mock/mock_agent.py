@@ -54,6 +54,8 @@ def _mock_diagnosis_tool_calls(
     backend: str, server_names: list[str]
 ) -> list[tuple[str, dict[str, Any]]]:
     calls: list[tuple[str, dict[str, Any]]] = [("get_reachability", {})]
+    if "pingmesh_mcp_server" in server_names:
+        calls.append(("run_pingmesh_snapshot", {}))
     if backend == "containerlab":
         calls.append(("ping_pair", {"host_a": "client1", "host_b": "client2"}))
         if "containerlab_srl_mcp_server" in server_names:
