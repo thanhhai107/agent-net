@@ -64,8 +64,13 @@ class HostMisconfigVerifyTest(PerTestEnvTestCase):
         self._inject_failure("host_incorrect_netmask", {"host_name": HOST})
         self._assert_failure_injected("host_incorrect_netmask")
 
+
+class HostIncorrectDNSVerifyTest(PerTestEnvTestCase):
+    SCENARIO = "ospf_enterprise_dhcp"
+    ENV_RUN_ARGS = ["-s", "s"]
+
     def test_host_incorrect_dns(self) -> None:
-        self._inject_failure("host_incorrect_dns", {"host_name": HOST})
+        self._inject_failure("host_incorrect_dns")
         self._assert_failure_injected("host_incorrect_dns")
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import os
 import sys
 from collections import Counter
@@ -14,7 +15,11 @@ from nika.problems.prob_pool import list_avail_problem_instances
 
 cur_path = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, cur_path)
-from inject_resolve import resolve_inject_params, validate_benchmark_case  # noqa: E402
+from inject_resolve import (  # noqa: E402
+    DEFAULT_SEED,
+    resolve_inject_params,
+    validate_benchmark_case,
+)
 
 # One best-matching traditional Kathara scenario per failure (k8s/llmd appear in full only).
 SELECTED_SCENARIO_FOR_PROBLEM: dict[str, str] = {
@@ -83,8 +88,8 @@ def _topo_sizes_for_scenario(scenario: str) -> list[str]:
     return [""]
 
 
-def _make_row(scenario: str, problem: str, topo_size: str) -> dict:
-    inject = resolve_inject_params(problem, scenario, topo_size)
+def _make_row(scenario: str, problem: str, topo_size: str, *, seed: int) -> dict:
+    inject = resolve_inject_params(problem, scenario, topo_size, seed=seed)
     validate_benchmark_case(scenario, problem, inject, topo_size)
     return {
         "scenario": scenario,
@@ -94,7 +99,7 @@ def _make_row(scenario: str, problem: str, topo_size: str) -> dict:
     }
 
 
-def iter_full_cases() -> list[dict]:
+def iter_full_cases(*, seed: int) -> list[dict]:
     net_envs = list_all_net_envs()
     problem_instances = list_avail_problem_instances()
     rows: list[dict] = []
@@ -105,11 +110,11 @@ def iter_full_cases() -> list[dict]:
             if not set(problem_instance.TAGS).issubset(set(net_env_cls.TAGS)):
                 continue
             for topo_size in _topo_sizes_for_scenario(net_env_name):
-                rows.append(_make_row(net_env_name, prob_name, topo_size))
+                rows.append(_make_row(net_env_name, prob_name, topo_size, seed=seed))
     return rows
 
 
-def iter_selected_cases() -> list[dict]:
+def iter_selected_cases(*, seed: int) -> list[dict]:
     net_envs = list_all_net_envs()
     problem_instances = list_avail_problem_instances()
     rows: list[dict] = []
@@ -126,7 +131,7 @@ def iter_selected_cases() -> list[dict]:
                 f"(problem={problem_instance.TAGS}, scenario={net_env_cls.TAGS})"
             )
         topo_size = "s" if scenario_requires_topo_size(scenario) else ""
-        rows.append(_make_row(scenario, prob_name, topo_size))
+        rows.append(_make_row(scenario, prob_name, topo_size, seed=seed))
     return rows
 
 
@@ -140,9 +145,9 @@ def _print_stats(label: str, rows: list[dict]) -> None:
         print(f"  {scenario}: {count}")
 
 
-def generate_benchmark() -> tuple[list[dict], list[dict]]:
-    full_rows = iter_full_cases()
-    selected_rows = iter_selected_cases()
+def generate_benchmark(*, seed: int = DEFAULT_SEED) -> tuple[list[dict], list[dict]]:
+    full_rows = iter_full_cases(seed=seed)
+    selected_rows = iter_selected_cases(seed=seed)
 
     _print_stats("benchmark_full.yaml", full_rows)
     _print_stats("benchmark_selected.yaml", selected_rows)
@@ -154,13 +159,29 @@ def generate_benchmark() -> tuple[list[dict], list[dict]]:
     ):
         out_path = benchmark_dir / name
         out_path.write_text(
-            yaml.dump({"cases": rows}, sort_keys=False, allow_unicode=True),
+            yaml.dump(
+                {"seed": seed, "cases": rows},
+                sort_keys=False,
+                allow_unicode=True,
+            ),
             encoding="utf-8",
         )
-        print(f"Wrote {len(rows)} cases to {out_path}")
+        print(f"Wrote {len(rows)} cases to {out_path} (seed={seed})")
 
     return full_rows, selected_rows
 
 
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Generate benchmark YAML configs.")
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=DEFAULT_SEED,
+        help=f"Global random seed for inject param selection (default: {DEFAULT_SEED})",
+    )
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
-    generate_benchmark()
+    args = _parse_args()
+    generate_benchmark(seed=args.seed)

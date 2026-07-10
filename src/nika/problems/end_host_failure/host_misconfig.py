@@ -365,10 +365,6 @@ class HostIncorrectDNS(ProblemBase):
 
     symptom_desc = "Some hosts are unable to access web services."
 
-    def __init__(self, scenario_name: str | None, **kwargs):
-        super().__init__(scenario_name, **kwargs)
-        self.params.fake_dns_ip = "8.8.8.8"
-
     def inject_fault(self, params: HostIncorrectDNSParams):
         self.set_faulty_devices([params.host_name])
         self.runtime.exec(
