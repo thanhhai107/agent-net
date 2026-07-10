@@ -1279,6 +1279,11 @@ with col_modules[1]:
                 step=0.05,
                 disabled=not memory_selected,
             )
+        memory_expert_seeds = st.checkbox(
+            "Enable NIKA expert seed ladders",
+            value=False,
+            disabled=not memory_selected,
+        )
 
 modules = []
 if tool_selected:
@@ -1324,6 +1329,7 @@ config = {
     "memory_evolution_threshold": int(memory_evolution_threshold),
     "memory_best_of_n": int(memory_best_of_n),
     "memory_ppo_epsilon": float(memory_ppo_epsilon),
+    "memory_expert_seeds": bool(memory_expert_seeds),
     "run_judge": bool(run_judge),
     "judge_backend": judge_backend,
     "judge_model": judge_model,

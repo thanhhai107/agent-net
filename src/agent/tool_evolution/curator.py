@@ -27,8 +27,10 @@ from agent.learning_llm import (
 from agent.llm.model_factory import load_model
 from agent.tool_evolution.models import (
     ComprehensionGap,
+    DraftAnalyzerDraft,
     DraftAnalyzerSuggestion,
     DraftExploration,
+    DraftExplorerDraft,
     DraftRewriteDraft,
     DocumentationRevision,
     DraftRewriteProposal,
@@ -55,6 +57,7 @@ ERROR_MARKERS = (
     "failed",
 )
 DRAFT_CONVERGENCE_THRESHOLD = 0.75
+DRAFT_EXPLORATION_SIMILARITY_THRESHOLD = 0.82
 DIAGNOSIS_AGENT_NAMES = frozenset({DIAGNOSIS, "diagnosis_agent"})
 MEMORY_AGENT_NAME = "memory_agent"
 DRAFT_PROMPT_TEXT_LIMIT = 360
@@ -97,9 +100,50 @@ def _text_similarity(left: str, right: str) -> float:
     return round((seq + jaccard) / 2, 6)
 
 
+def _ngram_word_match(left: str, right: str, *, max_n: int = 4) -> float:
+    """BLEU-like word match without an external tokenizer dependency."""
+    lhs = left.lower().split()
+    rhs = right.lower().split()
+    if not lhs and not rhs:
+        return 1.0
+    if not lhs or not rhs:
+        return 0.0
+    precisions: list[float] = []
+    for n in range(1, max_n + 1):
+        left_ngrams = {
+            tuple(lhs[index : index + n]) for index in range(max(0, len(lhs) - n + 1))
+        }
+        right_ngrams = {
+            tuple(rhs[index : index + n]) for index in range(max(0, len(rhs) - n + 1))
+        }
+        if not left_ngrams or not right_ngrams:
+            continue
+        precisions.append(len(left_ngrams & right_ngrams) / max(len(right_ngrams), 1))
+    if not precisions:
+        return 0.0
+    brevity = min(1.0, len(rhs) / max(len(lhs), 1))
+    return round(brevity * sum(precisions) / len(precisions), 6)
+
+
+def _document_convergence(left: str, right: str) -> tuple[float, float, float]:
+    """Return word-match, semantic proxy, and balanced convergence score."""
+    word_match = _ngram_word_match(left, right)
+    semantic_match = _text_similarity(left, right)
+    return (
+        word_match,
+        semantic_match,
+        round(
+            (word_match + semantic_match) / 2,
+            6,
+        ),
+    )
+
+
 def _tool_usage_description(doc: ToolDocumentation) -> str:
     description = doc.description.strip() or f"diagnose with `{doc.name}`"
-    summary = f"{doc.name} is a primitive diagnostic tool that can {description.rstrip('.')}"
+    summary = (
+        f"{doc.name} is a primitive diagnostic tool that can {description.rstrip('.')}"
+    )
     if doc.parameters:
         summary += " using parameters: " + ", ".join(sorted(doc.parameters)[:8])
     if doc.failure_modes:
@@ -166,7 +210,44 @@ def _argument_signature(arguments: dict[str, Any]) -> str:
     return json.dumps(arguments or {}, sort_keys=True, ensure_ascii=False, default=str)
 
 
-def _runtime_draft_hints(entries: list[dict[str, Any]]) -> dict[tuple[str, str], list[dict[str, str]]]:
+def _source_parameter_names(doc: ToolDocumentation) -> set[str]:
+    properties = doc.source_schema.get("properties")
+    if isinstance(properties, dict):
+        return set(properties)
+    return set()
+
+
+def _allowed_parameter_names(
+    doc: ToolDocumentation,
+    trials: list[ToolTrial],
+) -> set[str]:
+    if doc.source_contract_version > 0:
+        return _source_parameter_names(doc)
+    # Compatibility for stores built directly by the offline curator, where a
+    # primitive BaseTool contract is not available. Successful tool calls are
+    # the only authoritative parameter evidence in that mode.
+    return set(doc.parameters).union(
+        key for trial in trials for key in trial.arguments if not key.startswith("_")
+    )
+
+
+def _proposal_contract_errors(
+    proposal: DraftRewriteProposal,
+    *,
+    allowed_parameter_names: set[str],
+) -> list[str]:
+    unknown = sorted(set(proposal.parameters) - allowed_parameter_names)
+    if not unknown:
+        return []
+    return [
+        "proposed parameters are absent from the primitive schema: "
+        + ", ".join(unknown)
+    ]
+
+
+def _runtime_draft_hints(
+    entries: list[dict[str, Any]],
+) -> dict[tuple[str, str], list[dict[str, str]]]:
     hints: dict[tuple[str, str], list[dict[str, str]]] = defaultdict(list)
     for entry in entries:
         if (
@@ -322,7 +403,9 @@ def identify_comprehension_gaps(trials: list[ToolTrial]) -> list[ComprehensionGa
         text = trial.error_summary.lower()
         if any(marker in text for marker in ("validation", "missing", "invalid")):
             gap_type = "argument_schema"
-            recommendation = "Clarify required parameters, expected types, and allowed values."
+            recommendation = (
+                "Clarify required parameters, expected types, and allowed values."
+            )
         elif any(marker in text for marker in ("not found", "unknown", "no such")):
             gap_type = "environment_reference"
             recommendation = (
@@ -539,6 +622,126 @@ def _planned_exploration_from_doc(
     )
 
 
+def _invoke_draft_explorer(
+    *,
+    state: Any,
+    doc: ToolDocumentation,
+    session_id: str,
+    task_description: str,
+    analyzer_suggestion: str,
+    llm_backend: str | None,
+    model: str | None,
+    llm: Any | None = None,
+    llm_error: str = "",
+    similarity_threshold: float = DRAFT_EXPLORATION_SIMILARITY_THRESHOLD,
+) -> DraftExploration | None:
+    """Generate a diverse exploration and self-reflect on near duplicates."""
+    if not learning_backend(llm_backend) or not learning_model(model):
+        return None
+    if llm is None:
+        if llm_error:
+            return None
+        try:
+            llm = load_model(
+                learning_backend(llm_backend),
+                learning_model(model),
+                timeout=learning_timeout_seconds(),
+                max_retries=learning_max_retries(),
+            )
+        except Exception:
+            return None
+    history = [
+        item.user_query.strip()
+        for item in state.explorations
+        if item.tool_name == doc.name and item.user_query.strip()
+    ][-12:]
+    reflection = ""
+    best: tuple[DraftExplorerDraft, float, int] | None = None
+    for attempt in range(3):
+        prompt = (
+            "You are the DRAFT Explorer. Generate one new tool exploration that "
+            "covers a materially different functionality, parameter interaction, "
+            "or diagnostic interpretation than previous explorations. Use generic "
+            "topology-derived placeholders rather than inventing device names. "
+            "Do not predict a faulty device or root-cause answer.\n\n"
+            f"Tool documentation:\n{doc.refined_description(max_chars=1800)}\n\n"
+            f"Analyzer direction:\n{analyzer_suggestion}\n\n"
+            f"Current task family context:\n{_trim_text(task_description, limit=700)}\n\n"
+            f"Previous explorations:\n{json.dumps(history, ensure_ascii=False)}\n\n"
+            + (
+                f"Self-reflection from rejected proposal:\n{reflection}\n\n"
+                if reflection
+                else ""
+            )
+            + "Return DraftExplorerDraft with a natural user_query, concrete "
+            "parameters only when grounded by the documentation, one concise "
+            "next_exploration direction, and an intent."
+        )
+        try:
+            explorer = llm.with_structured_output(DraftExplorerDraft)
+            raw = explorer.invoke(prompt)
+            draft = (
+                raw
+                if isinstance(raw, DraftExplorerDraft)
+                else DraftExplorerDraft.model_validate(raw)
+            )
+        except Exception:
+            return None
+        candidate_query = (draft.user_query or draft.next_exploration).strip()
+        if not candidate_query:
+            return None
+        max_similarity = max(
+            [_text_similarity(candidate_query, previous) for previous in history]
+            or [0.0]
+        )
+        if best is None or max_similarity < best[1]:
+            best = (draft, max_similarity, attempt)
+        if max_similarity < similarity_threshold:
+            break
+        reflection = (
+            f"The previous proposal had similarity {max_similarity:.3f}, above "
+            f"the allowed {similarity_threshold:.3f}. Change the explored behavior, "
+            "not merely the wording."
+        )
+    if best is None or best[1] >= similarity_threshold:
+        return None
+    draft, max_similarity, reflection_count = best
+    candidate_text = (draft.next_exploration or draft.user_query).strip()
+    intent = draft.intent
+    unknown_parameters = (
+        set(draft.parameters) - _source_parameter_names(doc)
+        if doc.source_contract_version > 0
+        else set()
+    )
+    if unknown_parameters:
+        intent = "argument_schema_probe"
+    elif _looks_like_tool_validation_exploration(candidate_text):
+        intent = "tool_validation"
+    elif task_description:
+        intent = "diagnosis_check"
+    return DraftExploration(
+        exploration_id=_stable_id(
+            "planned",
+            session_id,
+            doc.name,
+            doc.content_hash(),
+            candidate_text,
+            prefix="explore",
+        ),
+        session_id=session_id,
+        tool_name=doc.name,
+        intent=intent,
+        user_query=draft.user_query.strip() or task_description,
+        parameters=draft.parameters,
+        status="planned",
+        document_hash=doc.content_hash(),
+        analyzer_suggestion=analyzer_suggestion,
+        next_exploration=candidate_text,
+        diversity_score=round(1.0 - max_similarity, 6),
+        reflection_count=reflection_count,
+    )
+
+
 def _planned_parameters_match(
     planned_parameters: dict[str, Any],
     trial_arguments: dict[str, Any],
@@ -613,9 +816,7 @@ def _planned_exploration_already_covered(
             continue
         if exploration.tool_name != planned.tool_name:
             continue
-        consumed_text = (
-            exploration.next_exploration or exploration.user_query
-        ).strip()
+        consumed_text = (exploration.next_exploration or exploration.user_query).strip()
         if not consumed_text:
             continue
         if not _planned_parameters_match(exploration.parameters, planned.parameters):
@@ -637,6 +838,10 @@ def _upsert_planned_explorations(
     task_description: str = "",
     documented_path_rate: float = 0.0,
     success_path_rate: float = 0.0,
+    llm_backend: str | None = None,
+    model: str | None = None,
+    llm: Any | None = None,
+    llm_error: str = "",
 ) -> int:
     weak_diagnosis = _diagnosis_scores_are_weak(metrics)
     seen = {item.exploration_id for item in state.explorations}
@@ -652,8 +857,25 @@ def _upsert_planned_explorations(
         should_plan = not trials or weak_diagnosis or bool(doc.exploration_suggestions)
         if not should_plan:
             continue
-        analyzer_suggestion = doc.analyzer_suggestions[-1] if doc.analyzer_suggestions else ""
-        planned = _planned_exploration_from_doc(
+        analyzer_suggestion = (
+            doc.analyzer_suggestions[-1] if doc.analyzer_suggestions else ""
+        )
+        llm_planned = (
+            _invoke_draft_explorer(
+                state=state,
+                doc=doc,
+                session_id=latest_session_id,
+                task_description=latest_task,
+                analyzer_suggestion=analyzer_suggestion,
+                llm_backend=llm_backend,
+                model=model,
+                llm=llm,
+                llm_error=llm_error,
+            )
+            if trials or doc.analyzer_suggestions
+            else None
+        )
+        planned = llm_planned or _planned_exploration_from_doc(
             doc=doc,
             session_id=latest_session_id,
             task_description=latest_task,
@@ -694,9 +916,7 @@ def _analyzer_suggestion_for_tool(
     error_count = sum(not trial.success for trial in trials)
     success_count = sum(trial.success for trial in trials)
     gap_text = "; ".join(gap.recommendation for gap in gaps[:4])
-    semantic_gaps = [
-        gap for gap in gaps if gap.gap_type == "diagnostic_semantic_gap"
-    ]
+    semantic_gaps = [gap for gap in gaps if gap.gap_type == "diagnostic_semantic_gap"]
     if semantic_gaps:
         suggestion = (
             f"Clarify how successful `{tool_name}` outputs should affect "
@@ -716,9 +936,7 @@ def _analyzer_suggestion_for_tool(
             "boundary/error case."
         )
     elif success_count:
-        suggestion = (
-            f"Preserve successful `{tool_name}` usage patterns and add concise positive examples."
-        )
+        suggestion = f"Preserve successful `{tool_name}` usage patterns and add concise positive examples."
         next_exploration = (
             "Explore a nearby valid input variation to confirm the documented "
             "parameter semantics."
@@ -728,7 +946,9 @@ def _analyzer_suggestion_for_tool(
             f"No usable `{tool_name}` execution feedback yet; keep documentation "
             "concise and request a concrete trial."
         )
-        next_exploration = "Collect one concrete tool call with explicit arguments and output."
+        next_exploration = (
+            "Collect one concrete tool call with explicit arguments and output."
+        )
     if error_count and not doc.failure_modes:
         suggestion += " Add known failure modes before adding new examples."
     return DraftAnalyzerSuggestion(
@@ -746,16 +966,111 @@ def _analyzer_suggestion_for_tool(
     )
 
 
+def _invoke_draft_analyzer(
+    *,
+    tool_name: str,
+    trials: list[ToolTrial],
+    gaps: list[ComprehensionGap],
+    doc: ToolDocumentation,
+    llm_backend: str | None,
+    model: str | None,
+    llm: Any | None = None,
+    llm_error: str = "",
+) -> tuple[DraftAnalyzerSuggestion | None, str]:
+    """Run DRAFT's natural-language Analyzer over feedback and revision history."""
+    if not learning_backend(llm_backend) or not learning_model(model):
+        return None, ""
+    if llm is None:
+        if llm_error:
+            return None, llm_error
+        try:
+            llm = load_model(
+                learning_backend(llm_backend),
+                learning_model(model),
+                timeout=learning_timeout_seconds(),
+                max_retries=learning_max_retries(),
+            )
+        except Exception as exc:
+            return None, format_learning_error(exc)
+    payload = {
+        "tool": tool_name,
+        "immutable_source_contract": {
+            "description": doc.description,
+            "input_schema": doc.source_schema,
+        },
+        "current_documentation": doc.model_dump(
+            mode="json",
+            exclude={"positive_examples", "negative_examples"},
+        ),
+        "recent_trials": [
+            {
+                "arguments": trial.arguments,
+                "status": trial.status,
+                "output": _trim_text(trial.output_summary),
+                "error": _trim_text(trial.error_summary),
+            }
+            for trial in trials[-8:]
+        ],
+        "identified_gaps": [gap.model_dump(mode="json") for gap in gaps[-8:]],
+        "revision_history": doc.rewrite_history[-5:],
+    }
+    prompt = (
+        "You are the DRAFT Analyzer. Compare current tool documentation with "
+        "actual exploration arguments and feedback. Identify concrete problems "
+        "in consistency, completeness, and conciseness, then propose one targeted "
+        "revision and one diverse next exploration. The immutable source contract "
+        "is authoritative: do not invent, remove, or rename parameters, and do not "
+        "interpret MCP content-block transport wrappers as changes to the primitive "
+        "tool API. Do not infer benchmark answers, "
+        "faulty devices, or root-cause labels. Tool-validation explorations may test "
+        "schema boundaries; diagnosis explorations must remain hypotheses.\n\n"
+        f"{json.dumps(payload, indent=2, ensure_ascii=False, default=str)}"
+    )
+    try:
+        analyzer = llm.with_structured_output(DraftAnalyzerDraft)
+        raw = analyzer.invoke(prompt)
+        draft = (
+            raw
+            if isinstance(raw, DraftAnalyzerDraft)
+            else DraftAnalyzerDraft.model_validate(raw)
+        )
+        if not draft.suggestion.strip():
+            return None, ""
+        suggestion_text = draft.suggestion.strip()
+        if draft.rationale.strip():
+            suggestion_text += " Rationale: " + draft.rationale.strip()
+        return (
+            DraftAnalyzerSuggestion(
+                suggestion_id=_stable_id(
+                    tool_name,
+                    [trial.trial_id for trial in trials],
+                    suggestion_text,
+                    prefix="suggest",
+                ),
+                tool_name=tool_name,
+                session_id=trials[-1].session_id if trials else "",
+                trial_ids=[trial.trial_id for trial in trials],
+                suggestion=suggestion_text,
+                next_exploration=draft.next_exploration.strip(),
+            ),
+            "",
+        )
+    except Exception as exc:
+        return None, format_learning_error(exc)
+
+
 def _recent_revision_hashes(
     revisions: list[DocumentationRevision],
     tool_name: str,
     *,
+    source_signature: str = "",
     limit: int = 3,
 ) -> list[str]:
     return [
         revision.after_hash
         for revision in revisions
         if revision.tool_name == tool_name
+        and (not source_signature or revision.source_signature == source_signature)
     ][-limit:]
 
 
@@ -777,9 +1092,7 @@ def _refresh_tool_stats(
     success_path_rate: float = 0.0,
 ) -> None:
     tool_name = doc.name
-    all_tool_trials = [
-        trial for trial in state.trials if trial.tool_name == tool_name
-    ]
+    all_tool_trials = [trial for trial in state.trials if trial.tool_name == tool_name]
     doc.trial_count = len(all_tool_trials)
     doc.success_count = sum(trial.success for trial in all_tool_trials)
     doc.error_count = sum(trial.status == "error" for trial in all_tool_trials)
@@ -862,9 +1175,7 @@ def _draft_rewrite_prompt(
             "output_summary": _trim_text(trial.output_summary),
             "error_summary": _trim_text(trial.error_summary),
             "planned_exploration_id": trial.planned_exploration_id,
-            "planned_next_exploration": _trim_text(
-                trial.planned_next_exploration
-            ),
+            "planned_next_exploration": _trim_text(trial.planned_next_exploration),
         }
         for trial in trials[-6:]
     ]
@@ -891,6 +1202,11 @@ def _draft_rewrite_prompt(
         "You are the DRAFT documentation rewriting agent for NIKA primitive "
         "network-diagnosis tools. Refine documentation only; do not invent new "
         "tools, APIs, commands, hidden labels, or benchmark answers.\n\n"
+        "The current `description`, `source_schema`, and parameter names form an "
+        "immutable primitive contract. Do not replace the source description or "
+        "add, remove, or rename parameters. MCP content-block wrappers in traces "
+        "are transport envelopes, not evidence that the primitive return contract "
+        "changed. Learn only usage guidance supported by trials.\n\n"
         "DRAFT loop mapping: Explorer = observed diagnosis tool calls; "
         "Analyzer = suggestions from output/error feedback; Rewriter = update "
         "the documentation and propose the next useful exploration direction.\n\n"
@@ -953,18 +1269,24 @@ def _invoke_draft_rewriter(
     metrics: dict[str, Any],
     llm_backend: str | None,
     model: str | None,
+    llm: Any | None = None,
+    llm_error: str = "",
 ) -> tuple[DraftRewriteProposal | None, str]:
-    selected_backend = learning_backend(llm_backend)
-    selected_model = learning_model(model)
-    if not selected_backend or not selected_model:
+    if not learning_backend(llm_backend) or not learning_model(model):
         return None, ""
+    if llm is None:
+        if llm_error:
+            return None, llm_error
+        try:
+            llm = load_model(
+                learning_backend(llm_backend),
+                learning_model(model),
+                timeout=learning_timeout_seconds(),
+                max_retries=learning_max_retries(),
+            )
+        except Exception as exc:
+            return None, format_learning_error(exc)
     try:
-        llm = load_model(
-            selected_backend,
-            selected_model,
-            timeout=learning_timeout_seconds(),
-            max_retries=learning_max_retries(),
-        )
         rewriter = llm.with_structured_output(DraftRewriteDraft)
         raw_proposal = rewriter.invoke(
             _draft_rewrite_prompt(
@@ -996,11 +1318,11 @@ def _invoke_draft_rewriter(
 def _apply_draft_proposal(
     doc: ToolDocumentation,
     proposal: DraftRewriteProposal,
+    *,
+    allowed_parameter_names: set[str],
 ) -> None:
     if proposal.tool_usage_description.strip():
         doc.tool_usage_description = proposal.tool_usage_description.strip()
-    if proposal.description.strip():
-        doc.description = proposal.description.strip()
     _append_unique(doc.preconditions, proposal.preconditions)
     _append_unique(doc.constraints, proposal.constraints)
     _append_unique(doc.failure_modes, proposal.failure_modes)
@@ -1015,11 +1337,14 @@ def _apply_draft_proposal(
     _append_unique(doc.positive_examples, proposal.positive_examples, limit=10)
     _append_unique(doc.negative_examples, proposal.negative_examples, limit=10)
     for name, param in proposal.parameters.items():
-        if not name:
+        if not name or name not in allowed_parameter_names:
             continue
         current = doc.parameters.get(name)
         if current is None:
-            doc.parameters[name] = param
+            # This path is used only by the standalone offline curator, whose
+            # source contract is reconstructed from observed valid trials.
+            if doc.source_contract_version <= 0:
+                doc.parameters[name] = param
             continue
         if param.type_hint != "unknown":
             current.type_hint = param.type_hint
@@ -1043,6 +1368,20 @@ def rewrite_documentation(
     convergence_threshold: float = DRAFT_CONVERGENCE_THRESHOLD,
 ) -> list[DocumentationRevision]:
     state = store.load()
+    learning_llm: Any | None = None
+    learning_llm_error = ""
+    selected_backend = learning_backend(llm_backend)
+    selected_model = learning_model(model)
+    if selected_backend and selected_model:
+        try:
+            learning_llm = load_model(
+                selected_backend,
+                selected_model,
+                timeout=learning_timeout_seconds(),
+                max_retries=learning_max_retries(),
+            )
+        except Exception as exc:
+            learning_llm_error = format_learning_error(exc)
     start_docs = (
         set(state.documents)
         if documented_tools_at_start is None
@@ -1088,9 +1427,10 @@ def rewrite_documentation(
             state.documents[tool_name] = doc
             continue
 
+        allowed_parameter_names = _allowed_parameter_names(doc, tool_trials)
         for trial in tool_trials:
             for key, value in trial.arguments.items():
-                if key.startswith("_"):
+                if key.startswith("_") or key not in allowed_parameter_names:
                     continue
                 current = doc.parameters.get(key)
                 inferred = _infer_parameter_doc(key, value)
@@ -1116,9 +1456,7 @@ def rewrite_documentation(
                     doc.negative_examples.append(example)
 
         gaps = identify_comprehension_gaps(tool_trials)
-        gaps.extend(
-            identify_diagnostic_semantic_gaps(tool_trials, metrics=metrics)
-        )
+        gaps.extend(identify_diagnostic_semantic_gaps(tool_trials, metrics=metrics))
         for gap in gaps:
             if gap.recommendation not in doc.usage_notes:
                 doc.usage_notes.append(gap.recommendation)
@@ -1148,12 +1486,25 @@ def rewrite_documentation(
         if grounded_constraint not in doc.constraints:
             doc.constraints.append(grounded_constraint)
 
-        suggestion = _analyzer_suggestion_for_tool(
+        fallback_suggestion = _analyzer_suggestion_for_tool(
             tool_name=tool_name,
             trials=tool_trials,
             gaps=gaps,
             doc=doc,
         )
+        llm_suggestion, analyzer_error = _invoke_draft_analyzer(
+            tool_name=tool_name,
+            trials=tool_trials,
+            gaps=gaps,
+            doc=doc,
+            llm_backend=llm_backend,
+            model=model,
+            llm=learning_llm,
+            llm_error=learning_llm_error,
+        )
+        suggestion = llm_suggestion or fallback_suggestion
+        if not suggestion.next_exploration:
+            suggestion.next_exploration = fallback_suggestion.next_exploration
         tool_suggestions = [suggestion]
         if not any(
             item.suggestion_id == suggestion.suggestion_id
@@ -1161,7 +1512,9 @@ def rewrite_documentation(
         ):
             state.analyzer_suggestions.append(suggestion)
         _append_unique(doc.analyzer_suggestions, [suggestion.suggestion], limit=20)
-        _append_unique(doc.exploration_suggestions, [suggestion.next_exploration], limit=12)
+        _append_unique(
+            doc.exploration_suggestions, [suggestion.next_exploration], limit=12
+        )
 
         explorations = [
             _exploration_from_trial(
@@ -1179,7 +1532,7 @@ def rewrite_documentation(
                 seen_explorations.add(exploration.exploration_id)
             _append_unique(doc.explored_queries, [exploration.user_query], limit=20)
 
-        proposal, llm_error = _invoke_draft_rewriter(
+        proposal, rewriter_error = _invoke_draft_rewriter(
             tool_name=tool_name,
             doc=doc,
             trials=tool_trials,
@@ -1189,15 +1542,38 @@ def rewrite_documentation(
             metrics=metrics,
             llm_backend=llm_backend,
             model=model,
+            llm=learning_llm,
+            llm_error=learning_llm_error,
         )
+        contract_rejected = False
         if proposal is not None:
-            _apply_draft_proposal(doc, proposal)
+            contract_errors = _proposal_contract_errors(
+                proposal,
+                allowed_parameter_names=allowed_parameter_names,
+            )
+            if contract_errors:
+                contract_rejected = True
+                contract_error = "ContractValidationError: " + "; ".join(
+                    contract_errors
+                )
+                rewriter_error = " | ".join(
+                    error for error in (rewriter_error, contract_error) if error
+                )
+                proposal = None
+            else:
+                _apply_draft_proposal(
+                    doc,
+                    proposal,
+                    allowed_parameter_names=allowed_parameter_names,
+                )
         if not doc.tool_usage_description:
             doc.tool_usage_description = _tool_usage_description(doc)
 
         after_hash = doc.content_hash()
         after_description = doc.refined_description(max_chars=4000)
-        convergence_score = _text_similarity(before_description, after_description)
+        word_match_score, semantic_match_score, convergence_score = (
+            _document_convergence(before_description, after_description)
+        )
         doc.last_convergence_score = convergence_score
         if after_description not in doc.rewrite_history:
             doc.rewrite_history.append(after_description)
@@ -1209,23 +1585,39 @@ def rewrite_documentation(
         doc.trial_count = len(all_tool_trials)
         doc.success_count = sum(trial.success for trial in all_tool_trials)
         doc.error_count = sum(trial.status == "error" for trial in all_tool_trials)
+        documentation_coverage = (
+            sum(
+                (
+                    bool(doc.description or doc.tool_usage_description),
+                    bool(doc.parameters)
+                    or not any(trial.arguments for trial in all_tool_trials),
+                    bool(doc.constraints or doc.preconditions),
+                    bool(doc.failure_modes)
+                    or not any(trial.status == "error" for trial in all_tool_trials),
+                )
+            )
+            / 4.0
+        )
         doc.mastery_score = round(
-            (doc.success_count / max(doc.trial_count, 1)) * (0.5 + 0.5 * accuracy),
+            (doc.success_count / max(doc.trial_count, 1))
+            * (0.5 + 0.5 * documentation_coverage),
             6,
         )
 
-        recent_hashes = _recent_revision_hashes(state.revisions, tool_name)
+        recent_hashes = _recent_revision_hashes(
+            state.revisions,
+            tool_name,
+            source_signature=doc.source_signature,
+        )
         unchanged_streak = (
-            len(recent_hashes) >= 2
-            and len(set(recent_hashes + [after_hash])) == 1
+            len(recent_hashes) >= 2 and len(set(recent_hashes + [after_hash])) == 1
         )
         converged = (
             convergence_score >= convergence_threshold
             and len(doc.rewrite_history) >= 2
             and doc.mastery_score >= 0.5
         )
-        no_signal = not gaps and accuracy <= 0 and len(tool_trials) >= 3
-        if unchanged_streak or converged or no_signal:
+        if unchanged_streak or converged:
             doc.frozen = True
             doc.frozen_reason = (
                 "DRAFT adaptive termination: documentation converged."
@@ -1244,6 +1636,7 @@ def rewrite_documentation(
                 prefix="rev",
             ),
             tool_name=tool_name,
+            source_signature=doc.source_signature,
             before_hash=before_hash,
             after_hash=after_hash,
             changed=after_hash != before_hash,
@@ -1256,16 +1649,24 @@ def rewrite_documentation(
                 "rca_accuracy": accuracy,
                 "tool_error_rate": sum(not item.success for item in tool_trials)
                 / max(len(tool_trials), 1),
-                "llm_attempted": 1.0 if llm_backend and model else 0.0,
+                "llm_attempted": (1.0 if selected_backend and selected_model else 0.0),
                 "llm_rewrite": 1.0 if proposal is not None else 0.0,
-                "llm_failed": 1.0 if llm_error else 0.0,
+                "llm_failed": 1.0 if (analyzer_error or rewriter_error) else 0.0,
+                "llm_analyzer": 1.0 if llm_suggestion is not None else 0.0,
+                "llm_analyzer_failed": 1.0 if analyzer_error else 0.0,
+                "llm_contract_rejected": 1.0 if contract_rejected else 0.0,
                 "convergence_score": convergence_score,
+                "word_match_score": word_match_score,
+                "semantic_match_score": semantic_match_score,
                 "mastery_score": doc.mastery_score,
+                "documentation_coverage": documentation_coverage,
                 "documented_path_rate": documented_path_rate,
                 "success_path_rate": success_path_rate,
             },
             analyzer_suggestion_ids=[suggestion.suggestion_id],
-            llm_error=llm_error,
+            llm_error=" | ".join(
+                error for error in (analyzer_error, rewriter_error) if error
+            ),
         )
         state.documents[tool_name] = doc
         state.revisions.append(revision)
@@ -1286,6 +1687,10 @@ def rewrite_documentation(
         task_description=task_description,
         documented_path_rate=documented_path_rate,
         success_path_rate=success_path_rate,
+        llm_backend=llm_backend,
+        model=model,
+        llm=learning_llm,
+        llm_error=learning_llm_error,
     )
     if planned_added:
         for revision in revisions:
@@ -1348,11 +1753,7 @@ def finalize_tool_evolution_session(
     llm_failures = sum(
         revision.metrics.get("llm_failed") == 1.0 for revision in revisions
     )
-    llm_errors = [
-        revision.llm_error
-        for revision in revisions
-        if revision.llm_error
-    ]
+    llm_errors = [revision.llm_error for revision in revisions if revision.llm_error]
     report = {
         "status": "updated",
         "method": "DRAFT",
@@ -1372,7 +1773,9 @@ def finalize_tool_evolution_session(
             exploration.status == "consumed" for exploration in state.explorations
         ),
         "draft_analyzer_suggestions": len(state.analyzer_suggestions),
-        "draft_mastered_tools": sum(stat.mastered for stat in state.tool_stats.values()),
+        "draft_mastered_tools": sum(
+            stat.mastered for stat in state.tool_stats.values()
+        ),
         "draft_documented_path_rate": documented_path_rate,
         "draft_success_path_rate": success_path_rate,
         "draft_converged_documents": sum(
@@ -1382,6 +1785,12 @@ def finalize_tool_evolution_session(
         "draft_llm_failures": llm_failures,
         "draft_llm_revisions": sum(
             revision.metrics.get("llm_rewrite") == 1.0 for revision in revisions
+        ),
+        "draft_llm_analyzer_revisions": sum(
+            revision.metrics.get("llm_analyzer") == 1.0 for revision in revisions
+        ),
+        "draft_llm_analyzer_failures": sum(
+            revision.metrics.get("llm_analyzer_failed") == 1.0 for revision in revisions
         ),
         "draft_llm_errors": llm_errors[:5],
         "draft_config": {

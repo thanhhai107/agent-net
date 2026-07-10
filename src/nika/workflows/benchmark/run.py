@@ -165,6 +165,8 @@ def _benchmark_row_cli_args(
             "--memory-ppo-epsilon",
             str(memory.ppo_epsilon),
         ]
+    if memory.mode != "off" and memory.include_expert_seeds:
+        args.append("--memory-expert-seeds")
     if tool_evolution.enabled:
         args += [
             "--tools",

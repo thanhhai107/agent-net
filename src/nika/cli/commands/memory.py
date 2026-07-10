@@ -120,6 +120,11 @@ def memory_run(
         "--meta-controller",
         help="Skill-Pro option termination controller: heuristic or llm.",
     ),
+    expert_seeds: bool = typer.Option(
+        False,
+        "--expert-seeds",
+        help="Enable optional NIKA expert seed ladders.",
+    ),
 ) -> None:
     """Run a Skill-Pro memory-only benchmark stream with concise defaults."""
     mode = "read" if read else "evolve"
@@ -155,6 +160,7 @@ def memory_run(
             token_budget=tokens,
             skill_selector_mode=selector,
             meta_controller_mode=meta_controller,
+            include_expert_seeds=expert_seeds,
         ),
         run_judge=False,
     )

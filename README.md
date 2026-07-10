@@ -289,21 +289,28 @@ The module augments `react`, `plan-execute`, or `reflexion` with DRAFT-style
 documentation refinement for the fixed primitive MCP tool surface. It does not
 create new executable tools or MCP servers.
 
-- **Explorer adaptation** reads diagnosis `messages.jsonl` as real tool
-  explorations and stores the task, arguments, success/error status, output
-  summary, and error summary.
-- **Analyzer adaptation** turns explored outputs into comprehension gaps and
-  next-exploration suggestions, such as invalid argument schema, wrong
-  environment reference, or missing precondition.
+- **Explorer adaptation** stores real diagnosis tool calls and uses the learning
+  LLM to propose the next exploration. New user queries are checked against
+  exploration history; near duplicates trigger bounded self-reflection and
+  regeneration. Only structured plans that match the immutable primitive input
+  schema and current topology enter live prompts; raw Analyzer/Rewriter
+  directions and schema/boundary probes remain in tool-learning state.
+- **Analyzer adaptation** uses structured natural-language feedback over the
+  current documentation, tool outputs, gaps, and revision history. A
+  deterministic analyzer keeps learning available when the LLM fails.
 - **Rewriter adaptation** asks a structured LLM DRAFT curator to update each
-  primitive tool document with clearer descriptions, preconditions, parameter
+  primitive tool document with clearer usage guidance, preconditions, parameter
   constraints, positive/negative examples, usage notes, known failure modes,
   suggestions for the next useful trial, and a concise tool-level usage
   summary. If the curator is unavailable, the deterministic trial-derived
-  rewrite still keeps evaluation running.
-- **Tool-adaptive termination** tracks rewrite history, convergence, and
-  mastery score, then freezes a document when repeated updates stop changing
-  useful guidance.
+  rewrite still keeps evaluation running. The primitive source description,
+  argument schema, and parameter names are immutable; contract-expanding LLM
+  proposals are rejected rather than injected.
+- **Tool-adaptive termination** combines BLEU-like word match and semantic-text
+  match with tool-usage mastery. Mastery is based on tool feedback and
+  documentation coverage, not benchmark RCA accuracy. A primitive description
+  or argument-schema change resets and reopens a frozen document. Planned
+  checks and convergence history are scoped to the matching source signature.
 - **Path-rate reporting** mirrors DRAFT evaluation by reporting how much of the
   session tool path was already covered by refined docs and how much executed
   successfully.
@@ -327,7 +334,7 @@ Runtime DRAFT behavior can be tuned with `--tool-doc-chars`,
 `--tool-convergence-threshold`. Setting planned/next checks to `0` disables
 that prompt guidance.
 Tool-evolving sessions write `tool_evolution.json` with trial counts,
-documentation revisions, LLM rewrite counts, gaps, exploration/analyzer counts,
+documentation revisions, LLM Analyzer/Rewriter counts, gaps, exploration counts,
 mastered tools, path rates, LLM rewrite failures, and frozen-document counts.
 
 See [`docs/README.md`](docs/README.md) for the current learning-module boundary.
@@ -354,19 +361,25 @@ For the full benchmark-safe design, see
   state and rebuilds the seed pool.
 - The skill pool tracks frequency, average gain, maturity, parent/version
   lineage, and reuse count.
-- Semantic gradients are structured LLM critiques of the episode. If the critic
-  is unavailable, the deterministic recovery path records the LLM error in
-  `memory_update.json` instead of failing silently.
+- Semantic gradients are produced per trajectory and consolidated across a
+  fresh evolution batch before the LLM samples independent best-of-N skill
+  candidates. If the critic is unavailable, the deterministic recovery path
+  records the LLM error instead of failing silently.
 - Learning-module LLM calls can use `NIKA_LEARNING_LLM_BACKEND` and
   `NIKA_LEARNING_LLM_MODEL` to override the diagnosis model; leave them blank
   to inherit `-b/--backend` and `-m/--model`.
-- ExperiencePool and GoldenExperiencePool records are persisted in the same
-  bank for PPO verification and future skill evolution.
+- ExperiencePool and GoldenExperiencePool records are persisted separately.
+  Fresh, unconsumed trajectories drive semantic evolution; compatible golden
+  trajectories are reusable verification replay and are never aliased to the
+  consumed normal-pool records.
 - Hidden evaluator labels may be present in offline evidence for scoring, but
   they are redacted from the LLM critic prompt and are not injected back into
   retrieved skill context.
-- The PPO gate compares the candidate skill against the active/best baseline
-  with clipped surrogate reward advantage from stored trajectories.
+- The verification gate compares each candidate against the active/best
+  baseline with clipped reward advantage from stored trajectories. NIKA's
+  current OpenAI-compatible providers do not expose historical-action
+  log-probabilities, so runs explicitly record `alignment_surrogate` rather
+  than claiming exact policy-logprob PPO verification.
 - Score-based maintenance retires low-value or duplicate skills.
 - Persistent state lives in `runtime/memory/<bank>/skills.json`.
 - Each evolving episode writes `memory_update.json`, including whether the
@@ -399,6 +412,9 @@ Runtime Skill-MDP behavior can also be tuned with `--memory-max-skill-age`,
 Skill-Pro evolution is controlled by `--memory-pool-size`,
 `--memory-evolution-threshold`, `--memory-best-of-n`, and
 `--memory-ppo-epsilon`.
+The four NIKA-specific DNS/DHCP/OSPF/BGP expert ladders are excluded from the
+core configuration. Enable them only as an explicit ablation with
+`--memory-expert-seeds`.
 
 ### Example: `simple_bgp` with `link_down`
 

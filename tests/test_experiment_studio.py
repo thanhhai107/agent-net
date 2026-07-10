@@ -43,6 +43,7 @@ def _config(**overrides: object) -> dict[str, object]:
         "memory_evolution_threshold": 2,
         "memory_best_of_n": 5,
         "memory_ppo_epsilon": 0.15,
+        "memory_expert_seeds": False,
     }
     config.update(overrides)
     return config
@@ -88,6 +89,7 @@ def test_tool_and_memory_modules_share_one_sequential_command() -> None:
     assert command[3:6] == ["benchmark", "run", "--file"]
     assert "-j" not in command
     assert "--parallel" not in command
+
     assert command[command.index("--tools") + 1] == "tools-test"
     assert command[command.index("--tool-doc-chars") + 1] == "640"
     assert command[command.index("--tool-prompt-doc-limit") + 1] == "5"
@@ -105,6 +107,18 @@ def test_tool_and_memory_modules_share_one_sequential_command() -> None:
     assert command[command.index("--memory-evolution-threshold") + 1] == "2"
     assert command[command.index("--memory-best-of-n") + 1] == "5"
     assert command[command.index("--memory-ppo-epsilon") + 1] == "0.15"
+
+
+def test_memory_expert_seed_ablation_is_explicit() -> None:
+    core_command = build_experiment_command(
+        _config(modules=["memory_evolution"])
+    )
+    expert_command = build_experiment_command(
+        _config(modules=["memory_evolution"], memory_expert_seeds=True)
+    )
+
+    assert "--memory-expert-seeds" not in core_command
+    assert "--memory-expert-seeds" in expert_command
 
 
 def test_memory_command_passes_skill_pro_selector_and_controller() -> None:

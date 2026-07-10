@@ -234,6 +234,12 @@ def run_eval_metrics(
                 "draft_llm_attempts": evolution.get("draft_llm_attempts"),
                 "draft_llm_failures": evolution.get("draft_llm_failures"),
                 "draft_llm_revisions": evolution.get("draft_llm_revisions"),
+                "draft_llm_analyzer_revisions": evolution.get(
+                    "draft_llm_analyzer_revisions"
+                ),
+                "draft_llm_analyzer_failures": evolution.get(
+                    "draft_llm_analyzer_failures"
+                ),
                 "draft_llm_errors": evolution.get("draft_llm_errors"),
             }
         )

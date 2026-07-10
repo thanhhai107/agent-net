@@ -18,19 +18,22 @@ from agent.memory.models import (
     EvaluationEvidence,
     MemoryQuery,
     ProceduralSkill,
-    SemanticGradient,
     SemanticGradientDraft,
-    SkillComponentGradient,
+    SkillCandidateDraft,
     SkillExperience,
     SkillStep,
     SkillTransition,
 )
 from agent.memory.adapter import MemoryAugmentedAgent
 from agent.memory.runtime import SkillToolRuntime
-from agent.memory.service import ProceduralMemoryModule, _evidence_score, _metric_success
+from agent.memory.service import (
+    ProceduralMemoryModule,
+    _evidence_score,
+    _metric_success,
+)
 from agent.memory.workflow import evolve_session_memory, extract_skill_steps
 from agent.tool_evolution.curator import rewrite_documentation
-from agent.tool_evolution.models import DraftExploration, ToolDocumentation
+from agent.tool_evolution.models import DraftExploration
 from agent.tool_evolution.runtime import ToolEvolutionRuntime
 from agent.tool_evolution.store import ToolEvolutionStore
 from nika.evaluator.result_log import build_eval_result_from_session_dir
@@ -38,6 +41,95 @@ from nika.workflows.eval.session import run_eval_metrics
 
 
 class SkillProMemoryTest(unittest.TestCase):
+    def test_batch_gradient_and_best_of_n_use_independent_llm_calls(self) -> None:
+        schemas: list[type] = []
+        prompts: list[str] = []
+        candidate_index = 0
+
+        class FakeModel:
+            schema: type | None = None
+
+            def with_structured_output(self, schema):
+                self.schema = schema
+                schemas.append(schema)
+                return self
+
+            def invoke(self, prompt):
+                nonlocal candidate_index
+                prompts.append(prompt)
+                if self.schema is SkillCandidateDraft:
+                    index = candidate_index
+                    candidate_index += 1
+                    return SkillCandidateDraft(
+                        title=f"Candidate {index}",
+                        initiation="When current route evidence is incomplete.",
+                        policy=[
+                            f"Inspect route evidence with independent strategy {index}.",
+                            "Cross-check the observation before termination.",
+                        ],
+                        termination="Stop after route evidence is independently confirmed.",
+                    )
+                return SemanticGradientDraft(
+                    critique="Route evidence needs a consistent cross-check.",
+                    proposed_update="Require an independent route observation.",
+                    policy=[
+                        "Inspect route evidence.",
+                        "Cross-check the route observation.",
+                    ],
+                    termination="Stop after the route observation is confirmed.",
+                )
+
+        def evidence(session_id: str) -> EvaluationEvidence:
+            return EvaluationEvidence(
+                session_id=session_id,
+                task_description="Investigate a missing route using current evidence.",
+                scenario="routing_family",
+                metrics={
+                    "detection_score": 1.0,
+                    "localization_accuracy": 1.0,
+                    "rca_accuracy": 1.0,
+                },
+                steps=4,
+                tool_calls=2,
+                success=True,
+            )
+
+        steps = [
+            SkillStep(
+                order=1,
+                action="Inspect route evidence.",
+                tool_name="show_route",
+                observation_summary="The expected route is absent.",
+            )
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            module = ProceduralMemoryModule(
+                bank_id="batch",
+                llm_backend="custom",
+                model="test-model",
+                store_path=Path(tmp) / "skills.json",
+                evolution_threshold=2,
+                best_of_n=3,
+            )
+            with patch(
+                "agent.memory.service.load_model", return_value=FakeModel()
+            ) as load_model:
+                first = module.learn_from_episode(
+                    evidence=evidence("batch-1"), tool_steps=steps
+                )
+                second = module.learn_from_episode(
+                    evidence=evidence("batch-2"), tool_steps=steps
+                )
+
+        self.assertEqual(first["status"], "deferred")
+        self.assertEqual(second["semantic_gradient_count"], 2)
+        self.assertEqual(second["decision"]["best_of_n"], 3)
+        self.assertEqual(second["verification_method"], "alignment_surrogate")
+        self.assertEqual(schemas.count(SkillCandidateDraft), 3)
+        self.assertEqual(sum("Skill Evolver" in prompt for prompt in prompts), 3)
+        self.assertTrue(any("batch semantic-gradient aggregator" in p for p in prompts))
+        load_model.assert_called_once()
+
     def test_attribute_mining_ignores_scenario_design_noise(self) -> None:
         attrs = infer_memory_attributes(
             (
@@ -162,7 +254,9 @@ class SkillProMemoryTest(unittest.TestCase):
                     "input": "{}",
                 },
             ]
-            trace.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+            trace.write_text(
+                "\n".join(json.dumps(row) for row in rows), encoding="utf-8"
+            )
 
             steps = extract_skill_steps(trace)
 
@@ -200,7 +294,9 @@ class SkillProMemoryTest(unittest.TestCase):
                     "observation_summary": "runtime interpreted output",
                 },
             ]
-            trace.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+            trace.write_text(
+                "\n".join(json.dumps(row) for row in rows), encoding="utf-8"
+            )
 
             steps = extract_skill_steps(trace)
 
@@ -297,7 +393,9 @@ class SkillProMemoryTest(unittest.TestCase):
                 )
             )
 
-        self.assertNotIn("missing_ip_skill", [item.skill.skill_id for item in retrieved])
+        self.assertNotIn(
+            "missing_ip_skill", [item.skill.skill_id for item in retrieved]
+        )
 
     def test_retrieval_blocks_symptom_mismatched_learned_skill(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -338,7 +436,9 @@ class SkillProMemoryTest(unittest.TestCase):
                 )
             )
 
-        self.assertNotIn("missing_ip_skill", [item.skill.skill_id for item in retrieved])
+        self.assertNotIn(
+            "missing_ip_skill", [item.skill.skill_id for item in retrieved]
+        )
 
     def test_retrieval_prefers_activation_fit_over_tool_catalog_overlap(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -408,7 +508,9 @@ class SkillProMemoryTest(unittest.TestCase):
 
         self.assertTrue(retrieved)
         self.assertEqual(retrieved[0].skill.skill_id, "dns_policy")
-        self.assertNotIn("bgp_tool_overlap", [item.skill.skill_id for item in retrieved])
+        self.assertNotIn(
+            "bgp_tool_overlap", [item.skill.skill_id for item in retrieved]
+        )
 
     def test_partial_rca_episode_is_not_promoted_to_reusable_skill(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -446,10 +548,13 @@ class SkillProMemoryTest(unittest.TestCase):
             after = set(module.store.load().skills)
 
         self.assertEqual(report["status"], "rejected")
-        self.assertIn("unsafe", report["reason"])
+        self.assertIn("no successful replay trajectory", report["reason"])
+        self.assertEqual(report["semantic_gradient_count"], 1)
         self.assertEqual(after, before)
 
-    def test_partial_localization_episode_is_not_promoted_to_reusable_skill(self) -> None:
+    def test_partial_localization_episode_is_not_promoted_to_reusable_skill(
+        self,
+    ) -> None:
         metrics = {
             "detection_score": 1.0,
             "localization_accuracy": 0.0,
@@ -491,7 +596,8 @@ class SkillProMemoryTest(unittest.TestCase):
             experience = state.experiences[-1]
 
         self.assertEqual(report["status"], "rejected")
-        self.assertIn("unsafe", report["reason"])
+        self.assertIn("no successful replay trajectory", report["reason"])
+        self.assertEqual(report["semantic_gradient_count"], 1)
         self.assertFalse(report["episode_success"])
         self.assertFalse(experience.success)
         self.assertLess(experience.reward, 0.0)
@@ -651,7 +757,9 @@ class SkillProMemoryTest(unittest.TestCase):
         self.assertLess(skill.avg_gain, 0.0)
         self.assertEqual(skill.failure_count, 1)
 
-    def test_deterministic_semantic_gradient_updates_components_for_partial_outcome(self) -> None:
+    def test_deterministic_semantic_gradient_updates_components_for_partial_outcome(
+        self,
+    ) -> None:
         module = ProceduralMemoryModule(bank_id="skill")
         gradient = module.semantic_gradient(
             evidence=EvaluationEvidence(
@@ -676,10 +784,14 @@ class SkillProMemoryTest(unittest.TestCase):
         )
 
         self.assertIn("localization/RCA", gradient.critique)
-        self.assertIn("current observation history", gradient.component_update.initiation)
+        self.assertIn(
+            "current observation history", gradient.component_update.initiation
+        )
         self.assertIn("detection-only", gradient.component_update.termination)
 
-    def test_proposed_skill_activation_uses_evidence_signature_not_scenario(self) -> None:
+    def test_proposed_skill_activation_uses_evidence_signature_not_scenario(
+        self,
+    ) -> None:
         module = ProceduralMemoryModule(bank_id="skill")
         skill = module.propose_skill(
             evidence=EvaluationEvidence(
@@ -737,9 +849,13 @@ class SkillProMemoryTest(unittest.TestCase):
 
         self.assertIn("evidence signature", skill.activation_condition)
         self.assertIn("bgp", skill.activation_condition.lower())
-        self.assertNotIn("deciding between broad exploration", skill.activation_condition)
+        self.assertNotIn(
+            "deciding between broad exploration", skill.activation_condition
+        )
 
-    def test_runtime_context_does_not_label_candidate_as_active_without_active_skill(self) -> None:
+    def test_runtime_context_does_not_label_candidate_as_active_without_active_skill(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             module = ProceduralMemoryModule(
                 bank_id="skill",
@@ -773,7 +889,9 @@ class SkillProMemoryTest(unittest.TestCase):
         self.assertIn("CANDIDATE Skill candidate_ping", context)
         self.assertNotIn("ACTIVE Skill candidate_ping", context)
 
-    def test_runtime_context_redacts_known_root_cause_ids_from_dirty_skills(self) -> None:
+    def test_runtime_context_redacts_known_root_cause_ids_from_dirty_skills(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             module = ProceduralMemoryModule(
                 bank_id="skill",
@@ -911,7 +1029,9 @@ class SkillProMemoryTest(unittest.TestCase):
             {exp.experience_id for exp in used},
         )
 
-    def test_evolution_batch_returns_full_odd_threshold_when_pool_is_large(self) -> None:
+    def test_evolution_batch_returns_full_odd_threshold_when_pool_is_large(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             module = ProceduralMemoryModule(
                 bank_id="skill",
@@ -1055,16 +1175,43 @@ class SkillProMemoryTest(unittest.TestCase):
             state = module.store.load()
             context = module.format_context(retrieved)
 
-        self.assertGreaterEqual(
-            len([skill_id for skill_id in state.skills if skill_id.startswith("seed_")]),
-            10,
+        self.assertEqual(
+            len(
+                [skill_id for skill_id in state.skills if skill_id.startswith("seed_")]
+            ),
+            6,
         )
-        self.assertIn("seed_bgp_config_disambiguation", state.skills)
-        self.assertIn("seed_name_resolution_ladder", state.skills)
-        self.assertIn("seed_host_addressing_ladder", state.skills)
-        self.assertIn("seed_routing_adjacency_ladder", state.skills)
-        self.assertTrue(any(item.skill.skill_id.startswith("seed_") for item in retrieved))
+        self.assertNotIn("seed_bgp_config_disambiguation", state.skills)
+        self.assertNotIn("seed_name_resolution_ladder", state.skills)
+        self.assertNotIn("seed_host_addressing_ladder", state.skills)
+        self.assertNotIn("seed_routing_adjacency_ladder", state.skills)
+        self.assertTrue(
+            any(item.skill.skill_id.startswith("seed_") for item in retrieved)
+        )
         self.assertIn("Skill-MDP", context)
+
+    def test_disabling_expert_seeds_retires_existing_ablation_skills(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "skills.json"
+            enabled = ProceduralMemoryModule(
+                bank_id="skill",
+                store_path=path,
+                include_expert_seeds=True,
+            )
+            self.assertEqual(
+                enabled.store.load().skills["seed_name_resolution_ladder"].status,
+                "validated",
+            )
+
+            disabled = ProceduralMemoryModule(
+                bank_id="skill",
+                store_path=path,
+                include_expert_seeds=False,
+            )
+            expert = disabled.store.load().skills["seed_name_resolution_ladder"]
+
+        self.assertEqual(expert.status, "retired")
+        self.assertEqual(expert.origin, "expert_seed")
 
     def test_generic_ladder_seeds_require_claim_or_evidence_signal(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1072,6 +1219,7 @@ class SkillProMemoryTest(unittest.TestCase):
                 bank_id="skill",
                 store_path=Path(tmp) / "skills.json",
                 evolution_threshold=1,
+                include_expert_seeds=True,
             )
 
             retrieved = module.retrieve(
@@ -1099,6 +1247,7 @@ class SkillProMemoryTest(unittest.TestCase):
                 bank_id="skill",
                 store_path=Path(tmp) / "skills.json",
                 evolution_threshold=1,
+                include_expert_seeds=True,
             )
 
             dns_retrieved = module.retrieve(
@@ -1148,12 +1297,15 @@ class SkillProMemoryTest(unittest.TestCase):
             "seed_routing_adjacency_ladder",
         )
 
-    def test_bgp_config_disambiguation_seed_is_retrieved_for_matching_evidence(self) -> None:
+    def test_bgp_config_disambiguation_seed_is_retrieved_for_matching_evidence(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             module = ProceduralMemoryModule(
                 bank_id="skill",
                 store_path=Path(tmp) / "skills.json",
                 evolution_threshold=1,
+                include_expert_seeds=True,
             )
 
             retrieved = module.retrieve(
@@ -1187,6 +1339,7 @@ class SkillProMemoryTest(unittest.TestCase):
                 bank_id="skill",
                 store_path=Path(tmp) / "skills.json",
                 evolution_threshold=1,
+                include_expert_seeds=True,
             )
 
             retrieved = module.retrieve(
@@ -1212,7 +1365,9 @@ class SkillProMemoryTest(unittest.TestCase):
             [item.skill.skill_id for item in retrieved],
         )
 
-    def test_bgp_config_disambiguation_seed_rejects_normal_established_summary(self) -> None:
+    def test_bgp_config_disambiguation_seed_rejects_normal_established_summary(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             module = ProceduralMemoryModule(
                 bank_id="skill",
@@ -1243,7 +1398,9 @@ class SkillProMemoryTest(unittest.TestCase):
             [item.skill.skill_id for item in retrieved],
         )
 
-    def test_bgp_config_disambiguation_seed_ignores_tool_catalog_without_bgp_evidence(self) -> None:
+    def test_bgp_config_disambiguation_seed_ignores_tool_catalog_without_bgp_evidence(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             module = ProceduralMemoryModule(
                 bank_id="skill",
@@ -1486,7 +1643,13 @@ class SkillProMemoryTest(unittest.TestCase):
                     "success": False,
                 }
             )
-            steps = [SkillStep(order=1, action="Check OSPF neighbors.", tool_name="frr_show_ip_ospf_neighbor")]
+            steps = [
+                SkillStep(
+                    order=1,
+                    action="Check OSPF neighbors.",
+                    tool_name="frr_show_ip_ospf_neighbor",
+                )
+            ]
             first = module.learn_from_episode(evidence=good, tool_steps=steps)
             second = module.learn_from_episode(evidence=bad, tool_steps=steps)
 
@@ -1590,7 +1753,9 @@ class SkillProMemoryTest(unittest.TestCase):
                     success=True,
                 ),
                 tool_steps=[
-                    SkillStep(order=1, action="Query DNS from the client.", tool_name="dig")
+                    SkillStep(
+                        order=1, action="Query DNS from the client.", tool_name="dig"
+                    )
                 ],
             )
             before_selection = module.store.load()
@@ -1711,7 +1876,9 @@ class SkillProMemoryTest(unittest.TestCase):
                 title="Generic reachability",
                 activation_condition="Use for host reachability failure.",
                 execution_steps=[
-                    SkillStep(order=1, action="Check reachability.", tool_name="ping_host")
+                    SkillStep(
+                        order=1, action="Check reachability.", tool_name="ping_host"
+                    )
                 ],
                 termination_condition="Stop after reachability evidence.",
                 tools=["ping_host"],
@@ -1789,7 +1956,9 @@ class SkillProMemoryTest(unittest.TestCase):
                 title="Risky high score",
                 activation_condition="Use for host reachability failure.",
                 execution_steps=[
-                    SkillStep(order=1, action="Check reachability.", tool_name="ping_host")
+                    SkillStep(
+                        order=1, action="Check reachability.", tool_name="ping_host"
+                    )
                 ],
                 termination_condition="Stop after reachability evidence.",
                 tools=["ping_host"],
@@ -1804,7 +1973,9 @@ class SkillProMemoryTest(unittest.TestCase):
                 title="Stable lower score",
                 activation_condition="Use for host reachability failure.",
                 execution_steps=[
-                    SkillStep(order=1, action="Check reachability.", tool_name="ping_host")
+                    SkillStep(
+                        order=1, action="Check reachability.", tool_name="ping_host"
+                    )
                 ],
                 termination_condition="Stop after reachability evidence.",
                 tools=["ping_host"],
@@ -1852,7 +2023,9 @@ class SkillProMemoryTest(unittest.TestCase):
                 title="Risky high score",
                 activation_condition="Use for host reachability failure.",
                 execution_steps=[
-                    SkillStep(order=1, action="Check reachability.", tool_name="ping_host")
+                    SkillStep(
+                        order=1, action="Check reachability.", tool_name="ping_host"
+                    )
                 ],
                 termination_condition="Stop after reachability evidence.",
                 tools=["ping_host"],
@@ -1867,7 +2040,9 @@ class SkillProMemoryTest(unittest.TestCase):
                 title="Stable lower score",
                 activation_condition="Use for host reachability failure.",
                 execution_steps=[
-                    SkillStep(order=1, action="Check reachability.", tool_name="ping_host")
+                    SkillStep(
+                        order=1, action="Check reachability.", tool_name="ping_host"
+                    )
                 ],
                 termination_condition="Stop after reachability evidence.",
                 tools=["ping_host"],
@@ -1960,7 +2135,9 @@ class SkillProMemoryTest(unittest.TestCase):
         self.assertEqual(state.skills["strong_ping"].reuse_count, 1)
         self.assertTrue(selector.prompts)
 
-    def test_runtime_prompt_query_does_not_use_full_tool_catalog_by_default(self) -> None:
+    def test_runtime_prompt_query_does_not_use_full_tool_catalog_by_default(
+        self,
+    ) -> None:
         def ping_host(host: str) -> str:
             return f"{host} reachable"
 
@@ -2163,9 +2340,9 @@ class SkillProMemoryTest(unittest.TestCase):
             runtime.before_tool(tool_name="ping_host", tool_input={"host": "pc2"})
             rows = [
                 json.loads(line)
-                for line in (Path(tmp) / "messages.jsonl").read_text(
-                    encoding="utf-8"
-                ).splitlines()
+                for line in (Path(tmp) / "messages.jsonl")
+                .read_text(encoding="utf-8")
+                .splitlines()
                 if line.strip()
             ]
 
@@ -2244,18 +2421,16 @@ class SkillProMemoryTest(unittest.TestCase):
             snapshot = runtime.snapshot()
             rows = [
                 json.loads(line)
-                for line in (Path(tmp) / "messages.jsonl").read_text(
-                    encoding="utf-8"
-                ).splitlines()
+                for line in (Path(tmp) / "messages.jsonl")
+                .read_text(encoding="utf-8")
+                .splitlines()
                 if line.strip()
             ]
 
         meta_events = [
             row for row in rows if row.get("event") == "skill_meta_controller"
         ]
-        terminations = [
-            row for row in rows if row.get("event") == "skill_termination"
-        ]
+        terminations = [row for row in rows if row.get("event") == "skill_termination"]
         self.assertEqual(snapshot["meta_controller_mode"], "llm")
         self.assertTrue(meta.prompts)
         self.assertIn("[ACTIVE OPTION]", meta.prompts[-1])
@@ -2332,9 +2507,9 @@ class SkillProMemoryTest(unittest.TestCase):
             snapshot = runtime.snapshot()
             rows = [
                 json.loads(line)
-                for line in (Path(tmp) / "messages.jsonl").read_text(
-                    encoding="utf-8"
-                ).splitlines()
+                for line in (Path(tmp) / "messages.jsonl")
+                .read_text(encoding="utf-8")
+                .splitlines()
                 if line.strip()
             ]
 
@@ -2345,7 +2520,9 @@ class SkillProMemoryTest(unittest.TestCase):
         self.assertEqual(snapshot["meta_controller_cache_hits"], 1)
         self.assertEqual(meta_events[-1]["status"], "cached")
 
-    def test_skill_runtime_selects_active_skill_in_prompt_before_tool_choice(self) -> None:
+    def test_skill_runtime_selects_active_skill_in_prompt_before_tool_choice(
+        self,
+    ) -> None:
         def ping_host(host: str) -> str:
             return f"{host} reachable"
 
@@ -2396,19 +2573,20 @@ class SkillProMemoryTest(unittest.TestCase):
             state = module.store.load()
             rows = [
                 json.loads(line)
-                for line in (Path(tmp) / "messages.jsonl").read_text(
-                    encoding="utf-8"
-                ).splitlines()
+                for line in (Path(tmp) / "messages.jsonl")
+                .read_text(encoding="utf-8")
+                .splitlines()
                 if line.strip()
             ]
 
         prompt_activations = [
             row
             for row in rows
-            if row.get("event") == "skill_activation"
-            and row.get("source") == "prompt"
+            if row.get("event") == "skill_activation" and row.get("source") == "prompt"
         ]
-        self.assertIn("Advisory Skill-MDP option selected before next LLM action", prompt)
+        self.assertIn(
+            "Advisory Skill-MDP option selected before next LLM action", prompt
+        )
         self.assertIn("not a final diagnosis stop condition", prompt)
         self.assertIn("prompt_ping", prompt)
         self.assertEqual(snapshot["active_skill_id"], "prompt_ping")
@@ -2416,7 +2594,9 @@ class SkillProMemoryTest(unittest.TestCase):
         self.assertEqual(state.skills["prompt_ping"].reuse_count, 1)
         self.assertEqual(len(prompt_activations), 1)
 
-    def test_skill_runtime_read_only_prompt_does_not_activate_or_record_reuse(self) -> None:
+    def test_skill_runtime_read_only_prompt_does_not_activate_or_record_reuse(
+        self,
+    ) -> None:
         def ping_host(host: str) -> str:
             return f"{host} reachable"
 
@@ -2474,7 +2654,9 @@ class SkillProMemoryTest(unittest.TestCase):
         self.assertEqual(state.skills["prompt_ping"].reuse_count, 0)
         self.assertFalse(log_path.exists())
 
-    def test_skill_runtime_does_not_reselect_cooldown_option_after_termination(self) -> None:
+    def test_skill_runtime_does_not_reselect_cooldown_option_after_termination(
+        self,
+    ) -> None:
         def ping_host(host: str) -> str:
             return f"{host} reachable"
 
@@ -2523,9 +2705,9 @@ class SkillProMemoryTest(unittest.TestCase):
             snapshot = runtime.snapshot()
             rows = [
                 json.loads(line)
-                for line in (Path(tmp) / "messages.jsonl").read_text(
-                    encoding="utf-8"
-                ).splitlines()
+                for line in (Path(tmp) / "messages.jsonl")
+                .read_text(encoding="utf-8")
+                .splitlines()
                 if line.strip()
             ]
 
@@ -2547,7 +2729,9 @@ class SkillProMemoryTest(unittest.TestCase):
             "termination_condition_satisfied",
         )
         self.assertTrue(post_tool_activations)
-        self.assertNotEqual(post_tool_activations[-1]["active_skill_id"], "one_step_ping")
+        self.assertNotEqual(
+            post_tool_activations[-1]["active_skill_id"], "one_step_ping"
+        )
         self.assertNotEqual(snapshot["active_skill_id"], "one_step_ping")
         self.assertEqual(snapshot["skill_age"], 0)
         self.assertNotIn("one_step_ping", output)
@@ -2613,9 +2797,9 @@ class SkillProMemoryTest(unittest.TestCase):
             snapshot = runtime.snapshot()
             rows = [
                 json.loads(line)
-                for line in (Path(tmp) / "messages.jsonl").read_text(
-                    encoding="utf-8"
-                ).splitlines()
+                for line in (Path(tmp) / "messages.jsonl")
+                .read_text(encoding="utf-8")
+                .splitlines()
                 if line.strip()
             ]
 
@@ -2713,9 +2897,9 @@ class SkillProMemoryTest(unittest.TestCase):
             snapshot = runtime.snapshot()
             rows = [
                 json.loads(line)
-                for line in (Path(tmp) / "messages.jsonl").read_text(
-                    encoding="utf-8"
-                ).splitlines()
+                for line in (Path(tmp) / "messages.jsonl")
+                .read_text(encoding="utf-8")
+                .splitlines()
                 if line.strip()
             ]
 
@@ -2733,7 +2917,9 @@ class SkillProMemoryTest(unittest.TestCase):
         self.assertIn("followup_route", output)
         self.assertNotIn("Active Skill-MDP option: one_step_ping", output)
 
-    def test_skill_runtime_logs_tool_deviation_without_posthoc_reselection(self) -> None:
+    def test_skill_runtime_logs_tool_deviation_without_posthoc_reselection(
+        self,
+    ) -> None:
         def ping_host(host: str) -> str:
             return f"{host} reachable"
 
@@ -2807,9 +2993,9 @@ class SkillProMemoryTest(unittest.TestCase):
             snapshot = runtime.snapshot()
             rows = [
                 json.loads(line)
-                for line in (Path(tmp) / "messages.jsonl").read_text(
-                    encoding="utf-8"
-                ).splitlines()
+                for line in (Path(tmp) / "messages.jsonl")
+                .read_text(encoding="utf-8")
+                .splitlines()
                 if line.strip()
             ]
 
@@ -2840,6 +3026,12 @@ class SkillProMemoryTest(unittest.TestCase):
                 task_description="Host reachability failure",
             )
             draft_store = ToolEvolutionStore("draft", root=tmp)
+            ToolEvolutionRuntime(
+                session=session,
+                primitive_tools=[tool],
+                library_id="draft",
+                store=draft_store,
+            )
             rewrite_documentation(
                 draft_store,
                 trials=[],
@@ -2921,9 +3113,9 @@ class SkillProMemoryTest(unittest.TestCase):
         self.assertIn("Active skill-tool links", prompt)
         self.assertIn("ping_host", prompt)
         self.assertIn("DRAFT tool documentation memory", prompt)
-        self.assertIn("stable tool semantics only", prompt)
-        self.assertNotIn("DRAFT checks", prompt)
-        self.assertNotIn("DRAFT active exploration queue", selector.prompts[-1])
+        self.assertIn("topology-safe diagnostic checks", prompt)
+        self.assertIn("DRAFT active exploration queue", prompt)
+        self.assertIn("DRAFT active exploration queue", selector.prompts[-1])
         self.assertIn("ping_host", selector.prompts[-1])
 
     def test_skill_runtime_logs_planned_draft_exploration_with_tool_call(self) -> None:
@@ -2941,13 +3133,16 @@ class SkillProMemoryTest(unittest.TestCase):
                 scenario_name="simple_bgp",
                 scenario_topo_size="small",
                 task_description="Host reachability failure",
+                topology=[("pc1:eth0", "r1:eth0")],
             )
             draft_store = ToolEvolutionStore("draft", root=tmp)
-            draft_state = draft_store.load()
-            draft_state.documents["ping_host"] = ToolDocumentation(
-                name="ping_host",
-                description="Ping one host.",
+            ToolEvolutionRuntime(
+                session=session,
+                primitive_tools=[tool],
+                library_id="draft",
+                store=draft_store,
             )
+            draft_state = draft_store.load()
             draft_state.explorations.append(
                 DraftExploration(
                     exploration_id="explore_ping_pc1",
@@ -2987,23 +3182,26 @@ class SkillProMemoryTest(unittest.TestCase):
             )
             rows = [
                 json.loads(line)
-                for line in (Path(tmp) / "messages.jsonl").read_text(
-                    encoding="utf-8"
-                ).splitlines()
+                for line in (Path(tmp) / "messages.jsonl")
+                .read_text(encoding="utf-8")
+                .splitlines()
                 if line.strip()
             ]
+            parsed_steps = extract_skill_steps(Path(tmp) / "messages.jsonl")
 
-        transitions = [
-            row for row in rows if row.get("event") == "skill_transition"
-        ]
-        self.assertNotIn("DRAFT planned exploration advanced", output)
-        self.assertEqual(transitions[-1].get("draft_exploration_id", ""), "")
+        transitions = [row for row in rows if row.get("event") == "skill_transition"]
+        self.assertIn("DRAFT planned exploration advanced", output)
         self.assertEqual(
-            [item["exploration_id"] for item in tool_learning_queue],
-            ["explore_ping_pc1"],
+            transitions[-1].get("draft_exploration_id"),
+            "explore_ping_pc1",
         )
+        self.assertEqual(parsed_steps[0].draft_exploration_id, "explore_ping_pc1")
+        self.assertIn("Ping pc1", parsed_steps[0].draft_next_exploration)
+        self.assertEqual(tool_learning_queue, [])
 
-    def test_skill_tool_wrapper_does_not_duplicate_existing_draft_guidance(self) -> None:
+    def test_skill_tool_wrapper_does_not_duplicate_existing_draft_guidance(
+        self,
+    ) -> None:
         def ping_host(host: str) -> str:
             return f"{host} reachable"
 
@@ -3059,9 +3257,14 @@ class SkillProMemoryTest(unittest.TestCase):
             wrapped = runtime.wrap_tools(draft_tools)[0]
 
         self.assertEqual(wrapped.description.count("DRAFT refined guidance:"), 1)
-        self.assertEqual(wrapped.description.count("DRAFT planned active checks"), 0)
+        self.assertLessEqual(
+            wrapped.description.count("DRAFT planned active checks"),
+            1,
+        )
         self.assertNotIn("DRAFT tool guidance:", wrapped.description)
-        self.assertNotIn("DRAFT active checks already reflected above", wrapped.description)
+        self.assertNotIn(
+            "DRAFT active checks already reflected above", wrapped.description
+        )
 
     def test_skill_tool_wrapper_scopes_guidance_to_linked_tools(self) -> None:
         def ping_host(host: str) -> str:
@@ -3157,10 +3360,14 @@ class SkillProMemoryTest(unittest.TestCase):
         self.assertIn("specific_ping", wrapped["ping_host"].description)
         self.assertIn("DRAFT tool guidance", wrapped["ping_host"].description)
         self.assertEqual(wrapped["cat_file"].description, "cat_file base.")
-        self.assertNotIn("Integrated learning guidance", wrapped["cat_file"].description)
+        self.assertNotIn(
+            "Integrated learning guidance", wrapped["cat_file"].description
+        )
         self.assertNotIn("DRAFT tool guidance", wrapped["cat_file"].description)
 
-    def test_skill_runtime_prioritizes_host_link_candidates_before_bgp_deep_dive(self) -> None:
+    def test_skill_runtime_prioritizes_host_link_candidates_before_bgp_deep_dive(
+        self,
+    ) -> None:
         def make_echo_tool(name: str) -> StructuredTool:
             def echo(value: str = "") -> str:
                 return value
@@ -3195,6 +3402,7 @@ class SkillProMemoryTest(unittest.TestCase):
             module = ProceduralMemoryModule(
                 bank_id="skill",
                 store_path=Path(tmp) / "skills.json",
+                include_expert_seeds=True,
             )
             runtime = SkillToolRuntime(
                 memory=module,
@@ -3220,7 +3428,54 @@ class SkillProMemoryTest(unittest.TestCase):
         self.assertNotIn("frr_show_bgp_summary", after_reachability_candidates)
         self.assertNotIn("frr_get_bgp_conf", after_reachability_candidates)
 
-    def test_skill_runtime_allows_bgp_config_candidates_after_endpoint_checks(self) -> None:
+    def test_core_fallback_ranks_arbitrary_tools_without_nika_mapping(self) -> None:
+        def make_tool(name: str, description: str) -> StructuredTool:
+            def inspect(value: str = "") -> str:
+                return value
+
+            inspect.__name__ = name
+            return StructuredTool.from_function(
+                inspect,
+                name=name,
+                description=description,
+            )
+
+        tools = [
+            make_tool("alpha_probe", "Inspect storage capacity."),
+            make_tool("beta_probe", "Inspect certificate expiry."),
+            make_tool("gamma_probe", "Measure request latency and delay."),
+            make_tool("delta_probe", "Inspect process ownership."),
+            make_tool("epsilon_probe", "Read application metadata."),
+            make_tool("zeta_probe", "Inspect queue depth."),
+            make_tool("eta_probe", "Read deployment labels."),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            module = ProceduralMemoryModule(
+                bank_id="core",
+                store_path=Path(tmp) / "skills.json",
+            )
+            runtime = SkillToolRuntime(
+                memory=module,
+                memory_mode="read",
+                session=SimpleNamespace(
+                    session_id="generic",
+                    scenario_name="generic",
+                    scenario_topo_size="s",
+                    task_description="Investigate high request latency.",
+                ),
+                task_description="Investigate high request latency.",
+                tools=tools,
+                session_dir=tmp,
+            )
+
+            candidates = runtime._fallback_tool_candidates()
+
+        self.assertIn("gamma_probe", candidates)
+        self.assertLessEqual(len(candidates), 6)
+
+    def test_skill_runtime_allows_bgp_config_candidates_after_endpoint_checks(
+        self,
+    ) -> None:
         def make_echo_tool(name: str) -> StructuredTool:
             def echo(value: str = "") -> str:
                 return value
@@ -3253,6 +3508,7 @@ class SkillProMemoryTest(unittest.TestCase):
             module = ProceduralMemoryModule(
                 bank_id="skill",
                 store_path=Path(tmp) / "skills.json",
+                include_expert_seeds=True,
             )
             runtime = SkillToolRuntime(
                 memory=module,
@@ -3281,7 +3537,9 @@ class SkillProMemoryTest(unittest.TestCase):
         self.assertIn("frr_get_bgp_conf", candidates)
         self.assertIn("frr_show_running_config", candidates)
 
-    def test_skill_runtime_uses_generic_ladder_candidates_without_bgp_sprawl(self) -> None:
+    def test_skill_runtime_uses_generic_ladder_candidates_without_bgp_sprawl(
+        self,
+    ) -> None:
         def make_echo_tool(name: str) -> StructuredTool:
             def echo(value: str = "") -> str:
                 return value
@@ -3313,6 +3571,7 @@ class SkillProMemoryTest(unittest.TestCase):
             module = ProceduralMemoryModule(
                 bank_id="skill",
                 store_path=Path(tmp) / "skills.json",
+                include_expert_seeds=True,
             )
             dns_runtime = SkillToolRuntime(
                 memory=module,
@@ -3418,6 +3677,7 @@ class SkillProMemoryTest(unittest.TestCase):
             module = ProceduralMemoryModule(
                 bank_id="skill",
                 store_path=Path(tmp) / "skills.json",
+                include_expert_seeds=True,
             )
             runtime = SkillToolRuntime(
                 memory=module,
@@ -3444,7 +3704,9 @@ class SkillProMemoryTest(unittest.TestCase):
         self.assertNotIn("frr_get_bgp_conf", candidates)
         self.assertNotIn("frr_show_running_config", candidates)
 
-    def test_skill_runtime_followup_checks_endpoint_link_after_unknown_reachability(self) -> None:
+    def test_skill_runtime_followup_checks_endpoint_link_after_unknown_reachability(
+        self,
+    ) -> None:
         def reachability() -> str:
             return "unknown"
 
@@ -3463,6 +3725,7 @@ class SkillProMemoryTest(unittest.TestCase):
             module = ProceduralMemoryModule(
                 bank_id="skill",
                 store_path=Path(tmp) / "skills.json",
+                include_expert_seeds=True,
             )
             runtime = SkillToolRuntime(
                 memory=module,
@@ -3487,7 +3750,9 @@ class SkillProMemoryTest(unittest.TestCase):
         self.assertIn("ethtool", output)
         self.assertIn("Before deeper BGP", output)
 
-    def test_skill_runtime_followup_compares_bgp_config_after_endpoint_checks(self) -> None:
+    def test_skill_runtime_followup_compares_bgp_config_after_endpoint_checks(
+        self,
+    ) -> None:
         def make_echo_tool(name: str) -> StructuredTool:
             def echo(value: str = "") -> str:
                 return value
@@ -3515,6 +3780,7 @@ class SkillProMemoryTest(unittest.TestCase):
             module = ProceduralMemoryModule(
                 bank_id="skill",
                 store_path=Path(tmp) / "skills.json",
+                include_expert_seeds=True,
             )
             runtime = SkillToolRuntime(
                 memory=module,
@@ -3529,8 +3795,7 @@ class SkillProMemoryTest(unittest.TestCase):
                 tool_name="get_reachability",
                 tool_input={},
                 result=(
-                    '{"results":[{"src":"pc_0_0","dst":"pc_0_1",'
-                    '"status":"unknown"}]}'
+                    '{"results":[{"src":"pc_0_0","dst":"pc_0_1","status":"unknown"}]}'
                 ),
             )
             runtime.after_tool(
@@ -3576,6 +3841,7 @@ class SkillProMemoryTest(unittest.TestCase):
             module = ProceduralMemoryModule(
                 bank_id="skill",
                 store_path=Path(tmp) / "skills.json",
+                include_expert_seeds=True,
             )
             runtime = SkillToolRuntime(
                 memory=module,
@@ -3832,7 +4098,9 @@ class SkillProMemoryTest(unittest.TestCase):
                     success=True,
                 ),
                 tool_steps=[
-                    SkillStep(order=1, action="Test HTTP reachability.", tool_name="curl")
+                    SkillStep(
+                        order=1, action="Test HTTP reachability.", tool_name="curl"
+                    )
                 ],
             )
             state = module.store.load()
@@ -3881,7 +4149,11 @@ class SkillProMemoryTest(unittest.TestCase):
                 evolution_threshold=1,
             )
             steps = [
-                SkillStep(order=1, action="Check BGP summary.", tool_name="frr_show_bgp_summary")
+                SkillStep(
+                    order=1,
+                    action="Check BGP summary.",
+                    tool_name="frr_show_bgp_summary",
+                )
             ]
             first = module.learn_from_episode(
                 evidence=EvaluationEvidence(
@@ -3989,9 +4261,14 @@ class SkillProMemoryTest(unittest.TestCase):
         self.assertNotIn("bgp_missing_route_advertisement", skill.termination_condition)
         self.assertNotIn("leaf_router_0_1", skill.termination_condition)
         self.assertEqual(stats["llm_semantic_gradients"], 1)
-        self.assertEqual(len(prompts), 1)
-        self.assertNotIn("bgp_missing_route_advertisement", prompts[0])
-        self.assertNotIn("leaf_router_0_1", prompts[0])
+        self.assertEqual(len(prompts), 2 + module.best_of_n)
+        self.assertTrue(any("batch semantic-gradient aggregator" in p for p in prompts))
+        self.assertEqual(
+            sum("Skill Evolver" in prompt for prompt in prompts),
+            module.best_of_n,
+        )
+        self.assertNotIn("bgp_missing_route_advertisement", "\n".join(prompts))
+        self.assertNotIn("leaf_router_0_1", "\n".join(prompts))
 
     def test_llm_semantic_gradient_failure_is_reported(self) -> None:
         class FailingModel:
@@ -4073,6 +4350,7 @@ class SkillProMemoryTest(unittest.TestCase):
                         "memory_bank": "skill",
                         "memory_skill_selector_mode": "llm_topk_lcb",
                         "memory_meta_controller_mode": "llm",
+                        "memory_include_expert_seeds": True,
                     }
                 ),
                 encoding="utf-8",
@@ -4124,6 +4402,7 @@ class SkillProMemoryTest(unittest.TestCase):
                         "memory_evolution_threshold": 2,
                         "memory_best_of_n": 5,
                         "memory_ppo_epsilon": 0.15,
+                        "memory_include_expert_seeds": "false",
                         "memory_max_skill_age": 6,
                         "memory_selector_min_lcb": -0.02,
                         "memory_selector_nominee_k": 4,
@@ -4148,6 +4427,7 @@ class SkillProMemoryTest(unittest.TestCase):
         self.assertEqual(report["memory_config"]["evolution_threshold"], 2)
         self.assertEqual(report["memory_config"]["best_of_n"], 5)
         self.assertEqual(report["memory_config"]["ppo_epsilon"], 0.15)
+        self.assertFalse(report["memory_config"]["include_expert_seeds"])
         self.assertEqual(report["memory_config"]["max_skill_age"], 6)
         self.assertEqual(report["memory_config"]["selector_min_lcb"], -0.02)
         self.assertEqual(report["memory_config"]["selector_nominee_k"], 4)
@@ -4176,6 +4456,7 @@ class SkillProMemoryTest(unittest.TestCase):
                         "memory_bank": "skill",
                         "memory_skill_selector_mode": "llm_topk_lcb",
                         "memory_meta_controller_mode": "llm",
+                        "memory_include_expert_seeds": True,
                     }
                 ),
                 encoding="utf-8",
@@ -4211,6 +4492,7 @@ class SkillProMemoryTest(unittest.TestCase):
                     self.memory_bank = "skill"
                     self.memory_skill_selector_mode = "llm_topk_lcb"
                     self.memory_meta_controller_mode = "llm"
+                    self.memory_include_expert_seeds = True
                     self.llm_backend = "custom"
                     self.model = "test-model"
                     self.tool_evolution_enabled = False
@@ -4241,9 +4523,13 @@ class SkillProMemoryTest(unittest.TestCase):
                     "j_score": 0.42,
                     "candidate_alignment": 0.73,
                     "baseline_alignment": 0.21,
+                    "verification_method": "alignment_surrogate",
+                    "verified_success_count": 2,
                 },
                 "semantic_gradient_source": "llm",
                 "semantic_gradient_llm_failed": False,
+                "semantic_gradient_count": 3,
+                "verification_method": "alignment_surrogate",
             }
             with (
                 patch("nika.workflows.eval.session.Session", FakeSession),
@@ -4275,5 +4561,9 @@ class SkillProMemoryTest(unittest.TestCase):
         self.assertEqual(result.memory_baseline_alignment, 0.21)
         self.assertEqual(result.memory_skill_selector_mode, "llm_topk_lcb")
         self.assertEqual(result.memory_meta_controller_mode, "llm")
+        self.assertTrue(result.memory_include_expert_seeds)
+        self.assertEqual(result.memory_semantic_gradient_count, 3)
+        self.assertEqual(result.memory_verification_method, "alignment_surrogate")
+        self.assertEqual(result.memory_verified_success_count, 2)
         self.assertEqual(result.memory_skills, 7)
         self.assertIn(("memory_update", memory_report), updates)

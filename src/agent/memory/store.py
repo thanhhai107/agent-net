@@ -124,6 +124,12 @@ class SkillMemoryStore:
             "last_baseline_alignment": (
                 last_decision.baseline_alignment if last_decision else None
             ),
+            "last_verification_method": (
+                last_decision.verification_method if last_decision else None
+            ),
+            "last_verified_success_count": (
+                last_decision.verified_success_count if last_decision else None
+            ),
             "iteration": state.iteration,
             "evolution_events": len(state.evolution_log),
             "maintenance_events": len(state.maintenance_log),

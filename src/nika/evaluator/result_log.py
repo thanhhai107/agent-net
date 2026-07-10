@@ -48,6 +48,7 @@ class EvalResult:
     memory_bank: str = None
     memory_skill_selector_mode: str = None
     memory_meta_controller_mode: str = None
+    memory_include_expert_seeds: bool | None = None
     benchmark_index: int = None
     draft_trials: int = None
     draft_trials_added: int = None
@@ -67,6 +68,8 @@ class EvalResult:
     draft_llm_attempts: int = None
     draft_llm_failures: int = None
     draft_llm_revisions: int = None
+    draft_llm_analyzer_revisions: int = None
+    draft_llm_analyzer_failures: int = None
     memory_update_status: str = None
     memory_skill_id: str = None
     memory_runtime_skill_ids: list[str] = None
@@ -84,6 +87,9 @@ class EvalResult:
     memory_baseline_alignment: float = None
     memory_semantic_gradient_source: str = None
     memory_semantic_gradient_llm_failed: bool | None = None
+    memory_semantic_gradient_count: int = None
+    memory_verification_method: str = None
+    memory_verified_success_count: int = None
     memory_skills: int = None
     incident_success: bool = None
     efficiency_evolution_rate: float = None
@@ -125,6 +131,20 @@ def _session_duration_seconds(start_time, end_time) -> float | None:
         start_dt = datetime.fromisoformat(str(start_time))
         end_dt = datetime.fromisoformat(str(end_time))
         return round((end_dt - start_dt).total_seconds(), 2)
+
+
+def _bool_value(value: object, *, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off", ""}:
+            return False
+    return bool(value)
 
 
 def default_summary_csv_path() -> str:
@@ -247,6 +267,9 @@ def build_eval_result_from_session_dir(session_dir: Path) -> EvalResult:
         memory_bank=run_meta.get("memory_bank"),
         memory_skill_selector_mode=run_meta.get("memory_skill_selector_mode"),
         memory_meta_controller_mode=run_meta.get("memory_meta_controller_mode"),
+        memory_include_expert_seeds=_bool_value(
+            run_meta.get("memory_include_expert_seeds"),
+        ),
         benchmark_index=run_meta.get("benchmark_index"),
         draft_trials=metrics_blob.get("draft_trials"),
         draft_trials_added=metrics_blob.get("draft_trials_added"),
@@ -270,6 +293,12 @@ def build_eval_result_from_session_dir(session_dir: Path) -> EvalResult:
         draft_llm_attempts=metrics_blob.get("draft_llm_attempts"),
         draft_llm_failures=metrics_blob.get("draft_llm_failures"),
         draft_llm_revisions=metrics_blob.get("draft_llm_revisions"),
+        draft_llm_analyzer_revisions=metrics_blob.get(
+            "draft_llm_analyzer_revisions"
+        ),
+        draft_llm_analyzer_failures=metrics_blob.get(
+            "draft_llm_analyzer_failures"
+        ),
         memory_update_status=memory_update.get("status"),
         memory_skill_id=memory_update.get("skill_id"),
         memory_runtime_skill_ids=memory_update.get("runtime_skill_ids"),
@@ -292,6 +321,14 @@ def build_eval_result_from_session_dir(session_dir: Path) -> EvalResult:
         memory_semantic_gradient_source=memory_update.get("semantic_gradient_source"),
         memory_semantic_gradient_llm_failed=memory_update.get(
             "semantic_gradient_llm_failed"
+        ),
+        memory_semantic_gradient_count=memory_update.get(
+            "semantic_gradient_count"
+        ),
+        memory_verification_method=memory_update.get("verification_method")
+        or memory_decision.get("verification_method"),
+        memory_verified_success_count=memory_decision.get(
+            "verified_success_count"
         ),
         memory_skills=memory_update.get("skills"),
         incident_success=all(

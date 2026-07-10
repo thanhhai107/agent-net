@@ -149,6 +149,12 @@ def _extract_runtime_skill_steps(entries: list[dict[str, Any]]) -> list[SkillSte
                 if entry.get("status") in {"success", "error", "unknown"}
                 else "unknown",
                 rationale="Observed Skill-Pro online runtime transition.",
+                draft_exploration_id=str(
+                    entry.get("draft_exploration_id") or ""
+                ),
+                draft_next_exploration=_short_text(
+                    entry.get("draft_next_exploration")
+                ),
             )
         )
     return steps
@@ -193,6 +199,21 @@ def _float_meta(run_meta: dict[str, Any], key: str, default: float) -> float:
         return default
 
 
+def _bool_meta(run_meta: dict[str, Any], key: str, default: bool) -> bool:
+    value = run_meta.get(key)
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off", ""}:
+            return False
+    return bool(value)
+
+
 def _strip_integrated_guidance(value: Any) -> str:
     return strip_integrated_learning_guidance(value)
 
@@ -226,6 +247,11 @@ async def evolve_session_memory(
         evolution_threshold=_int_meta(run_meta, "memory_evolution_threshold", 3),
         best_of_n=_int_meta(run_meta, "memory_best_of_n", 3),
         ppo_epsilon=_float_meta(run_meta, "memory_ppo_epsilon", 0.2),
+        include_expert_seeds=_bool_meta(
+            run_meta,
+            "memory_include_expert_seeds",
+            False,
+        ),
     )
     evidence = EvaluationEvidence(
         session_id=str(run_meta.get("session_id") or session_path.name),
@@ -271,6 +297,7 @@ async def evolve_session_memory(
                 "evolution_threshold": module.evolution_threshold,
                 "best_of_n": module.best_of_n,
                 "ppo_epsilon": module.ppo_epsilon,
+                "include_expert_seeds": module.include_expert_seeds,
             },
         }
     )

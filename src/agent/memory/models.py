@@ -44,6 +44,8 @@ class SkillStep(BaseModel):
     observation_summary: str = ""
     status: Literal["success", "error", "unknown"] = "unknown"
     rationale: str = ""
+    draft_exploration_id: str = ""
+    draft_next_exploration: str = ""
 
 
 class SkillComponentGradient(BaseModel):
@@ -75,6 +77,15 @@ class SemanticGradientDraft(BaseModel):
     is_related: bool = True
 
 
+class SkillCandidateDraft(BaseModel):
+    """One independently sampled Skill-Pro evolution candidate."""
+
+    title: str = ""
+    initiation: str = ""
+    policy: list[str] = Field(default_factory=list)
+    termination: str = ""
+
+
 class EvaluationEvidence(BaseModel):
     session_id: str
     task_description: str = ""
@@ -97,6 +108,8 @@ class SkillTransition(BaseModel):
     observation_summary: str = ""
     status: Literal["success", "error", "unknown"] = "unknown"
     done: bool = False
+    draft_exploration_id: str = ""
+    draft_next_exploration: str = ""
 
 
 class SkillExperience(BaseModel):
@@ -108,6 +121,7 @@ class SkillExperience(BaseModel):
     skill_ids: list[str] = Field(default_factory=list)
     trajectory: str = ""
     scenario: str = ""
+    metrics: dict[str, float] = Field(default_factory=dict)
     transitions: list[SkillTransition] = Field(default_factory=list)
     step_count: int = 0
     total_added_tokens: int = 0
@@ -141,6 +155,7 @@ class ProceduralSkill(BaseModel):
     version: int = 0
     last_evolved_iteration: int = 0
     semantic_gradients: list[SemanticGradient] = Field(default_factory=list)
+    origin: Literal["learned", "generic_seed", "expert_seed"] = "learned"
     created_at: str = Field(default_factory=utc_now)
     updated_at: str = Field(default_factory=utc_now)
 
@@ -227,6 +242,10 @@ class PPOGateDecision(BaseModel):
     sample_count: int = 0
     best_of_n: int = 1
     candidate_type: Literal["NEW", "REFINE"] = "NEW"
+    verification_method: Literal["policy_logprob", "alignment_surrogate"] = (
+        "alignment_surrogate"
+    )
+    verified_success_count: int = 0
 
 
 class SkillMemoryState(BaseModel):

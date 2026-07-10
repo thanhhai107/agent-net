@@ -57,7 +57,6 @@ from agent.llm.model_factory import (
     DEFAULT_MODEL,
     GLM47ChatOpenAI,
     NETMIND_API_URL,
-    NetmindChatOpenAI,
     _extract_glm_tool_calls,
     _normalize_glm_tool_calls,
     load_model,
@@ -454,6 +453,7 @@ class WorkflowRegistrationTest(unittest.TestCase):
             evolution_threshold=3,
             best_of_n=3,
             ppo_epsilon=0.2,
+            include_expert_seeds=False,
         )
         memory_adapter.assert_called_once_with(
             react_agent.return_value,

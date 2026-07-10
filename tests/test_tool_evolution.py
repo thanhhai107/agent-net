@@ -19,8 +19,10 @@ from agent.tool_evolution.curator import (
     rewrite_documentation,
 )
 from agent.tool_evolution.models import (
+    DraftAnalyzerDraft,
     DraftAnalyzerSuggestion,
     DraftExploration,
+    DraftExplorerDraft,
     DraftRewriteProposal,
     ToolDocumentation,
     ToolParameterDoc,
@@ -32,6 +34,183 @@ from nika.workflows.eval.session import run_eval_metrics
 
 
 class DraftToolEvolutionTest(unittest.TestCase):
+    def test_primitive_contract_change_reopens_frozen_documentation(self) -> None:
+        def ping(host: str) -> str:
+            return host
+
+        def ping_with_count(host: str, count: int = 1) -> str:
+            return host * count
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = ToolEvolutionStore("draft", root=tmp)
+            first_tool = StructuredTool.from_function(
+                ping,
+                name="ping_host",
+                description="Ping one host.",
+            )
+            ToolEvolutionRuntime(
+                session=object(),
+                primitive_tools=[first_tool],
+                library_id="draft",
+                store=store,
+            )
+            before = store.get_document("ping_host")
+            assert before is not None
+            before.frozen = True
+            before.frozen_reason = "converged"
+            before.usage_notes.append("Preserve learned interpretation.")
+            before.rewrite_history.append("Stale contract-specific rewrite.")
+            store.upsert_document(before)
+            state = store.load()
+            state.explorations.append(
+                DraftExploration(
+                    exploration_id="stale-plan",
+                    session_id="s1",
+                    tool_name="ping_host",
+                    intent="diagnosis_check",
+                    user_query="Ping a current host.",
+                    status="planned",
+                    document_hash=before.content_hash(),
+                    next_exploration="Ping a current host to verify reachability.",
+                )
+            )
+            store.save(state)
+
+            second_tool = StructuredTool.from_function(
+                ping_with_count,
+                name="ping_host",
+                description="Ping one host one or more times.",
+            )
+            ToolEvolutionRuntime(
+                session=object(),
+                primitive_tools=[second_tool],
+                library_id="draft",
+                store=store,
+            )
+            after = store.get_document("ping_host")
+            after_state = store.load()
+
+        assert after is not None
+        self.assertNotEqual(after.source_signature, before.source_signature)
+        self.assertFalse(after.frozen)
+        self.assertEqual(after.frozen_reason, "")
+        self.assertGreater(after.version, before.version)
+        self.assertEqual(after.description, "Ping one host one or more times.")
+        self.assertNotIn("Preserve learned interpretation.", after.usage_notes)
+        self.assertEqual(set(after.parameters), {"host", "count"})
+        self.assertEqual(after.source_contract_version, 1)
+        self.assertTrue(
+            any("reset and reopened" in item for item in after.rewrite_history)
+        )
+        self.assertNotIn("Stale contract-specific rewrite.", after.rewrite_history)
+        self.assertEqual(after_state.explorations[0].status, "invalidated")
+
+    def test_draft_explorer_self_reflects_until_query_is_diverse(self) -> None:
+        explorer_calls = 0
+
+        class FakeModel:
+            schema: type | None = None
+
+            def with_structured_output(self, schema):
+                self.schema = schema
+                return self
+
+            def invoke(self, _prompt):
+                nonlocal explorer_calls
+                if self.schema is DraftAnalyzerDraft:
+                    return DraftAnalyzerDraft(
+                        suggestion="Clarify how route output changes the hypothesis.",
+                        next_exploration="Check route evidence for the current hypothesis.",
+                    )
+                if self.schema is DraftExplorerDraft:
+                    explorer_calls += 1
+                    if explorer_calls == 1:
+                        return DraftExplorerDraft(
+                            user_query="Investigate route failure.",
+                            next_exploration="Investigate route failure.",
+                            intent="diagnosis_check",
+                        )
+                    return DraftExplorerDraft(
+                        user_query="Compare control-plane and data-plane observations.",
+                        next_exploration=(
+                            "Compare route-table output with an independent reachability "
+                            "observation."
+                        ),
+                        intent="diagnosis_check",
+                    )
+                return DraftRewriteProposal(
+                    tool_name="show_route",
+                    tool_usage_description="Inspect the current route table.",
+                )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = ToolEvolutionStore("draft", root=tmp)
+            trials, _ = extract_tool_trials(
+                self._trace(
+                    tmp,
+                    [
+                        ("tool_start", "1", "show_route", "{'router': 'r1'}", ""),
+                        ("tool_end", "1", "show_route", "", "route missing"),
+                    ],
+                ),
+                session_id="s1",
+                task_description="Investigate route failure.",
+            )
+            with patch(
+                "agent.tool_evolution.curator.load_model", return_value=FakeModel()
+            ) as load_model:
+                rewrite_documentation(
+                    store,
+                    trials=trials,
+                    tool_descriptions={"show_route": "Show routes."},
+                    metrics={"localization_f1": 0.0, "rca_f1": 0.0},
+                    llm_backend="custom",
+                    model="test-model",
+                    session_id="s1",
+                    task_description="Investigate route failure.",
+                )
+            state = store.load()
+
+        planned = [item for item in state.explorations if item.status == "planned"]
+        self.assertEqual(explorer_calls, 2)
+        self.assertEqual(len(planned), 1)
+        self.assertEqual(planned[0].reflection_count, 1)
+        self.assertGreater(planned[0].diversity_score, 0.18)
+        self.assertIn("independent reachability", planned[0].next_exploration)
+        load_model.assert_called_once()
+
+    def test_documentation_mastery_is_independent_of_rca_score(self) -> None:
+        def evolve(root: str, rca_f1: float) -> float:
+            store = ToolEvolutionStore("draft", root=root)
+            trials, _ = extract_tool_trials(
+                self._trace(
+                    root,
+                    [
+                        ("tool_start", "1", "show_route", "{'router': 'r1'}", ""),
+                        ("tool_end", "1", "show_route", "", "route present"),
+                    ],
+                ),
+                session_id="s1",
+            )
+            rewrite_documentation(
+                store,
+                trials=trials,
+                tool_descriptions={"show_route": "Show routes."},
+                metrics={"rca_f1": rca_f1},
+            )
+            doc = store.get_document("show_route")
+            assert doc is not None
+            return doc.mastery_score
+
+        with (
+            tempfile.TemporaryDirectory() as left,
+            tempfile.TemporaryDirectory() as right,
+        ):
+            low_rca = evolve(left, 0.0)
+            high_rca = evolve(right, 1.0)
+
+        self.assertEqual(low_rca, high_rca)
+
     def test_extracts_trials_and_argument_gaps_from_messages(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             trace = Path(tmp) / "messages.jsonl"
@@ -53,7 +232,9 @@ class DraftToolEvolutionTest(unittest.TestCase):
                     "output": "router_x not found",
                 },
             ]
-            trace.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+            trace.write_text(
+                "\n".join(json.dumps(row) for row in rows), encoding="utf-8"
+            )
 
             trials, docs = extract_tool_trials(trace, session_id="s1")
             gaps = identify_comprehension_gaps(trials)
@@ -79,7 +260,9 @@ class DraftToolEvolutionTest(unittest.TestCase):
                     "output": "eth0 up",
                 },
             ]
-            trace.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+            trace.write_text(
+                "\n".join(json.dumps(row) for row in rows), encoding="utf-8"
+            )
 
             trials, docs = extract_tool_trials(
                 trace,
@@ -115,7 +298,9 @@ class DraftToolEvolutionTest(unittest.TestCase):
                     ),
                 },
             ]
-            trace.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+            trace.write_text(
+                "\n".join(json.dumps(row) for row in rows), encoding="utf-8"
+            )
 
             trials, _ = extract_tool_trials(trace, session_id="s1")
 
@@ -224,7 +409,9 @@ class DraftToolEvolutionTest(unittest.TestCase):
                     "input": "{}",
                 },
             ]
-            trace.write_text("\n".join(json.dumps(row) for row in rows), encoding="utf-8")
+            trace.write_text(
+                "\n".join(json.dumps(row) for row in rows), encoding="utf-8"
+            )
 
             trials, docs = extract_tool_trials(trace, session_id="s1")
 
@@ -247,7 +434,13 @@ class DraftToolEvolutionTest(unittest.TestCase):
                             "{'router': 'r1', 'interface': 'eth9'}",
                             "",
                         ),
-                        ("tool_error", "1", "show_iface", "", "interface eth9 not found"),
+                        (
+                            "tool_error",
+                            "1",
+                            "show_iface",
+                            "",
+                            "interface eth9 not found",
+                        ),
                     ],
                 ),
                 session_id="s1",
@@ -330,9 +523,7 @@ class DraftToolEvolutionTest(unittest.TestCase):
         self.assertTrue(
             any(gap.gap_type == "diagnostic_semantic_gap" for gap in state.gaps)
         )
-        self.assertTrue(
-            any("interpret the output" in note for note in doc.usage_notes)
-        )
+        self.assertTrue(any("interpret the output" in note for note in doc.usage_notes))
         self.assertTrue(
             any(
                 exploration.status == "planned"
@@ -388,9 +579,7 @@ class DraftToolEvolutionTest(unittest.TestCase):
             {gap.tool_name for gap in gaps},
             {"ping_pair", "frr_show_ip_route"},
         )
-        self.assertTrue(
-            all(gap.gap_type == "diagnostic_semantic_gap" for gap in gaps)
-        )
+        self.assertTrue(all(gap.gap_type == "diagnostic_semantic_gap" for gap in gaps))
 
     def test_draft_plans_exploration_for_documented_tool_without_trace(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -409,8 +598,7 @@ class DraftToolEvolutionTest(unittest.TestCase):
         planned = [
             exploration
             for exploration in state.explorations
-            if exploration.tool_name == "ping_pair"
-            and exploration.status == "planned"
+            if exploration.tool_name == "ping_pair" and exploration.status == "planned"
         ]
         self.assertEqual(len(planned), 1)
         self.assertIn("Investigate reachability loss", planned[0].user_query)
@@ -429,6 +617,12 @@ class DraftToolEvolutionTest(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as tmp:
             store = ToolEvolutionStore("draft", root=tmp)
+            ToolEvolutionRuntime(
+                session=object(),
+                primitive_tools=[tool],
+                library_id="draft",
+                store=store,
+            )
             rewrite_documentation(
                 store,
                 trials=[],
@@ -457,12 +651,16 @@ class DraftToolEvolutionTest(unittest.TestCase):
                 diagnosis_only=False,
             )
 
-        self.assertEqual(queue, [])
+        self.assertEqual(
+            [item["intent"] for item in queue],
+            ["diagnosis_check"],
+        )
         self.assertEqual(
             [item["intent"] for item in tool_learning_queue],
             ["diagnosis_check"],
         )
-        self.assertNotIn("DRAFT active exploration queue", prompt)
+        self.assertIn("DRAFT active exploration queue", prompt)
+        self.assertIn("localization/RCA", prompt)
         self.assertIn("DRAFT active exploration queue", tool_learning_prompt)
         self.assertIn("localization/RCA", tool_learning_prompt)
 
@@ -477,6 +675,12 @@ class DraftToolEvolutionTest(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as tmp:
             store = ToolEvolutionStore("draft", root=tmp)
+            ToolEvolutionRuntime(
+                session=object(),
+                primitive_tools=[tool],
+                library_id="draft",
+                store=store,
+            )
             rewrite_documentation(
                 store,
                 trials=[],
@@ -526,8 +730,7 @@ class DraftToolEvolutionTest(unittest.TestCase):
         consumed = [
             exploration
             for exploration in state.explorations
-            if exploration.tool_name == "ping_pair"
-            and exploration.status == "consumed"
+            if exploration.tool_name == "ping_pair" and exploration.status == "consumed"
         ]
         self.assertEqual(len(consumed), 1)
         self.assertEqual(consumed[0].consumed_by_trial_id, trials[0].trial_id)
@@ -760,6 +963,8 @@ class DraftToolEvolutionTest(unittest.TestCase):
                 "draft_llm_attempts": 0,
                 "draft_llm_failures": 0,
                 "draft_llm_revisions": 0,
+                "draft_llm_analyzer_revisions": 1,
+                "draft_llm_analyzer_failures": 0,
                 "draft_llm_errors": [],
             }
             with (
@@ -780,6 +985,9 @@ class DraftToolEvolutionTest(unittest.TestCase):
         self.assertEqual(metrics["draft_consumed_explorations"], 1)
         self.assertEqual(result.draft_planned_explorations, 1)
         self.assertEqual(result.draft_consumed_explorations, 1)
+        self.assertEqual(metrics["draft_llm_analyzer_revisions"], 1)
+        self.assertEqual(result.draft_llm_analyzer_revisions, 1)
+        self.assertEqual(result.draft_llm_analyzer_failures, 0)
         self.assertIn(("eval_metrics", metrics), updates)
 
     def test_runtime_appends_refined_docs_without_adding_tools(self) -> None:
@@ -793,6 +1001,12 @@ class DraftToolEvolutionTest(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as tmp:
             store = ToolEvolutionStore("draft", root=tmp)
+            ToolEvolutionRuntime(
+                session=object(),
+                primitive_tools=[tool],
+                library_id="draft",
+                store=store,
+            )
             rewrite_documentation(
                 store,
                 trials=[],
@@ -842,7 +1056,9 @@ class DraftToolEvolutionTest(unittest.TestCase):
         self.assertIn("DRAFT active exploration queue", tool_learning_prompt_suffix)
         self.assertIsNotNone(seeded)
 
-    def test_runtime_can_restore_base_descriptions_for_scoped_memory_runtime(self) -> None:
+    def test_runtime_can_restore_base_descriptions_for_scoped_memory_runtime(
+        self,
+    ) -> None:
         def ping(host: str) -> str:
             return host
 
@@ -937,7 +1153,9 @@ class DraftToolEvolutionTest(unittest.TestCase):
         self.assertNotIn("cat_file", scoped_prompt)
         self.assertIn("cat_file", global_prompt)
 
-    def test_runtime_filters_tool_learning_explorations_from_diagnosis_prompt(self) -> None:
+    def test_runtime_filters_tool_learning_explorations_from_diagnosis_prompt(
+        self,
+    ) -> None:
         def ping(host: str) -> str:
             return host
 
@@ -948,16 +1166,18 @@ class DraftToolEvolutionTest(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as tmp:
             store = ToolEvolutionStore("draft", root=tmp)
-            state = store.load()
-            state.documents["ping_pair"] = ToolDocumentation(
-                name="ping_pair",
-                description="Ping a host.",
-                exploration_suggestions=[
-                    "Run ping_pair on a lab with >20 hosts to verify automatic sampling.",
-                    "Ping pc_0_0 to verify endpoint reachability.",
-                    "Repeat with invalid host to document validation behavior.",
-                ],
+            ToolEvolutionRuntime(
+                session=object(),
+                primitive_tools=[tool],
+                library_id="draft",
+                store=store,
             )
+            state = store.load()
+            state.documents["ping_pair"].exploration_suggestions = [
+                "Run ping_pair on a lab with >20 hosts to verify automatic sampling.",
+                "Ping pc_0_0 to verify endpoint reachability.",
+                "Repeat with invalid host to document validation behavior.",
+            ]
             state.explorations.extend(
                 [
                     DraftExploration(
@@ -1062,7 +1282,9 @@ class DraftToolEvolutionTest(unittest.TestCase):
         self.assertNotIn("Active DRAFT Explorer queue", prompt)
         self.assertNotIn("Next active checks", prompt)
 
-    def test_runtime_validates_diagnosis_explorations_against_generic_topology_hosts(self) -> None:
+    def test_runtime_validates_diagnosis_explorations_against_generic_topology_hosts(
+        self,
+    ) -> None:
         def net_config(host_name: str) -> str:
             return host_name
 
@@ -1073,11 +1295,13 @@ class DraftToolEvolutionTest(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as tmp:
             store = ToolEvolutionStore("draft", root=tmp)
-            state = store.load()
-            state.documents["get_host_net_config"] = ToolDocumentation(
-                name="get_host_net_config",
-                description="Inspect host network config.",
+            ToolEvolutionRuntime(
+                session=object(),
+                primitive_tools=[tool],
+                library_id="draft",
+                store=store,
             )
+            state = store.load()
             state.explorations.extend(
                 [
                     DraftExploration(
@@ -1119,9 +1343,12 @@ class DraftToolEvolutionTest(unittest.TestCase):
                 diagnosis_only=False,
             )
 
-        self.assertNotIn("host-1", prompt)
+        self.assertIn("host-1", prompt)
         self.assertNotIn("host-3", prompt)
-        self.assertEqual(diagnosis_queue, [])
+        self.assertEqual(
+            [item["exploration_id"] for item in diagnosis_queue],
+            ["explore_host_1"],
+        )
         self.assertIn("host-1", tool_learning_prompt)
         self.assertIn("host-3", tool_learning_prompt)
         self.assertEqual(
@@ -1129,7 +1356,7 @@ class DraftToolEvolutionTest(unittest.TestCase):
             {"explore_host_1", "explore_host_3"},
         )
 
-    def test_runtime_filters_document_suggestions_by_current_topology(self) -> None:
+    def test_runtime_keeps_raw_document_suggestions_in_tool_learning_mode(self) -> None:
         def ping(host: str) -> str:
             return host
 
@@ -1140,16 +1367,18 @@ class DraftToolEvolutionTest(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as tmp:
             store = ToolEvolutionStore("draft", root=tmp)
-            state = store.load()
-            state.documents["ping_pair"] = ToolDocumentation(
-                name="ping_pair",
-                description="Ping a host.",
-                exploration_suggestions=[
-                    "Ping pc1 to verify endpoint reachability.",
-                    "Ping pc3 to verify endpoint reachability.",
-                    "Repeat with invalid host to document validation behavior.",
-                ],
+            ToolEvolutionRuntime(
+                session=object(),
+                primitive_tools=[tool],
+                library_id="draft",
+                store=store,
             )
+            state = store.load()
+            state.documents["ping_pair"].exploration_suggestions = [
+                "Ping pc1 to verify endpoint reachability.",
+                "Ping pc3 to verify endpoint reachability.",
+                "Repeat with invalid host to document validation behavior.",
+            ]
             store.save(state)
             runtime = ToolEvolutionRuntime(
                 session=SimpleNamespace(
@@ -1219,6 +1448,8 @@ class DraftToolEvolutionTest(unittest.TestCase):
         self.assertEqual(sorted(state.documents), ["ping_pair", "show_route"])
         self.assertEqual(snapshot["available_documents"], ["ping_pair", "show_route"])
         self.assertIn("Ping topology hosts", state.documents["ping_pair"].description)
+        self.assertEqual(set(state.documents["ping_pair"].parameters), {"host"})
+        self.assertEqual(state.documents["ping_pair"].source_contract_version, 1)
 
     def test_runtime_claims_planned_exploration_once_per_session(self) -> None:
         def ping(host: str) -> str:
@@ -1231,11 +1462,13 @@ class DraftToolEvolutionTest(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as tmp:
             store = ToolEvolutionStore("draft", root=tmp)
-            state = store.load()
-            state.documents["ping_pair"] = ToolDocumentation(
-                name="ping_pair",
-                description="Ping a host.",
+            ToolEvolutionRuntime(
+                session=object(),
+                primitive_tools=[tool],
+                library_id="draft",
+                store=store,
             )
+            state = store.load()
             state.explorations.append(
                 DraftExploration(
                     exploration_id="explore_ping_once",
@@ -1320,7 +1553,9 @@ class DraftToolEvolutionTest(unittest.TestCase):
                 ),
                 session_id="s1",
             )
-            with patch("agent.tool_evolution.curator.load_model", return_value=FakeModel()):
+            with patch(
+                "agent.tool_evolution.curator.load_model", return_value=FakeModel()
+            ):
                 revisions = rewrite_documentation(
                     store,
                     trials=trials,
@@ -1332,7 +1567,7 @@ class DraftToolEvolutionTest(unittest.TestCase):
             doc = store.get_document("show_iface")
 
         assert doc is not None
-        self.assertEqual(doc.description, "Inspect one router interface with verified names.")
+        self.assertEqual(doc.description, "Inspect interface.")
         self.assertEqual(
             doc.tool_usage_description,
             "show_iface is a tool that can inspect one verified router interface.",
@@ -1344,10 +1579,119 @@ class DraftToolEvolutionTest(unittest.TestCase):
                 for item in doc.exploration_suggestions
             )
         )
-        self.assertIn("Explorer observations", prompts[0])
-        self.assertIn("Analyzer suggestions", prompts[0])
-        self.assertIn("tool_usage_description", prompts[0])
+        self.assertTrue(any("DRAFT Analyzer" in prompt for prompt in prompts))
+        rewrite_prompt = next(
+            prompt for prompt in prompts if "Explorer observations" in prompt
+        )
+        self.assertIn("Analyzer suggestions", rewrite_prompt)
+        self.assertIn("tool_usage_description", rewrite_prompt)
         self.assertEqual(revisions[0].metrics["llm_rewrite"], 1.0)
+
+    def test_llm_rewrite_cannot_expand_primitive_parameter_schema(self) -> None:
+        class FakeModel:
+            schema: type | None = None
+
+            def with_structured_output(self, schema):
+                self.schema = schema
+                return self
+
+            def invoke(self, _prompt):
+                if self.schema is DraftAnalyzerDraft:
+                    return DraftAnalyzerDraft(
+                        suggestion="Add a hosts filter not present in the source API.",
+                        next_exploration="Try a hosts filter for reachability.",
+                    )
+                if self.schema is DraftExplorerDraft:
+                    return DraftExplorerDraft(
+                        user_query="Filter reachability to pc1 and pc2.",
+                        parameters={"hosts": ["pc1", "pc2"]},
+                        next_exploration="Compare reachability for a hosts subset.",
+                        intent="diagnosis_check",
+                    )
+                return DraftRewriteProposal(
+                    tool_name="get_reachability",
+                    description="Reachability with an optional hosts filter.",
+                    tool_usage_description="Call with hosts to restrict the matrix.",
+                    parameters={
+                        "hosts": ToolParameterDoc(
+                            name="hosts",
+                            type_hint="array",
+                            description="Optional host filter.",
+                        )
+                    },
+                )
+
+        def reachability() -> str:
+            return "{}"
+
+        tool = StructuredTool.from_function(
+            reachability,
+            name="get_reachability",
+            description="Collect the current reachability matrix.",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            store = ToolEvolutionStore("draft", root=tmp)
+            ToolEvolutionRuntime(
+                session=object(),
+                primitive_tools=[tool],
+                library_id="draft",
+                store=store,
+            )
+            trials, _ = extract_tool_trials(
+                self._trace(
+                    tmp,
+                    [
+                        ("tool_start", "1", "get_reachability", "{}", ""),
+                        ("tool_end", "1", "get_reachability", "", "{}"),
+                    ],
+                ),
+                session_id="s1",
+                task_description="Investigate reachability loss.",
+            )
+            with patch(
+                "agent.tool_evolution.curator.load_model",
+                return_value=FakeModel(),
+            ):
+                revisions = rewrite_documentation(
+                    store,
+                    trials=trials,
+                    tool_descriptions={
+                        "get_reachability": "Collect the current reachability matrix."
+                    },
+                    metrics={"localization_f1": 0.0, "rca_f1": 0.0},
+                    llm_backend="custom",
+                    model="test-model",
+                    session_id="s1",
+                    task_description="Investigate reachability loss.",
+                )
+            doc = store.get_document("get_reachability")
+            state = store.load()
+            runtime = ToolEvolutionRuntime(
+                session=SimpleNamespace(
+                    task_description="Investigate reachability loss.",
+                    topology=[("pc1:eth0", "r1:eth0")],
+                ),
+                primitive_tools=[tool],
+                library_id="draft",
+                store=store,
+            )
+
+        assert doc is not None
+        self.assertEqual(doc.description, "Collect the current reachability matrix.")
+        self.assertEqual(doc.parameters, {})
+        self.assertIn(
+            "get_reachability is a primitive diagnostic tool",
+            doc.tool_usage_description,
+        )
+        self.assertNotIn("hosts filter", doc.tool_usage_description)
+        self.assertEqual(revisions[0].metrics["llm_rewrite"], 0.0)
+        self.assertEqual(revisions[0].metrics["llm_contract_rejected"], 1.0)
+        self.assertEqual(revisions[0].source_signature, doc.source_signature)
+        self.assertIn("ContractValidationError", revisions[0].llm_error)
+        planned = [item for item in state.explorations if item.status == "planned"]
+        self.assertEqual(len(planned), 1)
+        self.assertEqual(planned[0].intent, "argument_schema_probe")
+        self.assertEqual(runtime.planned_explorations(diagnosis_only=True), [])
 
     def test_llm_rewrite_failure_is_reported(self) -> None:
         class FailingModel:
@@ -1427,7 +1771,9 @@ class DraftToolEvolutionTest(unittest.TestCase):
                 ),
                 session_id="s1",
             )
-            with patch("agent.tool_evolution.curator.load_model", return_value=FakeModel()):
+            with patch(
+                "agent.tool_evolution.curator.load_model", return_value=FakeModel()
+            ):
                 rewrite_documentation(
                     store,
                     trials=trials,
@@ -1437,9 +1783,9 @@ class DraftToolEvolutionTest(unittest.TestCase):
                     model="test-model",
                 )
 
-        self.assertEqual(len(prompts), 1)
-        self.assertLess(len(prompts[0]), 8000)
-        self.assertNotIn("x" * 1000, prompts[0])
+        self.assertEqual(len(prompts), 3)
+        self.assertTrue(all(len(prompt) < 8000 for prompt in prompts))
+        self.assertNotIn("x" * 1000, "\n".join(prompts))
 
     def test_path_rate_counts_tools_documented_before_session(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1465,7 +1811,10 @@ class DraftToolEvolutionTest(unittest.TestCase):
             revisions = rewrite_documentation(
                 store,
                 trials=trials,
-                tool_descriptions={"show_iface": "Inspect interface.", "new_tool": "New."},
+                tool_descriptions={
+                    "show_iface": "Inspect interface.",
+                    "new_tool": "New.",
+                },
                 metrics={"rca_accuracy": 1.0},
                 documented_tools_at_start={"show_iface"},
             )
@@ -1490,5 +1839,7 @@ class DraftToolEvolutionTest(unittest.TestCase):
             else:
                 item["output"] = output
             payloads.append(item)
-        path.write_text("\n".join(json.dumps(row) for row in payloads), encoding="utf-8")
+        path.write_text(
+            "\n".join(json.dumps(row) for row in payloads), encoding="utf-8"
+        )
         return path

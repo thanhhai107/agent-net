@@ -80,6 +80,10 @@ def start_agent(
         )
         session.update_session("memory_best_of_n", agent_config.memory.best_of_n)
         session.update_session("memory_ppo_epsilon", agent_config.memory.ppo_epsilon)
+        session.update_session(
+            "memory_include_expert_seeds",
+            agent_config.memory.include_expert_seeds,
+        )
     session.update_session("tool_evolution_enabled", agent_config.tool_evolution.enabled)
     if agent_config.tool_evolution.enabled:
         session.update_session("tool_library_id", agent_config.tool_evolution.library_id)

@@ -136,6 +136,9 @@ class SkillToolRuntime:
         self.session = session
         self.task_description = task_description
         self.tool_names = [tool.name for tool in tools]
+        self.tool_descriptions = {
+            tool.name: (getattr(tool, "description", "") or "") for tool in tools
+        }
         self.tool_evolution_runtime = tool_evolution_runtime
         self.top_k = top_k
         self.token_budget = token_budget
@@ -642,8 +645,6 @@ class SkillToolRuntime:
             return ""
         pieces: list[str] = []
         tool_filter = {tool for tool in tools if tool}
-        if not tool_filter:
-            return ""
         planned = self.tool_evolution_runtime.planned_explorations(
             limit=self.tool_evolution_runtime.planned_checks,
             diagnosis_only=True,
@@ -668,6 +669,12 @@ class SkillToolRuntime:
             )
         if planned_lines:
             pieces.append("DRAFT active exploration queue: " + " | ".join(planned_lines))
+        if not tool_filter:
+            tool_filter = {
+                str(item.get("tool_name") or "")
+                for item in planned
+                if item.get("tool_name")
+            }
         for tool_name in sorted(tool_filter or set(self.tool_names))[:6]:
             checks = self.tool_evolution_runtime.next_checks(
                 tool_name,
@@ -1065,6 +1072,55 @@ class SkillToolRuntime:
         return {tool for tool in scope if tool and tool in known}
 
     def _fallback_tool_candidates(self) -> set[str]:
+        if self.memory.include_expert_seeds:
+            return self._expert_fallback_tool_candidates()
+        known_tools = list(dict.fromkeys(self.tool_names))
+        if len(known_tools) <= 6:
+            return set(known_tools)
+        context = " ".join(
+            [
+                self.task_description,
+                self.scenario,
+                " ".join(self.recent_observations[-6:]),
+            ]
+        ).lower()
+        context_tokens = {
+            token
+            for token in re.findall(r"[a-z0-9]+", context)
+            if len(token) >= 3
+        }
+        recent_tools = {
+            str(transition.get("tool") or "")
+            for transition in self.recent_transitions[-6:]
+        }
+        draft_tools = self._draft_tool_scope()
+        ranked: list[tuple[float, int, str]] = []
+        for index, tool_name in enumerate(known_tools):
+            description = strip_integrated_learning_guidance(
+                self.tool_descriptions.get(tool_name, "")
+            ).lower()
+            tool_tokens = {
+                token
+                for token in re.findall(
+                    r"[a-z0-9]+",
+                    f"{tool_name.replace('_', ' ')} {description}",
+                )
+                if len(token) >= 3
+            }
+            overlap = context_tokens & tool_tokens
+            score = float(len(overlap))
+            if tool_name.lower() in context:
+                score += 3.0
+            if tool_name in recent_tools:
+                score += 2.0
+            if tool_name in draft_tools:
+                score += 2.5
+            ranked.append((score, -index, tool_name))
+        positive = [item for item in ranked if item[0] > 0]
+        selected = sorted(positive or ranked, reverse=True)[:6]
+        return {tool_name for _, _, tool_name in selected}
+
+    def _expert_fallback_tool_candidates(self) -> set[str]:
         known = set(self.tool_names)
         if not known:
             return set()
@@ -1356,6 +1412,8 @@ class SkillToolRuntime:
         )
 
     def _evidence_guidance_after_tool(self, tool_name: str) -> str:
+        if not self.memory.include_expert_seeds:
+            return ""
         text = "\n".join(self.recent_observations[-6:])
         lower = text.lower()
         down_hosts = self._host_link_down_devices(text)

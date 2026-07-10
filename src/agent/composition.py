@@ -43,6 +43,7 @@ class MemoryConfig:
     evolution_threshold: int = 3
     best_of_n: int = 3
     ppo_epsilon: float = 0.2
+    include_expert_seeds: bool = False
 
     @property
     def enabled(self) -> bool:
@@ -160,6 +161,7 @@ def wrap_agent_extensions(agent: Any, config: AgentRunConfig) -> Any:
             evolution_threshold=config.memory.evolution_threshold,
             best_of_n=config.memory.best_of_n,
             ppo_epsilon=config.memory.ppo_epsilon,
+            include_expert_seeds=config.memory.include_expert_seeds,
         ),
         memory_mode=config.memory.mode,
         memory_top_k=config.memory.top_k,

@@ -216,6 +216,8 @@ def build_experiment_command(config: dict[str, Any]) -> list[str]:
                 _str(config.get("memory_ppo_epsilon"), "0.2"),
             ]
         )
+        if bool(config.get("memory_expert_seeds", False)):
+            command.append("--memory-expert-seeds")
 
     return command
 

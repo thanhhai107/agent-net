@@ -64,13 +64,36 @@ class DraftExploration(BaseModel):
     user_query: str = ""
     parameters: dict[str, Any] = Field(default_factory=dict)
     observation: str = ""
-    status: Literal["success", "error", "unknown", "planned", "consumed"] = "unknown"
+    status: Literal[
+        "success",
+        "error",
+        "unknown",
+        "planned",
+        "consumed",
+        "invalidated",
+    ] = "unknown"
     document_hash: str = ""
     analyzer_suggestion: str = ""
     next_exploration: str = ""
     consumed_by_trial_id: str = ""
     consumed_at: str = ""
+    diversity_score: float = 1.0
+    reflection_count: int = 0
     created_at: str = Field(default_factory=utc_now)
+
+
+class DraftExplorerDraft(BaseModel):
+    """One DRAFT Explorer proposal before diversity verification."""
+
+    user_query: str = ""
+    parameters: dict[str, Any] = Field(default_factory=dict)
+    next_exploration: str = ""
+    intent: Literal[
+        "diagnosis_check",
+        "tool_validation",
+        "boundary_case",
+        "argument_schema_probe",
+    ] = "tool_validation"
 
 
 class DraftAnalyzerSuggestion(BaseModel):
@@ -83,9 +106,18 @@ class DraftAnalyzerSuggestion(BaseModel):
     created_at: str = Field(default_factory=utc_now)
 
 
+class DraftAnalyzerDraft(BaseModel):
+    """Structured natural-language analysis of one tool's exploration batch."""
+
+    suggestion: str = ""
+    next_exploration: str = ""
+    rationale: str = ""
+
+
 class DocumentationRevision(BaseModel):
     revision_id: str
     tool_name: str
+    source_signature: str = ""
     before_hash: str
     after_hash: str
     changed: bool
@@ -133,6 +165,9 @@ class DraftRewriteDraft(BaseModel):
 class ToolDocumentation(BaseModel):
     name: str
     description: str = ""
+    source_signature: str = ""
+    source_schema: dict[str, Any] = Field(default_factory=dict)
+    source_contract_version: int = 0
     tool_usage_description: str = ""
     preconditions: list[str] = Field(default_factory=list)
     parameters: dict[str, ToolParameterDoc] = Field(default_factory=dict)
@@ -170,6 +205,7 @@ class ToolDocumentation(BaseModel):
                 "error_count",
                 "mastery_score",
                 "last_convergence_score",
+                "source_signature",
             }
         )
         encoded = json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str)

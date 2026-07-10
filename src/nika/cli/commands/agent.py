@@ -184,6 +184,11 @@ def agent_run(
         min=0.0,
         help="PPO-style clipping epsilon for Skill-Pro evolution gate.",
     ),
+    memory_expert_seeds: bool = typer.Option(
+        False,
+        "--memory-expert-seeds",
+        help="Enable optional NIKA expert seed ladders; core Skill-Pro uses generic seeds only.",
+    ),
 ) -> None:
     """Run the agent on the current session task."""
     from nika.workflows.agent.run import start_agent
@@ -232,6 +237,7 @@ def agent_run(
                     evolution_threshold=memory_evolution_threshold,
                     best_of_n=memory_best_of_n,
                     ppo_epsilon=memory_ppo_epsilon,
+                    include_expert_seeds=memory_expert_seeds,
                 ),
             ),
             session_id=session_id,
