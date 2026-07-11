@@ -149,12 +149,6 @@ def _extract_runtime_skill_steps(entries: list[dict[str, Any]]) -> list[SkillSte
                 if entry.get("status") in {"success", "error", "unknown"}
                 else "unknown",
                 rationale="Observed Skill-Pro online runtime transition.",
-                draft_exploration_id=str(
-                    entry.get("draft_exploration_id") or ""
-                ),
-                draft_next_exploration=_short_text(
-                    entry.get("draft_next_exploration")
-                ),
             )
         )
     return steps
@@ -199,21 +193,6 @@ def _float_meta(run_meta: dict[str, Any], key: str, default: float) -> float:
         return default
 
 
-def _bool_meta(run_meta: dict[str, Any], key: str, default: bool) -> bool:
-    value = run_meta.get(key)
-    if value is None:
-        return default
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        normalized = value.strip().lower()
-        if normalized in {"1", "true", "yes", "on"}:
-            return True
-        if normalized in {"0", "false", "no", "off", ""}:
-            return False
-    return bool(value)
-
-
 def _strip_integrated_guidance(value: Any) -> str:
     return strip_integrated_learning_guidance(value)
 
@@ -247,11 +226,6 @@ async def evolve_session_memory(
         evolution_threshold=_int_meta(run_meta, "memory_evolution_threshold", 3),
         best_of_n=_int_meta(run_meta, "memory_best_of_n", 3),
         ppo_epsilon=_float_meta(run_meta, "memory_ppo_epsilon", 0.2),
-        include_expert_seeds=_bool_meta(
-            run_meta,
-            "memory_include_expert_seeds",
-            False,
-        ),
     )
     evidence = EvaluationEvidence(
         session_id=str(run_meta.get("session_id") or session_path.name),
@@ -260,6 +234,9 @@ async def evolve_session_memory(
         topology_class=str(run_meta.get("scenario_topo_size") or ""),
         root_cause=list(gt.get("root_cause_name") or []),
         faulty_devices=list(gt.get("faulty_devices") or []),
+        ground_truth_is_anomaly=(
+            bool(gt.get("is_anomaly")) if "is_anomaly" in gt else None
+        ),
         metrics=metrics_with_runtime,
         steps=int(metrics_with_runtime.get("steps") or 0),
         tool_calls=int(metrics_with_runtime.get("tool_calls") or 0),
@@ -276,28 +253,13 @@ async def evolve_session_memory(
             "memory_config": {
                 "top_k": _int_meta(run_meta, "memory_top_k", 5),
                 "token_budget": _int_meta(run_meta, "memory_token_budget", 1500),
-                "skill_selector_mode": str(
-                    run_meta.get("memory_skill_selector_mode") or "lcb"
-                ),
-                "meta_controller_mode": str(
-                    run_meta.get("memory_meta_controller_mode") or "heuristic"
-                ),
+                "selection_policy": "similarity_top_k_then_online_value",
+                "meta_controller": "llm_with_deterministic_fallback",
                 "max_skill_age": _int_meta(run_meta, "memory_max_skill_age", 4),
-                "selector_min_lcb": _float_meta(
-                    run_meta,
-                    "memory_selector_min_lcb",
-                    -0.05,
-                ),
-                "selector_nominee_k": _int_meta(
-                    run_meta,
-                    "memory_selector_nominee_k",
-                    3,
-                ),
                 "pool_size": module.pool_size,
                 "evolution_threshold": module.evolution_threshold,
                 "best_of_n": module.best_of_n,
                 "ppo_epsilon": module.ppo_epsilon,
-                "include_expert_seeds": module.include_expert_seeds,
             },
         }
     )

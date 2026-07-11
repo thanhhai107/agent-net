@@ -26,24 +26,15 @@ def _config(**overrides: object) -> dict[str, object]:
         "max_attempts": 3,
         "tool_library_id": "tools-test",
         "tool_doc_chars": 640,
-        "tool_prompt_doc_limit": 5,
-        "tool_scoped_prompt_doc_limit": 3,
-        "tool_planned_checks": 2,
-        "tool_next_checks": 1,
         "tool_convergence_threshold": 0.8,
         "memory_bank": "memory-test",
         "memory_k": 5,
         "memory_tokens": 1500,
-        "memory_selector": "lcb",
-        "memory_meta_controller": "heuristic",
         "memory_max_skill_age": 6,
-        "memory_selector_min_lcb": -0.02,
-        "memory_selector_nominee_k": 4,
         "memory_pool_size": 24,
         "memory_evolution_threshold": 2,
         "memory_best_of_n": 5,
         "memory_ppo_epsilon": 0.15,
-        "memory_expert_seeds": False,
     }
     config.update(overrides)
     return config
@@ -92,47 +83,13 @@ def test_tool_and_memory_modules_share_one_sequential_command() -> None:
 
     assert command[command.index("--tools") + 1] == "tools-test"
     assert command[command.index("--tool-doc-chars") + 1] == "640"
-    assert command[command.index("--tool-prompt-doc-limit") + 1] == "5"
-    assert command[command.index("--tool-scoped-prompt-doc-limit") + 1] == "3"
-    assert command[command.index("--tool-planned-checks") + 1] == "2"
-    assert command[command.index("--tool-next-checks") + 1] == "1"
     assert command[command.index("--tool-convergence-threshold") + 1] == "0.8"
     assert command[command.index("--memory") + 1] == "memory-test"
-    assert command[command.index("--memory-selector") + 1] == "lcb"
-    assert command[command.index("--memory-meta-controller") + 1] == "heuristic"
     assert command[command.index("--memory-max-skill-age") + 1] == "6"
-    assert command[command.index("--memory-selector-min-lcb") + 1] == "-0.02"
-    assert command[command.index("--memory-selector-nominee-k") + 1] == "4"
     assert command[command.index("--memory-pool-size") + 1] == "24"
     assert command[command.index("--memory-evolution-threshold") + 1] == "2"
     assert command[command.index("--memory-best-of-n") + 1] == "5"
     assert command[command.index("--memory-ppo-epsilon") + 1] == "0.15"
-
-
-def test_memory_expert_seed_ablation_is_explicit() -> None:
-    core_command = build_experiment_command(
-        _config(modules=["memory_evolution"])
-    )
-    expert_command = build_experiment_command(
-        _config(modules=["memory_evolution"], memory_expert_seeds=True)
-    )
-
-    assert "--memory-expert-seeds" not in core_command
-    assert "--memory-expert-seeds" in expert_command
-
-
-def test_memory_command_passes_skill_pro_selector_and_controller() -> None:
-    command = build_experiment_command(
-        _config(
-            modules=["memory_evolution"],
-            memory_selector="llm_topk_lcb",
-            memory_meta_controller="llm",
-        )
-    )
-
-    assert command[command.index("--memory-selector") + 1] == "llm_topk_lcb"
-    assert command[command.index("--memory-meta-controller") + 1] == "llm"
-
 
 def test_command_plan_for_memory_has_no_service_prerequisite() -> None:
     plan = build_command_plan(

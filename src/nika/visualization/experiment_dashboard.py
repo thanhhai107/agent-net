@@ -396,10 +396,6 @@ RESULT_DETAIL_COLUMNS = [
     "memory_success",
     "memory_added_tokens",
     "memory_delta_tokens_step",
-    "memory_selector",
-    "memory_controller",
-    "draft_planned",
-    "draft_consumed",
     "duration",
     "modules",
     "agent",
@@ -443,8 +439,6 @@ RESULT_INTEGER_COLUMNS = {
     "token_out",
     "total_tokens",
     "memory_added_tokens",
-    "draft_planned",
-    "draft_consumed",
 }
 
 
@@ -580,10 +574,6 @@ def _result_column_config() -> dict[str, object]:
         "memory_delta_tokens_step": st.column_config.NumberColumn(
             "Mem Δ Tokens/Step", format="%.2f"
         ),
-        "memory_selector": st.column_config.TextColumn("Mem Selector"),
-        "memory_controller": st.column_config.TextColumn("Mem Controller"),
-        "draft_planned": st.column_config.NumberColumn("DRAFT Planned", format="%d"),
-        "draft_consumed": st.column_config.NumberColumn("DRAFT Used", format="%d"),
         "duration": st.column_config.TextColumn("Duration", width="small"),
         "agent": st.column_config.TextColumn("Agent", width="small"),
         "model": st.column_config.TextColumn("Model", width="medium"),
@@ -773,16 +763,12 @@ def _result_rows(*, benchmark_name: str | None = None) -> list[dict[str, object]
         memory_successes: list[float] = []
         memory_added_tokens: list[float] = []
         memory_delta_tokens: list[float] = []
-        draft_planned: list[float] = []
-        draft_consumed: list[float] = []
         submitted = 0
         finished = 0
         failed = 0
         result_modules: set[str] = set()
         agents: set[str] = set()
         models: set[str] = set()
-        memory_selectors: set[str] = set()
-        memory_controllers: set[str] = set()
         updated = "-"
 
         for run_path in run_paths:
@@ -832,14 +818,6 @@ def _result_rows(*, benchmark_name: str | None = None) -> list[dict[str, object]
                     memory_successes.append(
                         1.0 if memory_update.get("episode_success") else 0.0
                     )
-            for key, target in (
-                ("draft_planned_explorations", draft_planned),
-                ("draft_consumed_explorations", draft_consumed),
-            ):
-                value = _float(metrics.get(key))
-                if value is not None:
-                    target.append(value)
-
             dur = _parse_duration(meta)
             if dur is not None:
                 durations.append(dur)
@@ -848,10 +826,6 @@ def _result_rows(*, benchmark_name: str | None = None) -> list[dict[str, object]
                 result_modules.add("Tool Evolution")
             if meta.get("memory_mode") and meta.get("memory_mode") != "off":
                 result_modules.add("Memory Evolution")
-                if meta.get("memory_skill_selector_mode"):
-                    memory_selectors.add(str(meta["memory_skill_selector_mode"]))
-                if meta.get("memory_meta_controller_mode"):
-                    memory_controllers.add(str(meta["memory_meta_controller_mode"]))
             if meta.get("agent_type"):
                 agent_name = str(meta["agent_type"])
                 agents.add(agent_name)
@@ -895,10 +869,6 @@ def _result_rows(*, benchmark_name: str | None = None) -> list[dict[str, object]
             "memory_success": _avg(memory_successes),
             "memory_added_tokens": _sum(memory_added_tokens),
             "memory_delta_tokens_step": _avg(memory_delta_tokens),
-            "memory_selector": ", ".join(sorted(memory_selectors)) or "-",
-            "memory_controller": ", ".join(sorted(memory_controllers)) or "-",
-            "draft_planned": _sum(draft_planned),
-            "draft_consumed": _sum(draft_consumed),
             "duration": f"{int(sum(durations))}s" if durations else "-",
             "modules": ", ".join(sorted(result_modules)) or "-",
             "agent": ", ".join(sorted(agents)) or "-",
@@ -1131,50 +1101,14 @@ with col_modules[0]:
                 disabled=not tool_selected,
             )
             
-        t_col3, t_col4 = st.columns(2, gap="small")
-        with t_col3:
-            tool_prompt_doc_limit = st.number_input(
-                "DRAFT docs",
-                min_value=1,
-                max_value=20,
-                value=6,
-                disabled=not tool_selected,
-            )
-        with t_col4:
-            tool_scoped_prompt_doc_limit = st.number_input(
-                "Scoped docs",
-                min_value=1,
-                max_value=20,
-                value=4,
-                disabled=not tool_selected,
-            )
-            
-        t_col5, t_col6, t_col7 = st.columns(3, gap="small")
-        with t_col5:
-            tool_planned_checks = st.number_input(
-                "Planned checks",
-                min_value=0,
-                max_value=20,
-                value=4,
-                disabled=not tool_selected,
-            )
-        with t_col6:
-            tool_next_checks = st.number_input(
-                "Next checks",
-                min_value=0,
-                max_value=10,
-                value=2,
-                disabled=not tool_selected,
-            )
-        with t_col7:
-            tool_convergence_threshold = st.number_input(
-                "Convergence",
-                min_value=0.0,
-                max_value=1.0,
-                value=0.75,
-                step=0.05,
-                disabled=not tool_selected,
-            )
+        tool_convergence_threshold = st.number_input(
+            "Convergence",
+            min_value=0.0,
+            max_value=1.0,
+            value=0.75,
+            step=0.05,
+            disabled=not tool_selected,
+        )
 
 with col_modules[1]:
     with st.expander("Memory Evolution Settings", expanded=False):
@@ -1207,20 +1141,8 @@ with col_modules[1]:
                 disabled=not memory_selected
             )
             
-        m_col4, m_col5, m_col6 = st.columns(3, gap="small")
+        m_col4, m_col5 = st.columns(2, gap="small")
         with m_col4:
-            memory_selector = st.selectbox(
-                "Memory selector",
-                ["lcb", "llm_topk_lcb"],
-                disabled=not memory_selected,
-            )
-        with m_col5:
-            memory_meta_controller = st.selectbox(
-                "Memory controller",
-                ["heuristic", "llm"],
-                disabled=not memory_selected,
-            )
-        with m_col6:
             memory_max_skill_age = st.number_input(
                 "Skill max age",
                 min_value=1,
@@ -1229,23 +1151,7 @@ with col_modules[1]:
                 disabled=not memory_selected,
             )
             
-        m_col7, m_col8, m_col9 = st.columns(3, gap="small")
-        with m_col7:
-            memory_selector_min_lcb = st.number_input(
-                "Selector min LCB",
-                value=-0.05,
-                step=0.01,
-                disabled=not memory_selected,
-            )
-        with m_col8:
-            memory_selector_nominee_k = st.number_input(
-                "Nominee k",
-                min_value=1,
-                max_value=20,
-                value=3,
-                disabled=not memory_selected,
-            )
-        with m_col9:
+        with m_col5:
             memory_pool_size = st.number_input(
                 "Skill pool",
                 min_value=1,
@@ -1279,11 +1185,6 @@ with col_modules[1]:
                 step=0.05,
                 disabled=not memory_selected,
             )
-        memory_expert_seeds = st.checkbox(
-            "Enable NIKA expert seed ladders",
-            value=False,
-            disabled=not memory_selected,
-        )
 
 modules = []
 if tool_selected:
@@ -1312,24 +1213,15 @@ config = {
     "parallel": 1,
     "tool_library_id": tool_library_id,
     "tool_doc_chars": int(tool_doc_chars),
-    "tool_prompt_doc_limit": int(tool_prompt_doc_limit),
-    "tool_scoped_prompt_doc_limit": int(tool_scoped_prompt_doc_limit),
-    "tool_planned_checks": int(tool_planned_checks),
-    "tool_next_checks": int(tool_next_checks),
     "tool_convergence_threshold": float(tool_convergence_threshold),
     "memory_bank": memory_bank,
     "memory_k": int(memory_k),
     "memory_tokens": int(memory_tokens),
-    "memory_selector": memory_selector,
-    "memory_meta_controller": memory_meta_controller,
     "memory_max_skill_age": int(memory_max_skill_age),
-    "memory_selector_min_lcb": float(memory_selector_min_lcb),
-    "memory_selector_nominee_k": int(memory_selector_nominee_k),
     "memory_pool_size": int(memory_pool_size),
     "memory_evolution_threshold": int(memory_evolution_threshold),
     "memory_best_of_n": int(memory_best_of_n),
     "memory_ppo_epsilon": float(memory_ppo_epsilon),
-    "memory_expert_seeds": bool(memory_expert_seeds),
     "run_judge": bool(run_judge),
     "judge_backend": judge_backend,
     "judge_model": judge_model,

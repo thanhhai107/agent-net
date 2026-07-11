@@ -7,7 +7,7 @@ import json
 from datetime import datetime, timezone
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 def utc_now() -> str:
@@ -31,8 +31,6 @@ class ToolTrial(BaseModel):
     status: Literal["success", "error", "unknown"] = "unknown"
     output_summary: str = ""
     error_summary: str = ""
-    planned_exploration_id: str = ""
-    planned_next_exploration: str = ""
     timestamp: str = Field(default_factory=utc_now)
 
     @property
@@ -53,10 +51,10 @@ class ComprehensionGap(BaseModel):
 class DraftExploration(BaseModel):
     exploration_id: str
     session_id: str
+    trial_id: str = ""
     tool_name: str
     intent: Literal[
         "unknown",
-        "diagnosis_check",
         "tool_validation",
         "boundary_case",
         "argument_schema_probe",
@@ -68,32 +66,29 @@ class DraftExploration(BaseModel):
         "success",
         "error",
         "unknown",
-        "planned",
-        "consumed",
         "invalidated",
     ] = "unknown"
     document_hash: str = ""
     analyzer_suggestion: str = ""
-    next_exploration: str = ""
-    consumed_by_trial_id: str = ""
-    consumed_at: str = ""
     diversity_score: float = 1.0
     reflection_count: int = 0
+    read_only: bool = True
     created_at: str = Field(default_factory=utc_now)
 
-
-class DraftExplorerDraft(BaseModel):
-    """One DRAFT Explorer proposal before diversity verification."""
-
-    user_query: str = ""
-    parameters: dict[str, Any] = Field(default_factory=dict)
-    next_exploration: str = ""
-    intent: Literal[
-        "diagnosis_check",
-        "tool_validation",
-        "boundary_case",
-        "argument_schema_probe",
-    ] = "tool_validation"
+    @model_validator(mode="before")
+    @classmethod
+    def migrate_legacy_diagnosis_plan(_cls, value: Any) -> Any:
+        if not isinstance(value, dict):
+            return value
+        migrated = dict(value)
+        migrated.pop("scope", None)
+        if migrated.get("intent") == "diagnosis_check":
+            migrated["intent"] = "tool_validation"
+        if migrated.get("status") == "planned":
+            migrated["status"] = "invalidated"
+        elif migrated.get("status") == "consumed":
+            migrated["status"] = "unknown"
+        return migrated
 
 
 class DraftAnalyzerSuggestion(BaseModel):
@@ -102,7 +97,6 @@ class DraftAnalyzerSuggestion(BaseModel):
     session_id: str = ""
     trial_ids: list[str] = Field(default_factory=list)
     suggestion: str
-    next_exploration: str = ""
     created_at: str = Field(default_factory=utc_now)
 
 
@@ -110,7 +104,6 @@ class DraftAnalyzerDraft(BaseModel):
     """Structured natural-language analysis of one tool's exploration batch."""
 
     suggestion: str = ""
-    next_exploration: str = ""
     rationale: str = ""
 
 
@@ -141,7 +134,6 @@ class DraftRewriteProposal(BaseModel):
     usage_notes: list[str] = Field(default_factory=list)
     positive_examples: list[dict[str, Any]] = Field(default_factory=list)
     negative_examples: list[dict[str, Any]] = Field(default_factory=list)
-    suggestions_for_exploring: str = ""
     confidence: float = 0.0
     rationale: str = ""
 
@@ -157,7 +149,6 @@ class DraftRewriteDraft(BaseModel):
     constraints: list[str] = Field(default_factory=list)
     failure_modes: list[str] = Field(default_factory=list)
     usage_notes: list[str] = Field(default_factory=list)
-    suggestions_for_exploring: str = ""
     confidence: float = 0.0
     rationale: str = ""
 
@@ -174,16 +165,16 @@ class ToolDocumentation(BaseModel):
     constraints: list[str] = Field(default_factory=list)
     failure_modes: list[str] = Field(default_factory=list)
     usage_notes: list[str] = Field(default_factory=list)
-    exploration_suggestions: list[str] = Field(default_factory=list)
     positive_examples: list[dict[str, Any]] = Field(default_factory=list)
     negative_examples: list[dict[str, Any]] = Field(default_factory=list)
     rewrite_history: list[str] = Field(default_factory=list)
     analyzer_suggestions: list[str] = Field(default_factory=list)
-    explored_queries: list[str] = Field(default_factory=list)
     trial_count: int = 0
     success_count: int = 0
     error_count: int = 0
     mastery_score: float = 0.0
+    contract_mastery_score: float = 0.0
+    diagnostic_utility_score: float = 0.0
     last_convergence_score: float = 0.0
     version: int = 1
     frozen: bool = False
@@ -199,11 +190,12 @@ class ToolDocumentation(BaseModel):
                 "frozen_reason",
                 "rewrite_history",
                 "analyzer_suggestions",
-                "explored_queries",
                 "trial_count",
                 "success_count",
                 "error_count",
                 "mastery_score",
+                "contract_mastery_score",
+                "diagnostic_utility_score",
                 "last_convergence_score",
                 "source_signature",
             }
@@ -240,10 +232,6 @@ class ToolDocumentation(BaseModel):
             parts.append("Known failure modes: " + "; ".join(self.failure_modes[:4]))
         if self.usage_notes:
             parts.append("Usage notes: " + "; ".join(self.usage_notes[:5]))
-        if self.exploration_suggestions:
-            parts.append(
-                "DRAFT next checks: " + "; ".join(self.exploration_suggestions[-3:])
-            )
         text = "\n".join(part for part in parts if part).strip()
         return text[:max_chars]
 
@@ -257,9 +245,9 @@ class DraftToolStats(BaseModel):
     revisions: int = 0
     llm_rewrites: int = 0
     explorations: int = 0
-    planned_explorations: int = 0
-    consumed_explorations: int = 0
     mastery_score: float = 0.0
+    contract_mastery_score: float = 0.0
+    diagnostic_utility_score: float = 0.0
     convergence_score: float = 0.0
     documented_path_rate: float = 0.0
     success_path_rate: float = 0.0

@@ -21,10 +21,6 @@ class ToolEvolutionConfig:
     enabled: bool = False
     library_id: str = "default"
     tool_doc_chars: int = 500
-    prompt_doc_limit: int = 6
-    scoped_prompt_doc_limit: int = 4
-    planned_checks: int = 4
-    next_checks: int = 2
     convergence_threshold: float = 0.75
 
 
@@ -34,16 +30,11 @@ class MemoryConfig:
     bank: str = "default"
     top_k: int = 5
     token_budget: int = 1500
-    skill_selector_mode: str = "lcb"
-    meta_controller_mode: str = "heuristic"
     max_skill_age: int = 4
-    selector_min_lcb: float = -0.05
-    selector_nominee_k: int = 3
     pool_size: int = 32
     evolution_threshold: int = 3
     best_of_n: int = 3
     ppo_epsilon: float = 0.2
-    include_expert_seeds: bool = False
 
     @property
     def enabled(self) -> bool:
@@ -58,7 +49,6 @@ class AgentRunConfig:
     max_steps: int
     session_id: str = ""
     max_attempts: int = 3
-    stream_output: bool = True
     tool_evolution: ToolEvolutionConfig = field(default_factory=ToolEvolutionConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
 
@@ -79,30 +69,16 @@ def validate_agent_extensions(config: AgentRunConfig) -> None:
         )
     if config.tool_evolution.tool_doc_chars < 100:
         raise ValueError("tool_evolution tool_doc_chars must be >= 100")
-    if config.tool_evolution.prompt_doc_limit < 1:
-        raise ValueError("tool_evolution prompt_doc_limit must be >= 1")
-    if config.tool_evolution.scoped_prompt_doc_limit < 1:
-        raise ValueError("tool_evolution scoped_prompt_doc_limit must be >= 1")
-    if config.tool_evolution.planned_checks < 0:
-        raise ValueError("tool_evolution planned_checks must be >= 0")
-    if config.tool_evolution.next_checks < 0:
-        raise ValueError("tool_evolution next_checks must be >= 0")
     if not 0 <= config.tool_evolution.convergence_threshold <= 1:
         raise ValueError("tool_evolution convergence_threshold must be in [0, 1]")
     if config.memory.mode not in {"off", "read", "evolve"}:
         raise ValueError("memory_mode must be one of: off, read, evolve")
-    if config.memory.skill_selector_mode not in {"lcb", "llm_topk_lcb"}:
-        raise ValueError("memory skill selector must be one of: lcb, llm_topk_lcb")
-    if config.memory.meta_controller_mode not in {"heuristic", "llm"}:
-        raise ValueError("memory meta controller must be one of: heuristic, llm")
     if config.memory.top_k < 1:
         raise ValueError("memory top_k must be >= 1")
     if config.memory.token_budget < 100:
         raise ValueError("memory token_budget must be >= 100")
     if config.memory.max_skill_age < 1:
         raise ValueError("memory max_skill_age must be >= 1")
-    if config.memory.selector_nominee_k < 1:
-        raise ValueError("memory selector_nominee_k must be >= 1")
     if config.memory.pool_size < 1:
         raise ValueError("memory pool_size must be >= 1")
     if config.memory.evolution_threshold < 1:
@@ -137,10 +113,6 @@ def workflow_agent_kwargs(
         "tool_evolution_enabled": config.tool_evolution.enabled,
         "tool_library_id": config.tool_evolution.library_id,
         "tool_doc_chars": config.tool_evolution.tool_doc_chars,
-        "tool_prompt_doc_limit": config.tool_evolution.prompt_doc_limit,
-        "tool_scoped_prompt_doc_limit": config.tool_evolution.scoped_prompt_doc_limit,
-        "tool_planned_checks": config.tool_evolution.planned_checks,
-        "tool_next_checks": config.tool_evolution.next_checks,
     }
     if reflexion:
         kwargs["max_attempts"] = config.max_attempts
@@ -161,14 +133,9 @@ def wrap_agent_extensions(agent: Any, config: AgentRunConfig) -> Any:
             evolution_threshold=config.memory.evolution_threshold,
             best_of_n=config.memory.best_of_n,
             ppo_epsilon=config.memory.ppo_epsilon,
-            include_expert_seeds=config.memory.include_expert_seeds,
         ),
         memory_mode=config.memory.mode,
         memory_top_k=config.memory.top_k,
         memory_token_budget=config.memory.token_budget,
-        memory_skill_selector_mode=config.memory.skill_selector_mode,
-        memory_meta_controller_mode=config.memory.meta_controller_mode,
         memory_max_skill_age=config.memory.max_skill_age,
-        memory_selector_min_lcb=config.memory.selector_min_lcb,
-        memory_selector_nominee_k=config.memory.selector_nominee_k,
     )

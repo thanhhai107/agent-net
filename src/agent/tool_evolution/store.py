@@ -41,9 +41,46 @@ class ToolEvolutionStore:
     def load(self) -> DraftToolState:
         if not self.state_path.exists():
             return DraftToolState(library_id=self.library_id)
-        return DraftToolState.model_validate_json(
+        state = DraftToolState.model_validate_json(
             self.state_path.read_text(encoding="utf-8")
         )
+        trials_by_id = {trial.trial_id: trial for trial in state.trials}
+        normalized = []
+        seen_trial_ids: set[str] = set()
+        changed = False
+        for exploration in state.explorations:
+            if exploration.status == "invalidated":
+                changed = True
+                continue
+            trial_id = exploration.trial_id
+            if not trial_id:
+                matches = [
+                    trial
+                    for trial in state.trials
+                    if trial.session_id == exploration.session_id
+                    and trial.tool_name == exploration.tool_name
+                    and trial.arguments == exploration.parameters
+                    and (
+                        trial.output_summary
+                        if trial.status == "success"
+                        else trial.error_summary
+                    )
+                    == exploration.observation
+                ]
+                if len(matches) == 1:
+                    trial_id = matches[0].trial_id
+                    exploration.trial_id = trial_id
+                    exploration.status = matches[0].status
+                    changed = True
+            if not trial_id or trial_id not in trials_by_id or trial_id in seen_trial_ids:
+                changed = True
+                continue
+            normalized.append(exploration)
+            seen_trial_ids.add(trial_id)
+        if changed:
+            state.explorations = normalized
+            self.save(state)
+        return state
 
     def save(self, state: DraftToolState) -> DraftToolState:
         state.library_id = self.library_id
@@ -118,14 +155,6 @@ class ToolEvolutionStore:
             "successful_trials": successes,
             "error_trials": errors,
             "explorations": len(state.explorations),
-            "planned_explorations": sum(
-                exploration.status == "planned"
-                for exploration in state.explorations
-            ),
-            "consumed_explorations": sum(
-                exploration.status == "consumed"
-                for exploration in state.explorations
-            ),
             "analyzer_suggestions": len(state.analyzer_suggestions),
             "gaps": len(state.gaps),
             "revisions": len(state.revisions),

@@ -12,6 +12,7 @@ import ast
 import difflib
 import hashlib
 import json
+import re
 from collections import defaultdict
 from collections.abc import Collection
 from pathlib import Path
@@ -30,7 +31,6 @@ from agent.tool_evolution.models import (
     DraftAnalyzerDraft,
     DraftAnalyzerSuggestion,
     DraftExploration,
-    DraftExplorerDraft,
     DraftRewriteDraft,
     DocumentationRevision,
     DraftRewriteProposal,
@@ -46,26 +46,19 @@ from nika.evaluator.result_log import MESSAGES_FILENAME
 from nika.utils.session import Session
 
 
-ERROR_MARKERS = (
-    "error",
-    "exception",
-    "validation",
-    "not found",
-    "unknown",
-    "missing",
-    "invalid",
-    "failed",
-)
 DRAFT_CONVERGENCE_THRESHOLD = 0.75
 DRAFT_EXPLORATION_SIMILARITY_THRESHOLD = 0.82
 DIAGNOSIS_AGENT_NAMES = frozenset({DIAGNOSIS, "diagnosis_agent"})
-MEMORY_AGENT_NAME = "memory_agent"
 DRAFT_PROMPT_TEXT_LIMIT = 360
 INTEGRATED_GUIDANCE_MARKER = "[Integrated learning guidance - not evidence]"
 
 
 def _short_text(value: Any, *, limit: int = 700) -> str:
-    text = json.dumps(value, ensure_ascii=False, default=str)
+    text = (
+        value
+        if isinstance(value, str)
+        else json.dumps(value, ensure_ascii=False, default=str)
+    )
     if INTEGRATED_GUIDANCE_MARKER in text:
         text = text.split(INTEGRATED_GUIDANCE_MARKER, 1)[0]
     if len(text) > limit:
@@ -206,10 +199,6 @@ def _parse_arguments(raw: Any) -> dict[str, Any]:
     return parsed if isinstance(parsed, dict) else {"_value": parsed}
 
 
-def _argument_signature(arguments: dict[str, Any]) -> str:
-    return json.dumps(arguments or {}, sort_keys=True, ensure_ascii=False, default=str)
-
-
 def _source_parameter_names(doc: ToolDocumentation) -> set[str]:
     properties = doc.source_schema.get("properties")
     if isinstance(properties, dict):
@@ -245,46 +234,6 @@ def _proposal_contract_errors(
     ]
 
 
-def _runtime_draft_hints(
-    entries: list[dict[str, Any]],
-) -> dict[tuple[str, str], list[dict[str, str]]]:
-    hints: dict[tuple[str, str], list[dict[str, str]]] = defaultdict(list)
-    for entry in entries:
-        if (
-            entry.get("agent") != MEMORY_AGENT_NAME
-            or entry.get("event") != "skill_transition"
-        ):
-            continue
-        exploration_id = str(entry.get("draft_exploration_id") or "").strip()
-        if not exploration_id:
-            continue
-        tool_name = str(entry.get("tool") or "")
-        if not tool_name:
-            continue
-        arguments = _parse_arguments(entry.get("tool_input"))
-        hints[(tool_name, _argument_signature(arguments))].append(
-            {
-                "planned_exploration_id": exploration_id,
-                "planned_next_exploration": str(
-                    entry.get("draft_next_exploration") or ""
-                ),
-            }
-        )
-    return hints
-
-
-def _pop_runtime_draft_hint(
-    hints: dict[tuple[str, str], list[dict[str, str]]],
-    *,
-    tool_name: str,
-    arguments: dict[str, Any],
-) -> dict[str, str]:
-    queue = hints.get((tool_name, _argument_signature(arguments)))
-    if not queue:
-        return {}
-    return queue.pop(0)
-
-
 def extract_tool_trials(
     trace_path: str | Path,
     *,
@@ -301,7 +250,6 @@ def extract_tool_trials(
         for line in path.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
-    runtime_draft_hints = _runtime_draft_hints(entries)
     starts: dict[str, dict[str, Any]] = {}
     anonymous_starts: list[tuple[str, dict[str, Any]]] = []
     docs: dict[str, str] = {}
@@ -338,11 +286,6 @@ def extract_tool_trials(
                 continue
             status = "success" if event == "tool_end" else "error"
             output = entry.get("output") or entry.get("error") or ""
-            draft_hint = _pop_runtime_draft_hint(
-                runtime_draft_hints,
-                tool_name=start["tool_name"],
-                arguments=start["arguments"],
-            )
             trial = ToolTrial(
                 trial_id=_stable_id(session_id, run_id, start, output, prefix="trial"),
                 session_id=session_id,
@@ -352,14 +295,6 @@ def extract_tool_trials(
                 status=status,
                 output_summary=_short_text(output) if status == "success" else "",
                 error_summary=_short_text(output) if status == "error" else "",
-                planned_exploration_id=draft_hint.get(
-                    "planned_exploration_id",
-                    "",
-                ),
-                planned_next_exploration=draft_hint.get(
-                    "planned_next_exploration",
-                    "",
-                ),
                 timestamp=start["timestamp"],
             )
             trials.append(trial)
@@ -371,7 +306,9 @@ def _infer_parameter_doc(name: str, value: Any) -> ToolParameterDoc:
     constraints: list[str] = []
     lowered = name.lower()
     if any(token in lowered for token in ("host", "router", "device", "node")):
-        constraints.append("Use exact NIKA/Kathara device names from the scenario.")
+        constraints.append(
+            "Use an exact device identifier observed in the current environment."
+        )
     if "interface" in lowered or lowered in {"iface", "ifname"}:
         constraints.append("Use exact interface names observed on the target device.")
     if isinstance(value, bool):
@@ -436,474 +373,136 @@ def identify_comprehension_gaps(trials: list[ToolTrial]) -> list[ComprehensionGa
     return gaps
 
 
-def identify_diagnostic_semantic_gaps(
-    trials: list[ToolTrial],
-    *,
-    metrics: dict[str, Any],
-) -> list[ComprehensionGap]:
-    """Find DRAFT gaps where tool calls succeeded but diagnosis stayed weak."""
-    if not trials:
-        return []
-    loc_score = max(
-        float(metrics.get("localization_accuracy") or 0.0),
-        float(metrics.get("localization_f1") or 0.0),
-    )
-    rca_score = max(
-        float(metrics.get("rca_accuracy") or 0.0),
-        float(metrics.get("rca_f1") or 0.0),
-    )
-    if max(loc_score, rca_score) >= 0.6:
-        return []
-    latest_success_by_tool: dict[str, ToolTrial] = {}
-    for trial in trials:
-        if trial.success:
-            latest_success_by_tool[trial.tool_name] = trial
-    if not latest_success_by_tool:
-        return []
-    gaps: list[ComprehensionGap] = []
-    for sample in latest_success_by_tool.values():
-        gaps.append(
-            ComprehensionGap(
-                gap_id=_stable_id(
-                    sample.tool_name,
-                    "diagnostic_semantic_gap",
-                    sample.output_summary,
-                    round(loc_score, 3),
-                    round(rca_score, 3),
-                    prefix="gap",
-                ),
-                tool_name=sample.tool_name,
-                gap_type="diagnostic_semantic_gap",
-                evidence=_trim_text(sample.output_summary, limit=500),
-                recommendation=(
-                    "Document how this successful output should be interpreted for "
-                    "localization/RCA, which contradictory signals matter, and what "
-                    "follow-up probe distinguishes competing root causes."
-                ),
-                session_id=sample.session_id,
-            )
-        )
-    return gaps
-
-
 def _exploration_from_trial(
     *,
     trial: ToolTrial,
     doc: ToolDocumentation,
     analyzer_suggestion: str = "",
-    next_exploration: str = "",
+    prior_explorations: list[DraftExploration] | None = None,
 ) -> DraftExploration:
     observation = trial.output_summary if trial.success else trial.error_summary
+    read_only = _exploration_is_read_only(
+        tool_name=trial.tool_name,
+        parameters=trial.arguments,
+        text=trial.task_description,
+    )
     user_query = trial.task_description or (
         f"Explore `{trial.tool_name}` with arguments "
         f"{json.dumps(trial.arguments, ensure_ascii=False, default=str)}."
     )
-    return DraftExploration(
-        exploration_id=_stable_id(
-            trial.trial_id,
-            doc.content_hash(),
-            analyzer_suggestion,
-            prefix="explore",
-        ),
-        session_id=trial.session_id,
+    signature = _exploration_signature(
         tool_name=trial.tool_name,
         user_query=user_query,
         parameters=trial.arguments,
+    )
+    similarities = [
+        _text_similarity(
+            signature,
+            _exploration_signature(
+                tool_name=item.tool_name,
+                user_query=item.user_query,
+                parameters=item.parameters,
+            ),
+        )
+        for item in (prior_explorations or [])[-12:]
+        if item.tool_name == trial.tool_name
+    ]
+    max_similarity = max(similarities or [0.0])
+    return DraftExploration(
+        exploration_id=_stable_id(
+            trial.trial_id,
+            prefix="explore",
+        ),
+        session_id=trial.session_id,
+        trial_id=trial.trial_id,
+        tool_name=trial.tool_name,
+        intent="tool_validation",
+        user_query=user_query,
+        parameters=trial.arguments,
         observation=observation,
-        status=trial.status,
+        status=trial.status if read_only else "invalidated",
         document_hash=doc.content_hash(),
         analyzer_suggestion=analyzer_suggestion,
-        next_exploration=next_exploration,
+        diversity_score=round(1.0 - max_similarity, 6),
+        reflection_count=(
+            1 if max_similarity >= DRAFT_EXPLORATION_SIMILARITY_THRESHOLD else 0
+        ),
+        read_only=read_only,
     )
 
 
-def _diagnosis_scores_are_weak(metrics: dict[str, Any]) -> bool:
-    if not metrics:
-        return False
-    loc_values = [
-        float(metrics[key] or 0.0)
-        for key in ("localization_accuracy", "localization_f1")
-        if key in metrics
-    ]
-    rca_values = [
-        float(metrics[key] or 0.0)
-        for key in ("rca_accuracy", "rca_f1")
-        if key in metrics
-    ]
-    loc_score = max(loc_values or [1.0])
-    rca_score = max(rca_values or [1.0])
-    return min(loc_score, rca_score) < 0.6
+def _exploration_signature(
+    *,
+    tool_name: str,
+    user_query: str,
+    parameters: dict[str, Any],
+) -> str:
+    return " ".join(
+        (
+            tool_name,
+            user_query,
+            json.dumps(parameters, sort_keys=True, ensure_ascii=False, default=str),
+        )
+    )
 
 
-_TOOL_VALIDATION_EXPLORATION_MARKERS = (
-    "boundary",
-    "invalid",
-    "schema",
-    "validation behavior",
-    "parameter semantics",
-    "automatic sampling",
-    "error case",
+_MUTATING_OPERATION_VALUES = {
+    "add",
+    "apply",
+    "change",
+    "clear",
+    "create",
+    "delete",
+    "disable",
+    "enable",
+    "flush",
+    "inject",
+    "install",
+    "kill",
+    "reload",
+    "remove",
+    "replace",
+    "restart",
+    "set",
+    "shutdown",
+    "start",
+    "stop",
+    "terminate",
+    "uninstall",
+    "write",
+}
+_MUTATING_TEXT_RE = re.compile(
+    r"(?:\b(?:restart|start|stop|reload|enable|disable|kill|delete|remove|"
+    r"flush|apply|inject|shutdown|reboot)\b|"
+    r"\brm\s|\bmv\s|\btouch\s|\btruncate\s|\bsed\s+-i\b|"
+    r"\bsystemctl\s+(?:restart|start|stop|reload|enable|disable)\b|"
+    r"\btc\s+qdisc\s+(?:add|change|replace|del)\b|"
+    r"\b(?:iptables|nft)\s+(?:-[AIXDF]|add|insert|delete|flush)\b|"
+    r"(?:^|\s)(?:>|>>)(?:\s|$))",
+    re.IGNORECASE,
 )
 
 
-def _looks_like_tool_validation_exploration(text: str) -> bool:
-    lowered = str(text or "").lower()
-    return any(marker in lowered for marker in _TOOL_VALIDATION_EXPLORATION_MARKERS)
-
-
-def _default_next_exploration(
-    doc: ToolDocumentation,
+def _exploration_is_read_only(
     *,
-    diagnosis_context: bool = False,
-) -> str:
-    if doc.exploration_suggestions:
-        latest = doc.exploration_suggestions[-1]
-        if diagnosis_context and _looks_like_tool_validation_exploration(latest):
-            return (
-                "Run one topology-grounded diagnostic check with this tool and "
-                "record how the output affects localization/RCA."
-            )
-        return latest
-    if diagnosis_context:
-        return (
-            "Run one topology-grounded diagnostic check with this tool and "
-            "record how the output affects localization/RCA."
-        )
-    if doc.parameters:
-        return (
-            "Explore one valid topology-grounded call and one boundary case "
-            "to verify parameter semantics."
-        )
-    return (
-        "Explore one minimal valid call using observed topology identifiers "
-        "and record how the output should affect localization/RCA."
-    )
-
-
-def _planned_exploration_from_doc(
-    *,
-    doc: ToolDocumentation,
-    session_id: str = "",
-    task_description: str = "",
-    analyzer_suggestion: str = "",
-) -> DraftExploration:
-    diagnosis_context = bool(str(task_description or "").strip())
-    next_exploration = _default_next_exploration(
-        doc,
-        diagnosis_context=diagnosis_context,
-    )
-    parameters = {
-        name: param.examples[-1]
-        for name, param in sorted(doc.parameters.items())
-        if param.examples
-    }
-    user_query = task_description or (
-        f"Actively explore `{doc.name}` for NIKA diagnosis: {next_exploration}"
-    )
-    return DraftExploration(
-        exploration_id=_stable_id(
-            "planned",
-            session_id,
-            doc.name,
-            doc.content_hash(),
-            next_exploration,
-            prefix="explore",
-        ),
-        session_id=session_id,
-        tool_name=doc.name,
-        intent="diagnosis_check" if diagnosis_context else "tool_validation",
-        user_query=user_query,
-        parameters=parameters,
-        observation="",
-        status="planned",
-        document_hash=doc.content_hash(),
-        analyzer_suggestion=analyzer_suggestion,
-        next_exploration=next_exploration,
-    )
-
-
-def _invoke_draft_explorer(
-    *,
-    state: Any,
-    doc: ToolDocumentation,
-    session_id: str,
-    task_description: str,
-    analyzer_suggestion: str,
-    llm_backend: str | None,
-    model: str | None,
-    llm: Any | None = None,
-    llm_error: str = "",
-    similarity_threshold: float = DRAFT_EXPLORATION_SIMILARITY_THRESHOLD,
-) -> DraftExploration | None:
-    """Generate a diverse exploration and self-reflect on near duplicates."""
-    if not learning_backend(llm_backend) or not learning_model(model):
-        return None
-    if llm is None:
-        if llm_error:
-            return None
-        try:
-            llm = load_model(
-                learning_backend(llm_backend),
-                learning_model(model),
-                timeout=learning_timeout_seconds(),
-                max_retries=learning_max_retries(),
-            )
-        except Exception:
-            return None
-    history = [
-        item.user_query.strip()
-        for item in state.explorations
-        if item.tool_name == doc.name and item.user_query.strip()
-    ][-12:]
-    reflection = ""
-    best: tuple[DraftExplorerDraft, float, int] | None = None
-    for attempt in range(3):
-        prompt = (
-            "You are the DRAFT Explorer. Generate one new tool exploration that "
-            "covers a materially different functionality, parameter interaction, "
-            "or diagnostic interpretation than previous explorations. Use generic "
-            "topology-derived placeholders rather than inventing device names. "
-            "Do not predict a faulty device or root-cause answer.\n\n"
-            f"Tool documentation:\n{doc.refined_description(max_chars=1800)}\n\n"
-            f"Analyzer direction:\n{analyzer_suggestion}\n\n"
-            f"Current task family context:\n{_trim_text(task_description, limit=700)}\n\n"
-            f"Previous explorations:\n{json.dumps(history, ensure_ascii=False)}\n\n"
-            + (
-                f"Self-reflection from rejected proposal:\n{reflection}\n\n"
-                if reflection
-                else ""
-            )
-            + "Return DraftExplorerDraft with a natural user_query, concrete "
-            "parameters only when grounded by the documentation, one concise "
-            "next_exploration direction, and an intent."
-        )
-        try:
-            explorer = llm.with_structured_output(DraftExplorerDraft)
-            raw = explorer.invoke(prompt)
-            draft = (
-                raw
-                if isinstance(raw, DraftExplorerDraft)
-                else DraftExplorerDraft.model_validate(raw)
-            )
-        except Exception:
-            return None
-        candidate_query = (draft.user_query or draft.next_exploration).strip()
-        if not candidate_query:
-            return None
-        max_similarity = max(
-            [_text_similarity(candidate_query, previous) for previous in history]
-            or [0.0]
-        )
-        if best is None or max_similarity < best[1]:
-            best = (draft, max_similarity, attempt)
-        if max_similarity < similarity_threshold:
-            break
-        reflection = (
-            f"The previous proposal had similarity {max_similarity:.3f}, above "
-            f"the allowed {similarity_threshold:.3f}. Change the explored behavior, "
-            "not merely the wording."
-        )
-    if best is None or best[1] >= similarity_threshold:
-        return None
-    draft, max_similarity, reflection_count = best
-    candidate_text = (draft.next_exploration or draft.user_query).strip()
-    intent = draft.intent
-    unknown_parameters = (
-        set(draft.parameters) - _source_parameter_names(doc)
-        if doc.source_contract_version > 0
-        else set()
-    )
-    if unknown_parameters:
-        intent = "argument_schema_probe"
-    elif _looks_like_tool_validation_exploration(candidate_text):
-        intent = "tool_validation"
-    elif task_description:
-        intent = "diagnosis_check"
-    return DraftExploration(
-        exploration_id=_stable_id(
-            "planned",
-            session_id,
-            doc.name,
-            doc.content_hash(),
-            candidate_text,
-            prefix="explore",
-        ),
-        session_id=session_id,
-        tool_name=doc.name,
-        intent=intent,
-        user_query=draft.user_query.strip() or task_description,
-        parameters=draft.parameters,
-        status="planned",
-        document_hash=doc.content_hash(),
-        analyzer_suggestion=analyzer_suggestion,
-        next_exploration=candidate_text,
-        diversity_score=round(1.0 - max_similarity, 6),
-        reflection_count=reflection_count,
-    )
-
-
-def _planned_parameters_match(
-    planned_parameters: dict[str, Any],
-    trial_arguments: dict[str, Any],
+    tool_name: str,
+    parameters: dict[str, Any],
+    text: str,
 ) -> bool:
-    if not planned_parameters:
-        return True
-    for key, value in planned_parameters.items():
-        if key not in trial_arguments or trial_arguments[key] != value:
-            return False
-    return True
+    """Exclude mutating tool trials from reusable Explorer observations."""
 
-
-def _consume_planned_explorations(
-    *,
-    state: Any,
-    trials: list[ToolTrial],
-) -> int:
-    consumed = 0
-    for trial in trials:
-        if trial.planned_exploration_id:
-            matched = next(
-                (
-                    exploration
-                    for exploration in state.explorations
-                    if exploration.exploration_id == trial.planned_exploration_id
-                    and exploration.status == "planned"
-                ),
-                None,
-            )
-            if matched is not None:
-                summary = trial.output_summary if trial.success else trial.error_summary
-                matched.status = "consumed"
-                matched.consumed_by_trial_id = trial.trial_id
-                matched.consumed_at = utc_now()
-                matched.observation = (
-                    f"Consumed by {trial.status} trial {trial.trial_id}: "
-                    f"{_trim_text(summary, limit=500)}"
-                ).strip()
-                consumed += 1
-                continue
-        for exploration in state.explorations:
-            if exploration.status != "planned":
-                continue
-            if exploration.tool_name != trial.tool_name:
-                continue
-            if not _planned_parameters_match(exploration.parameters, trial.arguments):
-                continue
-            summary = trial.output_summary if trial.success else trial.error_summary
-            exploration.status = "consumed"
-            exploration.consumed_by_trial_id = trial.trial_id
-            exploration.consumed_at = utc_now()
-            exploration.observation = (
-                f"Consumed by {trial.status} trial {trial.trial_id}: "
-                f"{_trim_text(summary, limit=500)}"
-            ).strip()
-            consumed += 1
-            break
-    return consumed
-
-
-def _planned_exploration_already_covered(
-    *,
-    state: Any,
-    planned: DraftExploration,
-    similarity_threshold: float = 0.9,
-) -> bool:
-    planned_text = (planned.next_exploration or planned.user_query).strip()
-    if not planned_text:
-        return False
-    for exploration in state.explorations:
-        if exploration.status not in {"planned", "consumed"}:
-            continue
-        if exploration.tool_name != planned.tool_name:
-            continue
-        consumed_text = (exploration.next_exploration or exploration.user_query).strip()
-        if not consumed_text:
-            continue
-        if not _planned_parameters_match(exploration.parameters, planned.parameters):
-            continue
-        if consumed_text == planned_text:
-            return True
-        if _text_similarity(consumed_text, planned_text) < similarity_threshold:
-            continue
-        return True
-    return False
-
-
-def _upsert_planned_explorations(
-    *,
-    state: Any,
-    by_tool: dict[str, list[ToolTrial]],
-    metrics: dict[str, Any],
-    session_id: str = "",
-    task_description: str = "",
-    documented_path_rate: float = 0.0,
-    success_path_rate: float = 0.0,
-    llm_backend: str | None = None,
-    model: str | None = None,
-    llm: Any | None = None,
-    llm_error: str = "",
-) -> int:
-    weak_diagnosis = _diagnosis_scores_are_weak(metrics)
-    seen = {item.exploration_id for item in state.explorations}
-    added = 0
-    for tool_name, doc in sorted(state.documents.items()):
-        trials = by_tool.get(tool_name, [])
-        if trials:
-            latest_session_id = trials[-1].session_id
-            latest_task = trials[-1].task_description
-        else:
-            latest_session_id = session_id
-            latest_task = task_description
-        should_plan = not trials or weak_diagnosis or bool(doc.exploration_suggestions)
-        if not should_plan:
-            continue
-        analyzer_suggestion = (
-            doc.analyzer_suggestions[-1] if doc.analyzer_suggestions else ""
-        )
-        llm_planned = (
-            _invoke_draft_explorer(
-                state=state,
-                doc=doc,
-                session_id=latest_session_id,
-                task_description=latest_task,
-                analyzer_suggestion=analyzer_suggestion,
-                llm_backend=llm_backend,
-                model=model,
-                llm=llm,
-                llm_error=llm_error,
-            )
-            if trials or doc.analyzer_suggestions
-            else None
-        )
-        planned = llm_planned or _planned_exploration_from_doc(
-            doc=doc,
-            session_id=latest_session_id,
-            task_description=latest_task,
-            analyzer_suggestion=analyzer_suggestion,
-        )
-        already_covered = _planned_exploration_already_covered(
-            state=state,
-            planned=planned,
-        )
-        if planned.exploration_id not in seen and not already_covered:
-            state.explorations.append(planned)
-            seen.add(planned.exploration_id)
-            added += 1
-            _append_unique(
-                doc.exploration_suggestions,
-                [planned.next_exploration],
-                limit=12,
-            )
-            _append_unique(doc.explored_queries, [planned.user_query], limit=20)
-        state.documents[tool_name] = doc
-        _refresh_tool_stats(
-            state=state,
-            doc=doc,
-            convergence_score=doc.last_convergence_score,
-            documented_path_rate=documented_path_rate,
-            success_path_rate=success_path_rate,
-        )
-    return added
+    for key, value in parameters.items():
+        normalized_key = str(key).strip().lower()
+        normalized_value = str(value).strip().lower()
+        if normalized_key in {"operation", "action", "verb", "mode"}:
+            if normalized_value in _MUTATING_OPERATION_VALUES:
+                return False
+    command = " ".join(
+        str(parameters.get(key) or "")
+        for key in ("command", "cmd", "args")
+    )
+    combined = " ".join((str(tool_name or ""), command, str(text or "")))
+    return _MUTATING_TEXT_RE.search(combined) is None
 
 
 def _analyzer_suggestion_for_tool(
@@ -916,38 +515,16 @@ def _analyzer_suggestion_for_tool(
     error_count = sum(not trial.success for trial in trials)
     success_count = sum(trial.success for trial in trials)
     gap_text = "; ".join(gap.recommendation for gap in gaps[:4])
-    semantic_gaps = [gap for gap in gaps if gap.gap_type == "diagnostic_semantic_gap"]
-    if semantic_gaps:
-        suggestion = (
-            f"Clarify how successful `{tool_name}` outputs should affect "
-            "localization/RCA decisions: "
-            + "; ".join(gap.recommendation for gap in semantic_gaps[:3])
-        )
-        next_exploration = (
-            "Run a follow-up diagnostic probe that distinguishes the current "
-            "localization/RCA alternatives for the same symptom."
-        )
-    elif gaps:
+    if gaps:
         suggestion = (
             f"Clarify `{tool_name}` documentation using observed failures: {gap_text}"
         )
-        next_exploration = (
-            "Try a minimal call with topology-derived identifiers and one "
-            "boundary/error case."
-        )
     elif success_count:
         suggestion = f"Preserve successful `{tool_name}` usage patterns and add concise positive examples."
-        next_exploration = (
-            "Explore a nearby valid input variation to confirm the documented "
-            "parameter semantics."
-        )
     else:
         suggestion = (
             f"No usable `{tool_name}` execution feedback yet; keep documentation "
             "concise and request a concrete trial."
-        )
-        next_exploration = (
-            "Collect one concrete tool call with explicit arguments and output."
         )
     if error_count and not doc.failure_modes:
         suggestion += " Add known failure modes before adding new examples."
@@ -962,7 +539,6 @@ def _analyzer_suggestion_for_tool(
         session_id=trials[-1].session_id if trials else "",
         trial_ids=[trial.trial_id for trial in trials],
         suggestion=suggestion,
-        next_exploration=next_exploration,
     )
 
 
@@ -1018,12 +594,11 @@ def _invoke_draft_analyzer(
         "You are the DRAFT Analyzer. Compare current tool documentation with "
         "actual exploration arguments and feedback. Identify concrete problems "
         "in consistency, completeness, and conciseness, then propose one targeted "
-        "revision and one diverse next exploration. The immutable source contract "
+        "revision. The immutable source contract "
         "is authoritative: do not invent, remove, or rename parameters, and do not "
         "interpret MCP content-block transport wrappers as changes to the primitive "
         "tool API. Do not infer benchmark answers, "
-        "faulty devices, or root-cause labels. Tool-validation explorations may test "
-        "schema boundaries; diagnosis explorations must remain hypotheses.\n\n"
+        "faulty devices, root-cause labels, or diagnosis strategies.\n\n"
         f"{json.dumps(payload, indent=2, ensure_ascii=False, default=str)}"
     )
     try:
@@ -1051,7 +626,6 @@ def _invoke_draft_analyzer(
                 session_id=trials[-1].session_id if trials else "",
                 trial_ids=[trial.trial_id for trial in trials],
                 suggestion=suggestion_text,
-                next_exploration=draft.next_exploration.strip(),
             ),
             "",
         )
@@ -1083,6 +657,12 @@ def _append_unique(target: list[Any], items: list[Any], *, limit: int = 12) -> N
             break
 
 
+def _unique_items(items: list[Any], *, limit: int = 12) -> list[Any]:
+    result: list[Any] = []
+    _append_unique(result, items, limit=limit)
+    return result
+
+
 def _refresh_tool_stats(
     *,
     state: Any,
@@ -1110,15 +690,9 @@ def _refresh_tool_stats(
             for rev in state.revisions
         ),
         explorations=sum(item.tool_name == tool_name for item in state.explorations),
-        planned_explorations=sum(
-            item.tool_name == tool_name and item.status == "planned"
-            for item in state.explorations
-        ),
-        consumed_explorations=sum(
-            item.tool_name == tool_name and item.status == "consumed"
-            for item in state.explorations
-        ),
         mastery_score=doc.mastery_score,
+        contract_mastery_score=doc.contract_mastery_score,
+        diagnostic_utility_score=doc.diagnostic_utility_score,
         convergence_score=doc.last_convergence_score,
         documented_path_rate=documented_path_rate,
         success_path_rate=success_path_rate,
@@ -1136,10 +710,10 @@ def _draft_rewrite_prompt(
     explorations: list[DraftExploration],
     metrics: dict[str, Any],
 ) -> str:
+    del metrics
     doc_payload = doc.model_dump(
         exclude={
             "rewrite_history",
-            "explored_queries",
             "updated_at",
             "version",
             "frozen",
@@ -1148,6 +722,8 @@ def _draft_rewrite_prompt(
             "success_count",
             "error_count",
             "mastery_score",
+            "contract_mastery_score",
+            "diagnostic_utility_score",
             "last_convergence_score",
         },
         mode="json",
@@ -1174,27 +750,24 @@ def _draft_rewrite_prompt(
             "status": trial.status,
             "output_summary": _trim_text(trial.output_summary),
             "error_summary": _trim_text(trial.error_summary),
-            "planned_exploration_id": trial.planned_exploration_id,
-            "planned_next_exploration": _trim_text(trial.planned_next_exploration),
         }
         for trial in trials[-6:]
     ]
     gap_payload = [gap.model_dump(mode="json") for gap in gaps[-8:]]
     suggestion_payload = [
-        {
-            "suggestion": _trim_text(item.suggestion, limit=500),
-            "next_exploration": _trim_text(item.next_exploration),
-        }
+        {"suggestion": _trim_text(item.suggestion, limit=500)}
         for item in suggestions[-4:]
     ]
     exploration_payload = [
         {
+            "trial_id": item.trial_id,
             "tool_name": item.tool_name,
             "parameters": item.parameters,
             "status": item.status,
             "observation": _trim_text(item.observation),
             "analyzer_suggestion": _trim_text(item.analyzer_suggestion, limit=500),
-            "next_exploration": _trim_text(item.next_exploration),
+            "diversity_score": item.diversity_score,
+            "reflection_count": item.reflection_count,
         }
         for item in explorations[-4:]
     ]
@@ -1207,9 +780,9 @@ def _draft_rewrite_prompt(
         "add, remove, or rename parameters. MCP content-block wrappers in traces "
         "are transport envelopes, not evidence that the primitive return contract "
         "changed. Learn only usage guidance supported by trials.\n\n"
-        "DRAFT loop mapping: Explorer = observed diagnosis tool calls; "
+        "DRAFT loop mapping: Explorer = observed read-only tool trials; "
         "Analyzer = suggestions from output/error feedback; Rewriter = update "
-        "the documentation and propose the next useful exploration direction.\n\n"
+        "the documentation.\n\n"
         f"Tool: {tool_name}\n"
         f"Current documentation:\n{json.dumps(doc_payload, indent=2, ensure_ascii=False)}\n\n"
         "Explorer observations:\n"
@@ -1217,17 +790,19 @@ def _draft_rewrite_prompt(
         f"Recent tool trials:\n{json.dumps(trial_payload, indent=2, ensure_ascii=False)}\n\n"
         f"Analyzer suggestions:\n{json.dumps(suggestion_payload, indent=2, ensure_ascii=False)}\n\n"
         f"Comprehension gaps:\n{json.dumps(gap_payload, indent=2, ensure_ascii=False)}\n\n"
-        f"Evaluation metrics:\n{json.dumps(metrics, indent=2, ensure_ascii=False, default=str)}\n\n"
         "Return a documentation rewrite that helps future agents understand "
         "preconditions, argument types, allowed values, constraints, common "
-        "failure modes, safe usage examples, and discriminating checks that "
-        "separate competing hypotheses. Do not write answer-pattern rules such "
+        "failure modes, safe usage examples, return semantics, and how to tell "
+        "a valid result from a tool error. Do not write answer-pattern rules such "
         "as mapping one symptom directly to a faulty device or root-cause label. "
-        "Also return "
-        "`tool_usage_description` as a concise selection-time tool summary and "
-        "`suggestions_for_exploring` as one concise direction for the next "
-        "useful tool trial. For `parameters`, return a mapping from parameter "
-        "name to a short description."
+        "Only document preconditions, constraints, failure modes, and negative "
+        "examples when they are directly supported by the primitive source "
+        "contract or an observed error in this batch. For successful-only batches, "
+        "leave those fields empty rather than inventing possible failures or "
+        "unobserved output fields. "
+        "Also return `tool_usage_description` as a concise selection-time tool "
+        "summary. For `parameters`, return a mapping from parameter name to a "
+        "short description."
     )
 
 
@@ -1252,7 +827,6 @@ def _proposal_from_draft(
         constraints=draft.constraints,
         failure_modes=draft.failure_modes,
         usage_notes=draft.usage_notes,
-        suggestions_for_exploring=draft.suggestions_for_exploring,
         confidence=draft.confidence,
         rationale=draft.rationale,
     )
@@ -1320,22 +894,34 @@ def _apply_draft_proposal(
     proposal: DraftRewriteProposal,
     *,
     allowed_parameter_names: set[str],
+    trials: list[ToolTrial],
+    gaps: list[ComprehensionGap],
 ) -> None:
     if proposal.tool_usage_description.strip():
         doc.tool_usage_description = proposal.tool_usage_description.strip()
-    _append_unique(doc.preconditions, proposal.preconditions)
-    _append_unique(doc.constraints, proposal.constraints)
-    _append_unique(doc.failure_modes, proposal.failure_modes)
-    rationale = [proposal.rationale] if proposal.rationale else []
-    _append_unique(doc.usage_notes, proposal.usage_notes + rationale)
-    if proposal.suggestions_for_exploring:
-        _append_unique(
-            doc.exploration_suggestions,
-            [proposal.suggestions_for_exploring],
+    observed_errors = [trial.error_summary for trial in trials if trial.status == "error"]
+    grounded_constraint = (
+        "Tool arguments must be grounded in currently observed topology evidence."
+    )
+    if observed_errors:
+        doc.preconditions = _unique_items(proposal.preconditions, limit=8)
+        doc.constraints = _unique_items(
+            [grounded_constraint, *proposal.constraints],
             limit=12,
         )
-    _append_unique(doc.positive_examples, proposal.positive_examples, limit=10)
-    _append_unique(doc.negative_examples, proposal.negative_examples, limit=10)
+        doc.failure_modes = _unique_items(
+            [*observed_errors, *proposal.failure_modes],
+            limit=12,
+        )
+        doc.usage_notes = _unique_items(
+            [*(gap.recommendation for gap in gaps), *proposal.usage_notes],
+            limit=12,
+        )
+    else:
+        doc.preconditions = []
+        doc.constraints = [grounded_constraint]
+        doc.failure_modes = []
+        doc.usage_notes = []
     for name, param in proposal.parameters.items():
         if not name or name not in allowed_parameter_names:
             continue
@@ -1363,8 +949,6 @@ def rewrite_documentation(
     llm_backend: str | None = None,
     model: str | None = None,
     documented_tools_at_start: set[str] | None = None,
-    session_id: str = "",
-    task_description: str = "",
     convergence_threshold: float = DRAFT_CONVERGENCE_THRESHOLD,
 ) -> list[DocumentationRevision]:
     state = store.load()
@@ -1406,8 +990,6 @@ def rewrite_documentation(
     by_tool: dict[str, list[ToolTrial]] = defaultdict(list)
     for trial in trials:
         by_tool[trial.tool_name].append(trial)
-    planned_consumed = _consume_planned_explorations(state=state, trials=trials)
-
     revisions: list[DocumentationRevision] = []
     accuracy = float(metrics.get("rca_accuracy") or 0.0)
     for tool_name, tool_trials in by_tool.items():
@@ -1443,7 +1025,11 @@ def rewrite_documentation(
                     if value not in current.examples and len(current.examples) < 5:
                         current.examples.append(value)
 
-            if trial.success and trial.arguments:
+            if trial.success and trial.arguments and _exploration_is_read_only(
+                tool_name=trial.tool_name,
+                parameters=trial.arguments,
+                text=trial.task_description,
+            ):
                 example = {"arguments": trial.arguments}
                 if example not in doc.positive_examples:
                     doc.positive_examples.append(example)
@@ -1456,7 +1042,6 @@ def rewrite_documentation(
                     doc.negative_examples.append(example)
 
         gaps = identify_comprehension_gaps(tool_trials)
-        gaps.extend(identify_diagnostic_semantic_gaps(tool_trials, metrics=metrics))
         for gap in gaps:
             if gap.recommendation not in doc.usage_notes:
                 doc.usage_notes.append(gap.recommendation)
@@ -1469,14 +1054,6 @@ def rewrite_documentation(
                 )
                 if note not in doc.preconditions:
                     doc.preconditions.append(note)
-            if gap.gap_type == "diagnostic_semantic_gap":
-                note = (
-                    "After a successful call, interpret the output against the "
-                    "current hypothesis and choose a follow-up probe that can "
-                    "distinguish localization/RCA alternatives."
-                )
-                if note not in doc.usage_notes:
-                    doc.usage_notes.append(note)
             if not any(item.gap_id == gap.gap_id for item in state.gaps):
                 state.gaps.append(gap)
 
@@ -1503,8 +1080,6 @@ def rewrite_documentation(
             llm_error=learning_llm_error,
         )
         suggestion = llm_suggestion or fallback_suggestion
-        if not suggestion.next_exploration:
-            suggestion.next_exploration = fallback_suggestion.next_exploration
         tool_suggestions = [suggestion]
         if not any(
             item.suggestion_id == suggestion.suggestion_id
@@ -1512,25 +1087,31 @@ def rewrite_documentation(
         ):
             state.analyzer_suggestions.append(suggestion)
         _append_unique(doc.analyzer_suggestions, [suggestion.suggestion], limit=20)
-        _append_unique(
-            doc.exploration_suggestions, [suggestion.next_exploration], limit=12
-        )
 
-        explorations = [
-            _exploration_from_trial(
+        seen_explorations = {item.exploration_id for item in state.explorations}
+        seen_exploration_trials = {
+            item.trial_id for item in state.explorations if item.trial_id
+        }
+        prior_explorations = [
+            item for item in state.explorations if item.tool_name == tool_name
+        ]
+        explorations: list[DraftExploration] = []
+        for trial in tool_trials:
+            exploration = _exploration_from_trial(
                 trial=trial,
                 doc=doc,
                 analyzer_suggestion=suggestion.suggestion,
-                next_exploration=suggestion.next_exploration,
+                prior_explorations=[*prior_explorations, *explorations],
             )
-            for trial in tool_trials
-        ]
-        seen_explorations = {item.exploration_id for item in state.explorations}
+            explorations.append(exploration)
         for exploration in explorations:
-            if exploration.exploration_id not in seen_explorations:
+            if (
+                exploration.exploration_id not in seen_explorations
+                and exploration.trial_id not in seen_exploration_trials
+            ):
                 state.explorations.append(exploration)
                 seen_explorations.add(exploration.exploration_id)
-            _append_unique(doc.explored_queries, [exploration.user_query], limit=20)
+                seen_exploration_trials.add(exploration.trial_id)
 
         proposal, rewriter_error = _invoke_draft_rewriter(
             tool_name=tool_name,
@@ -1545,6 +1126,12 @@ def rewrite_documentation(
             llm=learning_llm,
             llm_error=learning_llm_error,
         )
+        all_evidence_trials = [
+            trial for trial in state.trials if trial.tool_name == tool_name
+        ]
+        all_evidence_gaps = [
+            gap for gap in state.gaps if gap.tool_name == tool_name
+        ]
         contract_rejected = False
         if proposal is not None:
             contract_errors = _proposal_contract_errors(
@@ -1565,7 +1152,16 @@ def rewrite_documentation(
                     doc,
                     proposal,
                     allowed_parameter_names=allowed_parameter_names,
+                    trials=all_evidence_trials,
+                    gaps=all_evidence_gaps,
                 )
+        if proposal is None and not any(
+            trial.status == "error" for trial in all_evidence_trials
+        ):
+            doc.preconditions = []
+            doc.constraints = [grounded_constraint]
+            doc.failure_modes = []
+            doc.usage_notes = []
         if not doc.tool_usage_description:
             doc.tool_usage_description = _tool_usage_description(doc)
 
@@ -1598,11 +1194,33 @@ def rewrite_documentation(
             )
             / 4.0
         )
-        doc.mastery_score = round(
-            (doc.success_count / max(doc.trial_count, 1))
-            * (0.5 + 0.5 * documentation_coverage),
+        if _source_parameter_names(doc) or any(
+            trial.arguments for trial in all_tool_trials
+        ):
+            independent_trials = len(
+                {
+                    json.dumps(
+                        {
+                            "arguments": trial.arguments,
+                            "status": trial.status,
+                        },
+                        sort_keys=True,
+                        ensure_ascii=False,
+                        default=str,
+                    )
+                    for trial in all_tool_trials
+                }
+            )
+        else:
+            independent_trials = len(
+                {trial.session_id for trial in all_tool_trials if trial.session_id}
+            )
+        diversity_support = min(1.0, independent_trials / 2.0)
+        doc.contract_mastery_score = round(
+            convergence_score * documentation_coverage * diversity_support,
             6,
         )
+        doc.mastery_score = doc.contract_mastery_score
 
         recent_hashes = _recent_revision_hashes(
             state.revisions,
@@ -1610,12 +1228,16 @@ def rewrite_documentation(
             source_signature=doc.source_signature,
         )
         unchanged_streak = (
-            len(recent_hashes) >= 2 and len(set(recent_hashes + [after_hash])) == 1
+            len(recent_hashes) >= 1
+            and len(set(recent_hashes + [after_hash])) == 1
+            and diversity_support >= 1.0
+            and documentation_coverage >= 0.5
         )
         converged = (
             convergence_score >= convergence_threshold
-            and len(doc.rewrite_history) >= 2
-            and doc.mastery_score >= 0.5
+            and len(doc.rewrite_history) >= 1
+            and diversity_support >= 1.0
+            and doc.contract_mastery_score >= convergence_threshold * 0.5
         )
         if unchanged_streak or converged:
             doc.frozen = True
@@ -1659,6 +1281,9 @@ def rewrite_documentation(
                 "word_match_score": word_match_score,
                 "semantic_match_score": semantic_match_score,
                 "mastery_score": doc.mastery_score,
+                "contract_mastery_score": doc.contract_mastery_score,
+                "diagnostic_utility_score": doc.diagnostic_utility_score,
+                "exploration_diversity_support": diversity_support,
                 "documentation_coverage": documentation_coverage,
                 "documented_path_rate": documented_path_rate,
                 "success_path_rate": success_path_rate,
@@ -1678,26 +1303,6 @@ def rewrite_documentation(
             success_path_rate=success_path_rate,
         )
         revisions.append(revision)
-
-    planned_added = _upsert_planned_explorations(
-        state=state,
-        by_tool=by_tool,
-        metrics=metrics,
-        session_id=session_id,
-        task_description=task_description,
-        documented_path_rate=documented_path_rate,
-        success_path_rate=success_path_rate,
-        llm_backend=llm_backend,
-        model=model,
-        llm=learning_llm,
-        llm_error=learning_llm_error,
-    )
-    if planned_added:
-        for revision in revisions:
-            revision.metrics["planned_explorations_added"] = float(planned_added)
-    if planned_consumed:
-        for revision in revisions:
-            revision.metrics["planned_explorations_consumed"] = float(planned_consumed)
 
     state.library_usage_description = _library_usage_description(state.documents)
     store.save(state)
@@ -1742,8 +1347,6 @@ def finalize_tool_evolution_session(
         llm_backend=getattr(session, "llm_backend", None),
         model=getattr(session, "model", None),
         documented_tools_at_start=documented_tools_at_start,
-        session_id=session_id,
-        task_description=str(getattr(session, "task_description", "") or ""),
         convergence_threshold=convergence_threshold,
     )
     state = store.load()
@@ -1766,12 +1369,6 @@ def finalize_tool_evolution_session(
         "draft_documented_tools": len(state.documents),
         "draft_unique_trial_tools": len({trial.tool_name for trial in trials}),
         "draft_explorations": len(state.explorations),
-        "draft_planned_explorations": sum(
-            exploration.status == "planned" for exploration in state.explorations
-        ),
-        "draft_consumed_explorations": sum(
-            exploration.status == "consumed" for exploration in state.explorations
-        ),
         "draft_analyzer_suggestions": len(state.analyzer_suggestions),
         "draft_mastered_tools": sum(
             stat.mastered for stat in state.tool_stats.values()
@@ -1796,14 +1393,6 @@ def finalize_tool_evolution_session(
         "draft_config": {
             "convergence_threshold": convergence_threshold,
             "tool_doc_chars": getattr(session, "tool_doc_chars", None),
-            "prompt_doc_limit": getattr(session, "tool_prompt_doc_limit", None),
-            "scoped_prompt_doc_limit": getattr(
-                session,
-                "tool_scoped_prompt_doc_limit",
-                None,
-            ),
-            "planned_checks": getattr(session, "tool_planned_checks", None),
-            "next_checks": getattr(session, "tool_next_checks", None),
         },
     }
     (session_dir / "tool_evolution.json").write_text(

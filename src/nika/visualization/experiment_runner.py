@@ -20,7 +20,6 @@ from nika.utils.kathara_cleanup import ensure_kathara_clean
 from nika.workflows.benchmark.run import default_benchmark_yaml_path
 
 RUNS_DIR = RUNTIME_DIR / "streamlit_runs"
-DOCKER_CONFIG_DIR = RUNTIME_DIR / "docker_config"
 LOG_FILENAME = "run.log"
 SPEC_FILENAME = "spec.json"
 META_FILENAME = "meta.json"
@@ -59,15 +58,6 @@ def _int(value: Any, default: int) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
-
-
-def _safe_docker_config_dir() -> str:
-    """Return a Docker config directory that does not call host credential helpers."""
-    DOCKER_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    config_path = DOCKER_CONFIG_DIR / "config.json"
-    if not config_path.exists():
-        config_path.write_text("{}", encoding="utf-8")
-    return str(DOCKER_CONFIG_DIR)
 
 
 def _common_agent_args(
@@ -171,14 +161,6 @@ def build_experiment_command(config: dict[str, Any]) -> list[str]:
                 ),
                 "--tool-doc-chars",
                 str(_int(config.get("tool_doc_chars"), 500)),
-                "--tool-prompt-doc-limit",
-                str(_int(config.get("tool_prompt_doc_limit"), 6)),
-                "--tool-scoped-prompt-doc-limit",
-                str(_int(config.get("tool_scoped_prompt_doc_limit"), 4)),
-                "--tool-planned-checks",
-                str(_int(config.get("tool_planned_checks"), 4)),
-                "--tool-next-checks",
-                str(_int(config.get("tool_next_checks"), 2)),
                 "--tool-convergence-threshold",
                 _str(config.get("tool_convergence_threshold"), "0.75"),
             ]
@@ -196,16 +178,8 @@ def build_experiment_command(config: dict[str, Any]) -> list[str]:
                 str(_int(config.get("memory_k"), 5)),
                 "--memory-tokens",
                 str(_int(config.get("memory_tokens"), 1500)),
-                "--memory-selector",
-                _str(config.get("memory_selector"), "lcb"),
-                "--memory-meta-controller",
-                _str(config.get("memory_meta_controller"), "heuristic"),
                 "--memory-max-skill-age",
                 str(_int(config.get("memory_max_skill_age"), 4)),
-                "--memory-selector-min-lcb",
-                _str(config.get("memory_selector_min_lcb"), "-0.05"),
-                "--memory-selector-nominee-k",
-                str(_int(config.get("memory_selector_nominee_k"), 3)),
                 "--memory-pool-size",
                 str(_int(config.get("memory_pool_size"), 32)),
                 "--memory-evolution-threshold",
@@ -216,9 +190,6 @@ def build_experiment_command(config: dict[str, Any]) -> list[str]:
                 _str(config.get("memory_ppo_epsilon"), "0.2"),
             ]
         )
-        if bool(config.get("memory_expert_seeds", False)):
-            command.append("--memory-expert-seeds")
-
     return command
 
 
@@ -664,7 +635,6 @@ def run_spec_file(spec_path: str | Path) -> int:
             import os
             sub_env = os.environ.copy()
             sub_env["PYTHONUNBUFFERED"] = "1"
-            sub_env["DOCKER_CONFIG"] = _safe_docker_config_dir()
             proc = subprocess.Popen(
                 command,
                 cwd=_REPO_ROOT,

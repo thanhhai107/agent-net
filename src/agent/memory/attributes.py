@@ -7,13 +7,13 @@ from agent.memory.models import MemoryAttributes
 
 PROTOCOL_KEYWORDS = {
     "bgp": ("bgp", "asn", "route advertisement", "blackhole"),
-    "ospf": ("ospf", "area", "neighbor", "lsa"),
-    "dhcp": ("dhcp", "lease", "gateway", "subnet", "default route"),
+    "ospf": ("ospf", "ospf area", "lsa"),
+    "dhcp": ("dhcp", "dhcp lease"),
     "dns": ("dns", "record", "resolve", "lookup", "nslookup", "dig", "servfail"),
-    "http": ("http", "curl", "apache", "nginx", "load balancer", "web"),
+    "http": ("http", "curl", "apache", "nginx", "load balancer"),
     "icmp": ("icmp", "ping", "reachability"),
     "arp": ("arp", "neighbor cache", "mac address"),
-    "p4": ("p4", "bmv2", "table", "pipeline"),
+    "p4": ("p4", "bmv2", "p4 table", "pipeline"),
     "sdn": ("sdn", "controller", "openflow", "ovs"),
 }
 
@@ -31,7 +31,13 @@ SYMPTOM_KEYWORDS = {
     "unreachable": ("unreachable", "cannot reach", "ping fail", "blackhole"),
     "missing_route": ("missing route", "not advertised", "no route"),
     "service_down": ("down", "crash", "not running"),
-    "latency_or_loss": ("latency", "loss", "delay", "corruption", "throttl"),
+    "latency_or_loss": (
+        "high latency",
+        "packet loss",
+        "delayed response",
+        "corruption",
+        "throttl",
+    ),
     "acl_block": ("acl", "blocked", "filter"),
     "missing_ip": ("missing ip", "no ipv4", "no ip address", "network is unreachable"),
     "bad_gateway": ("incorrect gateway", "wrong gateway", "default via", "default gateway"),

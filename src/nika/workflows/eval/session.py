@@ -212,12 +212,6 @@ def run_eval_metrics(
                     "draft_unique_trial_tools"
                 ),
                 "draft_explorations": evolution.get("draft_explorations"),
-                "draft_planned_explorations": evolution.get(
-                    "draft_planned_explorations"
-                ),
-                "draft_consumed_explorations": evolution.get(
-                    "draft_consumed_explorations"
-                ),
                 "draft_analyzer_suggestions": evolution.get(
                     "draft_analyzer_suggestions"
                 ),

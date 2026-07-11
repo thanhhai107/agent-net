@@ -32,11 +32,6 @@ def create_agent(config: AgentRunConfig) -> Any:
                 model=config.model,
                 max_steps=config.max_steps,
             )
-        case "sdk":
-            raise ValueError(
-                "Agent type 'sdk' is not implemented yet. "
-                "See docs/README.md for the current agent boundary."
-            )
         case _:
             raise ValueError(f"Unsupported agent type: {config.agent_type!r}")
 

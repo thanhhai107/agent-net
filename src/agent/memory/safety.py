@@ -7,20 +7,8 @@ from functools import lru_cache
 from typing import Any
 
 
-class MemoryOracleLeakageError(ValueError):
-    pass
-
-
 ORACLE_KEYS = {"ground_truth", "answer", "oracle", "expected_root_cause"}
 _REDACTED = "[redacted]"
-
-
-def assert_no_oracle_leakage(payload: Any) -> None:
-    text = str(payload).lower()
-    for key in ORACLE_KEYS:
-        if key in text:
-            raise MemoryOracleLeakageError(f"Potential oracle leakage marker: {key}")
-
 
 @lru_cache(maxsize=1)
 def _known_root_cause_ids() -> tuple[str, ...]:

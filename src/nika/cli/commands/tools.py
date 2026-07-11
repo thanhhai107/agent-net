@@ -25,8 +25,6 @@ def list_libraries() -> None:
             typer.echo(
                 f"{path.name}\tdocs={stats['documents']}\t"
                 f"trials={stats['trials']}\texplore={stats['explorations']}\t"
-                f"planned={stats['planned_explorations']}\t"
-                f"consumed={stats['consumed_explorations']}\t"
                 f"analyze={stats['analyzer_suggestions']}\tgaps={stats['gaps']}\t"
                 f"revisions={stats['revisions']}\tfrozen={stats['frozen_documents']}\t"
                 f"llm_fail={stats['llm_failures']}\t"

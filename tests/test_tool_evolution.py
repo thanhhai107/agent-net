@@ -7,7 +7,6 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
 
 from langchain_core.tools import StructuredTool
 from unittest.mock import patch
@@ -15,14 +14,11 @@ from unittest.mock import patch
 from agent.tool_evolution.curator import (
     extract_tool_trials,
     identify_comprehension_gaps,
-    identify_diagnostic_semantic_gaps,
     rewrite_documentation,
 )
 from agent.tool_evolution.models import (
     DraftAnalyzerDraft,
-    DraftAnalyzerSuggestion,
     DraftExploration,
-    DraftExplorerDraft,
     DraftRewriteProposal,
     ToolDocumentation,
     ToolParameterDoc,
@@ -67,11 +63,11 @@ class DraftToolEvolutionTest(unittest.TestCase):
                     exploration_id="stale-plan",
                     session_id="s1",
                     tool_name="ping_host",
-                    intent="diagnosis_check",
+                    intent="tool_validation",
                     user_query="Ping a current host.",
-                    status="planned",
+                    observation="host reachable",
+                    status="success",
                     document_hash=before.content_hash(),
-                    next_exploration="Ping a current host to verify reachability.",
                 )
             )
             store.save(state)
@@ -103,46 +99,46 @@ class DraftToolEvolutionTest(unittest.TestCase):
             any("reset and reopened" in item for item in after.rewrite_history)
         )
         self.assertNotIn("Stale contract-specific rewrite.", after.rewrite_history)
-        self.assertEqual(after_state.explorations[0].status, "invalidated")
+        self.assertEqual(after_state.explorations, [])
 
-    def test_draft_explorer_self_reflects_until_query_is_diverse(self) -> None:
-        explorer_calls = 0
-
-        class FakeModel:
-            schema: type | None = None
-
-            def with_structured_output(self, schema):
-                self.schema = schema
-                return self
-
-            def invoke(self, _prompt):
-                nonlocal explorer_calls
-                if self.schema is DraftAnalyzerDraft:
-                    return DraftAnalyzerDraft(
-                        suggestion="Clarify how route output changes the hypothesis.",
-                        next_exploration="Check route evidence for the current hypothesis.",
-                    )
-                if self.schema is DraftExplorerDraft:
-                    explorer_calls += 1
-                    if explorer_calls == 1:
-                        return DraftExplorerDraft(
-                            user_query="Investigate route failure.",
-                            next_exploration="Investigate route failure.",
-                            intent="diagnosis_check",
-                        )
-                    return DraftExplorerDraft(
-                        user_query="Compare control-plane and data-plane observations.",
-                        next_exploration=(
-                            "Compare route-table output with an independent reachability "
-                            "observation."
-                        ),
-                        intent="diagnosis_check",
-                    )
-                return DraftRewriteProposal(
+    def test_legacy_exploration_is_kept_only_when_it_matches_one_real_trial(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = ToolEvolutionStore("draft", root=tmp)
+            trials, _ = extract_tool_trials(
+                self._trace(
+                    tmp,
+                    [
+                        ("tool_start", "1", "show_route", "{'router': 'r1'}", ""),
+                        ("tool_end", "1", "show_route", "", "route present"),
+                    ],
+                ),
+                session_id="s1",
+            )
+            state = store.load()
+            state.trials.extend(trials)
+            state.explorations.append(
+                DraftExploration(
+                    exploration_id="legacy-consumed",
+                    session_id="s1",
                     tool_name="show_route",
-                    tool_usage_description="Inspect the current route table.",
+                    parameters={"router": "r1"},
+                    observation="route present",
+                    status="consumed",
                 )
+            )
+            store.save(state)
 
+            loaded = store.load()
+
+        self.assertEqual(len(loaded.explorations), 1)
+        self.assertEqual(loaded.explorations[0].trial_id, trials[0].trial_id)
+        self.assertEqual(loaded.explorations[0].status, "success")
+
+    def test_draft_explorer_records_only_observed_trials_and_scores_diversity(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = ToolEvolutionStore("draft", root=tmp)
             trials, _ = extract_tool_trials(
@@ -151,33 +147,37 @@ class DraftToolEvolutionTest(unittest.TestCase):
                     [
                         ("tool_start", "1", "show_route", "{'router': 'r1'}", ""),
                         ("tool_end", "1", "show_route", "", "route missing"),
+                        ("tool_start", "2", "show_route", "{'router': 'r1'}", ""),
+                        ("tool_end", "2", "show_route", "", "route missing"),
                     ],
                 ),
                 session_id="s1",
                 task_description="Investigate route failure.",
             )
-            with patch(
-                "agent.tool_evolution.curator.load_model", return_value=FakeModel()
-            ) as load_model:
-                rewrite_documentation(
-                    store,
-                    trials=trials,
-                    tool_descriptions={"show_route": "Show routes."},
-                    metrics={"localization_f1": 0.0, "rca_f1": 0.0},
-                    llm_backend="custom",
-                    model="test-model",
-                    session_id="s1",
-                    task_description="Investigate route failure.",
-                )
+            rewrite_documentation(
+                store,
+                trials=trials,
+                tool_descriptions={"show_route": "Show routes."},
+                metrics={"localization_f1": 0.0, "rca_f1": 0.0},
+            )
+            rewrite_documentation(
+                store,
+                trials=trials,
+                tool_descriptions={"show_route": "Show routes."},
+                metrics={"localization_f1": 0.0, "rca_f1": 0.0},
+            )
             state = store.load()
 
-        planned = [item for item in state.explorations if item.status == "planned"]
-        self.assertEqual(explorer_calls, 2)
-        self.assertEqual(len(planned), 1)
-        self.assertEqual(planned[0].reflection_count, 1)
-        self.assertGreater(planned[0].diversity_score, 0.18)
-        self.assertIn("independent reachability", planned[0].next_exploration)
-        load_model.assert_called_once()
+        self.assertEqual(len(state.explorations), 2)
+        self.assertEqual(
+            {item.trial_id for item in state.explorations},
+            {trial.trial_id for trial in trials},
+        )
+        self.assertTrue(all(item.status == "success" for item in state.explorations))
+        self.assertTrue(all(item.observation == "route missing" for item in state.explorations))
+        self.assertEqual(state.explorations[0].diversity_score, 1.0)
+        self.assertEqual(state.explorations[1].diversity_score, 0.0)
+        self.assertEqual(state.explorations[1].reflection_count, 1)
 
     def test_documentation_mastery_is_independent_of_rca_score(self) -> None:
         def evolve(root: str, rca_f1: float) -> float:
@@ -307,83 +307,6 @@ class DraftToolEvolutionTest(unittest.TestCase):
         self.assertIn("eth0 up", trials[0].output_summary)
         self.assertNotIn("Integrated learning guidance", trials[0].output_summary)
 
-    def test_runtime_draft_hint_consumes_planned_exploration_by_id(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            trace = Path(tmp) / "messages.jsonl"
-            rows = [
-                {
-                    "agent": "diagnosis_agent",
-                    "event": "tool_start",
-                    "run_id": "1",
-                    "tool": {"name": "ping_host", "description": "Ping one host."},
-                    "input": "{'host': 'pc1'}",
-                },
-                {
-                    "agent": "diagnosis_agent",
-                    "event": "tool_end",
-                    "run_id": "1",
-                    "output": "pc1 reachable",
-                },
-                {
-                    "agent": "memory_agent",
-                    "phase": "skill_mdp_runtime",
-                    "event": "skill_transition",
-                    "tool": "ping_host",
-                    "tool_input": {"host": "pc1"},
-                    "status": "success",
-                    "observation_summary": "pc1 reachable",
-                    "draft_exploration_id": "explore_ping_pc1",
-                    "draft_next_exploration": (
-                        "Ping pc1 to verify endpoint reachability."
-                    ),
-                },
-            ]
-            trace.write_text(
-                "\n".join(json.dumps(row) for row in rows),
-                encoding="utf-8",
-            )
-            store = ToolEvolutionStore("draft", root=tmp)
-            state = store.load()
-            state.documents["ping_host"] = ToolDocumentation(
-                name="ping_host",
-                description="Ping one host.",
-            )
-            state.explorations.append(
-                DraftExploration(
-                    exploration_id="explore_ping_pc1",
-                    session_id="s0",
-                    tool_name="ping_host",
-                    intent="diagnosis_check",
-                    user_query="Check pc1 reachability.",
-                    parameters={"host": "pc1"},
-                    status="planned",
-                    next_exploration="Ping pc1 to verify endpoint reachability.",
-                )
-            )
-            store.save(state)
-
-            trials, _ = extract_tool_trials(trace, session_id="s1")
-            revisions = rewrite_documentation(
-                store,
-                trials=trials,
-                tool_descriptions={"ping_host": "Ping one host."},
-                metrics={"rca_accuracy": 1.0},
-            )
-            state = store.load()
-
-        self.assertEqual(trials[0].planned_exploration_id, "explore_ping_pc1")
-        self.assertEqual(state.explorations[0].status, "consumed")
-        self.assertEqual(
-            state.explorations[0].consumed_by_trial_id,
-            trials[0].trial_id,
-        )
-        self.assertTrue(
-            any(
-                revision.metrics.get("planned_explorations_consumed") == 1.0
-                for revision in revisions
-            )
-        )
-
     def test_extracts_react_diagnosis_phase_trials(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             trace = Path(tmp) / "messages.jsonl"
@@ -461,10 +384,9 @@ class DraftToolEvolutionTest(unittest.TestCase):
         self.assertIn("interface", doc.parameters)
         self.assertTrue(doc.failure_modes)
         self.assertIn("Tool arguments must be grounded", doc.constraints[0])
-        self.assertGreaterEqual(len(state.explorations), 2)
-        self.assertTrue(
-            any(exploration.status == "planned" for exploration in state.explorations)
-        )
+        self.assertEqual(len(state.explorations), 1)
+        self.assertEqual(state.explorations[0].status, "error")
+        self.assertIn("interface eth9 not found", state.explorations[0].observation)
         self.assertEqual(len(state.analyzer_suggestions), 1)
         self.assertIn("show_iface", state.tool_stats)
         self.assertGreaterEqual(state.tool_stats["show_iface"].trials, 1)
@@ -478,7 +400,7 @@ class DraftToolEvolutionTest(unittest.TestCase):
         self.assertEqual(revisions[0].metrics["success_path_rate"], 0.0)
         self.assertTrue(state.library_usage_description)
 
-    def test_successful_trials_with_poor_diagnosis_create_semantic_gap(self) -> None:
+    def test_final_diagnosis_metrics_do_not_create_tool_contract_gaps(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = ToolEvolutionStore("draft", root=tmp)
             trials, _ = extract_tool_trials(
@@ -518,27 +440,16 @@ class DraftToolEvolutionTest(unittest.TestCase):
                 },
             )
             state = store.load()
-            doc = state.documents["frr_show_bgp_summary"]
 
-        self.assertTrue(
+        self.assertFalse(
             any(gap.gap_type == "diagnostic_semantic_gap" for gap in state.gaps)
         )
-        self.assertTrue(any("interpret the output" in note for note in doc.usage_notes))
-        self.assertTrue(
-            any(
-                exploration.status == "planned"
-                and exploration.tool_name == "frr_show_bgp_summary"
-                for exploration in state.explorations
-            )
-        )
-        self.assertTrue(
-            any(
-                "localization/RCA alternatives" in item
-                for item in doc.exploration_suggestions
-            )
-        )
+        self.assertEqual(len(state.explorations), 1)
+        self.assertEqual(state.explorations[0].tool_name, "frr_show_bgp_summary")
+        self.assertEqual(state.explorations[0].status, "success")
+        self.assertNotIn("localization/RCA", state.explorations[0].observation)
 
-    def test_poor_diagnosis_creates_semantic_gap_per_successful_tool(self) -> None:
+    def test_poor_diagnosis_does_not_create_tool_contract_gaps(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             trials, _ = extract_tool_trials(
                 self._trace(
@@ -565,23 +476,12 @@ class DraftToolEvolutionTest(unittest.TestCase):
                 session_id="s1",
             )
 
-        gaps = identify_diagnostic_semantic_gaps(
-            trials,
-            metrics={
-                "localization_accuracy": 0.0,
-                "localization_f1": 0.0,
-                "rca_accuracy": 0.0,
-                "rca_f1": 0.0,
-            },
+        gaps = identify_comprehension_gaps(trials)
+        self.assertFalse(
+            any(gap.gap_type == "diagnostic_semantic_gap" for gap in gaps)
         )
 
-        self.assertEqual(
-            {gap.tool_name for gap in gaps},
-            {"ping_pair", "frr_show_ip_route"},
-        )
-        self.assertTrue(all(gap.gap_type == "diagnostic_semantic_gap" for gap in gaps))
-
-    def test_draft_plans_exploration_for_documented_tool_without_trace(self) -> None:
+    def test_draft_does_not_learn_from_documented_tool_without_trace(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = ToolEvolutionStore("draft", root=tmp)
             rewrite_documentation(
@@ -589,302 +489,16 @@ class DraftToolEvolutionTest(unittest.TestCase):
                 trials=[],
                 tool_descriptions={"ping_pair": "Ping two topology hosts."},
                 metrics={},
-                session_id="s1",
-                task_description="Investigate reachability loss",
             )
             state = store.load()
             doc = state.documents["ping_pair"]
 
-        planned = [
-            exploration
-            for exploration in state.explorations
-            if exploration.tool_name == "ping_pair" and exploration.status == "planned"
-        ]
-        self.assertEqual(len(planned), 1)
-        self.assertIn("Investigate reachability loss", planned[0].user_query)
-        self.assertTrue(doc.exploration_suggestions)
-        self.assertEqual(planned[0].intent, "diagnosis_check")
-        self.assertIn("localization/RCA", planned[0].next_exploration)
+        self.assertEqual(state.explorations, [])
+        self.assertEqual(state.analyzer_suggestions, [])
+        self.assertEqual(state.trials, [])
+        self.assertEqual(doc.version, 1)
 
-    def test_diagnosis_planned_exploration_reaches_runtime_prompt(self) -> None:
-        def ping(host: str) -> str:
-            return host
-
-        tool = StructuredTool.from_function(
-            ping,
-            name="ping_pair",
-            description="Ping one topology host.",
-        )
-        with tempfile.TemporaryDirectory() as tmp:
-            store = ToolEvolutionStore("draft", root=tmp)
-            ToolEvolutionRuntime(
-                session=object(),
-                primitive_tools=[tool],
-                library_id="draft",
-                store=store,
-            )
-            rewrite_documentation(
-                store,
-                trials=[],
-                tool_descriptions={"ping_pair": "Ping one topology host."},
-                metrics={},
-                session_id="s1",
-                task_description="Investigate reachability loss",
-            )
-            runtime = ToolEvolutionRuntime(
-                session=SimpleNamespace(
-                    task_description="Investigate reachability loss",
-                    topology=[("pc1:eth0", "r1:eth0")],
-                ),
-                primitive_tools=[tool],
-                library_id="draft",
-                store=store,
-            )
-
-            prompt = runtime.prompt_suffix(tool_names=["ping_pair"])
-            queue = runtime.planned_explorations(diagnosis_only=True)
-            tool_learning_prompt = runtime.prompt_suffix(
-                tool_names=["ping_pair"],
-                diagnosis_only=False,
-            )
-            tool_learning_queue = runtime.planned_explorations(
-                diagnosis_only=False,
-            )
-
-        self.assertEqual(
-            [item["intent"] for item in queue],
-            ["diagnosis_check"],
-        )
-        self.assertEqual(
-            [item["intent"] for item in tool_learning_queue],
-            ["diagnosis_check"],
-        )
-        self.assertIn("DRAFT active exploration queue", prompt)
-        self.assertIn("localization/RCA", prompt)
-        self.assertIn("DRAFT active exploration queue", tool_learning_prompt)
-        self.assertIn("localization/RCA", tool_learning_prompt)
-
-    def test_planned_exploration_is_consumed_by_matching_trial(self) -> None:
-        def ping(host_a: str, host_b: str) -> str:
-            return f"{host_a}->{host_b}"
-
-        tool = StructuredTool.from_function(
-            ping,
-            name="ping_pair",
-            description="Ping two topology hosts.",
-        )
-        with tempfile.TemporaryDirectory() as tmp:
-            store = ToolEvolutionStore("draft", root=tmp)
-            ToolEvolutionRuntime(
-                session=object(),
-                primitive_tools=[tool],
-                library_id="draft",
-                store=store,
-            )
-            rewrite_documentation(
-                store,
-                trials=[],
-                tool_descriptions={"ping_pair": "Ping two topology hosts."},
-                metrics={},
-                session_id="s1",
-                task_description="Investigate reachability loss",
-            )
-            trials, _ = extract_tool_trials(
-                self._trace(
-                    tmp,
-                    [
-                        (
-                            "tool_start",
-                            "1",
-                            "ping_pair",
-                            "{'host_a': 'pc1', 'host_b': 'dns'}",
-                            "",
-                        ),
-                        (
-                            "tool_end",
-                            "1",
-                            "ping_pair",
-                            "",
-                            "2 packets transmitted, 2 received",
-                        ),
-                    ],
-                ),
-                session_id="s2",
-                task_description="Investigate reachability loss",
-            )
-            revisions = rewrite_documentation(
-                store,
-                trials=trials,
-                tool_descriptions={"ping_pair": "Ping two topology hosts."},
-                metrics={"rca_accuracy": 1.0},
-            )
-            runtime = ToolEvolutionRuntime(
-                session=object(),
-                primitive_tools=[tool],
-                library_id="draft",
-                store=store,
-            )
-            state = store.load()
-            snapshot = runtime.snapshot()
-
-        consumed = [
-            exploration
-            for exploration in state.explorations
-            if exploration.tool_name == "ping_pair" and exploration.status == "consumed"
-        ]
-        self.assertEqual(len(consumed), 1)
-        self.assertEqual(consumed[0].consumed_by_trial_id, trials[0].trial_id)
-        self.assertIn("2 packets transmitted", consumed[0].observation)
-        self.assertEqual(snapshot["consumed_explorations"], 1)
-        self.assertTrue(
-            all(item["session_id"] != "s1" for item in snapshot["planned_queue"])
-        )
-        self.assertEqual(
-            revisions[0].metrics["planned_explorations_consumed"],
-            1.0,
-        )
-
-    def test_consumed_planned_exploration_is_not_replanned_unchanged(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            store = ToolEvolutionStore("draft", root=tmp)
-            rewrite_documentation(
-                store,
-                trials=[],
-                tool_descriptions={"ping_pair": "Ping two topology hosts."},
-                metrics={},
-                session_id="s1",
-                task_description="Investigate reachability loss",
-            )
-            first_state = store.load()
-            original_plan = next(
-                exploration
-                for exploration in first_state.explorations
-                if exploration.tool_name == "ping_pair"
-                and exploration.status == "planned"
-            )
-            trials, _ = extract_tool_trials(
-                self._trace(
-                    tmp,
-                    [
-                        (
-                            "tool_start",
-                            "1",
-                            "ping_pair",
-                            "{'host_a': 'pc1', 'host_b': 'dns'}",
-                            "",
-                        ),
-                        (
-                            "tool_end",
-                            "1",
-                            "ping_pair",
-                            "",
-                            "2 packets transmitted, 2 received",
-                        ),
-                    ],
-                ),
-                session_id="s2",
-                task_description="Investigate reachability loss",
-            )
-            repeated_suggestion = DraftAnalyzerSuggestion(
-                suggestion_id="repeat-plan",
-                tool_name="ping_pair",
-                session_id="s2",
-                trial_ids=[trials[0].trial_id],
-                suggestion="Do not replan the same consumed check.",
-                next_exploration=original_plan.next_exploration,
-            )
-            with patch(
-                "agent.tool_evolution.curator._analyzer_suggestion_for_tool",
-                return_value=repeated_suggestion,
-            ):
-                rewrite_documentation(
-                    store,
-                    trials=trials,
-                    tool_descriptions={"ping_pair": "Ping two topology hosts."},
-                    metrics={"rca_accuracy": 1.0},
-                )
-            state = store.load()
-            repeated_plans = [
-                exploration
-                for exploration in state.explorations
-                if exploration.tool_name == "ping_pair"
-                and exploration.status == "planned"
-                and exploration.next_exploration == original_plan.next_exploration
-            ]
-
-        self.assertEqual(repeated_plans, [])
-
-    def test_similar_consumed_planned_exploration_is_not_replanned(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            store = ToolEvolutionStore("draft", root=tmp)
-            rewrite_documentation(
-                store,
-                trials=[],
-                tool_descriptions={"ping_pair": "Ping two topology hosts."},
-                metrics={},
-                session_id="s1",
-                task_description="Investigate reachability loss",
-            )
-            first_state = store.load()
-            original_plan = next(
-                exploration
-                for exploration in first_state.explorations
-                if exploration.tool_name == "ping_pair"
-                and exploration.status == "planned"
-            )
-            trials, _ = extract_tool_trials(
-                self._trace(
-                    tmp,
-                    [
-                        (
-                            "tool_start",
-                            "1",
-                            "ping_pair",
-                            "{'host_a': 'pc1', 'host_b': 'dns'}",
-                            "",
-                        ),
-                        (
-                            "tool_end",
-                            "1",
-                            "ping_pair",
-                            "",
-                            "2 packets transmitted, 2 received",
-                        ),
-                    ],
-                ),
-                session_id="s2",
-                task_description="Investigate reachability loss",
-            )
-            similar_suggestion = DraftAnalyzerSuggestion(
-                suggestion_id="near-repeat-plan",
-                tool_name="ping_pair",
-                session_id="s2",
-                trial_ids=[trials[0].trial_id],
-                suggestion="Avoid near-duplicate planned checks.",
-                next_exploration=original_plan.next_exploration + " now.",
-            )
-            with patch(
-                "agent.tool_evolution.curator._analyzer_suggestion_for_tool",
-                return_value=similar_suggestion,
-            ):
-                rewrite_documentation(
-                    store,
-                    trials=trials,
-                    tool_descriptions={"ping_pair": "Ping two topology hosts."},
-                    metrics={"rca_accuracy": 1.0},
-                )
-            state = store.load()
-            near_repeated_plans = [
-                exploration
-                for exploration in state.explorations
-                if exploration.tool_name == "ping_pair"
-                and exploration.status == "planned"
-                and exploration.next_exploration == similar_suggestion.next_exploration
-            ]
-
-        self.assertEqual(near_repeated_plans, [])
-
-    def test_eval_metrics_and_summary_include_planned_explorations(self) -> None:
+    def test_eval_metrics_and_summary_include_draft_core_metrics(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             session_dir = Path(tmp) / "session"
             session_dir.mkdir()
@@ -953,8 +567,6 @@ class DraftToolEvolutionTest(unittest.TestCase):
                 "draft_documented_tools": 1,
                 "draft_unique_trial_tools": 1,
                 "draft_explorations": 2,
-                "draft_planned_explorations": 1,
-                "draft_consumed_explorations": 1,
                 "draft_analyzer_suggestions": 1,
                 "draft_mastered_tools": 0,
                 "draft_documented_path_rate": 1.0,
@@ -981,10 +593,10 @@ class DraftToolEvolutionTest(unittest.TestCase):
             )
             result = build_eval_result_from_session_dir(session_dir)
 
-        self.assertEqual(metrics["draft_planned_explorations"], 1)
-        self.assertEqual(metrics["draft_consumed_explorations"], 1)
-        self.assertEqual(result.draft_planned_explorations, 1)
-        self.assertEqual(result.draft_consumed_explorations, 1)
+        self.assertEqual(metrics["draft_explorations"], 2)
+        self.assertEqual(result.draft_explorations, 2)
+        self.assertEqual(metrics["draft_analyzer_suggestions"], 1)
+        self.assertEqual(result.draft_analyzer_suggestions, 1)
         self.assertEqual(metrics["draft_llm_analyzer_revisions"], 1)
         self.assertEqual(result.draft_llm_analyzer_revisions, 1)
         self.assertEqual(result.draft_llm_analyzer_failures, 0)
@@ -1016,44 +628,22 @@ class DraftToolEvolutionTest(unittest.TestCase):
             doc = store.get_document("ping_pair")
             assert doc is not None
             doc.usage_notes.append("Use exact host names from the active topology.")
-            doc.exploration_suggestions.append(
-                "Ping pc1 to verify endpoint reachability."
-            )
             store.upsert_document(doc)
-            state = store.load()
-            state.explorations.append(
-                DraftExploration(
-                    exploration_id="explore_ping_pc1",
-                    session_id="s1",
-                    tool_name="ping_pair",
-                    user_query="Ping pc1.",
-                    status="planned",
-                    next_exploration="Ping pc1 to verify endpoint reachability.",
-                )
-            )
-            store.save(state)
             runtime = ToolEvolutionRuntime(
                 session=object(),
                 primitive_tools=[tool],
                 library_id="draft",
-                model="test",
-                task_description="",
                 store=store,
             )
             tools = runtime.build_tools()
             snapshot = runtime.snapshot()
-            prompt_suffix = runtime.prompt_suffix()
-            tool_learning_prompt_suffix = runtime.prompt_suffix(diagnosis_only=False)
             seeded = store.get_document("ping_pair")
 
         self.assertEqual([item.name for item in tools], ["ping_pair"])
         self.assertIn("DRAFT refined guidance", tools[0].description)
-        self.assertNotIn("DRAFT planned active checks", tools[0].description)
+        self.assertNotIn("Ping pc1", tools[0].description)
         self.assertEqual(snapshot["available_documents"], ["ping_pair"])
-        self.assertGreaterEqual(snapshot["planned_explorations"], 1)
-        self.assertTrue(snapshot["planned_queue"])
-        self.assertNotIn("DRAFT active exploration queue", prompt_suffix)
-        self.assertIn("DRAFT active exploration queue", tool_learning_prompt_suffix)
+        self.assertFalse(hasattr(runtime, "prompt_suffix"))
         self.assertIsNotNone(seeded)
 
     def test_runtime_can_restore_base_descriptions_for_scoped_memory_runtime(
@@ -1075,17 +665,6 @@ class DraftToolEvolutionTest(unittest.TestCase):
                 description="Ping a host.",
                 usage_notes=["Use exact host names from the active topology."],
             )
-            state.explorations.append(
-                DraftExploration(
-                    exploration_id="explore_ping_pair",
-                    session_id="s1",
-                    tool_name="ping_pair",
-                    intent="diagnosis_check",
-                    user_query="Ping pc1.",
-                    status="planned",
-                    next_exploration="Ping pc1 to verify endpoint reachability.",
-                )
-            )
             store.save(state)
             runtime = ToolEvolutionRuntime(
                 session=object(),
@@ -1099,321 +678,8 @@ class DraftToolEvolutionTest(unittest.TestCase):
             restored = runtime.build_tools(append_docs=False)
             restored_description = restored[0].description
 
-        self.assertIn("DRAFT refined guidance", enriched_description)
-        self.assertNotIn("DRAFT planned active checks", enriched_description)
+        self.assertEqual(enriched_description, "Ping a host.")
         self.assertEqual(restored_description, "Ping a host.")
-
-    def test_prompt_suffix_filters_global_library_description_when_scoped(self) -> None:
-        def ping(host: str) -> str:
-            return host
-
-        def cat(host: str) -> str:
-            return host
-
-        tools = [
-            StructuredTool.from_function(
-                ping,
-                name="ping_pair",
-                description="Ping a host.",
-            ),
-            StructuredTool.from_function(
-                cat,
-                name="cat_file",
-                description="Read a file.",
-            ),
-        ]
-        with tempfile.TemporaryDirectory() as tmp:
-            store = ToolEvolutionStore("draft", root=tmp)
-            state = store.load()
-            state.library_usage_description = (
-                "DRAFT-refined primitive diagnostic tools:\n"
-                "- ping_pair: Ping a host.\n"
-                "- cat_file: Read a file."
-            )
-            state.documents["ping_pair"] = ToolDocumentation(
-                name="ping_pair",
-                description="Ping a host.",
-            )
-            state.documents["cat_file"] = ToolDocumentation(
-                name="cat_file",
-                description="Read a file.",
-            )
-            store.save(state)
-            runtime = ToolEvolutionRuntime(
-                session=object(),
-                primitive_tools=tools,
-                library_id="draft",
-                store=store,
-            )
-
-            scoped_prompt = runtime.prompt_suffix(tool_names=["ping_pair"])
-            global_prompt = runtime.prompt_suffix()
-
-        self.assertIn("ping_pair", scoped_prompt)
-        self.assertNotIn("cat_file", scoped_prompt)
-        self.assertIn("cat_file", global_prompt)
-
-    def test_runtime_filters_tool_learning_explorations_from_diagnosis_prompt(
-        self,
-    ) -> None:
-        def ping(host: str) -> str:
-            return host
-
-        tool = StructuredTool.from_function(
-            ping,
-            name="ping_pair",
-            description="Ping a host.",
-        )
-        with tempfile.TemporaryDirectory() as tmp:
-            store = ToolEvolutionStore("draft", root=tmp)
-            ToolEvolutionRuntime(
-                session=object(),
-                primitive_tools=[tool],
-                library_id="draft",
-                store=store,
-            )
-            state = store.load()
-            state.documents["ping_pair"].exploration_suggestions = [
-                "Run ping_pair on a lab with >20 hosts to verify automatic sampling.",
-                "Ping pc_0_0 to verify endpoint reachability.",
-                "Repeat with invalid host to document validation behavior.",
-            ]
-            state.explorations.extend(
-                [
-                    DraftExploration(
-                        exploration_id="explore_api_boundary",
-                        session_id="s1",
-                        tool_name="ping_pair",
-                        intent="tool_validation",
-                        status="planned",
-                        next_exploration=(
-                            "Explore one minimal valid call using observed topology "
-                            "identifiers and record how output affects localization/RCA."
-                        ),
-                    ),
-                    DraftExploration(
-                        exploration_id="explore_ping_pc",
-                        session_id="s1",
-                        tool_name="ping_pair",
-                        intent="diagnosis_check",
-                        status="planned",
-                        next_exploration="Ping pc_0_0 to verify endpoint reachability.",
-                    ),
-                ]
-            )
-            store.save(state)
-            runtime = ToolEvolutionRuntime(
-                session=object(),
-                primitive_tools=[tool],
-                library_id="draft",
-                store=store,
-            )
-
-            prompt = runtime.prompt_suffix(tool_names=["ping_pair"])
-            checks = runtime.next_checks("ping_pair")
-            diagnosis_queue = runtime.planned_explorations(
-                diagnosis_only=True,
-            )
-            tool_learning_prompt = runtime.prompt_suffix(
-                tool_names=["ping_pair"],
-                diagnosis_only=False,
-            )
-            tool_learning_checks = runtime.next_checks(
-                "ping_pair",
-                limit=5,
-                diagnosis_only=False,
-            )
-            snapshot_queue = runtime.planned_explorations()
-
-        self.assertNotIn("Ping pc_0_0", prompt)
-        self.assertEqual(checks, [])
-        self.assertEqual(diagnosis_queue, [])
-        self.assertIn("Ping pc_0_0", tool_learning_prompt)
-        self.assertIn("Ping pc_0_0", " ".join(tool_learning_checks))
-        self.assertIn("minimal valid call", tool_learning_prompt)
-        self.assertEqual(len(snapshot_queue), 2)
-        self.assertNotIn("minimal valid call", prompt)
-        self.assertNotIn(">20 hosts", prompt)
-        self.assertNotIn("invalid host", prompt)
-
-    def test_runtime_zero_check_limits_disable_draft_prompt_queues(self) -> None:
-        def ping(host: str) -> str:
-            return host
-
-        tool = StructuredTool.from_function(
-            ping,
-            name="ping_pair",
-            description="Ping a host.",
-        )
-        with tempfile.TemporaryDirectory() as tmp:
-            store = ToolEvolutionStore("draft", root=tmp)
-            state = store.load()
-            state.documents["ping_pair"] = ToolDocumentation(
-                name="ping_pair",
-                description="Ping a host.",
-                exploration_suggestions=["Ping pc_0_0 to verify reachability."],
-            )
-            state.explorations.append(
-                DraftExploration(
-                    exploration_id="explore_ping_pc",
-                    session_id="s1",
-                    tool_name="ping_pair",
-                    intent="diagnosis_check",
-                    status="planned",
-                    next_exploration="Ping pc_0_0 to verify endpoint reachability.",
-                )
-            )
-            store.save(state)
-            runtime = ToolEvolutionRuntime(
-                session=object(),
-                primitive_tools=[tool],
-                library_id="draft",
-                store=store,
-                planned_checks=0,
-                next_checks=0,
-            )
-
-            prompt = runtime.prompt_suffix(tool_names=["ping_pair"])
-            planned = runtime.planned_explorations(limit=0)
-            next_checks = runtime.next_checks("ping_pair", limit=0)
-
-        self.assertEqual(planned, [])
-        self.assertEqual(next_checks, [])
-        self.assertNotIn("Active DRAFT Explorer queue", prompt)
-        self.assertNotIn("Next active checks", prompt)
-
-    def test_runtime_validates_diagnosis_explorations_against_generic_topology_hosts(
-        self,
-    ) -> None:
-        def net_config(host_name: str) -> str:
-            return host_name
-
-        tool = StructuredTool.from_function(
-            net_config,
-            name="get_host_net_config",
-            description="Inspect host network config.",
-        )
-        with tempfile.TemporaryDirectory() as tmp:
-            store = ToolEvolutionStore("draft", root=tmp)
-            ToolEvolutionRuntime(
-                session=object(),
-                primitive_tools=[tool],
-                library_id="draft",
-                store=store,
-            )
-            state = store.load()
-            state.explorations.extend(
-                [
-                    DraftExploration(
-                        exploration_id="explore_host_1",
-                        session_id="s1",
-                        tool_name="get_host_net_config",
-                        intent="diagnosis_check",
-                        status="planned",
-                        parameters={"host_name": "host-1"},
-                        next_exploration="Inspect host-1 interface state.",
-                    ),
-                    DraftExploration(
-                        exploration_id="explore_host_3",
-                        session_id="s1",
-                        tool_name="get_host_net_config",
-                        intent="diagnosis_check",
-                        status="planned",
-                        parameters={"host_name": "host-3"},
-                        next_exploration="Inspect host-3 interface state.",
-                    ),
-                ]
-            )
-            store.save(state)
-            runtime = ToolEvolutionRuntime(
-                session=object(),
-                primitive_tools=[tool],
-                library_id="draft",
-                task_description="Topology hosts: host-1, host-2.",
-                store=store,
-            )
-
-            prompt = runtime.prompt_suffix(tool_names=["get_host_net_config"])
-            diagnosis_queue = runtime.planned_explorations(diagnosis_only=True)
-            tool_learning_prompt = runtime.prompt_suffix(
-                tool_names=["get_host_net_config"],
-                diagnosis_only=False,
-            )
-            tool_learning_queue = runtime.planned_explorations(
-                diagnosis_only=False,
-            )
-
-        self.assertIn("host-1", prompt)
-        self.assertNotIn("host-3", prompt)
-        self.assertEqual(
-            [item["exploration_id"] for item in diagnosis_queue],
-            ["explore_host_1"],
-        )
-        self.assertIn("host-1", tool_learning_prompt)
-        self.assertIn("host-3", tool_learning_prompt)
-        self.assertEqual(
-            {item["exploration_id"] for item in tool_learning_queue},
-            {"explore_host_1", "explore_host_3"},
-        )
-
-    def test_runtime_keeps_raw_document_suggestions_in_tool_learning_mode(self) -> None:
-        def ping(host: str) -> str:
-            return host
-
-        tool = StructuredTool.from_function(
-            ping,
-            name="ping_pair",
-            description="Ping a host.",
-        )
-        with tempfile.TemporaryDirectory() as tmp:
-            store = ToolEvolutionStore("draft", root=tmp)
-            ToolEvolutionRuntime(
-                session=object(),
-                primitive_tools=[tool],
-                library_id="draft",
-                store=store,
-            )
-            state = store.load()
-            state.documents["ping_pair"].exploration_suggestions = [
-                "Ping pc1 to verify endpoint reachability.",
-                "Ping pc3 to verify endpoint reachability.",
-                "Repeat with invalid host to document validation behavior.",
-            ]
-            store.save(state)
-            runtime = ToolEvolutionRuntime(
-                session=SimpleNamespace(
-                    task_description="Investigate reachability loss",
-                    topology=[("pc1:eth0", "r1:eth0")],
-                ),
-                primitive_tools=[tool],
-                library_id="draft",
-                store=store,
-            )
-
-            prompt = runtime.prompt_suffix(tool_names=["ping_pair"])
-            checks = runtime.next_checks("ping_pair")
-            tool_learning_prompt = runtime.prompt_suffix(
-                tool_names=["ping_pair"],
-                diagnosis_only=False,
-            )
-            tool_learning_checks = runtime.next_checks(
-                "ping_pair",
-                limit=5,
-                diagnosis_only=False,
-            )
-
-        joined_checks = " ".join(checks)
-        joined_tool_learning_checks = " ".join(tool_learning_checks)
-        self.assertNotIn("pc1", prompt)
-        self.assertNotIn("pc1", joined_checks)
-        self.assertNotIn("pc3", prompt)
-        self.assertNotIn("pc3", joined_checks)
-        self.assertNotIn("invalid host", prompt)
-        self.assertIn("pc1", tool_learning_prompt)
-        self.assertIn("pc1", joined_tool_learning_checks)
-        self.assertIn("pc3", tool_learning_prompt)
-        self.assertIn("pc3", joined_tool_learning_checks)
-        self.assertIn("invalid host", tool_learning_prompt)
 
     def test_runtime_seeds_primitive_tool_documents(self) -> None:
         def ping(host: str) -> str:
@@ -1451,64 +717,6 @@ class DraftToolEvolutionTest(unittest.TestCase):
         self.assertEqual(set(state.documents["ping_pair"].parameters), {"host"})
         self.assertEqual(state.documents["ping_pair"].source_contract_version, 1)
 
-    def test_runtime_claims_planned_exploration_once_per_session(self) -> None:
-        def ping(host: str) -> str:
-            return host
-
-        tool = StructuredTool.from_function(
-            ping,
-            name="ping_pair",
-            description="Ping a host.",
-        )
-        with tempfile.TemporaryDirectory() as tmp:
-            store = ToolEvolutionStore("draft", root=tmp)
-            ToolEvolutionRuntime(
-                session=object(),
-                primitive_tools=[tool],
-                library_id="draft",
-                store=store,
-            )
-            state = store.load()
-            state.explorations.append(
-                DraftExploration(
-                    exploration_id="explore_ping_once",
-                    session_id="s1",
-                    tool_name="ping_pair",
-                    intent="diagnosis_check",
-                    user_query="Ping pc1 once.",
-                    parameters={"host": "pc1"},
-                    status="planned",
-                    next_exploration="Ping pc1 to verify endpoint reachability.",
-                )
-            )
-            store.save(state)
-            runtime = ToolEvolutionRuntime(
-                session=object(),
-                primitive_tools=[tool],
-                library_id="draft",
-                store=store,
-            )
-
-            first = runtime.match_planned_exploration(
-                "ping_pair",
-                {"host": "pc1"},
-                diagnosis_only=False,
-            )
-            second = runtime.match_planned_exploration(
-                "ping_pair",
-                {"host": "pc1"},
-                diagnosis_only=False,
-            )
-            snapshot = runtime.snapshot()
-            next_checks = runtime.next_checks("ping_pair")
-
-        self.assertIsNotNone(first)
-        self.assertEqual(first["exploration_id"], "explore_ping_once")
-        self.assertIsNone(second)
-        self.assertEqual(snapshot["planned_queue"], [])
-        self.assertEqual(snapshot["claimed_exploration_ids"], ["explore_ping_once"])
-        self.assertNotIn("Ping pc1", " ".join(next_checks))
-
     def test_llm_rewrite_proposal_is_merged_into_documentation(self) -> None:
         prompts: list[str] = []
 
@@ -1535,9 +743,6 @@ class DraftToolEvolutionTest(unittest.TestCase):
                     constraints=["Never guess interface names."],
                     failure_modes=["Unknown interface returns not found."],
                     usage_notes=["Call topology discovery before interface checks."],
-                    suggestions_for_exploring=(
-                        "Try a valid discovered interface and one invalid boundary case."
-                    ),
                     rationale="Observed interface-name confusion.",
                 )
 
@@ -1573,12 +778,6 @@ class DraftToolEvolutionTest(unittest.TestCase):
             "show_iface is a tool that can inspect one verified router interface.",
         )
         self.assertIn("Never guess interface names.", doc.constraints)
-        self.assertTrue(
-            any(
-                "Try a valid discovered interface" in item
-                for item in doc.exploration_suggestions
-            )
-        )
         self.assertTrue(any("DRAFT Analyzer" in prompt for prompt in prompts))
         rewrite_prompt = next(
             prompt for prompt in prompts if "Explorer observations" in prompt
@@ -1586,6 +785,87 @@ class DraftToolEvolutionTest(unittest.TestCase):
         self.assertIn("Analyzer suggestions", rewrite_prompt)
         self.assertIn("tool_usage_description", rewrite_prompt)
         self.assertEqual(revisions[0].metrics["llm_rewrite"], 1.0)
+
+    def test_success_only_rewrite_drops_unsupported_negative_knowledge_and_converges(
+        self,
+    ) -> None:
+        class FakeModel:
+            schema: type | None = None
+
+            def with_structured_output(self, schema):
+                self.schema = schema
+                return self
+
+            def invoke(self, _prompt):
+                if self.schema is DraftAnalyzerDraft:
+                    return DraftAnalyzerDraft(
+                        suggestion="Clarify the observed successful return contract."
+                    )
+                return DraftRewriteProposal(
+                    tool_name="inspect_state",
+                    tool_usage_description=(
+                        "Call inspect_state with no arguments and inspect its JSON result."
+                    ),
+                    preconditions=["The controller must have elevated privileges."],
+                    constraints=["A hidden mode must be enabled."],
+                    failure_modes=["An unobserved timeout returns an error field."],
+                    usage_notes=["Check an unobserved truncated flag."],
+                    rationale="This rationale is audit metadata, not runtime guidance.",
+                )
+
+        def inspect_state() -> str:
+            return "{}"
+
+        tool = StructuredTool.from_function(
+            inspect_state,
+            name="inspect_state",
+            description="Return the current state as JSON.",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            store = ToolEvolutionStore("draft", root=tmp)
+            ToolEvolutionRuntime(
+                session=object(),
+                primitive_tools=[tool],
+                library_id="draft",
+                store=store,
+            )
+            with patch(
+                "agent.tool_evolution.curator.load_model", return_value=FakeModel()
+            ):
+                for session_id in ("s1", "s2"):
+                    trials, _ = extract_tool_trials(
+                        self._trace(
+                            tmp,
+                            [
+                                ("tool_start", "1", "inspect_state", "{}", ""),
+                                ("tool_end", "1", "inspect_state", "", '{"ok": true}'),
+                            ],
+                        ),
+                        session_id=session_id,
+                    )
+                    rewrite_documentation(
+                        store,
+                        trials=trials,
+                        tool_descriptions={
+                            "inspect_state": "Return the current state as JSON."
+                        },
+                        metrics={},
+                        llm_backend="custom",
+                        model="test-model",
+                    )
+            doc = store.get_document("inspect_state")
+
+        assert doc is not None
+        self.assertEqual(doc.preconditions, [])
+        self.assertEqual(
+            doc.constraints,
+            ["Tool arguments must be grounded in currently observed topology evidence."],
+        )
+        self.assertEqual(doc.failure_modes, [])
+        self.assertEqual(doc.usage_notes, [])
+        self.assertNotIn("audit metadata", doc.refined_description(max_chars=4000))
+        self.assertTrue(doc.frozen)
+        self.assertIn("adaptive termination", doc.frozen_reason)
 
     def test_llm_rewrite_cannot_expand_primitive_parameter_schema(self) -> None:
         class FakeModel:
@@ -1599,14 +879,6 @@ class DraftToolEvolutionTest(unittest.TestCase):
                 if self.schema is DraftAnalyzerDraft:
                     return DraftAnalyzerDraft(
                         suggestion="Add a hosts filter not present in the source API.",
-                        next_exploration="Try a hosts filter for reachability.",
-                    )
-                if self.schema is DraftExplorerDraft:
-                    return DraftExplorerDraft(
-                        user_query="Filter reachability to pc1 and pc2.",
-                        parameters={"hosts": ["pc1", "pc2"]},
-                        next_exploration="Compare reachability for a hosts subset.",
-                        intent="diagnosis_check",
                     )
                 return DraftRewriteProposal(
                     tool_name="get_reachability",
@@ -1661,20 +933,9 @@ class DraftToolEvolutionTest(unittest.TestCase):
                     metrics={"localization_f1": 0.0, "rca_f1": 0.0},
                     llm_backend="custom",
                     model="test-model",
-                    session_id="s1",
-                    task_description="Investigate reachability loss.",
                 )
             doc = store.get_document("get_reachability")
             state = store.load()
-            runtime = ToolEvolutionRuntime(
-                session=SimpleNamespace(
-                    task_description="Investigate reachability loss.",
-                    topology=[("pc1:eth0", "r1:eth0")],
-                ),
-                primitive_tools=[tool],
-                library_id="draft",
-                store=store,
-            )
 
         assert doc is not None
         self.assertEqual(doc.description, "Collect the current reachability matrix.")
@@ -1688,10 +949,9 @@ class DraftToolEvolutionTest(unittest.TestCase):
         self.assertEqual(revisions[0].metrics["llm_contract_rejected"], 1.0)
         self.assertEqual(revisions[0].source_signature, doc.source_signature)
         self.assertIn("ContractValidationError", revisions[0].llm_error)
-        planned = [item for item in state.explorations if item.status == "planned"]
-        self.assertEqual(len(planned), 1)
-        self.assertEqual(planned[0].intent, "argument_schema_probe")
-        self.assertEqual(runtime.planned_explorations(diagnosis_only=True), [])
+        self.assertEqual(len(state.explorations), 1)
+        self.assertEqual(state.explorations[0].status, "success")
+        self.assertEqual(state.explorations[0].parameters, {})
 
     def test_llm_rewrite_failure_is_reported(self) -> None:
         class FailingModel:
@@ -1783,7 +1043,7 @@ class DraftToolEvolutionTest(unittest.TestCase):
                     model="test-model",
                 )
 
-        self.assertEqual(len(prompts), 3)
+        self.assertEqual(len(prompts), 2)
         self.assertTrue(all(len(prompt) < 8000 for prompt in prompts))
         self.assertNotIn("x" * 1000, "\n".join(prompts))
 

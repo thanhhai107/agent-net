@@ -28,10 +28,6 @@ class DiagnosisPhase:
         tool_evolution_enabled: bool = False,
         tool_library_id: str = "default",
         tool_doc_chars: int = 500,
-        tool_prompt_doc_limit: int = 6,
-        tool_scoped_prompt_doc_limit: int = 4,
-        tool_planned_checks: int = 4,
-        tool_next_checks: int = 2,
     ):
         mcp_cfg = MCPServerConfig(session_id=session_id)
         if load_all_tools:
@@ -47,10 +43,6 @@ class DiagnosisPhase:
         self.tool_evolution_enabled = tool_evolution_enabled
         self.tool_library_id = tool_library_id
         self.tool_doc_chars = tool_doc_chars
-        self.tool_prompt_doc_limit = tool_prompt_doc_limit
-        self.tool_scoped_prompt_doc_limit = tool_scoped_prompt_doc_limit
-        self.tool_planned_checks = tool_planned_checks
-        self.tool_next_checks = tool_next_checks
         self.tool_evolution_runtime: ToolEvolutionRuntime | None = None
         self.skill_tool_runtime: SkillToolRuntime | None = None
         self._memory_runtime_base_tools: list[BaseTool] = []
@@ -66,13 +58,7 @@ class DiagnosisPhase:
                 session=self.session,
                 primitive_tools=self.tools,
                 library_id=self.tool_library_id,
-                model=self.model,
-                task_description=getattr(self.session, "task_description", ""),
                 tool_doc_chars=self.tool_doc_chars,
-                prompt_doc_limit=self.tool_prompt_doc_limit,
-                scoped_prompt_doc_limit=self.tool_scoped_prompt_doc_limit,
-                planned_checks=self.tool_planned_checks,
-                next_checks=self.tool_next_checks,
             )
             self.tools = self.tool_evolution_runtime.build_tools()
         self._memory_runtime_base_tools = list(self.tools)
@@ -86,11 +72,7 @@ class DiagnosisPhase:
         top_k: int = 5,
         token_budget: int = 1500,
         session_dir: str = "",
-        skill_selector_mode: str = "lcb",
-        meta_controller_mode: str = "heuristic",
         max_skill_age: int = 4,
-        selector_min_lcb: float = -0.05,
-        selector_nominee_k: int = 3,
     ) -> None:
         if not self.tools:
             raise RuntimeError("Diagnosis tools must be loaded before installing memory")
@@ -110,21 +92,12 @@ class DiagnosisPhase:
             top_k=top_k,
             token_budget=token_budget,
             meta_controller_llm=self.llm,
-            meta_controller_mode=meta_controller_mode,
-            skill_selector_mode=skill_selector_mode,
             max_skill_age=max_skill_age,
-            selector_min_lcb=selector_min_lcb,
-            selector_nominee_k=selector_nominee_k,
         )
         self.tools = self.skill_tool_runtime.wrap_tools(self.tools)
 
     def prompt_suffix(self, *, activate_skill: bool = True) -> str:
         parts: list[str] = []
-        if (
-            self.tool_evolution_runtime is not None
-            and self.skill_tool_runtime is None
-        ):
-            parts.append(self.tool_evolution_runtime.prompt_suffix())
         if self.skill_tool_runtime is not None:
             parts.append(
                 self.skill_tool_runtime.prompt_suffix(

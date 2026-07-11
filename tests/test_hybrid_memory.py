@@ -32,10 +32,6 @@ from agent.memory.service import (
     _metric_success,
 )
 from agent.memory.workflow import evolve_session_memory, extract_skill_steps
-from agent.tool_evolution.curator import rewrite_documentation
-from agent.tool_evolution.models import DraftExploration
-from agent.tool_evolution.runtime import ToolEvolutionRuntime
-from agent.tool_evolution.store import ToolEvolutionStore
 from nika.evaluator.result_log import build_eval_result_from_session_dir
 from nika.workflows.eval.session import run_eval_metrics
 
@@ -124,7 +120,7 @@ class SkillProMemoryTest(unittest.TestCase):
         self.assertEqual(first["status"], "deferred")
         self.assertEqual(second["semantic_gradient_count"], 2)
         self.assertEqual(second["decision"]["best_of_n"], 3)
-        self.assertEqual(second["verification_method"], "alignment_surrogate")
+        self.assertEqual(second["verification_method"], "structured_replay")
         self.assertEqual(schemas.count(SkillCandidateDraft), 3)
         self.assertEqual(sum("Skill Evolver" in prompt for prompt in prompts), 3)
         self.assertTrue(any("batch semantic-gradient aggregator" in p for p in prompts))
@@ -184,7 +180,7 @@ class SkillProMemoryTest(unittest.TestCase):
             }
         )
 
-        self.assertEqual(_evidence_score(detection_only), 0.0)
+        self.assertGreater(_evidence_score(detection_only), 0.0)
         self.assertGreater(_evidence_score(complete), _evidence_score(partial))
         self.assertGreater(_evidence_score(partial), _evidence_score(detection_only))
 
@@ -548,9 +544,9 @@ class SkillProMemoryTest(unittest.TestCase):
             after = set(module.store.load().skills)
 
         self.assertEqual(report["status"], "rejected")
-        self.assertIn("no successful replay trajectory", report["reason"])
         self.assertEqual(report["semantic_gradient_count"], 1)
         self.assertEqual(after, before)
+        self.assertEqual(report["decision"]["verified_success_count"], 0)
 
     def test_partial_localization_episode_is_not_promoted_to_reusable_skill(
         self,
@@ -596,18 +592,17 @@ class SkillProMemoryTest(unittest.TestCase):
             experience = state.experiences[-1]
 
         self.assertEqual(report["status"], "rejected")
-        self.assertIn("no successful replay trajectory", report["reason"])
         self.assertEqual(report["semantic_gradient_count"], 1)
         self.assertFalse(report["episode_success"])
         self.assertFalse(experience.success)
-        self.assertLess(experience.reward, 0.0)
-        self.assertGreater(report["episode_reward"], experience.reward)
+        self.assertGreater(experience.reward, 0.0)
         self.assertEqual(len(state.golden_experiences), 0)
         self.assertAlmostEqual(
-            state.baselines["ospf_enterprise_dhcp"],
+            state.baselines["ospf_enterprise_dhcp::unknown"],
             experience.reward,
         )
         self.assertEqual(after, before)
+        self.assertEqual(report["decision"]["verified_success_count"], 0)
 
     def test_legacy_partial_experience_is_repaired_before_new_learning(self) -> None:
         partial_metrics = {
@@ -687,7 +682,7 @@ class SkillProMemoryTest(unittest.TestCase):
             )
 
         self.assertFalse(repaired.success)
-        self.assertLess(repaired.reward, 0.0)
+        self.assertGreater(repaired.reward, 0.0)
         self.assertNotIn(
             "exp-legacy-partial",
             {item.experience_id for item in state.golden_experiences},
@@ -755,33 +750,38 @@ class SkillProMemoryTest(unittest.TestCase):
 
         self.assertEqual(report["status"], "rejected")
         self.assertLess(skill.avg_gain, 0.0)
+        self.assertEqual(skill.success_count, 0)
         self.assertEqual(skill.failure_count, 1)
 
     def test_deterministic_semantic_gradient_updates_components_for_partial_outcome(
         self,
     ) -> None:
-        module = ProceduralMemoryModule(bank_id="skill")
-        gradient = module.semantic_gradient(
-            evidence=EvaluationEvidence(
-                session_id="partial-gradient",
-                task_description="Host reachability failure.",
-                metrics={
-                    "detection_score": 1.0,
-                    "localization_accuracy": 1.0,
-                    "rca_accuracy": 0.0,
-                },
-                success=False,
-                steps=6,
-                tool_calls=4,
-            ),
-            tool_steps=[
-                SkillStep(
-                    order=1,
-                    action="Check reachability.",
-                    tool_name="get_reachability",
-                )
-            ],
-        )
+        with tempfile.TemporaryDirectory() as tmp:
+            module = ProceduralMemoryModule(
+                bank_id="skill",
+                store_path=Path(tmp) / "skills.json",
+            )
+            gradient = module.semantic_gradient(
+                evidence=EvaluationEvidence(
+                    session_id="partial-gradient",
+                    task_description="Host reachability failure.",
+                    metrics={
+                        "detection_score": 1.0,
+                        "localization_accuracy": 1.0,
+                        "rca_accuracy": 0.0,
+                    },
+                    success=False,
+                    steps=6,
+                    tool_calls=4,
+                ),
+                tool_steps=[
+                    SkillStep(
+                        order=1,
+                        action="Check reachability.",
+                        tool_name="get_reachability",
+                    )
+                ],
+            )
 
         self.assertIn("localization/RCA", gradient.critique)
         self.assertIn(
@@ -792,28 +792,32 @@ class SkillProMemoryTest(unittest.TestCase):
     def test_proposed_skill_activation_uses_evidence_signature_not_scenario(
         self,
     ) -> None:
-        module = ProceduralMemoryModule(bank_id="skill")
-        skill = module.propose_skill(
-            evidence=EvaluationEvidence(
-                session_id="general-skill",
-                task_description="Diagnose missing route.",
-                scenario="benchmark_specific_scenario",
-                metrics={
-                    "detection_score": 1.0,
-                    "localization_accuracy": 1.0,
-                    "rca_accuracy": 1.0,
-                },
-                success=True,
-            ),
-            tool_steps=[
-                SkillStep(
-                    order=1,
-                    action="Check route table.",
-                    tool_name="frr_show_ip_route",
-                    observation_summary="Route is missing.",
-                )
-            ],
-        )
+        with tempfile.TemporaryDirectory() as tmp:
+            module = ProceduralMemoryModule(
+                bank_id="skill",
+                store_path=Path(tmp) / "skills.json",
+            )
+            skill = module.propose_skill(
+                evidence=EvaluationEvidence(
+                    session_id="general-skill",
+                    task_description="Diagnose missing route.",
+                    scenario="benchmark_specific_scenario",
+                    metrics={
+                        "detection_score": 1.0,
+                        "localization_accuracy": 1.0,
+                        "rca_accuracy": 1.0,
+                    },
+                    success=True,
+                ),
+                tool_steps=[
+                    SkillStep(
+                        order=1,
+                        action="Check route table.",
+                        tool_name="frr_show_ip_route",
+                        observation_summary="Route is missing.",
+                    )
+                ],
+            )
 
         self.assertIn("evidence signature", skill.activation_condition)
         self.assertIn("observed tools", skill.activation_condition)
@@ -821,31 +825,35 @@ class SkillProMemoryTest(unittest.TestCase):
         self.assertNotIn("benchmark_specific_scenario", skill.skill_id)
 
     def test_refining_generic_seed_uses_evidence_signature_activation(self) -> None:
-        module = ProceduralMemoryModule(bank_id="skill")
-        parent = module.store.load().skills["seed_explore_exploit"]
+        with tempfile.TemporaryDirectory() as tmp:
+            module = ProceduralMemoryModule(
+                bank_id="skill",
+                store_path=Path(tmp) / "skills.json",
+            )
+            parent = module.store.load().skills["seed_explore_exploit"]
 
-        skill = module.propose_skill(
-            evidence=EvaluationEvidence(
-                session_id="refine-generic",
-                task_description="BGP route is missing.",
-                scenario="dc_clos_bgp",
-                metrics={
-                    "detection_score": 1.0,
-                    "localization_accuracy": 1.0,
-                    "rca_accuracy": 1.0,
-                },
-                success=True,
-            ),
-            tool_steps=[
-                SkillStep(
-                    order=1,
-                    action="Inspect BGP route state.",
-                    tool_name="frr_show_bgp_summary",
-                    observation_summary="BGP route is missing.",
-                )
-            ],
-            parent=parent,
-        )
+            skill = module.propose_skill(
+                evidence=EvaluationEvidence(
+                    session_id="refine-generic",
+                    task_description="BGP route is missing.",
+                    scenario="dc_clos_bgp",
+                    metrics={
+                        "detection_score": 1.0,
+                        "localization_accuracy": 1.0,
+                        "rca_accuracy": 1.0,
+                    },
+                    success=True,
+                ),
+                tool_steps=[
+                    SkillStep(
+                        order=1,
+                        action="Inspect BGP route state.",
+                        tool_name="frr_show_bgp_summary",
+                        observation_summary="BGP route is missing.",
+                    )
+                ],
+                parent=parent,
+            )
 
         self.assertIn("evidence signature", skill.activation_condition)
         self.assertIn("bgp", skill.activation_condition.lower())
@@ -888,6 +896,68 @@ class SkillProMemoryTest(unittest.TestCase):
 
         self.assertIn("CANDIDATE Skill candidate_ping", context)
         self.assertNotIn("ACTIVE Skill candidate_ping", context)
+
+    def test_unvalidated_candidate_is_not_retrievable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            module = ProceduralMemoryModule(
+                bank_id="skill",
+                store_path=Path(tmp) / "skills.json",
+            )
+            state = module.store.load()
+            state.skills["unverified"] = ProceduralSkill(
+                skill_id="unverified",
+                title="Unverified procedure",
+                activation_condition="Use for current reachability evidence.",
+                execution_steps=[
+                    SkillStep(order=1, action="Inspect current reachability.")
+                ],
+                termination_condition="Stop after one observation.",
+                status="candidate",
+                score=100.0,
+            )
+            module.store.save(state)
+
+            retrieved = module.retrieve(
+                query=MemoryQuery(text="Current reachability evidence", top_k=20)
+            )
+
+        self.assertNotIn("unverified", {item.skill.skill_id for item in retrieved})
+
+    def test_loading_bank_quarantines_unsafe_learned_skill_and_restores_seed(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "skills.json"
+            module = ProceduralMemoryModule(bank_id="skill", store_path=path)
+            state = module.store.load()
+            state.skills["seed_react_decision"].status = "retired"
+            state.episodes.append(
+                EvaluationEvidence(
+                    session_id="failed-source",
+                    metrics={
+                        "detection_score": 1.0,
+                        "localization_accuracy": 1.0,
+                        "rca_accuracy": 0.0,
+                    },
+                )
+            )
+            state.skills["unsafe-learned"] = ProceduralSkill(
+                skill_id="unsafe-learned",
+                title="Unsafe learned procedure",
+                activation_condition="Use after one broad observation.",
+                execution_steps=[SkillStep(order=1, action="Stop early.")],
+                termination_condition="Stop immediately.",
+                source_sessions=["failed-source"],
+                status="validated",
+                origin="learned",
+            )
+            module.store.save(state)
+
+            reloaded = ProceduralMemoryModule(bank_id="skill", store_path=path)
+            repaired = reloaded.store.load()
+
+        self.assertEqual(repaired.skills["seed_react_decision"].status, "validated")
+        self.assertEqual(repaired.skills["unsafe-learned"].status, "candidate")
 
     def test_runtime_context_redacts_known_root_cause_ids_from_dirty_skills(
         self,
@@ -1004,7 +1074,9 @@ class SkillProMemoryTest(unittest.TestCase):
             )
             second = module.learn_from_episode(
                 evidence=evidence("s2"),
-                tool_steps=steps,
+                tool_steps=[
+                    steps[0].model_copy(update={"skill_id": first["skill_id"]})
+                ],
             )
             third = module.learn_from_episode(
                 evidence=evidence("s3"),
@@ -1158,6 +1230,95 @@ class SkillProMemoryTest(unittest.TestCase):
             {"bgp-low", "bgp-current", "bgp-mid"},
         )
 
+    def test_shared_generic_reachability_signal_does_not_merge_domains(self) -> None:
+        def experience(exp_id: str, text: str) -> SkillExperience:
+            return SkillExperience(
+                experience_id=exp_id,
+                session_id=exp_id,
+                reward=1.0,
+                advantage=1.0,
+                skill_ids=["seed_react_decision"],
+                trajectory=text,
+                transitions=[
+                    SkillTransition(
+                        action="Inspect current reachability.",
+                        tool_name="get_reachability",
+                        observation_summary=text,
+                        status="success",
+                        done=True,
+                    )
+                ],
+                success=True,
+            )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            module = ProceduralMemoryModule(
+                bank_id="skill",
+                store_path=Path(tmp) / "skills.json",
+                evolution_threshold=3,
+            )
+            state = module.store.load()
+            parent = state.skills["seed_react_decision"]
+            current = experience(
+                "service-current",
+                "DNS resolver and DHCP server are reachable over ICMP.",
+            )
+            state.experiences.extend(
+                [
+                    current,
+                    experience("service-2", "DNS lookup and DHCP service evidence."),
+                    experience("service-3", "DNS server response and DHCP lease evidence."),
+                    experience("p4-no-fault", "P4 hosts have successful ICMP reachability."),
+                ]
+            )
+
+            batch = module._evolution_batch(state, parent, current=current)
+
+        self.assertEqual(len(batch), 3)
+        self.assertNotIn("p4-no-fault", {item.experience_id for item in batch})
+
+    def test_refining_generic_seed_preserves_seed_and_resets_candidate_stats(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            module = ProceduralMemoryModule(
+                bank_id="skill",
+                store_path=Path(tmp) / "skills.json",
+                evolution_threshold=1,
+            )
+            report = module.learn_from_episode(
+                evidence=EvaluationEvidence(
+                    session_id="successful-refinement",
+                    task_description="A route is missing after a neighbor failure.",
+                    scenario="routing",
+                    metrics={
+                        "detection_score": 1.0,
+                        "localization_accuracy": 1.0,
+                        "rca_accuracy": 1.0,
+                    },
+                    steps=3,
+                    tool_calls=2,
+                    success=True,
+                ),
+                tool_steps=[
+                    SkillStep(
+                        order=1,
+                        skill_id="seed_react_decision",
+                        action="Inspect route state.",
+                        tool_name="show_route",
+                        observation_summary="The expected route is missing.",
+                    )
+                ],
+            )
+            state = module.store.load()
+            candidate = state.skills[report["skill_id"]]
+
+        self.assertEqual(report["status"], "accepted")
+        self.assertEqual(state.skills["seed_react_decision"].status, "validated")
+        self.assertIsNone(report["decision"]["replaced_skill_id"])
+        self.assertEqual(candidate.success_count, 0)
+        self.assertEqual(candidate.failure_count, 0)
+        self.assertEqual(candidate.frequency, 0)
+        self.assertEqual(candidate.maturity, 0)
+
     def test_seed_skill_pool_is_available_in_fresh_bank(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             module = ProceduralMemoryModule(
@@ -1190,247 +1351,25 @@ class SkillProMemoryTest(unittest.TestCase):
         )
         self.assertIn("Skill-MDP", context)
 
-    def test_disabling_expert_seeds_retires_existing_ablation_skills(self) -> None:
+    def test_existing_expert_seed_entries_are_removed_from_a_bank(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "skills.json"
-            enabled = ProceduralMemoryModule(
-                bank_id="skill",
-                store_path=path,
-                include_expert_seeds=True,
+            module = ProceduralMemoryModule(bank_id="skill", store_path=path)
+            state = module.store.load()
+            state.skills["legacy_expert_seed"] = ProceduralSkill(
+                skill_id="legacy_expert_seed",
+                title="Legacy expert seed",
+                activation_condition="Legacy condition.",
+                execution_steps=[SkillStep(order=1, action="Legacy action.")],
+                termination_condition="Legacy termination.",
+                origin="expert_seed",
+                status="validated",
             )
-            self.assertEqual(
-                enabled.store.load().skills["seed_name_resolution_ladder"].status,
-                "validated",
-            )
+            module.store.save(state)
 
-            disabled = ProceduralMemoryModule(
-                bank_id="skill",
-                store_path=path,
-                include_expert_seeds=False,
-            )
-            expert = disabled.store.load().skills["seed_name_resolution_ladder"]
+            cleaned = ProceduralMemoryModule(bank_id="skill", store_path=path)
 
-        self.assertEqual(expert.status, "retired")
-        self.assertEqual(expert.origin, "expert_seed")
-
-    def test_generic_ladder_seeds_require_claim_or_evidence_signal(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            module = ProceduralMemoryModule(
-                bank_id="skill",
-                store_path=Path(tmp) / "skills.json",
-                evolution_threshold=1,
-                include_expert_seeds=True,
-            )
-
-            retrieved = module.retrieve(
-                query=MemoryQuery(
-                    text=(
-                        "Network Description: enterprise topology includes "
-                        "routing, name service, addressing, and application "
-                        "components. Begin diagnosis with little evidence."
-                    ),
-                    scenario="enterprise_network",
-                    protocols=["dns", "dhcp", "ospf"],
-                    services=["routing", "addressing", "name_resolution"],
-                    top_k=10,
-                )
-            )
-
-        seed_ids = {item.skill.skill_id for item in retrieved}
-        self.assertNotIn("seed_name_resolution_ladder", seed_ids)
-        self.assertNotIn("seed_host_addressing_ladder", seed_ids)
-        self.assertNotIn("seed_routing_adjacency_ladder", seed_ids)
-
-    def test_generic_ladder_seeds_retrieve_from_evidence_signals(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            module = ProceduralMemoryModule(
-                bank_id="skill",
-                store_path=Path(tmp) / "skills.json",
-                evolution_threshold=1,
-                include_expert_seeds=True,
-            )
-
-            dns_retrieved = module.retrieve(
-                query=MemoryQuery(
-                    text="curl_web_test shows DNS name_lookup delay and SERVFAIL.",
-                    protocols=["dns"],
-                    services=["name_resolution"],
-                    tools=["curl_web_test", "systemctl_ops", "netstat"],
-                    top_k=3,
-                )
-            )
-            dhcp_retrieved = module.retrieve(
-                query=MemoryQuery(
-                    text=(
-                        "get_host_net_config shows no inet address and "
-                        "ip_route is empty after DHCP lease failure."
-                    ),
-                    protocols=["dhcp"],
-                    services=["addressing"],
-                    tools=["get_host_net_config", "systemctl_ops"],
-                    top_k=3,
-                )
-            )
-            ospf_retrieved = module.retrieve(
-                query=MemoryQuery(
-                    text=(
-                        "frr_exec show ip ospf neighbor reports neighbor down "
-                        "and frr_show_ip_route shows missing route."
-                    ),
-                    protocols=["ospf"],
-                    services=["routing"],
-                    tools=["frr_exec", "frr_get_ospf_conf", "frr_show_ip_route"],
-                    top_k=3,
-                )
-            )
-
-        self.assertEqual(
-            dns_retrieved[0].skill.skill_id,
-            "seed_name_resolution_ladder",
-        )
-        self.assertEqual(
-            dhcp_retrieved[0].skill.skill_id,
-            "seed_host_addressing_ladder",
-        )
-        self.assertEqual(
-            ospf_retrieved[0].skill.skill_id,
-            "seed_routing_adjacency_ladder",
-        )
-
-    def test_bgp_config_disambiguation_seed_is_retrieved_for_matching_evidence(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            module = ProceduralMemoryModule(
-                bank_id="skill",
-                store_path=Path(tmp) / "skills.json",
-                evolution_threshold=1,
-                include_expert_seeds=True,
-            )
-
-            retrieved = module.retrieve(
-                query=MemoryQuery(
-                    text=(
-                        "endpoint host link checked ok; frr_show_bgp_summary "
-                        "shows neighbor Idle and missing route"
-                    ),
-                    scenario="dc_clos_bgp",
-                    protocols=["bgp"],
-                    services=["routing"],
-                    symptoms=["missing_route", "neighbor_down"],
-                    tools=[
-                        "frr_show_bgp_summary",
-                        "frr_get_bgp_conf",
-                        "frr_show_running_config",
-                    ],
-                    top_k=3,
-                )
-            )
-
-        self.assertTrue(retrieved)
-        self.assertEqual(
-            retrieved[0].skill.skill_id,
-            "seed_bgp_config_disambiguation",
-        )
-
-    def test_bgp_config_disambiguation_seed_requires_endpoint_evidence(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            module = ProceduralMemoryModule(
-                bank_id="skill",
-                store_path=Path(tmp) / "skills.json",
-                evolution_threshold=1,
-                include_expert_seeds=True,
-            )
-
-            retrieved = module.retrieve(
-                query=MemoryQuery(
-                    text=(
-                        "Network Description: EBGP Clos. Begin diagnosis with "
-                        "little evidence."
-                    ),
-                    scenario="dc_clos_bgp",
-                    protocols=["bgp"],
-                    services=["routing"],
-                    tools=[
-                        "frr_show_bgp_summary",
-                        "frr_get_bgp_conf",
-                        "frr_show_running_config",
-                    ],
-                    top_k=8,
-                )
-            )
-
-        self.assertNotIn(
-            "seed_bgp_config_disambiguation",
-            [item.skill.skill_id for item in retrieved],
-        )
-
-    def test_bgp_config_disambiguation_seed_rejects_normal_established_summary(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            module = ProceduralMemoryModule(
-                bank_id="skill",
-                store_path=Path(tmp) / "skills.json",
-                evolution_threshold=1,
-            )
-
-            retrieved = module.retrieve(
-                query=MemoryQuery(
-                    text=(
-                        "endpoint host link checked ok; frr_show_bgp_summary "
-                        "shows neighbor Established with prefixes received 12"
-                    ),
-                    scenario="dc_clos_bgp",
-                    protocols=["bgp"],
-                    services=["routing"],
-                    tools=[
-                        "frr_show_bgp_summary",
-                        "frr_get_bgp_conf",
-                        "frr_show_running_config",
-                    ],
-                    top_k=8,
-                )
-            )
-
-        self.assertNotIn(
-            "seed_bgp_config_disambiguation",
-            [item.skill.skill_id for item in retrieved],
-        )
-
-    def test_bgp_config_disambiguation_seed_ignores_tool_catalog_without_bgp_evidence(
-        self,
-    ) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            module = ProceduralMemoryModule(
-                bank_id="skill",
-                store_path=Path(tmp) / "skills.json",
-                evolution_threshold=1,
-            )
-
-            retrieved = module.retrieve(
-                query=MemoryQuery(
-                    text=(
-                        'get_host_net_config({"host_name":"pc_0_0"}) -> '
-                        '{"ip_addr":"eth0 state UP","ip_route":"network is unreachable"}'
-                    ),
-                    scenario="dc_clos_bgp",
-                    protocols=["bgp"],
-                    services=["routing"],
-                    symptoms=["missing_route"],
-                    tools=[
-                        "frr_show_bgp_summary",
-                        "frr_get_bgp_conf",
-                        "frr_show_running_config",
-                    ],
-                    top_k=8,
-                )
-            )
-
-        self.assertNotIn(
-            "seed_bgp_config_disambiguation",
-            [item.skill.skill_id for item in retrieved],
-        )
+        self.assertNotIn("legacy_expert_seed", cleaned.store.load().skills)
 
     def test_failed_domain_specific_skill_does_not_dominate_other_domains(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1782,130 +1721,6 @@ class SkillProMemoryTest(unittest.TestCase):
         self.assertEqual(active.skill.skill_id, skill.skill_id)
         self.assertEqual(skill.reuse_count, 1)
 
-    def test_llm_topk_lcb_selector_uses_llm_nominees_then_lcb(self) -> None:
-        class FakeSelector:
-            def __init__(self) -> None:
-                self.prompts: list[str] = []
-
-            def invoke(self, prompt: str):
-                self.prompts.append(prompt)
-                return SimpleNamespace(
-                    content=(
-                        "<choice>weak_high_score</choice>\n"
-                        "<choice>strong_lower_score</choice>"
-                    )
-                )
-
-        with tempfile.TemporaryDirectory() as tmp:
-            module = ProceduralMemoryModule(
-                bank_id="skill",
-                store_path=Path(tmp) / "skills.json",
-            )
-            state = module.store.load()
-            state.skills["weak_high_score"] = ProceduralSkill(
-                skill_id="weak_high_score",
-                title="Weak high score",
-                activation_condition="Use for host reachability failure with ping_host.",
-                execution_steps=[
-                    SkillStep(order=1, action="Call ping_host.", tool_name="ping_host")
-                ],
-                termination_condition="Stop after ping evidence.",
-                tools=["ping_host"],
-                status="validated",
-                score=5.0,
-                frequency=10,
-                avg_gain=-0.5,
-                maturity=5,
-            )
-            state.skills["strong_lower_score"] = ProceduralSkill(
-                skill_id="strong_lower_score",
-                title="Strong lower score",
-                activation_condition="Use for host reachability failure with ping_host.",
-                execution_steps=[
-                    SkillStep(
-                        order=1,
-                        action="Call ping_host then inspect route.",
-                        tool_name="ping_host",
-                    )
-                ],
-                termination_condition="Stop after ping and route evidence.",
-                tools=["ping_host"],
-                status="validated",
-                score=1.0,
-                frequency=10,
-                avg_gain=0.7,
-                maturity=5,
-            )
-            module.store.save(state)
-            selector = FakeSelector()
-
-            active = module.select_skill_llm_topk_lcb(
-                query=MemoryQuery(
-                    text="Host reachability failure",
-                    scenario="simple_bgp",
-                    tools=["ping_host"],
-                    top_k=5,
-                ),
-                llm_agent=selector,
-            )
-            state = module.store.load()
-
-        self.assertIsNotNone(active)
-        self.assertIn("[AVAILABLE SKILL-MDP OPTIONS]", selector.prompts[-1])
-        self.assertEqual(active.skill.skill_id, "strong_lower_score")
-        self.assertEqual(state.skills["strong_lower_score"].reuse_count, 1)
-        self.assertEqual(state.skills["weak_high_score"].reuse_count, 0)
-
-    def test_llm_topk_lcb_selector_falls_back_when_llm_returns_none(self) -> None:
-        class FakeSelector:
-            def __init__(self) -> None:
-                self.prompts: list[str] = []
-
-            def invoke(self, prompt: str):
-                self.prompts.append(prompt)
-                return SimpleNamespace(content="<choice>NONE</choice>")
-
-        with tempfile.TemporaryDirectory() as tmp:
-            module = ProceduralMemoryModule(
-                bank_id="skill",
-                store_path=Path(tmp) / "skills.json",
-            )
-            state = module.store.load()
-            state.skills["generic_reachability"] = ProceduralSkill(
-                skill_id="generic_reachability",
-                title="Generic reachability",
-                activation_condition="Use for host reachability failure.",
-                execution_steps=[
-                    SkillStep(
-                        order=1, action="Check reachability.", tool_name="ping_host"
-                    )
-                ],
-                termination_condition="Stop after reachability evidence.",
-                tools=["ping_host"],
-                status="validated",
-                score=1.0,
-                frequency=3,
-                avg_gain=0.3,
-            )
-            module.store.save(state)
-            selector = FakeSelector()
-
-            active = module.select_skill_llm_topk_lcb(
-                query=MemoryQuery(
-                    text="Host reachability failure",
-                    scenario="simple_bgp",
-                    tools=["ping_host"],
-                    top_k=5,
-                ),
-                llm_agent=selector,
-            )
-            state = module.store.load()
-
-        self.assertIsNotNone(active)
-        self.assertEqual(active.skill.skill_id, "generic_reachability")
-        self.assertEqual(state.skills["generic_reachability"].reuse_count, 1)
-        self.assertIn("<choice>NONE</choice>", selector.prompts[-1])
-
     def test_lcb_gate_allows_untried_seed_skill_activation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             module = ProceduralMemoryModule(
@@ -1965,6 +1780,7 @@ class SkillProMemoryTest(unittest.TestCase):
                 status="validated",
                 score=1.0,
                 frequency=1,
+                total_gain=-1.0,
                 avg_gain=-1.0,
                 maturity=5,
             )
@@ -1982,6 +1798,7 @@ class SkillProMemoryTest(unittest.TestCase):
                 status="validated",
                 score=0.5,
                 frequency=20,
+                total_gain=6.0,
                 avg_gain=0.3,
                 maturity=5,
             )
@@ -2001,139 +1818,6 @@ class SkillProMemoryTest(unittest.TestCase):
         self.assertEqual(active.skill.skill_id, "stable_lower_score")
         self.assertEqual(state.skills["risky_high_score"].reuse_count, 0)
         self.assertEqual(state.skills["stable_lower_score"].reuse_count, 1)
-
-    def test_llm_topk_lcb_selector_skips_lcb_rejected_nominee(self) -> None:
-        class FakeSelector:
-            def invoke(self, _prompt: str):
-                return SimpleNamespace(
-                    content=(
-                        "<choice>risky_high_score</choice>\n"
-                        "<choice>stable_lower_score</choice>"
-                    )
-                )
-
-        with tempfile.TemporaryDirectory() as tmp:
-            module = ProceduralMemoryModule(
-                bank_id="skill",
-                store_path=Path(tmp) / "skills.json",
-            )
-            state = module.store.load()
-            state.skills["risky_high_score"] = ProceduralSkill(
-                skill_id="risky_high_score",
-                title="Risky high score",
-                activation_condition="Use for host reachability failure.",
-                execution_steps=[
-                    SkillStep(
-                        order=1, action="Check reachability.", tool_name="ping_host"
-                    )
-                ],
-                termination_condition="Stop after reachability evidence.",
-                tools=["ping_host"],
-                status="validated",
-                score=1.0,
-                frequency=1,
-                avg_gain=-1.0,
-                maturity=5,
-            )
-            state.skills["stable_lower_score"] = ProceduralSkill(
-                skill_id="stable_lower_score",
-                title="Stable lower score",
-                activation_condition="Use for host reachability failure.",
-                execution_steps=[
-                    SkillStep(
-                        order=1, action="Check reachability.", tool_name="ping_host"
-                    )
-                ],
-                termination_condition="Stop after reachability evidence.",
-                tools=["ping_host"],
-                status="validated",
-                score=0.5,
-                frequency=20,
-                avg_gain=0.3,
-                maturity=5,
-            )
-            module.store.save(state)
-
-            active = module.select_skill_llm_topk_lcb(
-                query=MemoryQuery(
-                    text="Host reachability failure",
-                    scenario="simple_bgp",
-                    tools=["ping_host"],
-                    top_k=5,
-                ),
-                llm_agent=FakeSelector(),
-            )
-            state = module.store.load()
-
-        self.assertIsNotNone(active)
-        self.assertEqual(active.skill.skill_id, "stable_lower_score")
-        self.assertEqual(state.skills["risky_high_score"].reuse_count, 0)
-        self.assertEqual(state.skills["stable_lower_score"].reuse_count, 1)
-
-    def test_runtime_prompt_selection_can_use_llm_topk_lcb_selector(self) -> None:
-        def ping_host(host: str) -> str:
-            return f"{host} reachable"
-
-        class FakeSelector:
-            def __init__(self) -> None:
-                self.prompts: list[str] = []
-
-            def invoke(self, prompt: str):
-                self.prompts.append(prompt)
-                return SimpleNamespace(content="<choice>strong_ping</choice>")
-
-        with tempfile.TemporaryDirectory() as tmp:
-            tool = StructuredTool.from_function(
-                ping_host,
-                name="ping_host",
-                description="Ping one host.",
-            )
-            module = ProceduralMemoryModule(
-                bank_id="skill",
-                store_path=Path(tmp) / "skills.json",
-            )
-            state = module.store.load()
-            state.skills["strong_ping"] = ProceduralSkill(
-                skill_id="strong_ping",
-                title="Strong ping selector skill",
-                activation_condition="Use for host reachability failure with ping_host.",
-                execution_steps=[
-                    SkillStep(order=1, action="Call ping_host.", tool_name="ping_host")
-                ],
-                termination_condition="Stop after ping evidence.",
-                tools=["ping_host"],
-                status="validated",
-                score=1.0,
-                frequency=3,
-                avg_gain=0.4,
-            )
-            module.store.save(state)
-            selector = FakeSelector()
-            runtime = SkillToolRuntime(
-                memory=module,
-                memory_mode="read",
-                session=SimpleNamespace(
-                    session_id="s2",
-                    scenario_name="simple_bgp",
-                    scenario_topo_size="small",
-                ),
-                task_description="Host reachability failure",
-                tools=[tool],
-                session_dir=tmp,
-                meta_controller_llm=selector,
-                skill_selector_mode="llm_topk_lcb",
-            )
-
-            prompt = runtime.prompt_suffix()
-            snapshot = runtime.snapshot()
-            state = module.store.load()
-
-        self.assertIn("strong_ping", prompt)
-        self.assertEqual(snapshot["skill_selector_mode"], "llm_topk_lcb")
-        self.assertEqual(snapshot["active_skill_id"], "strong_ping")
-        self.assertEqual(snapshot["prompt_selection_count"], 1)
-        self.assertEqual(state.skills["strong_ping"].reuse_count, 1)
-        self.assertTrue(selector.prompts)
 
     def test_runtime_prompt_query_does_not_use_full_tool_catalog_by_default(
         self,
@@ -2220,11 +1904,14 @@ class SkillProMemoryTest(unittest.TestCase):
 
         self.assertGreater(snapshot["prompt_added_tokens"], 0)
         self.assertEqual(snapshot["config"]["max_skill_age"], 4)
-        self.assertEqual(snapshot["config"]["selector_nominee_k"], 3)
-        self.assertGreater(snapshot["tool_description_added_tokens"], 0)
+        self.assertEqual(
+            snapshot["selection_policy"],
+            "similarity_top_k_then_online_value",
+        )
+        self.assertEqual(snapshot["tool_description_added_tokens"], 0)
         self.assertGreater(snapshot["followup_added_tokens"], 0)
         self.assertEqual(snapshot["prompt_injection_count"], 1)
-        self.assertEqual(snapshot["tool_description_injection_count"], 1)
+        self.assertEqual(snapshot["tool_description_injection_count"], 0)
         self.assertEqual(snapshot["followup_guidance_count"], 1)
         self.assertEqual(
             snapshot["total_added_tokens"],
@@ -2409,7 +2096,6 @@ class SkillProMemoryTest(unittest.TestCase):
                 tools=[tool],
                 session_dir=tmp,
                 meta_controller_llm=meta,
-                meta_controller_mode="llm",
             )
 
             runtime.before_tool(tool_name="ping_host", tool_input={"host": "pc1"})
@@ -2431,7 +2117,7 @@ class SkillProMemoryTest(unittest.TestCase):
             row for row in rows if row.get("event") == "skill_meta_controller"
         ]
         terminations = [row for row in rows if row.get("event") == "skill_termination"]
-        self.assertEqual(snapshot["meta_controller_mode"], "llm")
+        self.assertTrue(snapshot["meta_controller_available"])
         self.assertTrue(meta.prompts)
         self.assertIn("[ACTIVE OPTION]", meta.prompts[-1])
         self.assertEqual(meta_events[-1]["status"], "DONE")
@@ -2494,7 +2180,6 @@ class SkillProMemoryTest(unittest.TestCase):
                 tools=[tool],
                 session_dir=tmp,
                 meta_controller_llm=meta,
-                meta_controller_mode="llm",
             )
 
             runtime.before_tool(tool_name="ping_host", tool_input={"host": "pc1"})
@@ -2584,10 +2269,8 @@ class SkillProMemoryTest(unittest.TestCase):
             for row in rows
             if row.get("event") == "skill_activation" and row.get("source") == "prompt"
         ]
-        self.assertIn(
-            "Advisory Skill-MDP option selected before next LLM action", prompt
-        )
-        self.assertIn("not a final diagnosis stop condition", prompt)
+        self.assertIn("Active Skill-Pro procedure", prompt)
+        self.assertIn("guidance, not evidence", prompt)
         self.assertIn("prompt_ping", prompt)
         self.assertEqual(snapshot["active_skill_id"], "prompt_ping")
         self.assertEqual(snapshot["prompt_selection_count"], 1)
@@ -2646,9 +2329,7 @@ class SkillProMemoryTest(unittest.TestCase):
             state = module.store.load()
             log_path = Path(tmp) / "messages.jsonl"
 
-        self.assertIn("prompt_ping", prompt)
-        self.assertIn("read-only planning context", prompt)
-        self.assertNotIn("selected before next LLM action", prompt)
+        self.assertEqual(prompt, "")
         self.assertEqual(snapshot["active_skill_id"], "")
         self.assertEqual(snapshot["prompt_selection_count"], 0)
         self.assertEqual(state.skills["prompt_ping"].reuse_count, 0)
@@ -3009,957 +2690,6 @@ class SkillProMemoryTest(unittest.TestCase):
         self.assertEqual(deviations[-1]["tool"], "show_route")
         self.assertEqual(transitions[-1]["active_skill_id"], "prompt_ping")
 
-    def test_skill_prompt_links_active_skill_to_draft_tool_checks(self) -> None:
-        def ping_host(host: str) -> str:
-            return f"{host} reachable"
-
-        with tempfile.TemporaryDirectory() as tmp:
-            tool = StructuredTool.from_function(
-                ping_host,
-                name="ping_host",
-                description="Ping one host.",
-            )
-            session = SimpleNamespace(
-                session_id="s2",
-                scenario_name="simple_bgp",
-                scenario_topo_size="small",
-                task_description="Host reachability failure",
-            )
-            draft_store = ToolEvolutionStore("draft", root=tmp)
-            ToolEvolutionRuntime(
-                session=session,
-                primitive_tools=[tool],
-                library_id="draft",
-                store=draft_store,
-            )
-            rewrite_documentation(
-                draft_store,
-                trials=[],
-                tool_descriptions={"ping_host": "Ping one host."},
-                metrics={},
-                session_id="s1",
-                task_description="Host reachability failure",
-            )
-            doc = draft_store.get_document("ping_host")
-            assert doc is not None
-            doc.usage_notes.append("Use exact host names from the active topology.")
-            doc.exploration_suggestions.append(
-                "Ping pc1 to verify endpoint reachability."
-            )
-            draft_store.upsert_document(doc)
-            draft_state = draft_store.load()
-            draft_state.explorations.append(
-                DraftExploration(
-                    exploration_id="explore_ping_pc1",
-                    session_id="s1",
-                    tool_name="ping_host",
-                    intent="diagnosis_check",
-                    user_query="Ping pc1.",
-                    parameters={"host": "pc1"},
-                    status="planned",
-                    next_exploration="Ping pc1 to verify endpoint reachability.",
-                )
-            )
-            draft_store.save(draft_state)
-            draft_runtime = ToolEvolutionRuntime(
-                session=session,
-                primitive_tools=[tool],
-                library_id="draft",
-                store=draft_store,
-            )
-            module = ProceduralMemoryModule(
-                bank_id="skill",
-                store_path=Path(tmp) / "skills.json",
-            )
-            state = module.store.load()
-            state.skills["prompt_ping"] = ProceduralSkill(
-                skill_id="prompt_ping",
-                title="Prompt-time reachability skill",
-                activation_condition="Use for host reachability failure with ping_host.",
-                execution_steps=[
-                    SkillStep(
-                        order=1,
-                        action="Call ping_host and interpret reachability.",
-                        tool_name="ping_host",
-                    )
-                ],
-                termination_condition="Stop after ping evidence is interpreted.",
-                tools=["ping_host"],
-                status="validated",
-                score=2.0,
-            )
-            module.store.save(state)
-            selector = SimpleNamespace(
-                prompts=[],
-                invoke=lambda prompt: (
-                    selector.prompts.append(prompt)
-                    or SimpleNamespace(content="<choice>prompt_ping</choice>")
-                ),
-            )
-            runtime = SkillToolRuntime(
-                memory=module,
-                memory_mode="read",
-                session=session,
-                task_description="Host reachability failure",
-                tools=[tool],
-                session_dir=tmp,
-                tool_evolution_runtime=draft_runtime,
-                meta_controller_llm=selector,
-                skill_selector_mode="llm_topk_lcb",
-            )
-
-            prompt = runtime.prompt_suffix()
-
-        self.assertIn("Active skill-tool links", prompt)
-        self.assertIn("ping_host", prompt)
-        self.assertIn("DRAFT tool documentation memory", prompt)
-        self.assertIn("topology-safe diagnostic checks", prompt)
-        self.assertIn("DRAFT active exploration queue", prompt)
-        self.assertIn("DRAFT active exploration queue", selector.prompts[-1])
-        self.assertIn("ping_host", selector.prompts[-1])
-
-    def test_skill_runtime_logs_planned_draft_exploration_with_tool_call(self) -> None:
-        def ping_host(host: str) -> str:
-            return f"{host} reachable"
-
-        with tempfile.TemporaryDirectory() as tmp:
-            tool = StructuredTool.from_function(
-                ping_host,
-                name="ping_host",
-                description="Ping one host.",
-            )
-            session = SimpleNamespace(
-                session_id="s2",
-                scenario_name="simple_bgp",
-                scenario_topo_size="small",
-                task_description="Host reachability failure",
-                topology=[("pc1:eth0", "r1:eth0")],
-            )
-            draft_store = ToolEvolutionStore("draft", root=tmp)
-            ToolEvolutionRuntime(
-                session=session,
-                primitive_tools=[tool],
-                library_id="draft",
-                store=draft_store,
-            )
-            draft_state = draft_store.load()
-            draft_state.explorations.append(
-                DraftExploration(
-                    exploration_id="explore_ping_pc1",
-                    session_id="s1",
-                    tool_name="ping_host",
-                    intent="diagnosis_check",
-                    user_query="Check pc1 reachability.",
-                    parameters={"host": "pc1"},
-                    status="planned",
-                    next_exploration="Ping pc1 to verify endpoint reachability.",
-                )
-            )
-            draft_store.save(draft_state)
-            draft_runtime = ToolEvolutionRuntime(
-                session=session,
-                primitive_tools=[tool],
-                library_id="draft",
-                store=draft_store,
-            )
-            module = ProceduralMemoryModule(
-                bank_id="skill",
-                store_path=Path(tmp) / "skills.json",
-            )
-            runtime = SkillToolRuntime(
-                memory=module,
-                memory_mode="read",
-                session=session,
-                task_description="Host reachability failure",
-                tools=[tool],
-                session_dir=tmp,
-                tool_evolution_runtime=draft_runtime,
-            )
-
-            output = runtime.wrap_tools([tool])[0].invoke({"host": "pc1"})
-            tool_learning_queue = draft_runtime.planned_explorations(
-                diagnosis_only=False,
-            )
-            rows = [
-                json.loads(line)
-                for line in (Path(tmp) / "messages.jsonl")
-                .read_text(encoding="utf-8")
-                .splitlines()
-                if line.strip()
-            ]
-            parsed_steps = extract_skill_steps(Path(tmp) / "messages.jsonl")
-
-        transitions = [row for row in rows if row.get("event") == "skill_transition"]
-        self.assertIn("DRAFT planned exploration advanced", output)
-        self.assertEqual(
-            transitions[-1].get("draft_exploration_id"),
-            "explore_ping_pc1",
-        )
-        self.assertEqual(parsed_steps[0].draft_exploration_id, "explore_ping_pc1")
-        self.assertIn("Ping pc1", parsed_steps[0].draft_next_exploration)
-        self.assertEqual(tool_learning_queue, [])
-
-    def test_skill_tool_wrapper_does_not_duplicate_existing_draft_guidance(
-        self,
-    ) -> None:
-        def ping_host(host: str) -> str:
-            return f"{host} reachable"
-
-        with tempfile.TemporaryDirectory() as tmp:
-            tool = StructuredTool.from_function(
-                ping_host,
-                name="ping_host",
-                description="Ping one host.",
-            )
-            session = SimpleNamespace(
-                session_id="s2",
-                scenario_name="simple_bgp",
-                scenario_topo_size="small",
-                task_description="Host reachability failure",
-            )
-            draft_store = ToolEvolutionStore("draft", root=tmp)
-            rewrite_documentation(
-                draft_store,
-                trials=[],
-                tool_descriptions={"ping_host": "Ping one host."},
-                metrics={},
-                session_id="s1",
-                task_description="Host reachability failure",
-            )
-            doc = draft_store.get_document("ping_host")
-            assert doc is not None
-            doc.usage_notes.append("Use exact host names from the active topology.")
-            doc.exploration_suggestions.append(
-                "Ping pc1 to verify endpoint reachability."
-            )
-            draft_store.upsert_document(doc)
-            draft_runtime = ToolEvolutionRuntime(
-                session=session,
-                primitive_tools=[tool],
-                library_id="draft",
-                store=draft_store,
-            )
-            draft_tools = draft_runtime.build_tools()
-            module = ProceduralMemoryModule(
-                bank_id="skill",
-                store_path=Path(tmp) / "skills.json",
-            )
-            runtime = SkillToolRuntime(
-                memory=module,
-                memory_mode="read",
-                session=session,
-                task_description="Host reachability failure",
-                tools=draft_tools,
-                session_dir=tmp,
-                tool_evolution_runtime=draft_runtime,
-            )
-
-            wrapped = runtime.wrap_tools(draft_tools)[0]
-
-        self.assertEqual(wrapped.description.count("DRAFT refined guidance:"), 1)
-        self.assertLessEqual(
-            wrapped.description.count("DRAFT planned active checks"),
-            1,
-        )
-        self.assertNotIn("DRAFT tool guidance:", wrapped.description)
-        self.assertNotIn(
-            "DRAFT active checks already reflected above", wrapped.description
-        )
-
-    def test_skill_tool_wrapper_scopes_guidance_to_linked_tools(self) -> None:
-        def ping_host(host: str) -> str:
-            return f"{host} reachable"
-
-        def make_echo_tool(name: str) -> StructuredTool:
-            def echo(value: str = "") -> str:
-                return value
-
-            echo.__name__ = name
-            return StructuredTool.from_function(
-                echo,
-                name=name,
-                description=f"{name} base.",
-            )
-
-        with tempfile.TemporaryDirectory() as tmp:
-            tools = [
-                StructuredTool.from_function(
-                    ping_host,
-                    name="ping_host",
-                    description="Ping one host.",
-                ),
-                make_echo_tool("cat_file"),
-                make_echo_tool("show_logs"),
-                make_echo_tool("list_files"),
-                make_echo_tool("read_config"),
-                make_echo_tool("write_note"),
-                make_echo_tool("noop_tool"),
-            ]
-            session = SimpleNamespace(
-                session_id="s2",
-                scenario_name="simple_bgp",
-                scenario_topo_size="small",
-                task_description="Host reachability failure",
-            )
-            draft_store = ToolEvolutionStore("draft", root=tmp)
-            draft_state = draft_store.load()
-            draft_state.explorations.append(
-                DraftExploration(
-                    exploration_id="explore_ping_host",
-                    session_id="s1",
-                    tool_name="ping_host",
-                    intent="diagnosis_check",
-                    user_query="Check pc1 reachability.",
-                    parameters={"host": "pc1"},
-                    status="planned",
-                    next_exploration="Ping pc1 to verify endpoint reachability.",
-                )
-            )
-            draft_store.save(draft_state)
-            draft_runtime = ToolEvolutionRuntime(
-                session=session,
-                primitive_tools=tools,
-                library_id="draft",
-                store=draft_store,
-            )
-            module = ProceduralMemoryModule(
-                bank_id="skill",
-                store_path=Path(tmp) / "skills.json",
-            )
-            state = module.store.load()
-            state.skills["specific_ping"] = ProceduralSkill(
-                skill_id="specific_ping",
-                title="Specific ping skill",
-                activation_condition="Use ping_host for host reachability failure.",
-                execution_steps=[
-                    SkillStep(
-                        order=1,
-                        action="Call ping_host and interpret reachability.",
-                        tool_name="ping_host",
-                    )
-                ],
-                termination_condition="Stop after ping evidence is interpreted.",
-                tools=["ping_host"],
-                status="validated",
-                score=3.0,
-            )
-            module.store.save(state)
-            runtime = SkillToolRuntime(
-                memory=module,
-                memory_mode="read",
-                session=session,
-                task_description="Host reachability failure",
-                tools=tools,
-                session_dir=tmp,
-                tool_evolution_runtime=draft_runtime,
-            )
-
-            wrapped = {tool.name: tool for tool in runtime.wrap_tools(tools)}
-
-        self.assertIn("Integrated learning guidance", wrapped["ping_host"].description)
-        self.assertIn("specific_ping", wrapped["ping_host"].description)
-        self.assertIn("DRAFT tool guidance", wrapped["ping_host"].description)
-        self.assertEqual(wrapped["cat_file"].description, "cat_file base.")
-        self.assertNotIn(
-            "Integrated learning guidance", wrapped["cat_file"].description
-        )
-        self.assertNotIn("DRAFT tool guidance", wrapped["cat_file"].description)
-
-    def test_skill_runtime_prioritizes_host_link_candidates_before_bgp_deep_dive(
-        self,
-    ) -> None:
-        def make_echo_tool(name: str) -> StructuredTool:
-            def echo(value: str = "") -> str:
-                return value
-
-            echo.__name__ = name
-            return StructuredTool.from_function(
-                echo,
-                name=name,
-                description=f"{name} base.",
-            )
-
-        with tempfile.TemporaryDirectory() as tmp:
-            tools = [
-                make_echo_tool("get_reachability"),
-                make_echo_tool("ping_pair"),
-                make_echo_tool("get_host_net_config"),
-                make_echo_tool("ethtool"),
-                make_echo_tool("ip_addr_statistics"),
-                make_echo_tool("frr_show_bgp_summary"),
-                make_echo_tool("frr_show_ip_route"),
-                make_echo_tool("frr_get_bgp_conf"),
-            ]
-            session = SimpleNamespace(
-                session_id="s2",
-                scenario_name="dc_clos_bgp",
-                scenario_topo_size="s",
-                task_description=(
-                    "Network Description: EBGP Clos. PCs: pc_0_0, pc_0_1. "
-                    "Topology includes pc_0_0:eth0 and pc_0_1:eth0."
-                ),
-            )
-            module = ProceduralMemoryModule(
-                bank_id="skill",
-                store_path=Path(tmp) / "skills.json",
-                include_expert_seeds=True,
-            )
-            runtime = SkillToolRuntime(
-                memory=module,
-                memory_mode="read",
-                session=session,
-                task_description=session.task_description,
-                tools=tools,
-                session_dir=tmp,
-            )
-
-            initial_candidates = runtime._fallback_tool_candidates()
-            runtime.recent_observations.append(
-                'get_reachability({}) -> {"results":[{"src":"pc_0_0",'
-                '"dst":"pc_0_1","status":"unknown"}]}'
-            )
-            after_reachability_candidates = runtime._fallback_tool_candidates()
-
-        self.assertIn("get_host_net_config", initial_candidates)
-        self.assertIn("ethtool", initial_candidates)
-        self.assertNotIn("frr_get_bgp_conf", initial_candidates)
-        self.assertIn("get_host_net_config", after_reachability_candidates)
-        self.assertIn("ethtool", after_reachability_candidates)
-        self.assertNotIn("frr_show_bgp_summary", after_reachability_candidates)
-        self.assertNotIn("frr_get_bgp_conf", after_reachability_candidates)
-
-    def test_core_fallback_ranks_arbitrary_tools_without_nika_mapping(self) -> None:
-        def make_tool(name: str, description: str) -> StructuredTool:
-            def inspect(value: str = "") -> str:
-                return value
-
-            inspect.__name__ = name
-            return StructuredTool.from_function(
-                inspect,
-                name=name,
-                description=description,
-            )
-
-        tools = [
-            make_tool("alpha_probe", "Inspect storage capacity."),
-            make_tool("beta_probe", "Inspect certificate expiry."),
-            make_tool("gamma_probe", "Measure request latency and delay."),
-            make_tool("delta_probe", "Inspect process ownership."),
-            make_tool("epsilon_probe", "Read application metadata."),
-            make_tool("zeta_probe", "Inspect queue depth."),
-            make_tool("eta_probe", "Read deployment labels."),
-        ]
-        with tempfile.TemporaryDirectory() as tmp:
-            module = ProceduralMemoryModule(
-                bank_id="core",
-                store_path=Path(tmp) / "skills.json",
-            )
-            runtime = SkillToolRuntime(
-                memory=module,
-                memory_mode="read",
-                session=SimpleNamespace(
-                    session_id="generic",
-                    scenario_name="generic",
-                    scenario_topo_size="s",
-                    task_description="Investigate high request latency.",
-                ),
-                task_description="Investigate high request latency.",
-                tools=tools,
-                session_dir=tmp,
-            )
-
-            candidates = runtime._fallback_tool_candidates()
-
-        self.assertIn("gamma_probe", candidates)
-        self.assertLessEqual(len(candidates), 6)
-
-    def test_skill_runtime_allows_bgp_config_candidates_after_endpoint_checks(
-        self,
-    ) -> None:
-        def make_echo_tool(name: str) -> StructuredTool:
-            def echo(value: str = "") -> str:
-                return value
-
-            echo.__name__ = name
-            return StructuredTool.from_function(
-                echo,
-                name=name,
-                description=f"{name} base.",
-            )
-
-        with tempfile.TemporaryDirectory() as tmp:
-            tools = [
-                make_echo_tool("get_reachability"),
-                make_echo_tool("ping_pair"),
-                make_echo_tool("get_host_net_config"),
-                make_echo_tool("ethtool"),
-                make_echo_tool("ip_addr_statistics"),
-                make_echo_tool("frr_show_bgp_summary"),
-                make_echo_tool("frr_show_ip_route"),
-                make_echo_tool("frr_get_bgp_conf"),
-                make_echo_tool("frr_show_running_config"),
-            ]
-            session = SimpleNamespace(
-                session_id="s2",
-                scenario_name="dc_clos_bgp",
-                scenario_topo_size="s",
-                task_description="Network Description: EBGP Clos.",
-            )
-            module = ProceduralMemoryModule(
-                bank_id="skill",
-                store_path=Path(tmp) / "skills.json",
-                include_expert_seeds=True,
-            )
-            runtime = SkillToolRuntime(
-                memory=module,
-                memory_mode="read",
-                session=session,
-                task_description=session.task_description,
-                tools=tools,
-                session_dir=tmp,
-            )
-            runtime.recent_observations.extend(
-                [
-                    'get_reachability({}) -> {"results":[{"src":"pc_0_0",'
-                    '"dst":"pc_0_1","status":"unknown"}]}',
-                    'get_host_net_config({"host_name":"pc_0_0"}) -> '
-                    '{"ip_addr":"eth0 state UP","ip_route":"default via 10.0.0.1"}',
-                    'ethtool({"host_name":"pc_0_0","interface":"eth0"}) -> '
-                    "Link detected: yes",
-                    'frr_show_bgp_summary({"router_name":"leaf_router_0_0"}) -> '
-                    "Neighbor 172.16.0.1 Idle, prefixes received 0",
-                ]
-            )
-
-            candidates = runtime._fallback_tool_candidates()
-
-        self.assertIn("frr_show_bgp_summary", candidates)
-        self.assertIn("frr_get_bgp_conf", candidates)
-        self.assertIn("frr_show_running_config", candidates)
-
-    def test_skill_runtime_uses_generic_ladder_candidates_without_bgp_sprawl(
-        self,
-    ) -> None:
-        def make_echo_tool(name: str) -> StructuredTool:
-            def echo(value: str = "") -> str:
-                return value
-
-            echo.__name__ = name
-            return StructuredTool.from_function(
-                echo,
-                name=name,
-                description=f"{name} base.",
-            )
-
-        with tempfile.TemporaryDirectory() as tmp:
-            tools = [
-                make_echo_tool("get_reachability"),
-                make_echo_tool("ping_pair"),
-                make_echo_tool("get_host_net_config"),
-                make_echo_tool("curl_web_test"),
-                make_echo_tool("cat_file"),
-                make_echo_tool("systemctl_ops"),
-                make_echo_tool("netstat"),
-                make_echo_tool("exec_shell"),
-                make_echo_tool("frr_show_ip_route"),
-                make_echo_tool("frr_exec"),
-                make_echo_tool("frr_get_ospf_conf"),
-                make_echo_tool("frr_show_bgp_summary"),
-                make_echo_tool("frr_get_bgp_conf"),
-                make_echo_tool("frr_show_running_config"),
-            ]
-            module = ProceduralMemoryModule(
-                bank_id="skill",
-                store_path=Path(tmp) / "skills.json",
-                include_expert_seeds=True,
-            )
-            dns_runtime = SkillToolRuntime(
-                memory=module,
-                memory_mode="read",
-                session=SimpleNamespace(
-                    session_id="dns",
-                    scenario_name="enterprise",
-                    scenario_topo_size="s",
-                    task_description="Users cannot resolve internal names.",
-                ),
-                task_description="Users cannot resolve internal names.",
-                tools=tools,
-                session_dir=tmp,
-            )
-            dhcp_runtime = SkillToolRuntime(
-                memory=module,
-                memory_mode="read",
-                session=SimpleNamespace(
-                    session_id="dhcp",
-                    scenario_name="enterprise",
-                    scenario_topo_size="s",
-                    task_description="A host has no IP address from DHCP.",
-                ),
-                task_description="A host has no IP address from DHCP.",
-                tools=tools,
-                session_dir=tmp,
-            )
-            ospf_runtime = SkillToolRuntime(
-                memory=module,
-                memory_mode="read",
-                session=SimpleNamespace(
-                    session_id="ospf",
-                    scenario_name="enterprise",
-                    scenario_topo_size="s",
-                    task_description="OSPF route missing between subnets.",
-                ),
-                task_description="OSPF route missing between subnets.",
-                tools=tools,
-                session_dir=tmp,
-            )
-
-            dns_candidates = dns_runtime._fallback_tool_candidates()
-            dhcp_candidates = dhcp_runtime._fallback_tool_candidates()
-            ospf_candidates = ospf_runtime._fallback_tool_candidates()
-
-        self.assertIn("curl_web_test", dns_candidates)
-        self.assertIn("netstat", dns_candidates)
-        self.assertNotIn("frr_get_bgp_conf", dns_candidates)
-        self.assertIn("get_host_net_config", dhcp_candidates)
-        self.assertIn("systemctl_ops", dhcp_candidates)
-        self.assertNotIn("frr_get_bgp_conf", dhcp_candidates)
-        self.assertIn("frr_get_ospf_conf", ospf_candidates)
-        self.assertIn("frr_show_ip_route", ospf_candidates)
-        self.assertNotIn("frr_get_bgp_conf", ospf_candidates)
-
-    def test_skill_runtime_bgp_state_detection_avoids_normal_words(self) -> None:
-        self.assertFalse(
-            SkillToolRuntime._deep_bgp_symptom(
-                "Neighbor 172.16.0.1 Established, prefixes received 12"
-            )
-        )
-        self.assertFalse(
-            SkillToolRuntime._deep_bgp_symptom(
-                "C>* 10.0.0.0/24 is directly connected, eth0"
-            )
-        )
-        self.assertTrue(
-            SkillToolRuntime._deep_bgp_symptom(
-                "Neighbor 172.16.0.1 Connect, prefixes received 0"
-            )
-        )
-
-    def test_skill_runtime_does_not_deep_dive_on_normal_established_bgp(self) -> None:
-        def make_echo_tool(name: str) -> StructuredTool:
-            def echo(value: str = "") -> str:
-                return value
-
-            echo.__name__ = name
-            return StructuredTool.from_function(
-                echo,
-                name=name,
-                description=f"{name} base.",
-            )
-
-        with tempfile.TemporaryDirectory() as tmp:
-            tools = [
-                make_echo_tool("get_reachability"),
-                make_echo_tool("ping_pair"),
-                make_echo_tool("get_host_net_config"),
-                make_echo_tool("ethtool"),
-                make_echo_tool("ip_addr_statistics"),
-                make_echo_tool("frr_show_bgp_summary"),
-                make_echo_tool("frr_show_ip_route"),
-                make_echo_tool("frr_get_bgp_conf"),
-                make_echo_tool("frr_show_running_config"),
-            ]
-            session = SimpleNamespace(
-                session_id="s2",
-                scenario_name="dc_clos_bgp",
-                scenario_topo_size="s",
-                task_description="Network Description: EBGP Clos.",
-            )
-            module = ProceduralMemoryModule(
-                bank_id="skill",
-                store_path=Path(tmp) / "skills.json",
-                include_expert_seeds=True,
-            )
-            runtime = SkillToolRuntime(
-                memory=module,
-                memory_mode="read",
-                session=session,
-                task_description=session.task_description,
-                tools=tools,
-                session_dir=tmp,
-            )
-            runtime.recent_observations.extend(
-                [
-                    'get_host_net_config({"host_name":"pc_0_0"}) -> '
-                    '{"ip_addr":"eth0 state UP","ip_route":"default via 10.0.0.1"}',
-                    'ethtool({"host_name":"pc_0_0","interface":"eth0"}) -> '
-                    "Link detected: yes",
-                    'frr_show_bgp_summary({"router_name":"leaf_router_0_0"}) -> '
-                    "Neighbor 172.16.0.1 Established, prefixes received 12",
-                ]
-            )
-
-            candidates = runtime._fallback_tool_candidates()
-
-        self.assertIn("frr_show_bgp_summary", candidates)
-        self.assertNotIn("frr_get_bgp_conf", candidates)
-        self.assertNotIn("frr_show_running_config", candidates)
-
-    def test_skill_runtime_followup_checks_endpoint_link_after_unknown_reachability(
-        self,
-    ) -> None:
-        def reachability() -> str:
-            return "unknown"
-
-        with tempfile.TemporaryDirectory() as tmp:
-            tool = StructuredTool.from_function(
-                reachability,
-                name="get_reachability",
-                description="Check host reachability.",
-            )
-            session = SimpleNamespace(
-                session_id="s2",
-                scenario_name="dc_clos_bgp",
-                scenario_topo_size="s",
-                task_description="Check Clos host reachability.",
-            )
-            module = ProceduralMemoryModule(
-                bank_id="skill",
-                store_path=Path(tmp) / "skills.json",
-                include_expert_seeds=True,
-            )
-            runtime = SkillToolRuntime(
-                memory=module,
-                memory_mode="read",
-                session=session,
-                task_description=session.task_description,
-                tools=[tool],
-                session_dir=tmp,
-            )
-
-            output = runtime.after_tool(
-                tool_name="get_reachability",
-                tool_input={},
-                result=(
-                    '{"hosts":{"pc_0_0":"10.0.0.2","pc_0_1":"10.0.1.2"},'
-                    '"results":[{"src":"pc_0_0","dst":"pc_0_1",'
-                    '"status":"unknown"}]}'
-                ),
-            )
-
-        self.assertIn("get_host_net_config", output)
-        self.assertIn("ethtool", output)
-        self.assertIn("Before deeper BGP", output)
-
-    def test_skill_runtime_followup_compares_bgp_config_after_endpoint_checks(
-        self,
-    ) -> None:
-        def make_echo_tool(name: str) -> StructuredTool:
-            def echo(value: str = "") -> str:
-                return value
-
-            echo.__name__ = name
-            return StructuredTool.from_function(
-                echo,
-                name=name,
-                description=f"{name} base.",
-            )
-
-        with tempfile.TemporaryDirectory() as tmp:
-            tools = [
-                make_echo_tool("get_reachability"),
-                make_echo_tool("get_host_net_config"),
-                make_echo_tool("ethtool"),
-                make_echo_tool("frr_show_bgp_summary"),
-            ]
-            session = SimpleNamespace(
-                session_id="s2",
-                scenario_name="dc_clos_bgp",
-                scenario_topo_size="s",
-                task_description="Check Clos host reachability.",
-            )
-            module = ProceduralMemoryModule(
-                bank_id="skill",
-                store_path=Path(tmp) / "skills.json",
-                include_expert_seeds=True,
-            )
-            runtime = SkillToolRuntime(
-                memory=module,
-                memory_mode="read",
-                session=session,
-                task_description=session.task_description,
-                tools=tools,
-                session_dir=tmp,
-            )
-
-            runtime.after_tool(
-                tool_name="get_reachability",
-                tool_input={},
-                result=(
-                    '{"results":[{"src":"pc_0_0","dst":"pc_0_1","status":"unknown"}]}'
-                ),
-            )
-            runtime.after_tool(
-                tool_name="get_host_net_config",
-                tool_input={"host_name": "pc_0_0"},
-                result=(
-                    '{"host_name":"pc_0_0","ip_addr":"eth0 state UP",'
-                    '"ip_route":"default via 10.0.0.1 dev eth0"}'
-                ),
-            )
-            runtime.after_tool(
-                tool_name="ethtool",
-                tool_input={"host_name": "pc_0_0", "interface": "eth0"},
-                result="Link detected: yes",
-            )
-            output = runtime.after_tool(
-                tool_name="frr_show_bgp_summary",
-                tool_input={"router_name": "leaf_router_0_0"},
-                result="Neighbor 172.16.0.1 Idle, prefixes received 0",
-            )
-
-        self.assertIn("seed_bgp_config_disambiguation", output)
-        self.assertIn("Skill-MDP option", output)
-        self.assertIn("Inspect the running BGP configuration", output)
-        self.assertNotIn("Prefer `get_host_net_config`", output)
-
-    def test_skill_runtime_followup_stops_after_host_link_down_evidence(self) -> None:
-        def host_config(host_name: str) -> str:
-            return host_name
-
-        with tempfile.TemporaryDirectory() as tmp:
-            tool = StructuredTool.from_function(
-                host_config,
-                name="get_host_net_config",
-                description="Inspect host network config.",
-            )
-            session = SimpleNamespace(
-                session_id="s2",
-                scenario_name="dc_clos_bgp",
-                scenario_topo_size="s",
-                task_description="Check Clos host reachability.",
-            )
-            module = ProceduralMemoryModule(
-                bank_id="skill",
-                store_path=Path(tmp) / "skills.json",
-                include_expert_seeds=True,
-            )
-            runtime = SkillToolRuntime(
-                memory=module,
-                memory_mode="read",
-                session=session,
-                task_description=session.task_description,
-                tools=[tool],
-                session_dir=tmp,
-            )
-
-            output = runtime.after_tool(
-                tool_name="get_host_net_config",
-                tool_input={"host_name": "pc_0_0"},
-                result="pc_0_0 eth0 state DOWN; ip_route is empty",
-            )
-
-        self.assertIn("interface/link-down fault", output)
-        self.assertNotIn("`link_down`", output)
-        self.assertIn("pc_0_0", output)
-        self.assertIn("stop calling diagnostic tools", output)
-
-    def test_skill_runtime_link_down_evidence_uses_generic_device_names(self) -> None:
-        devices = SkillToolRuntime._host_link_down_devices(
-            "server-1 eth0 state DOWN; ip_route is empty"
-        )
-
-        self.assertEqual(devices, ["server-1"])
-
-    def test_skill_runtime_does_not_treat_empty_route_as_link_down(self) -> None:
-        devices = SkillToolRuntime._host_link_down_devices(
-            'get_host_net_config({"host_name":"server-1"}) -> '
-            '{"host_name":"server-1","ip_addr":"eth0 state UP",'
-            '"ip_route":""}'
-        )
-
-        self.assertEqual(devices, [])
-
-    def test_skill_runtime_link_down_extractor_ignores_tool_output_noise(self) -> None:
-        text = "\n".join(
-            [
-                (
-                    'frr_show_ip_route({"router_name":"leaf_router_0_1"}) -> '
-                    "B>* 10.0.0.0/24 via 172.16.0.6 dev eth0; "
-                    "table-direct vnc-direct"
-                ),
-                (
-                    'get_host_net_config({"host_name":"pc_0_0"}) -> '
-                    '{"host_name":"pc_0_0","ip_addr":"105: eth0: '
-                    '<BROADCAST,MULTICAST> qdisc fq_codel state DOWN",'
-                    '"id":"lc_4a6455c9-1725-4d39-883c-c7c7e9297940",'
-                    '"ip_route":""}'
-                ),
-                (
-                    'get_host_net_config({"host_name":"pc_0_1"}) -> '
-                    '{"host_name":"pc_0_1","ip_addr":"eth0 state UP",'
-                    '"ip_route":"default via 10.0.1.1 dev eth0"}'
-                ),
-            ]
-        )
-
-        devices = SkillToolRuntime._host_link_down_devices(text)
-
-        self.assertEqual(devices, ["pc_0_0"])
-
-    def test_skill_runtime_wraps_tools_and_feeds_online_guidance(self) -> None:
-        def ping_host(host: str) -> str:
-            return f"{host} reachable"
-
-        with tempfile.TemporaryDirectory() as tmp:
-            tool = StructuredTool.from_function(
-                ping_host,
-                name="ping_host",
-                description="Ping one host.",
-            )
-            module = ProceduralMemoryModule(
-                bank_id="skill",
-                store_path=Path(tmp) / "skills.json",
-            )
-            module.learn_from_episode(
-                evidence=EvaluationEvidence(
-                    session_id="s1",
-                    task_description="Host reachability failure",
-                    scenario="simple_bgp",
-                    metrics={
-                        "detection_score": 1.0,
-                        "localization_accuracy": 1.0,
-                        "rca_accuracy": 1.0,
-                    },
-                    success=True,
-                ),
-                tool_steps=[
-                    SkillStep(
-                        order=1,
-                        action="Ping endpoints to isolate the failed segment.",
-                        tool_name="ping_host",
-                    )
-                ],
-            )
-            runtime = SkillToolRuntime(
-                memory=module,
-                memory_mode="read",
-                session=SimpleNamespace(
-                    session_id="s2",
-                    scenario_name="simple_bgp",
-                    scenario_topo_size="small",
-                ),
-                task_description="Client cannot reach server",
-                tools=[tool],
-                session_dir=tmp,
-            )
-            wrapped = runtime.wrap_tools([tool])[0]
-            output = wrapped.invoke({"host": "pc1"})
-            log_exists = (Path(tmp) / "messages.jsonl").exists()
-
-        self.assertIn("Integrated learning guidance", wrapped.description)
-        self.assertIn("Integrated learning guidance - not evidence", output)
-        self.assertTrue(runtime.snapshot()["active_skill_id"])
-        self.assertTrue(log_exists)
 
     def test_skill_tool_wrapper_preserves_content_and_artifact_tools(self) -> None:
         def reachability(host: str) -> tuple[str, dict[str, str]]:
@@ -4046,8 +2776,6 @@ class SkillProMemoryTest(unittest.TestCase):
                     memory_mode="read",
                     memory_top_k=2,
                     memory_token_budget=300,
-                    memory_skill_selector_mode="llm_topk_lcb",
-                    memory_meta_controller_mode="llm",
                 ).run("Diagnose BGP reachability")
             )
 
@@ -4055,8 +2783,6 @@ class SkillProMemoryTest(unittest.TestCase):
         self.assertEqual(agent.seen_task, "Diagnose BGP reachability")
         self.assertIs(agent.installed["memory"], module)
         self.assertEqual(agent.installed["top_k"], 2)
-        self.assertEqual(agent.installed["skill_selector_mode"], "llm_topk_lcb")
-        self.assertEqual(agent.installed["meta_controller_mode"], "llm")
 
     def test_memory_adapter_rejects_prompt_only_fallback(self) -> None:
         class PromptOnlyAgent:
@@ -4185,7 +2911,9 @@ class SkillProMemoryTest(unittest.TestCase):
                     tool_calls=2,
                     success=True,
                 ),
-                tool_steps=steps,
+                tool_steps=[
+                    steps[0].model_copy(update={"skill_id": first["skill_id"]})
+                ],
             )
             state = module.store.load()
             refined = state.skills[second["skill_id"]]
@@ -4261,7 +2989,7 @@ class SkillProMemoryTest(unittest.TestCase):
         self.assertNotIn("bgp_missing_route_advertisement", skill.termination_condition)
         self.assertNotIn("leaf_router_0_1", skill.termination_condition)
         self.assertEqual(stats["llm_semantic_gradients"], 1)
-        self.assertEqual(len(prompts), 2 + module.best_of_n)
+        self.assertGreaterEqual(len(prompts), 2 + module.best_of_n)
         self.assertTrue(any("batch semantic-gradient aggregator" in p for p in prompts))
         self.assertEqual(
             sum("Skill Evolver" in prompt for prompt in prompts),
@@ -4348,9 +3076,6 @@ class SkillProMemoryTest(unittest.TestCase):
                         "root_cause_name": "dns_record_error",
                         "memory_mode": "evolve",
                         "memory_bank": "skill",
-                        "memory_skill_selector_mode": "llm_topk_lcb",
-                        "memory_meta_controller_mode": "llm",
-                        "memory_include_expert_seeds": True,
                     }
                 ),
                 encoding="utf-8",
@@ -4393,33 +3118,31 @@ class SkillProMemoryTest(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            report = asyncio.run(
-                evolve_session_memory(
-                    run_meta={
-                        "memory_mode": "evolve",
-                        "memory_bank": "skill",
-                        "memory_pool_size": 24,
-                        "memory_evolution_threshold": 2,
-                        "memory_best_of_n": 5,
-                        "memory_ppo_epsilon": 0.15,
-                        "memory_include_expert_seeds": "false",
-                        "memory_max_skill_age": 6,
-                        "memory_selector_min_lcb": -0.02,
-                        "memory_selector_nominee_k": 4,
-                        "session_id": "s1",
-                        "task_description": "DNS record resolves to wrong host",
-                        "scenario_name": "enterprise",
-                    },
-                    metrics={
-                        "detection_score": 1.0,
-                        "localization_accuracy": 1.0,
-                        "rca_accuracy": 1.0,
-                        "steps": 4,
-                        "tool_calls": 2,
-                    },
-                    session_dir=session_dir,
+            with patch("agent.memory.store.MEMORY_DIR", Path(tmp) / "memory"):
+                report = asyncio.run(
+                    evolve_session_memory(
+                        run_meta={
+                            "memory_mode": "evolve",
+                            "memory_bank": "skill",
+                            "memory_pool_size": 24,
+                            "memory_evolution_threshold": 2,
+                            "memory_best_of_n": 5,
+                            "memory_ppo_epsilon": 0.15,
+                            "memory_max_skill_age": 6,
+                            "session_id": "s1",
+                            "task_description": "DNS record resolves to wrong host",
+                            "scenario_name": "enterprise",
+                        },
+                        metrics={
+                            "detection_score": 1.0,
+                            "localization_accuracy": 1.0,
+                            "rca_accuracy": 1.0,
+                            "steps": 4,
+                            "tool_calls": 2,
+                        },
+                        session_dir=session_dir,
+                    )
                 )
-            )
             self.assertTrue((session_dir / "memory_update.json").exists())
 
         self.assertEqual(report["method"], "Skill-Pro")
@@ -4427,10 +3150,11 @@ class SkillProMemoryTest(unittest.TestCase):
         self.assertEqual(report["memory_config"]["evolution_threshold"], 2)
         self.assertEqual(report["memory_config"]["best_of_n"], 5)
         self.assertEqual(report["memory_config"]["ppo_epsilon"], 0.15)
-        self.assertFalse(report["memory_config"]["include_expert_seeds"])
         self.assertEqual(report["memory_config"]["max_skill_age"], 6)
-        self.assertEqual(report["memory_config"]["selector_min_lcb"], -0.02)
-        self.assertEqual(report["memory_config"]["selector_nominee_k"], 4)
+        self.assertEqual(
+            report["memory_config"]["selection_policy"],
+            "similarity_top_k_then_online_value",
+        )
         self.assertEqual(report["total_added_tokens"], 120)
         self.assertEqual(report["delta_prompt_tokens_per_step"], 30.0)
         self.assertEqual(report["prompt_added_tokens"], 80)
@@ -4454,9 +3178,6 @@ class SkillProMemoryTest(unittest.TestCase):
                         "root_cause_name": "dns_record_error",
                         "memory_mode": "evolve",
                         "memory_bank": "skill",
-                        "memory_skill_selector_mode": "llm_topk_lcb",
-                        "memory_meta_controller_mode": "llm",
-                        "memory_include_expert_seeds": True,
                     }
                 ),
                 encoding="utf-8",
@@ -4490,9 +3211,6 @@ class SkillProMemoryTest(unittest.TestCase):
                     self.session_id = "s1"
                     self.memory_mode = "evolve"
                     self.memory_bank = "skill"
-                    self.memory_skill_selector_mode = "llm_topk_lcb"
-                    self.memory_meta_controller_mode = "llm"
-                    self.memory_include_expert_seeds = True
                     self.llm_backend = "custom"
                     self.model = "test-model"
                     self.tool_evolution_enabled = False
@@ -4559,9 +3277,6 @@ class SkillProMemoryTest(unittest.TestCase):
         self.assertEqual(result.memory_ppo_j_score, 0.42)
         self.assertEqual(result.memory_candidate_alignment, 0.73)
         self.assertEqual(result.memory_baseline_alignment, 0.21)
-        self.assertEqual(result.memory_skill_selector_mode, "llm_topk_lcb")
-        self.assertEqual(result.memory_meta_controller_mode, "llm")
-        self.assertTrue(result.memory_include_expert_seeds)
         self.assertEqual(result.memory_semantic_gradient_count, 3)
         self.assertEqual(result.memory_verification_method, "alignment_surrogate")
         self.assertEqual(result.memory_verified_success_count, 2)

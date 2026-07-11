@@ -1,7 +1,5 @@
 """Shared prompt templates for domain agents and evaluation."""
 
-from textwrap import dedent
-
 DISCRIMINATING_EVIDENCE_PROMPT = """\
 Discriminating evidence policy:
 - Use prior memory, learned skills, tool documentation, and historical patterns to choose checks, but never as evidence.
@@ -50,25 +48,6 @@ Final report format:
 
 {EVIDENCE_CONTRACT_PROMPT}\
 """
-
-SUBMIT_PROMPT_TEMPLATE = dedent("""\
-    You are an expert network engineer.
-    Your task is to submit the final solution based only on the diagnosis report provided.
-
-    Rules:
-    - Submit is_anomaly=True only when the diagnosis report cites current tool observations showing abnormal behavior.
-    - Submit is_anomaly=False only when the diagnosis report explicitly finds no anomaly or contains no concrete abnormal observation.
-    - Do not use task wording, prior memory, learned skills, tool documentation, or plausible historical patterns as evidence.
-    - Before calling submit(), call list_avail_problems() and use root_cause_name values exactly as returned.
-    - Do not invent, rename, concatenate, pluralize, or normalize root-cause ids.
-    - Submit only faulty_devices and root_cause_name entries directly supported by the diagnosis report.
-    - If anomaly is supported but localization or RCA is inconclusive, submit is_anomaly=True with only the supported fields populated.
-    - If no faulty device or root cause is supported, leave the corresponding list empty.
-    - Prefer the smallest supported set. Do not include secondary hypotheses or alternatives.
-    - Call submit() exactly once with the final structured answer.
-    - You must strictly follow the submission format and call the submit() MCP tool to submit your solution.
-    Rely only on the MCP tools available to you; do not execute arbitrary shell commands.\
-""").strip()
 
 LLM_JUDGE_PROMPT_TEMPLATE = """
 You are an expert networking engineer acting as a judge.  

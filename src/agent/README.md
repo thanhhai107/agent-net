@@ -13,8 +13,6 @@ src/agent/
 │   └── phases/
 ├── mock/                 # Deterministic mock without an LLM
 │   └── mock_agent.py
-├── sdk/                  # [planned] SDK-backed agents
-│   └── agent.py
 ├── llm/                  # LangChain model factory (react path)
 └── utils/                # MCP config, phases, loggers
 ```
@@ -27,7 +25,6 @@ src/agent/
 | `plan-execute` | LangGraph `StateGraph` | LangChain structured planner/executor | Implemented |
 | `reflexion` | LangGraph `StateGraph` | LangChain iterative reflection | Implemented |
 | `mock` | Hand-written two-phase flow | No LLM; fixed tool sequence | Implemented |
-| `sdk` | TBD | SDK adapter | Planned |
 
 ## Shared Pipeline
 
@@ -130,18 +127,6 @@ NIKA_MOCK_MODEL=mock-v1
 
 nika agent run -a mock -n 5
 ```
-
----
-
-## sdk (planned)
-
-**Entry**: `agent.sdk.agent.SdkAgent` — not implemented.
-
-```bash
-# nika agent run -a sdk   # raises ValueError
-```
-
----
 
 ## Example Workflow
 

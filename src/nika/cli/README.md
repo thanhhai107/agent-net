@@ -48,9 +48,9 @@ Aligned with `nika agent run`:
 - **`-m` / `--model`**: model id.
 - **`-n` / `--max-steps`**: per-worker recursion limit for LangGraph agents; also caps executed plan items for `plan-execute`.
 - **`-r` / `--max-attempts`**: maximum Reflexion attempts for `reflexion` (default: `3`).
-- **`--tools <library-id>`**: enable DRAFT Tool Evolution for a LangGraph workflow. It refines usage guidance for fixed primitive tools while keeping source descriptions and input schemas immutable, validates live Explorer plans against that contract and the current topology, stores Explorer/Analyzer/Rewriter artifacts, tracks path-rate/mastery/LLM-failure stats, and writes JSON state under `runtime/tool_evolution/<library-id>/`.
-- **Tool Evolution knobs**: `--tool-doc-chars`, `--tool-prompt-doc-limit`, `--tool-scoped-prompt-doc-limit`, `--tool-planned-checks`, `--tool-next-checks`, and `--tool-convergence-threshold` control DRAFT prompt budget, Explorer guidance injection, and document-freeze convergence.
-- **Memory Evolution knobs**: `--memory-max-skill-age`, `--memory-selector-min-lcb`, `--memory-selector-nominee-k`, `--memory-pool-size`, `--memory-evolution-threshold`, `--memory-best-of-n`, and `--memory-ppo-epsilon` control Skill-Pro runtime option selection and offline evolution. `--memory-expert-seeds` explicitly enables the optional NIKA DNS/DHCP/OSPF/BGP seed ablation; it is off for core runs.
+- **`--tools <library-id>`**: enable DRAFT Tool Evolution for a LangGraph workflow. It refines contract guidance for fixed primitive tools while keeping source descriptions and input schemas immutable. Explorer records are derived from observed read-only tool trials only. State, path-rate, mastery, and LLM-failure telemetry are written under `runtime/tool_evolution/<library-id>/`.
+- **Tool Evolution knobs**: `--tool-doc-chars` and `--tool-convergence-threshold` control refined-contract size and document-freeze convergence.
+- **Memory Evolution knobs**: `--memory-max-skill-age`, `--memory-pool-size`, `--memory-evolution-threshold`, `--memory-best-of-n`, and `--memory-ppo-epsilon` control Skill-Pro runtime and offline evolution.
 - **Auto names**: Studio-created result roots, runtime runs, memory banks, and tool libraries share `<benchmark>-<NNNN>` such as `benchmark_test-0001`.
 
 Learning-module LLM calls inherit `-b/--backend` and `-m/--model` unless
@@ -125,11 +125,9 @@ Example: `nika exec pc1 ping -c 3 10.0.0.2 --timeout 30`
   | `-r` / `--max-attempts` | `reflexion` | Maximum attempt → evaluate → reflect cycles |
   | `--session-id` | all | target session |
   | `--tools` | LangGraph workflows | enable Tool Evolution with a persistent library id |
-  | `--tool-*` | Tool Evolution | tune DRAFT prompt budgets, planned/next checks, and convergence threshold |
+  | `--tool-doc-chars`, `--tool-convergence-threshold` | Tool Evolution | tune refined-contract size and DRAFT convergence |
   | `--memory` | LangGraph workflows | enable evolving procedural memory with a bank id |
   | `--memory-read` | LangGraph workflows | read a frozen procedural-memory bank |
-  | `--memory-selector` | memory | choose `lcb` or `llm_topk_lcb` Skill-Pro selection |
-  | `--memory-meta-controller` | memory | choose `heuristic` or `llm` Skill-Pro termination |
   | `--memory-*` | memory | tune Skill-Pro runtime and offline evolution config |
 
   Examples:

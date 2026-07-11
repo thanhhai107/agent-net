@@ -12,6 +12,7 @@ import json
 import os
 import re
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -70,7 +71,7 @@ class AgentConfigTest(unittest.TestCase):
     """Unit tests for agent CLI env resolution."""
 
     def test_cli_overrides_env(self) -> None:
-        with unittest.mock.patch.dict(
+        with mock.patch.dict(
             os.environ,
             {ENV_AGENT_TYPE: "mock", ENV_LLM_PROVIDER: "deepseek", ENV_MAX_STEPS: "99"},
             clear=False,
@@ -80,7 +81,7 @@ class AgentConfigTest(unittest.TestCase):
             self.assertEqual(resolve_max_steps(20), 20)
 
     def test_env_fallback(self) -> None:
-        with unittest.mock.patch.dict(
+        with mock.patch.dict(
             os.environ,
             {
                 ENV_AGENT_TYPE: "react",
@@ -96,7 +97,7 @@ class AgentConfigTest(unittest.TestCase):
             self.assertEqual(resolve_agent_model("react", None), "deepseek-chat")
 
     def test_missing_config_raises(self) -> None:
-        with unittest.mock.patch.dict(os.environ, {}, clear=True):
+        with mock.patch.dict(os.environ, {}, clear=True):
             with self.assertRaises(ValueError):
                 resolve_agent_type(None)
             with self.assertRaises(ValueError):
@@ -104,13 +105,13 @@ class AgentConfigTest(unittest.TestCase):
             self.assertEqual(resolve_max_steps(None), 100)
 
     def test_llm_provider_optional_for_non_react(self) -> None:
-        with unittest.mock.patch.dict(os.environ, {}, clear=True):
+        with mock.patch.dict(os.environ, {}, clear=True):
             self.assertIsNone(resolve_llm_provider(None, agent_type="mock"))
             self.assertIsNone(resolve_llm_provider(None, agent_type="plan-execute"))
             self.assertIsNone(resolve_llm_provider(None, agent_type="reflexion"))
 
     def test_agent_model_per_type(self) -> None:
-        with unittest.mock.patch.dict(
+        with mock.patch.dict(
             os.environ,
             {ENV_REACT_MODEL: "deepseek-chat", ENV_MOCK_MODEL: "mock-v1"},
             clear=False,
@@ -120,7 +121,7 @@ class AgentConfigTest(unittest.TestCase):
             self.assertEqual(resolve_agent_model("react", "override"), "override")
 
     def test_judge_from_env(self) -> None:
-        with unittest.mock.patch.dict(
+        with mock.patch.dict(
             os.environ,
             {ENV_JUDGE_PROVIDER: "deepseek", ENV_JUDGE_MODEL: "deepseek-chat"},
             clear=False,

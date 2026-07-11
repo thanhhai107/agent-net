@@ -46,9 +46,6 @@ class EvalResult:
     tool_library_id: str = None
     memory_mode: str = None
     memory_bank: str = None
-    memory_skill_selector_mode: str = None
-    memory_meta_controller_mode: str = None
-    memory_include_expert_seeds: bool | None = None
     benchmark_index: int = None
     draft_trials: int = None
     draft_trials_added: int = None
@@ -58,8 +55,6 @@ class EvalResult:
     draft_documented_tools: int = None
     draft_unique_trial_tools: int = None
     draft_explorations: int = None
-    draft_planned_explorations: int = None
-    draft_consumed_explorations: int = None
     draft_analyzer_suggestions: int = None
     draft_mastered_tools: int = None
     draft_documented_path_rate: float = None
@@ -265,11 +260,6 @@ def build_eval_result_from_session_dir(session_dir: Path) -> EvalResult:
         or run_meta.get("tool_library_id"),
         memory_mode=run_meta.get("memory_mode"),
         memory_bank=run_meta.get("memory_bank"),
-        memory_skill_selector_mode=run_meta.get("memory_skill_selector_mode"),
-        memory_meta_controller_mode=run_meta.get("memory_meta_controller_mode"),
-        memory_include_expert_seeds=_bool_value(
-            run_meta.get("memory_include_expert_seeds"),
-        ),
         benchmark_index=run_meta.get("benchmark_index"),
         draft_trials=metrics_blob.get("draft_trials"),
         draft_trials_added=metrics_blob.get("draft_trials_added"),
@@ -279,12 +269,6 @@ def build_eval_result_from_session_dir(session_dir: Path) -> EvalResult:
         draft_documented_tools=metrics_blob.get("draft_documented_tools"),
         draft_unique_trial_tools=metrics_blob.get("draft_unique_trial_tools"),
         draft_explorations=metrics_blob.get("draft_explorations"),
-        draft_planned_explorations=metrics_blob.get(
-            "draft_planned_explorations"
-        ),
-        draft_consumed_explorations=metrics_blob.get(
-            "draft_consumed_explorations"
-        ),
         draft_analyzer_suggestions=metrics_blob.get("draft_analyzer_suggestions"),
         draft_mastered_tools=metrics_blob.get("draft_mastered_tools"),
         draft_documented_path_rate=metrics_blob.get("draft_documented_path_rate"),

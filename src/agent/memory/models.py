@@ -44,8 +44,6 @@ class SkillStep(BaseModel):
     observation_summary: str = ""
     status: Literal["success", "error", "unknown"] = "unknown"
     rationale: str = ""
-    draft_exploration_id: str = ""
-    draft_next_exploration: str = ""
 
 
 class SkillComponentGradient(BaseModel):
@@ -93,6 +91,7 @@ class EvaluationEvidence(BaseModel):
     topology_class: str = ""
     root_cause: list[str] = Field(default_factory=list)
     faulty_devices: list[str] = Field(default_factory=list)
+    ground_truth_is_anomaly: bool | None = None
     metrics: dict[str, Any] = Field(default_factory=dict)
     steps: int = 0
     tool_calls: int = 0
@@ -108,8 +107,6 @@ class SkillTransition(BaseModel):
     observation_summary: str = ""
     status: Literal["success", "error", "unknown"] = "unknown"
     done: bool = False
-    draft_exploration_id: str = ""
-    draft_next_exploration: str = ""
 
 
 class SkillExperience(BaseModel):
@@ -127,6 +124,7 @@ class SkillExperience(BaseModel):
     total_added_tokens: int = 0
     used_for_evolution: bool = False
     success: bool = False
+    ground_truth_is_anomaly: bool | None = None
     created_at: str = Field(default_factory=utc_now)
 
 
@@ -147,6 +145,7 @@ class ProceduralSkill(BaseModel):
     success_count: int = 0
     failure_count: int = 0
     score: float = 0.0
+    prior_score: float = 0.0
     frequency: int = 0
     total_gain: float = 0.0
     avg_gain: float = 0.0
@@ -187,16 +186,22 @@ class ProceduralSkill(BaseModel):
         baseline: float,
         total_skill_calls: int,
         skill_call_count: int = 1,
+        outcome_success: bool | None = None,
     ) -> None:
         advantage = reward - baseline
-        per_call_gain = advantage / max(total_skill_calls, 1)
+        successful_outcome = (
+            outcome_success if outcome_success is not None else advantage > 0
+        )
+        policy_gain = advantage if successful_outcome else min(advantage, reward - 1.0)
+        per_call_gain = policy_gain / max(total_skill_calls, 1)
         self.total_gain += skill_call_count * per_call_gain
         self.frequency += skill_call_count
         self.avg_gain = self.total_gain / max(self.frequency, 1)
-        if advantage > 0:
+        if successful_outcome:
             self.success_count += 1
         else:
             self.failure_count += 1
+        self.maturity += 1
         self.updated_at = utc_now()
 
     def increment_maturity(self) -> None:
@@ -242,10 +247,14 @@ class PPOGateDecision(BaseModel):
     sample_count: int = 0
     best_of_n: int = 1
     candidate_type: Literal["NEW", "REFINE"] = "NEW"
-    verification_method: Literal["policy_logprob", "alignment_surrogate"] = (
-        "alignment_surrogate"
-    )
+    verification_method: Literal[
+        "policy_logprob",
+        "behavioral_replay",
+        "structured_replay",
+    ] = "structured_replay"
     verified_success_count: int = 0
+    positive_advantage_count: int = 0
+    verification_error: str = ""
 
 
 class SkillMemoryState(BaseModel):

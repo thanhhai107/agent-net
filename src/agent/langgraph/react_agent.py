@@ -11,10 +11,8 @@ from pydantic import Field, ValidationError
 from typing_extensions import TypedDict
 
 from agent.langgraph.langfuse_tracing import callback_config, create_langfuse_callbacks
-from agent.langgraph.evidence_gate import (
-    EvidenceGateResult,
+from agent.langgraph.evidence import (
     ToolObservation,
-    evaluate_fault_family_evidence,
     observations_from_messages,
     observations_from_runtime_snapshot,
 )
@@ -50,6 +48,7 @@ class AgentState(TypedDict):
         default="",
         description="The diagnosis report of the network state after analysis.",
     )
+    diagnosis_observations: list[ToolObservation]
     is_max_steps_reached: bool = Field(
         default=False,
         description="Indicates whether the agent has reached the maximum number of steps allowed.",
@@ -66,21 +65,11 @@ class BasicReActAgent:
         tool_evolution_enabled: bool = False,
         tool_library_id: str = "default",
         tool_doc_chars: int = 500,
-        tool_prompt_doc_limit: int = 6,
-        tool_scoped_prompt_doc_limit: int = 4,
-        tool_planned_checks: int = 4,
-        tool_next_checks: int = 2,
         use_problem_tool_hints: bool = True,
-        evidence_gate_enabled: bool = True,
-        evidence_gate_retries: int = 1,
     ):
         self.session_id = session_id
         self.model = model
         self.max_steps = max_steps
-        self.evidence_gate_enabled = evidence_gate_enabled
-        self.evidence_gate_retries = self._resolve_evidence_gate_retries(
-            evidence_gate_retries
-        )
         self.session = Session()
         self.session.load_running_session(session_id=session_id)
         self.session_dir = self.session.session_dir
@@ -96,10 +85,6 @@ class BasicReActAgent:
             tool_evolution_enabled=tool_evolution_enabled,
             tool_library_id=tool_library_id,
             tool_doc_chars=tool_doc_chars,
-            tool_prompt_doc_limit=tool_prompt_doc_limit,
-            tool_scoped_prompt_doc_limit=tool_scoped_prompt_doc_limit,
-            tool_planned_checks=tool_planned_checks,
-            tool_next_checks=tool_next_checks,
         )
         asyncio.run(diagnosis_phase.load_tools())
         self._diagnosis_phase = diagnosis_phase
@@ -114,7 +99,7 @@ class BasicReActAgent:
             model=model,
         )
         asyncio.run(submission_phase.load_tools())
-        self.submission_agent = submission_phase.get_agent()
+        self.submission_phase = submission_phase
 
         worker_builder = StateGraph(AgentState)
         worker_builder.add_node(DIAGNOSIS, self.diagnosis_agent_builder)
@@ -205,22 +190,6 @@ class BasicReActAgent:
             return [first, marker, *kept]
         return [first, *kept]
 
-    @staticmethod
-    def _resolve_evidence_gate_retries(default: int) -> int:
-        raw_value = os.getenv("NIKA_EVIDENCE_GATE_RETRIES")
-        if raw_value is None:
-            return max(0, int(default))
-        try:
-            return max(0, int(raw_value))
-        except ValueError:
-            return max(0, int(default))
-
-    def _diagnosis_tool_names(self) -> list[str]:
-        if getattr(self, "diagnosis_tool_names", None):
-            return list(self.diagnosis_tool_names)
-        phase = getattr(self, "_diagnosis_phase", None)
-        return [tool.name for tool in getattr(phase, "tools", []) or []]
-
     def _state_task_description(self, state: AgentState) -> str:
         task_description = str(state.get("task_description") or "").strip()
         if task_description:
@@ -243,23 +212,6 @@ class BasicReActAgent:
         observations.extend(observations_from_messages(messages))
         return observations
 
-    def _evaluate_evidence_gate(
-        self,
-        *,
-        task_description: str,
-        diagnosis_report: str,
-        messages: list[Any],
-    ) -> EvidenceGateResult:
-        return evaluate_fault_family_evidence(
-            task_description=task_description,
-            diagnosis_report=diagnosis_report,
-            observations=self._current_tool_observations(messages),
-            available_tools=self._diagnosis_tool_names(),
-        )
-
-    def _is_evidence_gate_enabled(self) -> bool:
-        return bool(getattr(self, "evidence_gate_enabled", True))
-
     def install_memory_runtime(
         self,
         *,
@@ -268,11 +220,7 @@ class BasicReActAgent:
         task_description: str,
         top_k: int = 5,
         token_budget: int = 1500,
-        skill_selector_mode: str = "lcb",
-        meta_controller_mode: str = "heuristic",
         max_skill_age: int = 4,
-        selector_min_lcb: float = -0.05,
-        selector_nominee_k: int = 3,
     ) -> None:
         self._diagnosis_phase.install_memory_runtime(
             memory=memory,
@@ -281,11 +229,7 @@ class BasicReActAgent:
             top_k=top_k,
             token_budget=token_budget,
             session_dir=self.session_dir,
-            skill_selector_mode=skill_selector_mode,
-            meta_controller_mode=meta_controller_mode,
             max_skill_age=max_skill_age,
-            selector_min_lcb=selector_min_lcb,
-            selector_nominee_k=selector_nominee_k,
         )
         self._refresh_diagnosis_agent()
 
@@ -304,6 +248,7 @@ class BasicReActAgent:
                     {
                         "task_description": task_description,
                         "messages": [HumanMessage(content=task_description)],
+                        "diagnosis_observations": [],
                     },
                     config=callback_config(self.langfuse_callbacks),
                 )
@@ -317,7 +262,6 @@ class BasicReActAgent:
         try:
             cb = AgentCallbackLogger(agent=DIAGNOSIS, session_dir=self.session_dir)
             messages = list(state["messages"])
-            task_description = self._state_task_description(state)
             learning_context = self._learning_prompt_suffix()
             if learning_context:
                 messages.append(HumanMessage(content=learning_context))
@@ -332,55 +276,11 @@ class BasicReActAgent:
             )
             report_messages = list(diagnosis_report.get("messages", []))
             report_text = str(report_messages[-1].content)
-            gate = None
-            if self._is_evidence_gate_enabled():
-                gate = self._evaluate_evidence_gate(
-                    task_description=task_description,
-                    diagnosis_report=report_text,
-                    messages=report_messages,
-                )
-            if (
-                gate is not None
-                and not gate.sufficient
-                and getattr(self, "evidence_gate_retries", 1) > 0
-                and gate.prompt
-            ):
-                cb._log(
-                    "evidence_gate_blocked",
-                    {
-                        "attempt": 1,
-                        **gate.to_log_payload(),
-                    },
-                )
-                retry_messages = [
-                    *report_messages,
-                    HumanMessage(content=gate.prompt),
-                ]
-                retry_messages = self._bounded_messages(retry_messages)
-                diagnosis_report = await self.diagnosis_agent.ainvoke(
-                    {"messages": retry_messages},
-                    config={
-                        "callbacks": [cb],
-                        "recursion_limit": self.max_steps,
-                    },
-                    debug=True,
-                )
-                report_messages = list(diagnosis_report.get("messages", []))
-                report_text = str(report_messages[-1].content)
-                retry_gate = self._evaluate_evidence_gate(
-                    task_description=task_description,
-                    diagnosis_report=report_text,
-                    messages=report_messages,
-                )
-                cb._log(
-                    "evidence_gate_retry_result",
-                    {
-                        "attempt": 1,
-                        **retry_gate.to_log_payload(),
-                    },
-                )
             return {
                 "diagnosis_report": report_text,
+                "diagnosis_observations": self._current_tool_observations(
+                    report_messages
+                ),
                 "is_max_steps_reached": False,
             }
         except ValidationError as e:
@@ -412,38 +312,22 @@ class BasicReActAgent:
     async def submission_agent_builder(self, state: AgentState):
         diag_text = state["diagnosis_report"]
         try:
-            result = await self.submission_agent.ainvoke(
-                {
-                    "messages": [
-                        HumanMessage(
-                            content=f"Based on the diagnosis report: {diag_text}, please provide the submission. Do not submit if no report available."
-                        ),
-                    ]
-                },
-                config={
-                    "callbacks": [
-                        AgentCallbackLogger(
-                            agent=SUBMISSION, session_dir=self.session_dir
-                        )
-                    ],
-                    "recursion_limit": self.max_steps,
-                },
-                debug=True,
+            result = await self.submission_phase.submit_report(
+                task_description=self._state_task_description(state),
+                diagnosis_report=diag_text,
+                observations=state.get("diagnosis_observations", []),
+                session_dir=self.session_dir,
             )
+            if result is None:
+                return {}
             return {
                 "messages": result["messages"],
             }
-        except GraphRecursionError:
+        except Exception as exc:
             AgentCallbackLogger(
                 agent=SUBMISSION, session_dir=self.session_dir
             )._log(
-                "max_recursion_reached",
-                {"message": "Submission phase reached max recursion limit."},
+                "error",
+                {"message": f"Evidence-bound submission failed: {exc}"},
             )
-            return {
-                "messages": [
-                    HumanMessage(
-                        content="Submission was not produced before the max step limit."
-                    )
-                ],
-            }
+            return {}

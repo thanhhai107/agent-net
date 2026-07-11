@@ -110,30 +110,11 @@ def memory_run(
         min=100,
         help="Estimated token budget for retrieved skills.",
     ),
-    selector: str = typer.Option(
-        "lcb",
-        "--selector",
-        help="Skill-Pro selector: lcb or llm_topk_lcb.",
-    ),
-    meta_controller: str = typer.Option(
-        "heuristic",
-        "--meta-controller",
-        help="Skill-Pro option termination controller: heuristic or llm.",
-    ),
-    expert_seeds: bool = typer.Option(
-        False,
-        "--expert-seeds",
-        help="Enable optional NIKA expert seed ladders.",
-    ),
 ) -> None:
     """Run a Skill-Pro memory-only benchmark stream with concise defaults."""
     mode = "read" if read else "evolve"
     if not file.exists():
         raise typer.BadParameter(f"YAML does not exist: {file}")
-    if selector not in {"lcb", "llm_topk_lcb"}:
-        raise typer.BadParameter("--selector must be lcb or llm_topk_lcb.")
-    if meta_controller not in {"heuristic", "llm"}:
-        raise typer.BadParameter("--meta-controller must be heuristic or llm.")
 
     if reset_bank:
         _module(bank).clear()
@@ -158,9 +139,6 @@ def memory_run(
             bank=bank,
             top_k=k,
             token_budget=tokens,
-            skill_selector_mode=selector,
-            meta_controller_mode=meta_controller,
-            include_expert_seeds=expert_seeds,
         ),
         run_judge=False,
     )

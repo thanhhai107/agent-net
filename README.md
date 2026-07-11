@@ -289,28 +289,25 @@ The module augments `react`, `plan-execute`, or `reflexion` with DRAFT-style
 documentation refinement for the fixed primitive MCP tool surface. It does not
 create new executable tools or MCP servers.
 
-- **Explorer adaptation** stores real diagnosis tool calls and uses the learning
-  LLM to propose the next exploration. New user queries are checked against
-  exploration history; near duplicates trigger bounded self-reflection and
-  regeneration. Only structured plans that match the immutable primitive input
-  schema and current topology enter live prompts; raw Analyzer/Rewriter
-  directions and schema/boundary probes remain in tool-learning state.
+- **Explorer adaptation** records only observed read-only primitive-tool trials.
+  Each trial is compared with earlier uses of the same tool, so the Rewriter can
+  distinguish diverse contract coverage from repeated calls without learning from
+  an unexecuted proposal.
 - **Analyzer adaptation** uses structured natural-language feedback over the
   current documentation, tool outputs, gaps, and revision history. A
   deterministic analyzer keeps learning available when the LLM fails.
 - **Rewriter adaptation** asks a structured LLM DRAFT curator to update each
   primitive tool document with clearer usage guidance, preconditions, parameter
   constraints, positive/negative examples, usage notes, known failure modes,
-  suggestions for the next useful trial, and a concise tool-level usage
-  summary. If the curator is unavailable, the deterministic trial-derived
+  and a concise tool-level usage summary. If the curator is unavailable, the deterministic trial-derived
   rewrite still keeps evaluation running. The primitive source description,
   argument schema, and parameter names are immutable; contract-expanding LLM
   proposals are rejected rather than injected.
 - **Tool-adaptive termination** combines BLEU-like word match and semantic-text
   match with tool-usage mastery. Mastery is based on tool feedback and
   documentation coverage, not benchmark RCA accuracy. A primitive description
-  or argument-schema change resets and reopens a frozen document. Planned
-  checks and convergence history are scoped to the matching source signature.
+  or argument-schema change resets and reopens a frozen document. Convergence
+  history is scoped to the matching source signature.
 - **Path-rate reporting** mirrors DRAFT evaluation by reporting how much of the
   session tool path was already covered by refined docs and how much executed
   successfully.
@@ -328,11 +325,8 @@ nika tools reset bgp-study
 The persistent library is `runtime/tool_evolution/<library_id>/state.json`.
 When Studio auto-names a Tool Evolution run, `<library_id>` is the shared
 experiment id such as `benchmark_test-0001`.
-Runtime DRAFT behavior can be tuned with `--tool-doc-chars`,
-`--tool-prompt-doc-limit`, `--tool-scoped-prompt-doc-limit`,
-`--tool-planned-checks`, `--tool-next-checks`, and
-`--tool-convergence-threshold`. Setting planned/next checks to `0` disables
-that prompt guidance.
+Runtime DRAFT behavior can be tuned with `--tool-doc-chars` and
+`--tool-convergence-threshold`.
 Tool-evolving sessions write `tool_evolution.json` with trial counts,
 documentation revisions, LLM Analyzer/Rewriter counts, gaps, exploration counts,
 mastered tools, path rates, LLM rewrite failures, and frozen-document counts.
@@ -375,11 +369,11 @@ For the full benchmark-safe design, see
 - Hidden evaluator labels may be present in offline evidence for scoring, but
   they are redacted from the LLM critic prompt and are not injected back into
   retrieved skill context.
-- The verification gate compares each candidate against the active/best
-  baseline with clipped reward advantage from stored trajectories. NIKA's
-  current OpenAI-compatible providers do not expose historical-action
-  log-probabilities, so runs explicitly record `alignment_surrogate` rather
-  than claiming exact policy-logprob PPO verification.
+- The verification gate compares each candidate against its attributed parent
+  with clipped reward advantage from stored trajectories. It uses a frozen
+  behavioral replay scorer when a learning model is available and a structured
+  transition replay scorer otherwise; the recorded verification method states
+  which path was used.
 - Score-based maintenance retires low-value or duplicate skills.
 - Persistent state lives in `runtime/memory/<bank>/skills.json`.
 - Each evolving episode writes `memory_update.json`, including whether the
@@ -402,19 +396,14 @@ Retrieval injects at most 5 skills within an estimated 1,500-token budget by
 default. For `nika memory run`, override with `--k` and `--tokens`; for
 `nika agent run` and `nika benchmark run`, use `--memory-k` and
 `--memory-tokens`.
-Skill selection defaults to deterministic LCB ranking. To use Skill-Pro's
-LLM-nominate-then-LCB policy, pass `--memory-selector llm_topk_lcb`.
-Option termination defaults to the heuristic controller; pass
-`--memory-meta-controller llm` to use an LLM Skill-Pro meta-controller that
-returns DONE/CONTINUE from current observations and the active option.
-Runtime Skill-MDP behavior can also be tuned with `--memory-max-skill-age`,
-`--memory-selector-min-lcb`, and `--memory-selector-nominee-k`. Offline
+Skill selection uses the same fixed retrieval policy on every run: retrieve the
+most similar Skill-MDP options, then choose the highest online-value option.
+An LLM meta-controller evaluates the active option's DONE/CONTINUE condition
+when available, with deterministic termination checks as the fallback. Runtime
+Skill-MDP behavior can be tuned with `--memory-max-skill-age`. Offline
 Skill-Pro evolution is controlled by `--memory-pool-size`,
 `--memory-evolution-threshold`, `--memory-best-of-n`, and
 `--memory-ppo-epsilon`.
-The four NIKA-specific DNS/DHCP/OSPF/BGP expert ladders are excluded from the
-core configuration. Enable them only as an explicit ablation with
-`--memory-expert-seeds`.
 
 ### Example: `simple_bgp` with `link_down`
 
@@ -549,10 +538,6 @@ This framework provides MCP servers under `src/nika/service/mcp_server`. These i
 - **Task management MCP server** (`task_mcp_server.py`): agent submissions, including
   - `list_avail_problems` to list injectable root-cause ids.
   - `submit` to write the agent's final detection/localization/RCA answer.
-- **DRAFT tool-documentation MCP server** (`tool_evolution_mcp_server.py`):
-  - `list_refined_tool_docs` to inspect refined documentation for fixed primitive diagnostic tools.
-  - `get_refined_tool_doc` to inspect one primitive tool document.
-  - Selects the library through `NIKA_TOOL_LIBRARY_ID` and the live lab through `NIKA_SESSION_ID`.
 
 💡 More tools are coming soon...
 

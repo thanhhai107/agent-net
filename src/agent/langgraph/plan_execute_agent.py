@@ -14,12 +14,10 @@ from langgraph.graph import END, START, StateGraph
 from typing_extensions import TypedDict
 
 from agent.langgraph.phases.diagnosis import DiagnosisPhase as DiagnosisAgent
-from agent.langgraph.phases.submission import SubmissionPhase as SubmissionAgent
+from agent.langgraph.phases.submission import SubmissionPhase
 from agent.langgraph.langfuse_tracing import callback_config, create_langfuse_callbacks
-from agent.langgraph.evidence_gate import (
+from agent.langgraph.evidence import (
     ToolObservation,
-    evidence_gate_plan_steps,
-    evaluate_fault_family_evidence,
     observations_from_runtime_snapshot,
 )
 from agent.langgraph.workflow_models import (
@@ -114,19 +112,13 @@ class PlanExecuteAgent:
         tool_evolution_enabled: bool = False,
         tool_library_id: str = "default",
         tool_doc_chars: int = 500,
-        tool_prompt_doc_limit: int = 6,
-        tool_scoped_prompt_doc_limit: int = 4,
-        tool_planned_checks: int = 4,
-        tool_next_checks: int = 2,
         use_problem_tool_hints: bool = True,
-        evidence_gate_enabled: bool = True,
     ) -> None:
         if max_steps < 1:
             raise ValueError("max_steps must be >= 1")
 
         self.session_id = session_id
         self.max_steps = max_steps
-        self.evidence_gate_enabled = evidence_gate_enabled
         self.session = Session()
         self.session.load_running_session(session_id=session_id)
         self.session_dir = self.session.session_dir
@@ -143,10 +135,6 @@ class PlanExecuteAgent:
             tool_evolution_enabled=tool_evolution_enabled,
             tool_library_id=tool_library_id,
             tool_doc_chars=tool_doc_chars,
-            tool_prompt_doc_limit=tool_prompt_doc_limit,
-            tool_scoped_prompt_doc_limit=tool_scoped_prompt_doc_limit,
-            tool_planned_checks=tool_planned_checks,
-            tool_next_checks=tool_next_checks,
         )
         asyncio.run(diagnosis.load_tools())
         self._diagnosis_phase = diagnosis
@@ -154,13 +142,13 @@ class PlanExecuteAgent:
         self.skill_tool_runtime = diagnosis.skill_tool_runtime
         self._refresh_executor()
 
-        submission = SubmissionAgent(
+        submission = SubmissionPhase(
             session_id=session_id,
             llm_backend=llm_backend,
             model=model,
         )
         asyncio.run(submission.load_tools())
-        self.submission_agent = submission.get_agent()
+        self.submission_phase = submission
 
         self.langfuse_callbacks = create_langfuse_callbacks()
 
@@ -222,11 +210,7 @@ class PlanExecuteAgent:
         task_description: str,
         top_k: int = 5,
         token_budget: int = 1500,
-        skill_selector_mode: str = "lcb",
-        meta_controller_mode: str = "heuristic",
         max_skill_age: int = 4,
-        selector_min_lcb: float = -0.05,
-        selector_nominee_k: int = 3,
     ) -> None:
         self._diagnosis_phase.install_memory_runtime(
             memory=memory,
@@ -235,11 +219,7 @@ class PlanExecuteAgent:
             top_k=top_k,
             token_budget=token_budget,
             session_dir=self.session_dir,
-            skill_selector_mode=skill_selector_mode,
-            meta_controller_mode=meta_controller_mode,
             max_skill_age=max_skill_age,
-            selector_min_lcb=selector_min_lcb,
-            selector_nominee_k=selector_nominee_k,
         )
         self._refresh_executor()
 
@@ -267,28 +247,6 @@ class PlanExecuteAgent:
                 )
             )
         return observations
-
-    def _diagnosis_tool_names(self) -> list[str]:
-        if getattr(self, "diagnosis_tool_names", None):
-            return list(self.diagnosis_tool_names)
-        phase = getattr(self, "_diagnosis_phase", None)
-        return [tool.name for tool in getattr(phase, "tools", []) or []]
-
-    def _evidence_gate(
-        self,
-        *,
-        state: PlanExecuteState,
-        diagnosis_report: str,
-    ):
-        return evaluate_fault_family_evidence(
-            task_description=state.get("task_description", ""),
-            diagnosis_report=diagnosis_report,
-            observations=self._current_tool_observations(state),
-            available_tools=self._diagnosis_tool_names(),
-        )
-
-    def _is_evidence_gate_enabled(self) -> bool:
-        return bool(getattr(self, "evidence_gate_enabled", True))
 
     async def run(self, task_description: str) -> dict[str, Any]:
         with langsmith_tracing_context(
@@ -479,30 +437,6 @@ class PlanExecuteAgent:
             )
             decision = ReplanDecision.model_validate(raw_decision)
             if decision.completed:
-                gate = None
-                if self._is_evidence_gate_enabled():
-                    gate = self._evidence_gate(
-                        state=state,
-                        diagnosis_report=decision.diagnosis_report,
-                    )
-                if (
-                    gate is not None
-                    and not gate.sufficient
-                    and state.get("executed_steps", 0) < self.max_steps
-                ):
-                    callback._log(
-                        "evidence_gate_blocked",
-                        gate.to_log_payload(),
-                    )
-                    gate_steps = [
-                        PlanStep.model_validate(item)
-                        for item in evidence_gate_plan_steps(gate)
-                    ]
-                    if gate_steps:
-                        return {
-                            "diagnosis_report": "",
-                            "plan": gate_steps,
-                        }
                 return {
                     "diagnosis_report": decision.diagnosis_report,
                     "plan": [],
@@ -534,39 +468,18 @@ class PlanExecuteAgent:
             )
             return {}
         try:
-            result = await self.submission_agent.ainvoke(
-                {
-                    "messages": [
-                        HumanMessage(
-                            content=(
-                                "Based on the diagnosis report: "
-                                f"{_clip_text(report, limit=_REPORT_BUDGET_CHARS)}, please provide "
-                                "the submission. Do not submit if no report is available."
-                            )
-                        )
-                    ]
-                },
-                config={
-                    "callbacks": [
-                        AgentCallbackLogger(
-                            agent="submission_agent",
-                            session_dir=self.session_dir,
-                            extra_fields={"phase": "submission"},
-                        )
-                    ],
-                    "recursion_limit": self.max_steps,
-                },
+            result = await self.submission_phase.submit_report(
+                task_description=state.get("task_description", ""),
+                diagnosis_report=report,
+                observations=self._current_tool_observations(state),
+                session_dir=self.session_dir,
             )
+            if result is None:
+                return {}
             return {"messages": result["messages"]}
-        except GraphRecursionError:
-            self._callback("submission")._log(
-                "error",
-                {"message": "Submission agent reached max recursion limit."},
-            )
-            return {}
         except Exception as exc:
             self._callback("submission")._log(
                 "error",
-                {"message": f"Submission agent failed: {exc}"},
+                {"message": f"Evidence-bound submission failed: {exc}"},
             )
             return {}

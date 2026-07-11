@@ -96,18 +96,3 @@ class MCPServerConfig:
         """
         full = self.load_config(if_submit=False)
         return {k: v for k, v in full.items() if k in server_names}
-
-    def load_tool_docs_config(self, library_id: str) -> dict:
-        """Return the FastMCP adapter for one DRAFT documentation library."""
-        if not library_id:
-            raise ValueError("library_id is required for DRAFT tool docs.")
-        return {
-            "nika_tool_docs": {
-                "command": sys.executable,
-                "args": [
-                    f"{self.mcp_server_dir}/tool_evolution_mcp_server.py"
-                ],
-                "transport": "stdio",
-                "env": self._server_env(NIKA_TOOL_LIBRARY_ID=library_id),
-            }
-        }

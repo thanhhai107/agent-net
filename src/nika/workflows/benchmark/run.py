@@ -119,16 +119,8 @@ def _benchmark_row_cli_args(
             str(memory.top_k),
             "--memory-tokens",
             str(memory.token_budget),
-            "--memory-selector",
-            memory.skill_selector_mode,
-            "--memory-meta-controller",
-            memory.meta_controller_mode,
             "--memory-max-skill-age",
             str(memory.max_skill_age),
-            "--memory-selector-min-lcb",
-            str(memory.selector_min_lcb),
-            "--memory-selector-nominee-k",
-            str(memory.selector_nominee_k),
             "--memory-pool-size",
             str(memory.pool_size),
             "--memory-evolution-threshold",
@@ -146,16 +138,8 @@ def _benchmark_row_cli_args(
             str(memory.top_k),
             "--memory-tokens",
             str(memory.token_budget),
-            "--memory-selector",
-            memory.skill_selector_mode,
-            "--memory-meta-controller",
-            memory.meta_controller_mode,
             "--memory-max-skill-age",
             str(memory.max_skill_age),
-            "--memory-selector-min-lcb",
-            str(memory.selector_min_lcb),
-            "--memory-selector-nominee-k",
-            str(memory.selector_nominee_k),
             "--memory-pool-size",
             str(memory.pool_size),
             "--memory-evolution-threshold",
@@ -165,22 +149,12 @@ def _benchmark_row_cli_args(
             "--memory-ppo-epsilon",
             str(memory.ppo_epsilon),
         ]
-    if memory.mode != "off" and memory.include_expert_seeds:
-        args.append("--memory-expert-seeds")
     if tool_evolution.enabled:
         args += [
             "--tools",
             tool_evolution.library_id,
             "--tool-doc-chars",
             str(tool_evolution.tool_doc_chars),
-            "--tool-prompt-doc-limit",
-            str(tool_evolution.prompt_doc_limit),
-            "--tool-scoped-prompt-doc-limit",
-            str(tool_evolution.scoped_prompt_doc_limit),
-            "--tool-planned-checks",
-            str(tool_evolution.planned_checks),
-            "--tool-next-checks",
-            str(tool_evolution.next_checks),
             "--tool-convergence-threshold",
             str(tool_evolution.convergence_threshold),
         ]
@@ -467,7 +441,6 @@ def run_single_benchmark(
                     model=model,
                     max_steps=max_steps,
                     max_attempts=max_attempts,
-                    stream_output=False,
                     tool_evolution=tool_evolution,
                     memory=memory,
                 ),
@@ -569,9 +542,6 @@ def run_benchmark_from_yaml(
             "tool_evolution_library "
             f"id={tool_config.library_id} "
             f"doc_chars={tool_config.tool_doc_chars} "
-            f"prompt_docs={tool_config.prompt_doc_limit} "
-            f"planned_checks={tool_config.planned_checks} "
-            f"next_checks={tool_config.next_checks} "
             f"convergence={tool_config.convergence_threshold}"
         )
     if memory_config.enabled:
@@ -581,8 +551,6 @@ def run_benchmark_from_yaml(
             f"mode={memory_config.mode} "
             f"top_k={memory_config.top_k} "
             f"tokens={memory_config.token_budget} "
-            f"selector={memory_config.skill_selector_mode} "
-            f"controller={memory_config.meta_controller_mode} "
             f"max_age={memory_config.max_skill_age} "
             f"pool={memory_config.pool_size} "
             f"threshold={memory_config.evolution_threshold} "

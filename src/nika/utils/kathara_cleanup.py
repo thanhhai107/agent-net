@@ -257,8 +257,8 @@ def _retry_cleanup_step(
     raise last_error
 
 
-def wait_for_docker_daemon(*, context: str = "run", attempts: int = 5) -> None:
-    """Wait briefly for Docker before code paths that instantiate Kathara."""
+def wait_for_docker_daemon(*, context: str = "run", attempts: int = 30) -> None:
+    """Wait for Docker startup before code paths that instantiate Kathara."""
 
     last_error: KatharaCleanupError | None = None
     for attempt in range(attempts):

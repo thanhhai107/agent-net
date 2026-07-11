@@ -8,7 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 from langgraph.errors import GraphRecursionError
 from pydantic import ValidationError
@@ -25,11 +25,6 @@ from agent.langgraph.plan_execute_agent import (
     REPLANNER_PROMPT,
     SYNTHESIS_PROMPT,
     PlanExecuteAgent,
-)
-from agent.langgraph.evidence_gate import (
-    ToolObservation,
-    evidence_gate_enabled,
-    evaluate_fault_family_evidence,
 )
 from agent.langgraph.phases.diagnosis import DiagnosisPhase
 from agent.langgraph.react_agent import BasicReActAgent
@@ -176,136 +171,6 @@ class WorkflowModelTest(unittest.TestCase):
             )
 
 
-class EvidenceGateTest(unittest.TestCase):
-    def test_dns_gate_blocks_reachability_only_report(self) -> None:
-        result = evaluate_fault_family_evidence(
-            task_description="Users cannot resolve local DNS names.",
-            diagnosis_report=(
-                "Anomaly exists. The root cause is DNS service failure on dns_server."
-            ),
-            observations=[
-                ToolObservation(
-                    tool="ping_pair",
-                    summary="pc_1_1 can ping dns_server successfully.",
-                )
-            ],
-            available_tools=[
-                "ping_pair",
-                "curl_web_test",
-                "cat_file",
-                "systemctl_ops",
-                "netstat",
-            ],
-        )
-
-        self.assertFalse(result.sufficient)
-        self.assertIn("DNS/resolver", result.families)
-        self.assertTrue(
-            any("DNS/resolver" in item for item in result.missing_evidence)
-        )
-        self.assertIn("Evidence gate blocked finalization", result.prompt)
-
-    def test_dns_gate_accepts_resolution_or_resolver_evidence(self) -> None:
-        result = evaluate_fault_family_evidence(
-            task_description="Users cannot resolve local DNS names.",
-            diagnosis_report=(
-                "Anomaly exists. DNS lookup for web0.local fails from pc_1_1."
-            ),
-            observations=[
-                ToolObservation(
-                    tool="exec_shell",
-                    summary="nslookup web0.local returns SERVFAIL from dns_server.",
-                )
-            ],
-            available_tools=["exec_shell", "curl_web_test", "cat_file"],
-        )
-
-        self.assertTrue(result.sufficient)
-        self.assertEqual(result.missing_evidence, ())
-
-    def test_bgp_gate_blocks_ping_only_route_report(self) -> None:
-        result = evaluate_fault_family_evidence(
-            task_description="BGP missing route advertisement between leaves.",
-            diagnosis_report=(
-                "Anomaly exists. Root cause is missing BGP advertisement on leaf_router_0_0."
-            ),
-            observations=[
-                ToolObservation(
-                    tool="ping_pair",
-                    summary="Traffic fails between hosts in different racks.",
-                )
-            ],
-            available_tools=[
-                "ping_pair",
-                "frr_show_bgp_summary",
-                "frr_get_bgp_conf",
-                "frr_show_ip_route",
-            ],
-        )
-
-        self.assertFalse(result.sufficient)
-        self.assertIn("BGP control plane", result.families)
-        self.assertTrue(
-            any("frr_show_bgp_summary" in item for item in result.suggested_steps)
-        )
-
-    def test_gate_ignores_topology_catalog_when_report_claims_one_family(self) -> None:
-        result = evaluate_fault_family_evidence(
-            task_description=(
-                "Network Description: enterprise topology with DNS, DHCP, OSPF, "
-                "HTTP services, ACLs, and BGP edge connectivity."
-            ),
-            diagnosis_report=(
-                "Anomaly exists. The root cause is DNS resolver service failure."
-            ),
-            observations=[
-                ToolObservation(
-                    tool="ping_pair",
-                    summary="Affected host can ping the resolver address.",
-                )
-            ],
-            available_tools=[
-                "curl_web_test",
-                "cat_file",
-                "systemctl_ops",
-                "netstat",
-                "frr_get_ospf_conf",
-                "frr_show_bgp_summary",
-                "get_host_net_config",
-            ],
-        )
-
-        self.assertFalse(result.sufficient)
-        self.assertEqual(result.families, ("DNS/resolver",))
-        self.assertTrue(
-            all("BGP" not in item and "OSPF" not in item for item in result.suggested_steps)
-        )
-
-    def test_gate_does_not_turn_topology_only_task_into_protocol_sprawl(self) -> None:
-        result = evaluate_fault_family_evidence(
-            task_description=(
-                "Network Description: enterprise topology with DNS, DHCP, OSPF, "
-                "HTTP services, ACLs, and BGP edge connectivity."
-            ),
-            diagnosis_report="No anomaly is confirmed from the current evidence.",
-            observations=[
-                ToolObservation(
-                    tool="get_reachability",
-                    summary="All tested host pairs are reachable.",
-                )
-            ],
-            available_tools=[
-                "curl_web_test",
-                "get_host_net_config",
-                "frr_get_ospf_conf",
-                "frr_show_bgp_summary",
-            ],
-        )
-
-        self.assertTrue(result.sufficient)
-        self.assertEqual(result.families, ())
-        self.assertEqual(result.suggested_steps, ())
-
 
 class WorkflowRegistrationTest(unittest.TestCase):
     def test_langfuse_auth_errors_disable_tracing_without_failing(self) -> None:
@@ -342,18 +207,12 @@ class WorkflowRegistrationTest(unittest.TestCase):
                     task_description="task",
                     top_k=7,
                     token_budget=2100,
-                    skill_selector_mode="llm_topk_lcb",
-                    meta_controller_mode="llm",
                     max_skill_age=6,
-                    selector_min_lcb=-0.02,
-                    selector_nominee_k=4,
                 )
 
                 kwargs = agent._diagnosis_phase.install_memory_runtime.call_args.kwargs
                 self.assertEqual(kwargs["session_dir"], "/tmp/session")
                 self.assertEqual(kwargs["max_skill_age"], 6)
-                self.assertEqual(kwargs["selector_min_lcb"], -0.02)
-                self.assertEqual(kwargs["selector_nominee_k"], 4)
                 getattr(agent, refresh_name).assert_called_once_with()
 
     def test_cli_lists_all_agent_types(self) -> None:
@@ -399,8 +258,6 @@ class WorkflowRegistrationTest(unittest.TestCase):
                         bank="experiment",
                         top_k=4,
                         token_budget=900,
-                        skill_selector_mode="llm_topk_lcb",
-                        meta_controller_mode="llm",
                     ),
                 )
             )
@@ -413,10 +270,6 @@ class WorkflowRegistrationTest(unittest.TestCase):
             tool_evolution_enabled=False,
             tool_library_id="default",
             tool_doc_chars=500,
-            tool_prompt_doc_limit=6,
-            tool_scoped_prompt_doc_limit=4,
-            tool_planned_checks=4,
-            tool_next_checks=2,
         )
         reflexion_agent.assert_called_once_with(
             session_id="session",
@@ -427,10 +280,6 @@ class WorkflowRegistrationTest(unittest.TestCase):
             tool_evolution_enabled=False,
             tool_library_id="default",
             tool_doc_chars=500,
-            tool_prompt_doc_limit=6,
-            tool_scoped_prompt_doc_limit=4,
-            tool_planned_checks=4,
-            tool_next_checks=2,
         )
         react_agent.assert_called_once_with(
             session_id="session",
@@ -440,10 +289,6 @@ class WorkflowRegistrationTest(unittest.TestCase):
             tool_evolution_enabled=True,
             tool_library_id="experiment-a",
             tool_doc_chars=500,
-            tool_prompt_doc_limit=6,
-            tool_scoped_prompt_doc_limit=4,
-            tool_planned_checks=4,
-            tool_next_checks=2,
         )
         memory_module.assert_called_once_with(
             bank_id="experiment",
@@ -453,7 +298,6 @@ class WorkflowRegistrationTest(unittest.TestCase):
             evolution_threshold=3,
             best_of_n=3,
             ppo_epsilon=0.2,
-            include_expert_seeds=False,
         )
         memory_adapter.assert_called_once_with(
             react_agent.return_value,
@@ -461,11 +305,7 @@ class WorkflowRegistrationTest(unittest.TestCase):
             memory_mode="read",
             memory_top_k=4,
             memory_token_budget=900,
-            memory_skill_selector_mode="llm_topk_lcb",
-            memory_meta_controller_mode="llm",
             memory_max_skill_age=4,
-            memory_selector_min_lcb=-0.05,
-            memory_selector_nominee_k=3,
         )
 
     def test_cli_lists_custom_backend(self) -> None:
@@ -520,11 +360,7 @@ class WorkflowRegistrationTest(unittest.TestCase):
                     memory_mode="evolve",
                     memory_top_k=5,
                     memory_token_budget=1500,
-                    memory_skill_selector_mode="lcb",
-                    memory_meta_controller_mode="heuristic",
                     memory_max_skill_age=4,
-                    memory_selector_min_lcb=-0.05,
-                    memory_selector_nominee_k=3,
                 )
 
     def test_memory_rejects_unsupported_workflow(self) -> None:
@@ -548,10 +384,6 @@ class WorkflowRegistrationTest(unittest.TestCase):
                 enabled=True,
                 library_id="tools-a",
                 tool_doc_chars=640,
-                prompt_doc_limit=5,
-                scoped_prompt_doc_limit=3,
-                planned_checks=2,
-                next_checks=1,
                 convergence_threshold=0.8,
             ),
             memory=MemoryConfig(
@@ -560,8 +392,6 @@ class WorkflowRegistrationTest(unittest.TestCase):
                 top_k=7,
                 token_budget=2100,
                 max_skill_age=6,
-                selector_min_lcb=-0.02,
-                selector_nominee_k=4,
                 pool_size=24,
                 evolution_threshold=2,
                 best_of_n=5,
@@ -573,10 +403,6 @@ class WorkflowRegistrationTest(unittest.TestCase):
 
         self.assertEqual(kwargs["tool_library_id"], "tools-a")
         self.assertEqual(kwargs["tool_doc_chars"], 640)
-        self.assertEqual(kwargs["tool_prompt_doc_limit"], 5)
-        self.assertEqual(kwargs["tool_scoped_prompt_doc_limit"], 3)
-        self.assertEqual(kwargs["tool_planned_checks"], 2)
-        self.assertEqual(kwargs["tool_next_checks"], 1)
         self.assertNotIn("use_problem_tool_hints", kwargs)
 
 
@@ -899,87 +725,6 @@ class ReactBehaviorTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("react_route", messages[1].content)
         self.assertEqual(update["diagnosis_report"], "Evidence-backed report")
 
-    async def test_diagnosis_retries_when_evidence_gate_blocks_report(self) -> None:
-        self.agent.evidence_gate_retries = 1
-        self.agent.diagnosis_tool_names = ["ping_pair", "exec_shell"]
-        self.agent.skill_tool_runtime = None
-        self.agent.diagnosis_agent = AsyncMock()
-        self.agent.diagnosis_agent.ainvoke.side_effect = [
-            {
-                "messages": [
-                    AIMessage(
-                        content=(
-                            "Anomaly exists. Root cause is DNS service failure on dns_server."
-                        )
-                    )
-                ]
-            },
-            {
-                "messages": [
-                    ToolMessage(
-                        content="nslookup web0.local returns SERVFAIL from dns_server.",
-                        tool_call_id="call_1",
-                        name="exec_shell",
-                    ),
-                    AIMessage(
-                        content=(
-                            "Anomaly exists. DNS resolution fails based on nslookup "
-                            "SERVFAIL from dns_server."
-                        )
-                    ),
-                ]
-            },
-        ]
-
-        update = await self.agent.diagnosis_agent_builder(
-            {
-                "task_description": "Users cannot resolve local DNS names.",
-                "messages": [
-                    HumanMessage(content="Users cannot resolve local DNS names.")
-                ],
-            }
-        )
-
-        self.assertEqual(self.agent.diagnosis_agent.ainvoke.await_count, 2)
-        retry_payload = self.agent.diagnosis_agent.ainvoke.call_args_list[1].args[0]
-        self.assertIn(
-            "Evidence gate blocked finalization",
-            retry_payload["messages"][-1].content,
-        )
-        self.assertIn("DNS resolution fails", update["diagnosis_report"])
-
-    async def test_diagnosis_does_not_retry_when_evidence_gate_disabled(self) -> None:
-        self.agent.evidence_gate_enabled = False
-        self.agent.evidence_gate_retries = 1
-        self.agent.diagnosis_tool_names = ["ping_pair", "exec_shell"]
-        self.agent.skill_tool_runtime = None
-        self.agent.diagnosis_agent = AsyncMock()
-        self.agent.diagnosis_agent.ainvoke.return_value = {
-            "messages": [
-                AIMessage(
-                    content="Anomaly exists. Root cause is DNS service failure on dns_server."
-                )
-            ]
-        }
-
-        update = await self.agent.diagnosis_agent_builder(
-            {
-                "task_description": "Users cannot resolve local DNS names.",
-                "messages": [
-                    HumanMessage(content="Users cannot resolve local DNS names.")
-                ],
-            }
-        )
-
-        self.assertEqual(self.agent.diagnosis_agent.ainvoke.await_count, 1)
-        self.assertIn("DNS service failure", update["diagnosis_report"])
-
-    def test_evidence_gate_enabled_env_override(self) -> None:
-        with patch.dict("os.environ", {"NIKA_EVIDENCE_GATE_ENABLED": "false"}):
-            self.assertFalse(evidence_gate_enabled(default=True))
-        with patch.dict("os.environ", {"NIKA_EVIDENCE_GATE_ENABLED": "true"}):
-            self.assertTrue(evidence_gate_enabled(default=False))
-
     async def test_diagnosis_max_steps_matches_upstream_error_contract(
         self,
     ) -> None:
@@ -1013,10 +758,9 @@ class ReactGraphRoutingTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             diagnosis_agent = SimpleNamespace(ainvoke=AsyncMock())
             diagnosis_agent.ainvoke.side_effect = GraphRecursionError()
-            submission_agent = SimpleNamespace(ainvoke=AsyncMock())
-            submission_agent.ainvoke.return_value = {
-                "messages": [AIMessage(content="submitted")]
-            }
+            submission_submit = AsyncMock(
+                return_value={"messages": [AIMessage(content="submitted")]}
+            )
             skill_runtime = SimpleNamespace(
                 snapshot=lambda: {
                     "recent_transitions": [
@@ -1039,7 +783,7 @@ class ReactGraphRoutingTest(unittest.TestCase):
             )
             submission_phase = SimpleNamespace(
                 load_tools=AsyncMock(),
-                get_agent=lambda: submission_agent,
+                submit_report=submission_submit,
             )
 
             with (
@@ -1067,7 +811,7 @@ class ReactGraphRoutingTest(unittest.TestCase):
                     )
                 )
 
-            submission_agent.ainvoke.assert_not_awaited()
+            submission_submit.assert_not_awaited()
             self.assertEqual(result["diagnosis_report"], "ERROR_MAX_STEPS_REACHED")
             self.assertTrue(result["is_max_steps_reached"])
             self.assertEqual(
@@ -1406,12 +1150,12 @@ class PlanExecuteBehaviorTest(unittest.IsolatedAsyncioTestCase):
         write_session.assert_called_once_with(None, self.tmp.name)
 
     async def test_empty_report_skips_submission(self) -> None:
-        self.agent.submission_agent = AsyncMock()
+        self.agent.submission_phase = SimpleNamespace(submit_report=AsyncMock())
 
         update = await self.agent._submit({"diagnosis_report": ""})
 
         self.assertEqual(update, {})
-        self.agent.submission_agent.ainvoke.assert_not_awaited()
+        self.agent.submission_phase.submit_report.assert_not_awaited()
 
 
 class ReflexionBehaviorTest(unittest.IsolatedAsyncioTestCase):
@@ -1734,12 +1478,12 @@ class ReflexionBehaviorTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Host runtime state", call.args[0][1].content)
 
     async def test_empty_report_skips_submission(self) -> None:
-        self.agent.submission_agent = AsyncMock()
+        self.agent.submission_phase = SimpleNamespace(submit_report=AsyncMock())
 
         update = await self.agent._submit({"diagnosis_report": ""})
 
         self.assertEqual(update, {})
-        self.agent.submission_agent.ainvoke.assert_not_awaited()
+        self.agent.submission_phase.submit_report.assert_not_awaited()
 
 
 if __name__ == "__main__":

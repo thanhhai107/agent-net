@@ -18,11 +18,7 @@ class MemoryAugmentedAgent:
         memory_mode: str,
         memory_top_k: int = 5,
         memory_token_budget: int = 1500,
-        memory_skill_selector_mode: str = "lcb",
-        memory_meta_controller_mode: str = "heuristic",
         memory_max_skill_age: int = 4,
-        memory_selector_min_lcb: float = -0.05,
-        memory_selector_nominee_k: int = 3,
     ) -> None:
         if memory_mode not in {"read", "evolve"}:
             raise ValueError("memory_mode must be read or evolve for the adapter")
@@ -31,11 +27,7 @@ class MemoryAugmentedAgent:
         self.memory_mode = memory_mode
         self.memory_top_k = memory_top_k
         self.memory_token_budget = memory_token_budget
-        self.memory_skill_selector_mode = memory_skill_selector_mode
-        self.memory_meta_controller_mode = memory_meta_controller_mode
         self.memory_max_skill_age = memory_max_skill_age
-        self.memory_selector_min_lcb = memory_selector_min_lcb
-        self.memory_selector_nominee_k = memory_selector_nominee_k
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self.agent, name)
@@ -53,11 +45,7 @@ class MemoryAugmentedAgent:
             task_description=task_description,
             top_k=self.memory_top_k,
             token_budget=self.memory_token_budget,
-            skill_selector_mode=self.memory_skill_selector_mode,
-            meta_controller_mode=self.memory_meta_controller_mode,
             max_skill_age=self.memory_max_skill_age,
-            selector_min_lcb=self.memory_selector_min_lcb,
-            selector_nominee_k=self.memory_selector_nominee_k,
         )
         try:
             return await self.agent.run(task_description)
