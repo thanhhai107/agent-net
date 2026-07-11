@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import sys
+import json
+from pathlib import Path
 
 from agent.extensions.config import (
     DEFAULT_LLM_PROVIDER as DEFAULT_LLM_BACKEND,
@@ -50,6 +52,23 @@ def test_baseline_command_uses_default_sequential_execution() -> None:
     assert command[command.index("--max-steps") + 1] == "100"
     assert "-j" not in command
     assert "--parallel" not in command
+
+
+def test_result_summary_uses_selected_benchmark_metrics() -> None:
+    from nika.visualization.experiment_dashboard import RESULT_SUMMARY_COLUMNS
+
+    metrics = [
+        "detection_score",
+        "localization_f1",
+        "rca_f1",
+        "localization_precision",
+        "rca_precision",
+        "tool_calls",
+        "tool_errors",
+    ]
+    assert [column for column in RESULT_SUMMARY_COLUMNS if column in metrics] == metrics
+    assert "progress" not in RESULT_SUMMARY_COLUMNS
+    assert "total_tokens" not in RESULT_SUMMARY_COLUMNS
 
 
 def test_command_fallbacks_match_extension_defaults(monkeypatch) -> None:
@@ -249,3 +268,55 @@ def test_parse_progress_events_reads_benchmark_and_ui_events() -> None:
     assert rows[3]["skipped"] == "1"
     assert rows[4]["reason"] == "user_stop"
     assert rows[5]["exit_code"] == "0"
+
+
+def test_result_aggregation_excludes_clean_controls_from_localization_and_rca(
+    monkeypatch, tmp_path: Path
+) -> None:
+    from nika.visualization import experiment_dashboard as dashboard
+
+    results = tmp_path / "results"
+    root = results / "benchmark_test-0001"
+    for name, is_anomaly, localization_f1, rca_f1 in (
+        ("fault", True, 1.0, 0.8),
+        ("clean", False, 0.0, 0.0),
+    ):
+        session = root / name
+        session.mkdir(parents=True)
+        (session / "run.json").write_text(
+            json.dumps(
+                {
+                    "session_id": name,
+                    "status": "finished",
+                    "agent_type": "byo.langgraph",
+                    "model": "openai/gpt-oss-20b",
+                    "problem_names": ["link_down" if is_anomaly else "no_fault"],
+                }
+            ),
+            encoding="utf-8",
+        )
+        (session / "ground_truth.json").write_text(
+            json.dumps({"is_anomaly": is_anomaly}),
+            encoding="utf-8",
+        )
+        (session / "eval_metrics.json").write_text(
+            json.dumps(
+                {
+                    "detection_score": 1.0,
+                    "localization_f1": localization_f1,
+                    "rca_f1": rca_f1,
+                    "localization_precision": localization_f1,
+                    "rca_precision": rca_f1,
+                    "tool_calls": 2,
+                    "tool_errors": 0,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    monkeypatch.setattr(dashboard, "RESULTS_DIR", results)
+    row = dashboard._result_rows(benchmark_name="benchmark_test")[0]
+
+    assert row["detection_score"] == "1.00"
+    assert row["localization_f1"] == "1.00"
+    assert row["rca_f1"] == "0.80"

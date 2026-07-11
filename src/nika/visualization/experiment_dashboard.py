@@ -359,10 +359,10 @@ RESULT_SUMMARY_COLUMNS = [
     "detection_score",
     "localization_f1",
     "rca_f1",
+    "localization_precision",
+    "rca_precision",
     "tool_calls",
     "tool_errors",
-    "total_tokens",
-    "duration",
     "agent",
     "model",
     "updated",
@@ -624,12 +624,15 @@ def _is_baseline_meta(meta: dict) -> bool:
     )
 
 
-def _metric_total(metrics: dict) -> float | None:
-    values = [
-        _float(metrics.get("detection_score")),
-        _float(metrics.get("localization_f1")),
-        _float(metrics.get("rca_f1")),
-    ]
+def _metric_total(metrics: dict, *, is_anomaly: bool) -> float | None:
+    values = [_float(metrics.get("detection_score"))]
+    if is_anomaly:
+        values.extend(
+            [
+                _float(metrics.get("localization_f1")),
+                _float(metrics.get("rca_f1")),
+            ]
+        )
     if any(value is None for value in values):
         return None
     return sum(value or 0.0 for value in values) / 3
@@ -640,10 +643,15 @@ def _root_case_map(run_paths: list[Path]) -> dict[object, dict[str, object]]:
     for run_path in run_paths:
         meta = _read_json(run_path)
         metrics = _read_json(run_path.parent / "eval_metrics.json")
+        ground_truth = _read_json(run_path.parent / "ground_truth.json")
         key = _case_key(meta)
         if key is None:
             continue
-        cases[key] = {"meta": meta, "metrics": metrics}
+        cases[key] = {
+            "meta": meta,
+            "metrics": metrics,
+            "is_anomaly": bool(ground_truth.get("is_anomaly", True)),
+        }
     return cases
 
 
@@ -677,15 +685,20 @@ def _paired_stats(
     }
     wins = losses = ties = 0
     for key in overlap:
-        target_metrics = target_cases[key]["metrics"]
-        baseline_metrics = root_cases[baseline_root][key]["metrics"]
+        target_case = target_cases[key]
+        baseline_case = root_cases[baseline_root][key]
+        target_metrics = target_case["metrics"]
+        baseline_metrics = baseline_case["metrics"]
+        is_anomaly = bool(target_case.get("is_anomaly", True))
         for metric, values in deltas.items():
+            if metric != "detection_score" and not is_anomaly:
+                continue
             target_value = _float(target_metrics.get(metric))
             baseline_value = _float(baseline_metrics.get(metric))
             if target_value is not None and baseline_value is not None:
                 values.append(target_value - baseline_value)
-        target_total = _metric_total(target_metrics)
-        baseline_total = _metric_total(baseline_metrics)
+        target_total = _metric_total(target_metrics, is_anomaly=is_anomaly)
+        baseline_total = _metric_total(baseline_metrics, is_anomaly=is_anomaly)
         if target_total is None or baseline_total is None:
             continue
         delta = target_total - baseline_total
@@ -778,6 +791,8 @@ def _result_rows(*, benchmark_name: str | None = None) -> list[dict[str, object]
             session_dir = run_path.parent
             meta = _read_json(run_path)
             metrics = _read_json(session_dir / "eval_metrics.json")
+            ground_truth = _read_json(session_dir / "ground_truth.json")
+            is_anomaly = bool(ground_truth.get("is_anomaly", True))
             if meta.get("status") == "finished":
                 finished += 1
             has_eval = (session_dir / "eval_metrics.json").exists()
@@ -786,17 +801,23 @@ def _result_rows(*, benchmark_name: str | None = None) -> list[dict[str, object]
             elif meta.get("status") != "running" and not has_eval:
                 failed += 1
 
-            for key, target in (
+            metric_targets = [
                 ("detection_score", detections),
-                ("localization_f1", localization_f1s),
-                ("rca_f1", rca_f1s),
-                ("localization_precision", localization_precisions),
-                ("rca_precision", rca_precisions),
                 ("tool_calls", tool_calls),
                 ("in_tokens", in_tokens),
                 ("out_tokens", out_tokens),
                 ("tool_errors", tool_errors),
-            ):
+            ]
+            if is_anomaly:
+                metric_targets.extend(
+                    [
+                        ("localization_f1", localization_f1s),
+                        ("rca_f1", rca_f1s),
+                        ("localization_precision", localization_precisions),
+                        ("rca_precision", rca_precisions),
+                    ]
+                )
+            for key, target in metric_targets:
                 value = _float(metrics.get(key))
                 if value is not None:
                     target.append(value)
