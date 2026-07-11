@@ -15,19 +15,23 @@ class TelemetryAPIMixin:
     org = "int_org"
     bucket = "int_bucket"
 
-    def influx_list_buckets(self: _SupportsBase, host_name: str = "collector") -> list[str]:
+    def influx_list_buckets(
+        self: _SupportsBase, host_name: str = "collector"
+    ) -> list[str]:
         """List all buckets in the InfluxDB instance."""
         query_cmd = "influx bucket list --json"
         return [self.exec_cmd(host_name=host_name, command=query_cmd)]
 
-    def influx_get_measurements(self: _SupportsBase, host_name: str = "collector") -> list[str]:
+    def influx_get_measurements(
+        self: _SupportsBase, host_name: str = "collector"
+    ) -> list[str]:
         """List all measurements (tables) in a database"""
-        query_cmd = (
-            f"""influx query 'import "influxdata/influxdb/schema" schema.measurements(bucket: "{self.bucket}")'"""
-        )
+        query_cmd = f"""influx query 'import "influxdata/influxdb/schema" schema.measurements(bucket: "{self.bucket}")'"""
         return [self.exec_cmd(host_name=host_name, command=query_cmd)]
 
-    def influx_count_measurements(self: _SupportsBase, measurement: str, host_name: str = "collector") -> list[str]:
+    def influx_count_measurements(
+        self: _SupportsBase, measurement: str, host_name: str = "collector"
+    ) -> list[str]:
         """Count the size of all records in a measurement"""
         query_cmd = (
             f'curl -sS --request POST "http://localhost:8086/api/v2/query?org={self.org}" '
@@ -48,7 +52,11 @@ class TelemetryAPIMixin:
 
     def _csv_to_json(self: _SupportsBase, query_result: str) -> list[dict]:
         """Convert CSV query result to JSON format."""
-        lines = [line for line in query_result.splitlines() if line.strip() and not line.startswith("#")]
+        lines = [
+            line
+            for line in query_result.splitlines()
+            if line.strip() and not line.startswith("#")
+        ]
 
         header = None
         data_lines = []
@@ -66,7 +74,11 @@ class TelemetryAPIMixin:
         return json.dumps(rows, indent=2)
 
     def influx_query_measurement(
-        self: _SupportsBase, measurement: str, limit: int = 10, offset: int = 0, host_name: str = "collector"
+        self: _SupportsBase,
+        measurement: str,
+        limit: int = 10,
+        offset: int = 0,
+        host_name: str = "collector",
     ) -> list[str]:
         """
         ref: https://github.com/influxdata/influxdb3_mcp_server/blob/3fb86fe505f76fddcab4c7740ad62987beb02c45/src/tools/categories/query.tools.ts#L14

@@ -6,8 +6,7 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
-from nika.config import RESULTS_DIR, SESSIONS_DIR
-from nika.utils.session import find_session_dir
+from nika.config import RESULTS_DIR, resolve_results_root, SESSIONS_DIR
 from nika.utils.session_index import SessionIndex
 from nika.utils.session_store import SessionStore
 
@@ -18,20 +17,57 @@ class EvalCleanReport:
     results_entries_removed: int
 
 
+def _session_result_dir_candidates(
+    session_id: str,
+    *,
+    results_dir: str | Path | None = None,
+    session_dir: str | Path | None = None,
+    db_path: str | Path | None = None,
+) -> list[Path]:
+    """Return unique session result directories to remove, most specific first."""
+    candidates: list[Path] = []
+    seen: set[Path] = set()
+
+    def add(raw: str | Path | None) -> None:
+        if raw is None or raw == "":
+            return
+        path = Path(raw)
+        key = path.resolve()
+        if key in seen:
+            return
+        seen.add(key)
+        candidates.append(path)
+
+    add(session_dir)
+    row = SessionIndex(db_path).get_row(session_id)
+    if row:
+        add(row.get("session_dir"))
+    add(Path(results_dir or resolve_results_root()) / session_id)
+    add(Path(RESULTS_DIR) / session_id)
+    return candidates
+
+
 def remove_session_results(
     session_id: str,
     *,
     results_dir: str | Path | None = None,
+    session_dir: str | Path | None = None,
     db_path: str | Path | None = None,
 ) -> bool:
-    """Remove a session result directory by id, including nested benchmark runs."""
+    """Remove the session results directory and the session index row if present."""
+    removed = False
+    for path in _session_result_dir_candidates(
+        session_id,
+        results_dir=results_dir,
+        session_dir=session_dir,
+        db_path=db_path,
+    ):
+        if not path.exists():
+            continue
+        shutil.rmtree(path)
+        removed = True
     SessionIndex(db_path).purge(session_id)
-    try:
-        session_results = find_session_dir(session_id, results_dir=results_dir)
-    except FileNotFoundError:
-        return False
-    shutil.rmtree(session_results)
-    return True
+    return removed
 
 
 def run_eval_clean(
@@ -41,12 +77,14 @@ def run_eval_clean(
     db_path: str | Path | None = None,
     force: bool = False,
 ) -> EvalCleanReport:
-    """Delete all contents under ``results/``, session JSON files, and the index."""
-    results_root = Path(results_dir or RESULTS_DIR)
+    """Delete all contents under the results root, session JSON files, and the index."""
+    results_root = Path(results_dir or resolve_results_root())
     sessions_root = Path(sessions_dir or SESSIONS_DIR)
     index = SessionIndex(db_path)
 
-    running = SessionStore(sessions_root, db_path or index.db_path).list_running_sessions()
+    running = SessionStore(
+        sessions_root, db_path or index.db_path
+    ).list_running_sessions()
     if running and not force:
         ids = ", ".join(str(row.get("session_id", "?")) for row in running)
         raise ValueError(

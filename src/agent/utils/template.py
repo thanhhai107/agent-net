@@ -1,53 +1,32 @@
 """Shared prompt templates for domain agents and evaluation."""
 
-DISCRIMINATING_EVIDENCE_PROMPT = """\
-Discriminating evidence policy:
-- Use prior memory, learned skills, tool documentation, and historical patterns to choose checks, but never as evidence.
-- Base every conclusion on observations collected in this run.
-- A broad symptom or reachability failure can support anomaly detection, but localization and root cause require more specific discriminating evidence.
-- Prefer checks that distinguish between competing hypotheses instead of repeating broad health checks.
-- Do not name a faulty device or root cause solely because it is plausible, common, or suggested by prior runs.
-- If evidence is incomplete, contradictory, or only supports detection, state the uncertainty explicitly instead of guessing.\
-"""
+from textwrap import dedent
 
-EVIDENCE_CONTRACT_PROMPT = f"""\
-Evidence contract:
-- Treat memory, Skill-Pro skills, DRAFT tool documentation, and learned patterns from prior runs as guidance only; they are not evidence.
-- Every final diagnosis must separate current tool observations from learned guidance.
-- Confirm anomaly status only from current tool observations. Do not infer anomaly solely from the task wording, memory, DRAFT suggestions, or a plausible prior pattern.
-- Name a faulty device or root cause only when current observations support it directly. If evidence is missing or contradictory, state that the result is inconclusive instead of filling in a guess.
-- Before finalizing, check that detection, localization, and root cause are each supported by concrete observations from this run.\
-
-{DISCRIMINATING_EVIDENCE_PROMPT}\
-"""
-
-OVERALL_DIAGNOSIS_PROMPT = f"""\
+OVERALL_DIAGNOSIS_PROMPT = """\
 You are a network troubleshooting expert.
-Your task is to diagnose the current network state by using the provided MCP tools.
+Focus on (1) detecting if there is an anomaly, (2) localizing the faulty devices, and (3) identifying the root cause.
 
-Goals:
-1. Determine whether an anomaly is present.
-2. If an anomaly is present, localize the faulty device, component, link, service, route, policy, or path segment.
-3. Identify the most likely root cause only when supported by current observations.
-
-Rules:
+Basic requirements:
 - Use the provided MCP tools to gather necessary information.
 - Do not provide mitigation unless explicitly required.
-- Rely only on the MCP tools available to you; do not execute arbitrary shell commands.
-- Stop calling tools once current observations directly support anomaly status,
-  faulty device localization, and root cause. Do not exhaust unrelated tools
-  after the primary incident is isolated.
-- If evidence is incomplete, contradictory, or only supports detection, state the uncertainty explicitly instead of guessing.
-
-Final report format:
-- Anomaly status: present, absent, or inconclusive.
-- Faulty device or component: list only supported items, or empty/inconclusive.
-- Root cause: state only if supported, otherwise inconclusive.
-- Supporting observations: cite the concrete tool outputs used.
-- Remaining uncertainty: mention missing or contradictory evidence, if any.
-
-{EVIDENCE_CONTRACT_PROMPT}\
+- Rely only on the MCP tools available to you; do not execute arbitrary shell commands.\
 """
+
+SKILLS_PROMPT_SUFFIX = dedent("""\
+    ## Skills
+    Project skills are available for structured troubleshooting workflows.
+    - Claude Code agents: read `CLAUDE.md`, then invoke `Skill(skill="nika-test-skill")` at the start of every session and follow its marker-first workflow.
+    - Codex agents: invoke `$nika-test-skill` at the start of every session and follow its marker-first workflow.
+    Always invoke this skill first; do not skip it.\
+""").strip()
+
+SUBMIT_PROMPT_TEMPLATE = dedent("""\
+    You are an expert network engineer.
+    Your task is to submit the final solution for this network problem based on the diagnosis report provided.
+    Carefully review the diagnosis results and ensure that your submission is accurate and complete.
+    You must strictly follow the submission format and call the submit() MCP tool to submit your solution.
+    Rely only on the MCP tools available to you; do not execute arbitrary shell commands.\
+""").strip()
 
 LLM_JUDGE_PROMPT_TEMPLATE = """
 You are an expert networking engineer acting as a judge.  

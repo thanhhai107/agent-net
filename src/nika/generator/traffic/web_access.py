@@ -1,9 +1,11 @@
 import asyncio
-import logging
 import random
 from typing import Iterable, Optional
 
 from nika.net_env.base import NetworkEnvBase
+from nika.net_env.kathara.intradomain_routing.ospf_enterprise.lab_static import (
+    OSPFEnterpriseStatic,
+)
 from nika.net_env.net_env_pool import get_net_env_instance
 from nika.service.kathara import KatharaAPIALL
 
@@ -11,7 +13,7 @@ from nika.service.kathara import KatharaAPIALL
 class WebBrowsingTrafficGenerator:
     def __init__(
         self,
-        scenario_name: NetworkEnvBase | str = "ospf_enterprise_static",
+        scenario_name: NetworkEnvBase = OSPFEnterpriseStatic(),
         request_delay_range: tuple[float, float] = (1.0, 5.0),
         pages_per_session_range: tuple[int, int] = (3, 10),
         loop_forever: bool = True,
@@ -88,20 +90,3 @@ class WebBrowsingTrafficGenerator:
     def stop_traffic(self):
         if self._traffic_task and not self._traffic_task.done():
             self._traffic_task.cancel()
-
-
-async def main():
-    traffic_generator = WebBrowsingTrafficGenerator()
-
-    traffic_task = asyncio.create_task(traffic_generator.generate_traffic())
-    try:
-        while True:
-            await asyncio.sleep(1)
-    except KeyboardInterrupt:
-        traffic_task.cancel()
-        await traffic_task
-
-
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    asyncio.run(main())

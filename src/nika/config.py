@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -11,12 +12,29 @@ load_dotenv(_REPO_ROOT / ".env")
 
 RUNTIME_DIR = _REPO_ROOT / "runtime"
 SESSIONS_DIR = RUNTIME_DIR / "sessions"
-MEMORY_DIR = RUNTIME_DIR / "memory"
 SESSIONS_DB = RUNTIME_DIR / "sessions.db"
 RESULTS_DIR = _REPO_ROOT / "results"
 BENCHMARK_DIR = _REPO_ROOT / "benchmark"
 MCP_SERVER_DIR = _PKG_DIR / "service" / "mcp_server"
-TOOL_EVOLUTION_DIR = RUNTIME_DIR / "tool_evolution"
+
+ENV_RESULT_DIR = "NIKA_RESULT_DIR"
+
+
+def resolve_results_root(result_dir: str | Path | None = None) -> Path:
+    """Return the directory under which session folders are created.
+
+    Precedence: explicit *result_dir* (CLI) → ``NIKA_RESULT_DIR`` in ``.env`` → ``RESULTS_DIR``.
+    Relative paths resolve from the repository root.
+    """
+    raw = (str(result_dir).strip() if result_dir is not None else "") or os.environ.get(
+        ENV_RESULT_DIR, ""
+    ).strip()
+    if not raw:
+        return RESULTS_DIR
+    path = Path(raw)
+    if not path.is_absolute():
+        path = _REPO_ROOT / path
+    return path.resolve()
 
 
 def pkg_path(*parts: str) -> Path:

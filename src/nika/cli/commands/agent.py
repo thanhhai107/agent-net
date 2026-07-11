@@ -2,181 +2,159 @@
 
 import typer
 
-from agent.composition import (
-    AgentRunConfig,
-    MemoryConfig,
-    ToolEvolutionConfig,
+from agent.local_cli.codex_cli.codex_worker import REASONING_EFFORT_LEVELS
+from agent.sandbox.config import (
+    ENV_AGENT_SANDBOX,
+    ENV_SANDBOX_CPUS,
+    ENV_SANDBOX_ENV_FILE,
+    ENV_SANDBOX_IMAGE,
+    ENV_SANDBOX_KEEP,
+    ENV_SANDBOX_MEMORY,
+    ENV_SANDBOX_NETWORK,
 )
-from agent.llm.model_factory import (
-    DEFAULT_LLM_BACKEND,
-    DEFAULT_MODEL,
+from nika.utils.agent_config import (
+    ENV_AGENT_TYPE,
+    ENV_CODEX_REASONING_EFFORT,
+    ENV_LLM_PROVIDER,
+    ENV_MAX_STEPS,
+    ENV_MODEL,
 )
-from nika.utils.agent_config import resolve_max_steps
 
 SUPPORTED_AGENT_TYPES = (
-    "react",
-    "plan-execute",
-    "reflexion",
-    "mock",
+    "byo.langgraph",
+    "byo.mcp_agent",
+    "byo.autogen",
+    "local_cli.codex_cli",
+    "local_cli.claude_cli",
+    "community.sade",
+    "sdk.claude_sdk",
+    "sdk.codex_sdk",
 )
-SUPPORTED_LLM_BACKENDS = ("openai", "ollama", "deepseek", "custom")
+SUPPORTED_LLM_PROVIDERS = ("openai", "ollama", "deepseek", "custom")
 
 agent_app = typer.Typer(help="Troubleshooting agents.")
 
 
 @agent_app.command("list")
 def agent_list() -> None:
-    """Print supported agent types and LLM backends."""
+    """Print supported agent types and LLM providers."""
     typer.echo("agent_types:")
     for agent_type in SUPPORTED_AGENT_TYPES:
         typer.echo(f"  {agent_type}")
-    typer.echo("llm_backends:")
-    for backend in SUPPORTED_LLM_BACKENDS:
-        typer.echo(f"  {backend}")
+    typer.echo("llm_providers (byo.langgraph only):")
+    for provider in SUPPORTED_LLM_PROVIDERS:
+        typer.echo(f"  {provider}")
+    typer.echo("reasoning_effort (local_cli.codex_cli, sdk.codex_sdk):")
+    for level in REASONING_EFFORT_LEVELS:
+        typer.echo(f"  {level}")
 
 
 @agent_app.command("run")
 def agent_run(
-    agent_type: str = typer.Option(
-        "react", "-a", "--agent", help="Agent implementation."
+    agent_type: str | None = typer.Option(
+        None,
+        "-a",
+        "--agent",
+        envvar=ENV_AGENT_TYPE,
+        help="Agent implementation (required unless NIKA_AGENT_TYPE is in .env).",
     ),
-    llm_backend: str = typer.Option(
-        DEFAULT_LLM_BACKEND,
-        "-b",
-        "--backend",
-        help="LLM provider (openai, ollama, deepseek, custom).",
+    llm_provider: str | None = typer.Option(
+        None,
+        "-p",
+        "--provider",
+        envvar=ENV_LLM_PROVIDER,
+        help="LLM provider for byo.langgraph only: openai, ollama, deepseek, custom.",
     ),
     model: str | None = typer.Option(
-        None, "-m", "--model", help="Model id for the chosen backend."
+        None,
+        "-m",
+        "--model",
+        envvar=ENV_MODEL,
+        help="Model id (required unless agent-specific NIKA_*_MODEL or NIKA_MODEL is in .env).",
     ),
     max_steps: int | None = typer.Option(
         None,
         "-n",
         "--max-steps",
-        help=(
-            "Per-worker step limit for LangGraph agents; also the maximum "
-            "executed plan items for plan-execute. Defaults to NIKA_MAX_STEPS."
-        ),
+        envvar=ENV_MAX_STEPS,
+        help="Max steps per phase (required unless NIKA_MAX_STEPS is in .env; byo.langgraph, byo.mcp_agent, byo.autogen, community.sade, sdk.claude_sdk).",
     ),
-    max_attempts: int = typer.Option(
-        3,
-        "-r",
-        "--max-attempts",
-        min=1,
-        help="Maximum attempts for the reflexion agent; ignored by other agents.",
+    reasoning_effort: str | None = typer.Option(
+        None,
+        "-e",
+        "--reasoning-effort",
+        envvar=ENV_CODEX_REASONING_EFFORT,
+        help="Codex model_reasoning_effort (local_cli.codex_cli, sdk.codex_sdk): none, minimal, low, medium, high, xhigh.",
     ),
     session_id: str | None = typer.Option(
-        None, "--session-id", help="Target session id (lab_hash)."
+        None, "--session_id", help="Target session id."
     ),
-    tools: str | None = typer.Option(
+    sandbox: bool = typer.Option(
+        False,
+        "--sandbox",
+        envvar=ENV_AGENT_SANDBOX,
+        help="Run the agent inside the Docker sandbox container.",
+    ),
+    sandbox_image: str | None = typer.Option(
         None,
-        "--tools",
-        help="Enable DRAFT Tool Evolution with this documentation library id.",
+        "--sandbox-image",
+        envvar=ENV_SANDBOX_IMAGE,
+        help="Docker image for sandbox execution (default: nika/agent-sandbox:latest).",
     ),
-    tool_doc_chars: int = typer.Option(
-        500,
-        "--tool-doc-chars",
-        min=100,
-        help="Maximum DRAFT refined-doc characters appended to each tool.",
-    ),
-    tool_convergence_threshold: float = typer.Option(
-        0.75,
-        "--tool-convergence-threshold",
-        min=0.0,
-        max=1.0,
-        help="DRAFT documentation convergence threshold for freezing docs.",
-    ),
-    memory: str | None = typer.Option(
+    sandbox_env_file: str | None = typer.Option(
         None,
-        "--memory",
-        help="Enable evolving memory with this bank id.",
+        "--sandbox-env-file",
+        envvar=ENV_SANDBOX_ENV_FILE,
+        help="Env file for whitelisted credential injection into the sandbox.",
     ),
-    memory_read: str | None = typer.Option(
+    sandbox_keep_container: bool = typer.Option(
+        False,
+        "--sandbox-keep-container",
+        envvar=ENV_SANDBOX_KEEP,
+        help="Do not remove the sandbox container after the agent exits.",
+    ),
+    sandbox_cpus: str | None = typer.Option(
         None,
-        "--memory-read",
-        help="Read this memory bank without updating it.",
+        "--sandbox-cpus",
+        envvar=ENV_SANDBOX_CPUS,
+        help="CPU limit for the sandbox container (docker --cpus).",
     ),
-    memory_k: int = typer.Option(
-        5,
-        "--memory-k",
-        min=1,
-        max=20,
-        help="Maximum memories injected into one diagnosis.",
+    sandbox_memory: str | None = typer.Option(
+        None,
+        "--sandbox-memory",
+        envvar=ENV_SANDBOX_MEMORY,
+        help="Memory limit for the sandbox container (docker --memory).",
     ),
-    memory_tokens: int = typer.Option(
-        1500,
-        "--memory-tokens",
-        min=100,
-        help="Maximum estimated tokens used by retrieved memory.",
-    ),
-    memory_max_skill_age: int = typer.Option(
-        4,
-        "--memory-max-skill-age",
-        min=1,
-        help="Maximum tool transitions controlled by one active Skill-Pro option.",
-    ),
-    memory_pool_size: int = typer.Option(
-        32,
-        "--memory-pool-size",
-        min=1,
-        help="Maximum active Skill-Pro skill pool size.",
-    ),
-    memory_evolution_threshold: int = typer.Option(
-        3,
-        "--memory-evolution-threshold",
-        min=1,
-        help="Minimum replay samples before Skill-Pro refinement/retirement decisions.",
-    ),
-    memory_best_of_n: int = typer.Option(
-        3,
-        "--memory-best-of-n",
-        min=1,
-        help="Number of candidate Skill-Pro procedures proposed per episode.",
-    ),
-    memory_ppo_epsilon: float = typer.Option(
-        0.2,
-        "--memory-ppo-epsilon",
-        min=0.0,
-        help="PPO-style clipping epsilon for Skill-Pro evolution gate.",
+    sandbox_network: str | None = typer.Option(
+        None,
+        "--sandbox-network",
+        envvar=ENV_SANDBOX_NETWORK,
+        help="Docker network mode for sandbox (bridge or host; use host with Clash TUN).",
     ),
 ) -> None:
     """Run the agent on the current session task."""
     from nika.workflows.agent.run import start_agent
 
-    if memory is not None and memory_read is not None:
-        raise typer.BadParameter("Use either --memory or --memory-read, not both.")
-    memory_mode = "evolve" if memory is not None else "read" if memory_read else "off"
-    memory_bank = memory or memory_read or "default"
-    resolved_max_steps = resolve_max_steps(max_steps)
+    if reasoning_effort is not None and reasoning_effort not in REASONING_EFFORT_LEVELS:
+        raise typer.BadParameter(
+            f"reasoning_effort must be one of {', '.join(REASONING_EFFORT_LEVELS)}"
+        )
 
     try:
         start_agent(
-            AgentRunConfig(
-                agent_type=agent_type,
-                llm_backend=llm_backend,
-                model=model or DEFAULT_MODEL,
-                max_steps=resolved_max_steps,
-                max_attempts=max_attempts,
-                tool_evolution=ToolEvolutionConfig(
-                    enabled=tools is not None,
-                    library_id=tools or "default",
-                    tool_doc_chars=tool_doc_chars,
-                    convergence_threshold=tool_convergence_threshold,
-                ),
-                memory=MemoryConfig(
-                    mode=memory_mode,
-                    bank=memory_bank,
-                    top_k=memory_k,
-                    token_budget=memory_tokens,
-                    max_skill_age=memory_max_skill_age,
-                    pool_size=memory_pool_size,
-                    evolution_threshold=memory_evolution_threshold,
-                    best_of_n=memory_best_of_n,
-                    ppo_epsilon=memory_ppo_epsilon,
-                ),
-            ),
+            agent_type,
+            llm_provider,
+            model,
+            max_steps,
             session_id=session_id,
-            requested_model=model,
+            reasoning_effort=reasoning_effort,
+            sandbox=sandbox,
+            sandbox_image=sandbox_image,
+            sandbox_env_file=sandbox_env_file,
+            sandbox_keep_container=sandbox_keep_container,
+            sandbox_cpus=sandbox_cpus,
+            sandbox_memory=sandbox_memory,
+            sandbox_network=sandbox_network,
         )
     except (FileNotFoundError, ValueError) as exc:
         raise typer.BadParameter(str(exc)) from exc

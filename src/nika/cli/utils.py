@@ -51,8 +51,7 @@ def fmt_table(headers: list[str], rows: list[list[str]]) -> str:
         widths = [len(h) for h in headers]
     else:
         widths = [
-            max(len(h), max(len(r[i]) for r in rows))
-            for i, h in enumerate(headers)
+            max(len(h), max(len(r[i]) for r in rows)) for i, h in enumerate(headers)
         ]
     sep = "  ".join("-" * w for w in widths)
     header_line = "  ".join(h.ljust(w) for h, w in zip(headers, widths))

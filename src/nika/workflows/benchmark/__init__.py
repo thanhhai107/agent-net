@@ -3,7 +3,7 @@
 from nika.workflows.benchmark.run import (
     default_benchmark_yaml_path,
     run_benchmark_from_yaml,
-    run_single_benchmark,
+    run_single_case,
 )
 
-__all__ = ["default_benchmark_yaml_path", "run_benchmark_from_yaml", "run_single_benchmark"]
+__all__ = ["default_benchmark_yaml_path", "run_benchmark_from_yaml", "run_single_case"]

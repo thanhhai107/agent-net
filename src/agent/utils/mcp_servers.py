@@ -1,39 +1,55 @@
-import sys
+"""Build HTTP MCP client configs for NIKA troubleshooting agents."""
 
-from nika.config import MCP_SERVER_DIR
+from __future__ import annotations
 
-# Keyword sets that trigger inclusion of each optional Kathara MCP server.
-_FRR_KEYWORDS = frozenset({"bgp", "ospf", "rip", "frr", "routing"})
-_BMV2_KEYWORDS = frozenset({"p4", "bmv2", "sdn", "bloom", "mpls", "int", "counter"})
-_TELEMETRY_KEYWORDS = frozenset({"telemetry", "influx", "int"})
+import os
+
+from nika.service.mcp_gateway.lifecycle import ENV_GATEWAY_AGENT_URL, ENV_GATEWAY_URL
+from nika.service.mcp_server.registry import (
+    MCP_SERVER_SPECS,
+    SUBMISSION_SERVER,
+    select_diagnosis_servers,
+)
+
+__all__ = [
+    "MCPServerConfig",
+    "select_diagnosis_servers",
+    "select_session_servers",
+    "session_http_headers",
+]
+
+SESSION_HEADER = "NIKA-Session-Id"
 
 
-def select_diagnosis_servers(
+def session_http_headers(session_id: str) -> dict[str, str]:
+    return {SESSION_HEADER: session_id}
+
+
+def _gateway_base_url() -> str:
+    if os.environ.get("NIKA_SANDBOX_EXECUTION") == "1":
+        agent_base = os.environ.get(ENV_GATEWAY_AGENT_URL, "").strip().rstrip("/")
+        if agent_base:
+            return agent_base
+    base = os.environ.get(ENV_GATEWAY_URL, "").strip().rstrip("/")
+    if not base:
+        raise RuntimeError(
+            f"{ENV_GATEWAY_URL} is not set. Start the MCP gateway before building HTTP config."
+        )
+    return base
+
+
+def select_session_servers(
     scenario_name: str,
+    *,
+    backend: str | None = None,
 ) -> list[str]:
-    """Return the minimal public Kathara MCP server set needed for *scenario*.
-
-    ``kathara_base_mcp_server`` is always included.  The three specialised
-    servers are added only when keyword signals appear in the public scenario
-    name (tokens are split on ``_`` and ``-``). Hidden injected problem labels
-    are deliberately ignored so evaluation remains fair.
-
-    Parameters
-    ----------
-    scenario_name:
-        E.g. ``"dc_clos_bgp"`` or ``"p4_counter"``.
-    """
-    combined = scenario_name.lower()
-    tokens = set(combined.replace("_", " ").replace("-", " ").split())
-
-    servers = ["kathara_base_mcp_server"]
-    clos_service_routing = "clos" in tokens and "sdn" not in tokens
-    if tokens & _FRR_KEYWORDS or clos_service_routing:
-        servers.append("kathara_frr_mcp_server")
-    if tokens & _BMV2_KEYWORDS:
-        servers.append("kathara_bmv2_mcp_server")
-    if tokens & _TELEMETRY_KEYWORDS:
-        servers.append("kathara_telemetry_mcp_server")
+    """Return all MCP server names for a troubleshooting session."""
+    servers = select_diagnosis_servers(
+        scenario_name,
+        backend=backend,
+    )
+    if SUBMISSION_SERVER not in servers:
+        servers.append(SUBMISSION_SERVER)
     return servers
 
 
@@ -41,58 +57,45 @@ class MCPServerConfig:
     def __init__(self, session_id: str):
         if not session_id:
             raise ValueError("session_id is required to start MCP servers.")
-        self.mcp_server_dir = str(MCP_SERVER_DIR)
         self.session_id = session_id
 
-    def _server_env(self, **extra: str) -> dict[str, str]:
+    def _build_http_entry(self, name: str) -> dict:
+        if name not in MCP_SERVER_SPECS:
+            raise KeyError(f"Unknown MCP server: {name!r}")
+        base = _gateway_base_url()
         return {
-            "NIKA_SESSION_ID": self.session_id,
-            **extra,
+            "transport": "http",
+            "url": f"{base}/mcp/{name}/mcp",
+            "headers": session_http_headers(self.session_id),
         }
 
+    def load_http_config(self, server_names: list[str]) -> dict:
+        """Return HTTP MCP client config for *server_names*."""
+        return {
+            name: self._build_http_entry(name)
+            for name in server_names
+            if name in MCP_SERVER_SPECS
+        }
+
+    def load_session_http_config(
+        self,
+        scenario_name: str,
+        *,
+        backend: str | None = None,
+    ) -> dict:
+        """Return HTTP MCP config for all servers needed by the session."""
+        server_names = select_session_servers(
+            scenario_name,
+            backend=backend,
+        )
+        return self.load_http_config(server_names)
+
+    # Backward-compatible aliases used in tests and docs during migration.
     def load_config(self, if_submit: bool = False) -> dict:
         if if_submit:
-            config = {
-                "task_mcp_server": {
-                    "command": sys.executable,
-                    "args": [f"{self.mcp_server_dir}/task_mcp_server.py"],
-                    "transport": "stdio",
-                },
-            }
-        else:
-            config = {
-                "kathara_base_mcp_server": {
-                    "command": sys.executable,
-                    "args": [f"{self.mcp_server_dir}/kathara_base_mcp_server.py"],
-                    "transport": "stdio",
-                },
-                "kathara_frr_mcp_server": {
-                    "command": sys.executable,
-                    "args": [f"{self.mcp_server_dir}/kathara_frr_mcp_server.py"],
-                    "transport": "stdio",
-                },
-                "kathara_bmv2_mcp_server": {
-                    "command": sys.executable,
-                    "args": [f"{self.mcp_server_dir}/kathara_bmv2_mcp_server.py"],
-                    "transport": "stdio",
-                },
-                "kathara_telemetry_mcp_server": {
-                    "command": sys.executable,
-                    "args": [f"{self.mcp_server_dir}/kathara_telemetry_mcp_server.py"],
-                    "transport": "stdio",
-                },
-            }
-
-        for server in config.values():
-            server["env"] = self._server_env()
-        return config
+            return self.load_http_config([SUBMISSION_SERVER])
+        names = [n for n, spec in MCP_SERVER_SPECS.items() if spec.role != "task"]
+        return self.load_http_config(names)
 
     def load_filtered_config(self, server_names: list[str]) -> dict:
-        """Diagnosis config restricted to *server_names*.
-
-        Useful when only a subset of Kathara MCP servers is relevant for a
-        given scenario (e.g. skip bmv2 tools for a pure routing problem).
-        Unknown names in *server_names* are silently ignored.
-        """
-        full = self.load_config(if_submit=False)
-        return {k: v for k, v in full.items() if k in server_names}
+        return self.load_http_config(server_names)

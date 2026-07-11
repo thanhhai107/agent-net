@@ -4,20 +4,20 @@ import random
 import re
 import time
 from collections import defaultdict
-from typing import Any, Dict, Literal, Optional, Protocol, runtime_checkable
+from typing import Dict, Literal, Optional, Protocol, runtime_checkable
 
 from func_timeout import func_timeout
 from func_timeout.exceptions import FunctionTimedOut
 from Kathara.exceptions import MachineNotFoundError
 from Kathara.manager.docker.stats.DockerLinkStats import DockerLinkStats
-from Kathara.manager.Kathara import Kathara
+from Kathara.manager.Kathara import Kathara, Lab
 from Kathara.model.Machine import Machine
 
 
 @runtime_checkable
 class _SupportsBase(Protocol):
     instance: "Kathara"
-    lab: Any
+    lab: "Lab"
 
     def _run_cmd(self, host_name: str, command: str) -> str: ...
 
@@ -176,7 +176,9 @@ class KatharaBaseAPI:
             return result.strip()
         return None
 
-    def get_host_ip(self, host_name: str, iface: str = "eth0", with_prefix: bool = False) -> str | None:
+    def get_host_ip(
+        self, host_name: str, iface: str = "eth0", with_prefix: bool = False
+    ) -> str | None:
         """
         Get the IPv4 address of a host via `ip -j addr`.
         Prefer the given interface (default: eth0).
@@ -186,31 +188,19 @@ class KatharaBaseAPI:
         :param with_prefix: if True, return "ip/prefix" (e.g. 192.168.1.10/24)
                             if False, return only "ip" (e.g. 192.168.1.10)
         """
-        import time
 
         cmd = "ip -j addr"
-        last_error = None
-        output = ""
+        result = self.exec_cmd(host_name, cmd)
 
-        for attempt in range(3):
-            result = self.exec_cmd(host_name, cmd, timeout=30)
-
-            if isinstance(result, list):
-                output = "\n".join(result)
-            else:
-                output = result
-
-            try:
-                ifaces = json.loads(output)
-                break
-            except json.JSONDecodeError as e:
-                last_error = e
-                time.sleep(2)
+        if isinstance(result, list):
+            output = "\n".join(result)
         else:
-            raise RuntimeError(
-                f"Failed to parse `ip -j addr` output for host '{host_name}' after 3 attempts. "
-                f"Error: {last_error}. Command output was: {output!r}"
-            ) from last_error
+            output = result
+
+        try:
+            ifaces = json.loads(output)
+        except json.JSONDecodeError as e:
+            raise RuntimeError(f"Failed to parse `ip -j addr` output: {e}") from e
 
         def format_ip(ip: str, prefix: Optional[int]) -> str:
             if with_prefix and prefix is not None:
@@ -240,7 +230,9 @@ class KatharaBaseAPI:
 
         return None
 
-    def get_host_interfaces(self, host_name: str, include_loopback: bool = False) -> list[str]:
+    def get_host_interfaces(
+        self, host_name: str, include_loopback: bool = False
+    ) -> list[str]:
         cmd = "ip -j addr"
         result = self.exec_cmd(host_name, cmd)
         output = "\n".join(result) if isinstance(result, list) else result
@@ -271,7 +263,10 @@ class KatharaBaseAPI:
         result = {}
         for _, link in links.items():
             if link.name:
-                result[link.name] = (link.containers[0].labels["name"], link.containers[1].labels["name"])
+                result[link.name] = (
+                    link.containers[0].labels["name"],
+                    link.containers[1].labels["name"],
+                )
         return result
 
     async def exec_cmd_async(self, host_name: str, command: str) -> str:
@@ -281,17 +276,26 @@ class KatharaBaseAPI:
         loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, self.exec_cmd, host_name, command)
 
-    def _run_cmd(self, host_name: str, command: str, max_chars: int = 262144) -> str:
+    def _run_cmd(self, host_name: str, command: str, max_chars: int = 4000) -> str:
         """
         Run a command on a machine and return its output as a string,
         decoding bytes and filtering out None/empty/zeros.
         """
         try:
             output_generator = self.instance.exec(
-                machine_name=host_name, command=command, lab_name=self.lab.name, stream=False
+                machine_name=host_name,
+                command=command,
+                lab_name=self.lab.name,
+                stream=False,
             )
             for item in output_generator:
-                if not item or item == b"" or isinstance(item, int) or item is None or item == "None":
+                if (
+                    not item
+                    or item == b""
+                    or isinstance(item, int)
+                    or item is None
+                    or item == "None"
+                ):
                     continue
 
                 if isinstance(item, bytes):
@@ -302,7 +306,10 @@ class KatharaBaseAPI:
                     out = str(item).strip()
 
                 if len(out) > max_chars:
-                    return out[:max_chars] + f"...[truncated, {len(out) - max_chars} chars omitted]"
+                    return (
+                        out[:max_chars]
+                        + f"...[truncated, {len(out) - max_chars} chars omitted]"
+                    )
 
                 return out
 
@@ -493,7 +500,9 @@ class KatharaBaseAPI:
 
         return json.dumps(payload, separators=(",", ":"))
 
-    def ping_pair(self, host_a: str, host_b: str, count: int = 4, args: str = "") -> str:
+    def ping_pair(
+        self, host_a: str, host_b: str, count: int = 4, args: str = ""
+    ) -> str:
         """
         Ping from one host to another in the lab.
         """
@@ -529,14 +538,18 @@ class KatharaBaseAPI:
         self.exec_cmd(server_host_name, f"iperf3 -s -D {server_args}")
         # Run iperf client
         result = self.exec_cmd(
-            client_host_name, f"iperf3 -c {self.get_host_ip(server_host_name)} -t {duration} {client_args}"
+            client_host_name,
+            f"iperf3 -c {self.get_host_ip(server_host_name)} -t {duration} {client_args}",
         )
         # Stop iperf server
         self.exec_cmd(server_host_name, "pkill iperf3")
         return result
 
     def systemctl_ops(
-        self, host_name: str, service_name: str, operation: Literal["start", "stop", "restart", "status"]
+        self,
+        host_name: str,
+        service_name: str,
+        operation: Literal["start", "stop", "restart", "status"],
     ) -> str:
         """
         Perform systemctl operations (start, stop, restart, status) on a host.

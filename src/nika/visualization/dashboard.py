@@ -13,7 +13,7 @@ import importlib
 import nika.visualization.data
 importlib.reload(nika.visualization.data)
 
-from nika.visualization.data import (
+from nika.visualization.data import (  # noqa: E402
     discover_sessions,
     fault_endpoints,
     faulty_devices,
@@ -21,7 +21,7 @@ from nika.visualization.data import (
     parse_topology,
     replay_steps,
 )
-from nika.visualization.topology import render_topology_svg
+from nika.visualization.topology import render_topology_svg  # noqa: E402
 
 
 st.set_page_config(
@@ -452,7 +452,6 @@ def _render_dashboard() -> None:
     bundle = load_session_bundle(selected_id)
     meta = bundle.meta
     metrics = bundle.metrics or meta.get("eval_metrics", {})
-    status = str(meta.get("status") or "unknown")
     problems = meta.get("problem_names") or []
     pairs = parse_topology(meta)
     nodes = {endpoint.split(":", 1)[0] for pair in pairs for endpoint in pair}

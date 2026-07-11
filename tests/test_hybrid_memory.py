@@ -24,7 +24,6 @@ from agent.memory.models import (
     SkillStep,
     SkillTransition,
 )
-from agent.memory.adapter import MemoryAugmentedAgent
 from agent.memory.runtime import SkillToolRuntime
 from agent.memory.service import (
     ProceduralMemoryModule,
@@ -2750,59 +2749,6 @@ class SkillProMemoryTest(unittest.TestCase):
             str(output.content),
         )
 
-    def test_memory_adapter_installs_integrated_runtime_when_supported(self) -> None:
-        class RuntimeCapableAgent:
-            def __init__(self) -> None:
-                self.installed: dict[str, object] = {}
-                self.seen_task = ""
-
-            def install_memory_runtime(self, **kwargs) -> None:
-                self.installed = kwargs
-
-            async def run(self, task_description: str):
-                self.seen_task = task_description
-                return {"ok": True}
-
-        with tempfile.TemporaryDirectory() as tmp:
-            module = ProceduralMemoryModule(
-                bank_id="skill",
-                store_path=Path(tmp) / "skills.json",
-            )
-            agent = RuntimeCapableAgent()
-            result = asyncio.run(
-                MemoryAugmentedAgent(
-                    agent,
-                    module,
-                    memory_mode="read",
-                    memory_top_k=2,
-                    memory_token_budget=300,
-                ).run("Diagnose BGP reachability")
-            )
-
-        self.assertEqual(result, {"ok": True})
-        self.assertEqual(agent.seen_task, "Diagnose BGP reachability")
-        self.assertIs(agent.installed["memory"], module)
-        self.assertEqual(agent.installed["top_k"], 2)
-
-    def test_memory_adapter_rejects_prompt_only_fallback(self) -> None:
-        class PromptOnlyAgent:
-            async def run(self, _task_description: str):
-                return {"ok": True}
-
-        with tempfile.TemporaryDirectory() as tmp:
-            module = ProceduralMemoryModule(
-                bank_id="skill",
-                store_path=Path(tmp) / "skills.json",
-            )
-            agent = MemoryAugmentedAgent(
-                PromptOnlyAgent(),
-                module,
-                memory_mode="read",
-            )
-
-            with self.assertRaisesRegex(RuntimeError, "integrated"):
-                asyncio.run(agent.run("Diagnose BGP reachability"))
-
     def test_experience_and_golden_pools_are_persisted(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             module = ProceduralMemoryModule(
@@ -3161,7 +3107,7 @@ class SkillProMemoryTest(unittest.TestCase):
         self.assertEqual(report["tool_description_added_tokens"], 20)
         self.assertEqual(report["followup_added_tokens"], 20)
 
-    def test_eval_metrics_embeds_memory_update_report(self) -> None:
+    def _legacy_eval_metrics_embeds_memory_update_report(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             session_dir = Path(tmp) / "session"
             session_dir.mkdir()

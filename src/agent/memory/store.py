@@ -7,7 +7,7 @@ import re
 import shutil
 from pathlib import Path
 
-from nika.config import MEMORY_DIR
+from agent.extensions.config import MEMORY_DIR
 
 from agent.memory.models import (
     EvaluationEvidence,

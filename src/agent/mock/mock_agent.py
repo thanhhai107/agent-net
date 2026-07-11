@@ -1,46 +1,34 @@
 """Mock LLM agent that simulates BasicReActAgent behaviour without a real LLM.
 
 The agent mirrors the two-phase architecture of BasicReActAgent:
-  1. diagnosis phase  – calls Kathara MCP tools and emits a deterministic report
+  1. diagnosis phase  – calls lab MCP tools and emits a deterministic report
   2. submission phase – calls list_avail_problems + submit via task MCP server
 
-It can be selected via ``nika agent run -a mock`` and is intended for integration
-tests and CI pipelines that must exercise the full session pipeline without
-standing up a real LLM endpoint.
+Test-only. See ``tests/README.md``.
 """
 
 import json
-import re
 from typing import Any
 
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
-from agent.utils.mcp_servers import MCPServerConfig
+from agent.utils.mcp_client import begin_submission_mcp_phase, load_session_mcp_config
+from agent.utils.mcp_servers import select_diagnosis_servers
 from agent.utils.phases import DIAGNOSIS, SUBMISSION
+from nika.runtime.factory import resolve_backend
 from nika.utils.session import Session
+from nika.utils.session_store import SessionStore
 
-_REPORT_DEVICE_RE = re.compile(
-    r"\b(?:"
-    r"pc[_-]?\d[A-Za-z0-9_.-]*|"
-    r"r\d[A-Za-z0-9_.-]*|"
-    r"router\d*[A-Za-z0-9_.-]*|"
-    r"host\d*[A-Za-z0-9_.-]*|"
-    r"server\d*[A-Za-z0-9_.-]*|"
-    r"switch\d*[A-Za-z0-9_.-]*"
-    r")\b",
-    re.I,
-)
-
-MOCK_DIAGNOSIS_TOOL_CALLS: list[tuple[str, dict[str, Any]]] = [
-    ("get_reachability", {}),
-    ("ping_pair", {"host_a": "pc1", "host_b": "pc2"}),
-    ("frr_show_ip_route", {"router_name": "r1"}),
-]
-
-MOCK_DIAGNOSIS_REPORT = (
+_KATHARA_DIAGNOSIS_REPORT = (
     "Anomaly detected: high packet loss between pc1 and pc2.  "
     "BGP routes on r1 show an unreachable prefix (10.0.1.0/24).  "
     "Suspected root cause: link failure on the path between r1 and pc2."
+)
+
+_CLAB_DIAGNOSIS_REPORT = (
+    "Anomaly detected: high packet loss between client1 and client2.  "
+    "BGP routes on leaf1 show an unreachable prefix (10.0.0.24/31).  "
+    "Suspected root cause: link failure on the path between leaf1 and spine."
 )
 
 
@@ -63,13 +51,37 @@ def _tool_text_list(result: object) -> list[str]:
     return texts
 
 
-def _devices_from_report(report: str) -> list[str]:
-    devices: list[str] = []
-    for token in _REPORT_DEVICE_RE.findall(report):
-        normalized = token.strip()
-        if normalized and normalized not in devices:
-            devices.append(normalized)
-    return devices[:4]
+def _mock_diagnosis_tool_calls(
+    backend: str, server_names: list[str]
+) -> list[tuple[str, dict[str, Any]]]:
+    calls: list[tuple[str, dict[str, Any]]] = [("get_reachability", {})]
+    if "pingmesh_mcp_server" in server_names:
+        calls.append(("run_pingmesh_snapshot", {}))
+    if backend == "containerlab":
+        calls.append(("ping_pair", {"host_a": "client1", "host_b": "client2"}))
+        if "containerlab_srl_mcp_server" in server_names:
+            calls.append(("srl_show_ip_route", {"device_name": "leaf1"}))
+        else:
+            calls.append(("exec_shell", {"host_name": "leaf1", "command": "hostname"}))
+    else:
+        calls.append(("ping_pair", {"host_a": "pc1", "host_b": "pc2"}))
+        if "kathara_frr_mcp_server" in server_names:
+            calls.append(("frr_show_ip_route", {"router_name": "r1"}))
+        else:
+            calls.append(("exec_shell", {"host_name": "pc1", "command": "hostname"}))
+    return calls
+
+
+def _mock_faulty_device(backend: str) -> str:
+    return "leaf1" if backend == "containerlab" else "pc1"
+
+
+def _mock_diagnosis_report(backend: str) -> str:
+    return (
+        _CLAB_DIAGNOSIS_REPORT
+        if backend == "containerlab"
+        else _KATHARA_DIAGNOSIS_REPORT
+    )
 
 
 class MockAgent:
@@ -78,8 +90,8 @@ class MockAgent:
     def __init__(
         self,
         session_id: str,
-        max_steps: int,
         model: str = "mock-v1",
+        max_steps: int = 20,
     ) -> None:
         self.session_id = session_id
         self.model = model
@@ -106,17 +118,21 @@ class MockAgent:
             },
         )
 
-        mcp_config = MCPServerConfig(session_id=self.session_id)
-        diagnosis_config = {
-            k: v
-            for k, v in mcp_config.load_config(if_submit=False).items()
-            if k in ("kathara_base_mcp_server", "kathara_frr_mcp_server")
-        }
+        session_row = SessionStore().get_session(self.session_id)
+        backend = resolve_backend(session_row)
+        scenario = str(session_row.get("scenario_name") or "")
+        server_names = select_diagnosis_servers(scenario, backend=backend)
 
-        client = MultiServerMCPClient(connections=diagnosis_config)
+        config = load_session_mcp_config(self.session_id, scenario, backend=backend)
+        client = MultiServerMCPClient(connections=config)
         tools = {tool.name: tool for tool in await client.get_tools()}
 
-        for tool_name, tool_input in MOCK_DIAGNOSIS_TOOL_CALLS:
+        tool_calls = _mock_diagnosis_tool_calls(backend, server_names)
+        diagnosis_report = _mock_diagnosis_report(backend)
+
+        for tool_name, tool_input in tool_calls:
+            if tool_name not in tools:
+                continue
             logger.log(
                 "tool_start",
                 {"tool": {"name": tool_name}, "input": json.dumps(tool_input)},
@@ -130,11 +146,16 @@ class MockAgent:
                 },
             )
 
-        logger.log("llm_end", {"text": MOCK_DIAGNOSIS_REPORT})
-        return MOCK_DIAGNOSIS_REPORT
+        logger.log("llm_end", {"text": diagnosis_report})
+        return diagnosis_report
 
     async def _run_submission(self, diagnosis_report: str) -> None:
         logger = self._make_logger(SUBMISSION)
+
+        session_row = SessionStore().get_session(self.session_id)
+        backend = resolve_backend(session_row)
+        faulty_device = _mock_faulty_device(backend)
+        scenario = str(session_row.get("scenario_name") or "")
 
         logger.log(
             "llm_start",
@@ -142,33 +163,39 @@ class MockAgent:
                 "messages": {
                     "role": "user",
                     "content": (
-                        f"Based on diagnosis: {diagnosis_report}. "
-                        "Please call list_avail_problems and then submit."
+                        f"Based on diagnosis: {diagnosis_report}. Please call list_avail_problems and then submit."
                     ),
                 },
                 "model": {"name": self.model},
             },
         )
 
-        config = MCPServerConfig(session_id=self.session_id).load_config(if_submit=True)
-
+        begin_submission_mcp_phase(self.session_id)
+        config = load_session_mcp_config(
+            self.session_id, scenario, backend=backend
+        )
         client = MultiServerMCPClient(connections=config)
         tools = {tool.name: tool for tool in await client.get_tools()}
 
-        logger.log("tool_start", {"tool": {"name": "list_avail_problems"}, "input": "{}"})
+        logger.log(
+            "tool_start", {"tool": {"name": "list_avail_problems"}, "input": "{}"}
+        )
         avail_raw = await tools["list_avail_problems"].ainvoke({})
         avail = _tool_text_list(avail_raw)
-        mock_root_cause = ""
+        session_root_cause = getattr(self.session, "root_cause_name", None)
+        if session_root_cause in avail:
+            mock_root_cause = session_root_cause
+        else:
+            mock_root_cause = avail[0] if avail else "link_down"
         logger.log(
             "tool_end",
             {"output": json.dumps(avail[:5]) + " ...", "output_type": "list"},
         )
 
-        faulty_devices = _devices_from_report(diagnosis_report)
         submission: dict[str, Any] = {
-            "is_anomaly": bool(faulty_devices),
-            "faulty_devices": faulty_devices,
-            "root_cause_name": [],
+            "is_anomaly": True,
+            "faulty_devices": [faulty_device],
+            "root_cause_name": [mock_root_cause],
         }
         logger.log(
             "tool_start",
@@ -184,8 +211,8 @@ class MockAgent:
             "llm_end",
             {
                 "text": (
-                    f"Submitted: root cause = {mock_root_cause or 'unspecified'}, "
-                    f"faulty devices = {faulty_devices}"
+                    f"Submitted: root cause = {mock_root_cause}, "
+                    f"faulty device = {faulty_device}"
                 )
             },
         )

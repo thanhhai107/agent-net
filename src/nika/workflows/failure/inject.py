@@ -1,18 +1,20 @@
 """Inject configured faults for the current session and write ground truth."""
 
-import json
-import random
+import time
 from datetime import datetime
 from enum import Enum
 from typing import Any
 
-from pydantic import ValidationError
-
-from nika.orchestrator.problems.prob_pool import get_problem_instance, list_avail_problem_names
-from nika.orchestrator.problems.problem_base import TaskLevel
-from nika.utils.logger import bind_session_dir, log_event
+from nika.problems.prob_pool import (
+    get_problem_instance,
+    list_avail_problem_names,
+)
+from nika.utils.logger import bind_session_dir, log_error_event, log_event
 from nika.utils.session import Session
 from nika.utils.session_store import SessionStore
+
+VERIFY_MAX_ATTEMPTS = 3
+VERIFY_RETRY_DELAY_SEC = 2
 
 
 def _json_safe(value: Any) -> Any:
@@ -42,69 +44,26 @@ def _extract_injection_params(problem: Any) -> dict[str, Any]:
         "southbound_port",
         "original_port",
         "mismatched_port",
+        "deleted_subnet",
     ):
         if hasattr(problem, attr):
             params[attr] = _json_safe(getattr(problem, attr))
     return params
 
 
-def _coerce_device_list(value: Any) -> list[str]:
-    if isinstance(value, list):
-        return [str(item) for item in value]
-    if isinstance(value, tuple):
-        return [str(item) for item in value]
-    if isinstance(value, set):
-        return [str(item) for item in value]
-    if isinstance(value, str):
-        return [value]
-    return []
-
-
-def _sync_problem_runtime_from_params(problem: Any, fault_params: Any) -> None:
-    """Keep runtime task metadata aligned with typed injection overrides.
-
-    Many problem classes choose ``faulty_devices`` randomly in ``__init__`` and
-    later allow typed params such as ``host_name`` to override the actual target
-    used for injection. If we do not mirror the resolved target back onto each
-    task object, ``ground_truth.json`` can describe the random default while the
-    lab state was mutated on the requested host.
-    """
-    if not hasattr(fault_params, "model_dump"):
-        return
-
-    params = fault_params.model_dump(exclude_none=True)
-    devices = _coerce_device_list(getattr(problem, "faulty_devices", []))
-    changed_devices = False
-    for field_name, index in (("host_name", 0), ("host_name_2", 1)):
-        value = params.get(field_name)
-        if not isinstance(value, str) or not value:
-            continue
-        while len(devices) <= index:
-            devices.append(value)
-        devices[index] = value
-        changed_devices = True
-    if changed_devices and hasattr(problem, "faulty_devices"):
-        problem.faulty_devices = devices
-
-    if "intf_name" in params:
-        if hasattr(problem, "faulty_intf"):
-            problem.faulty_intf = params["intf_name"]
-        if hasattr(problem, "intf_name"):
-            problem.intf_name = params["intf_name"]
-
-    for field_name in (
-        "service_name",
-        "attacker_device",
-        "target_host",
-        "target_website",
-        "target_domain",
-        "p4_name",
-        "southbound_port",
-        "original_port",
-        "mismatched_port",
-    ):
-        if field_name in params and hasattr(problem, field_name):
-            setattr(problem, field_name, _json_safe(params[field_name]))
+def _verify_with_retry(inject_problem: Any, fault_params: Any | None) -> dict[str, Any]:
+    """Run verify_fault with retries for transient container state."""
+    last_result: dict[str, Any] = {"verified": False}
+    for attempt in range(1, VERIFY_MAX_ATTEMPTS + 1):
+        if fault_params is not None:
+            last_result = inject_problem.verify_fault(params=fault_params)
+        else:
+            last_result = inject_problem.verify_fault()
+        if last_result.get("verified", False):
+            return last_result
+        if attempt < VERIFY_MAX_ATTEMPTS:
+            time.sleep(VERIFY_RETRY_DELAY_SEC)
+    return last_result
 
 
 def inject_failure(
@@ -118,7 +77,6 @@ def inject_failure(
     session.load_running_session(session_id=session_id)
     session.update_session("problem_names", problem_names)
 
-    # Bind per-session logging now that session_dir is set.
     bind_session_dir(session.session_dir)
 
     store = SessionStore()
@@ -127,41 +85,42 @@ def inject_failure(
         if problem_name not in list_avail_problem_names():
             raise ValueError(f"Unknown problem name: {problem_name}")
 
-    scenario_params = session.scenario_params if hasattr(session, "scenario_params") else {}
+    scenario_params = dict(
+        session.scenario_params if hasattr(session, "scenario_params") else {}
+    )
+    from nika.runtime.factory import resolve_backend
+
+    session_meta = {k: v for k, v in session.__dict__.items() if k != "store"}
+    scenario_params.setdefault("backend", resolve_backend(session_meta))
     overrides = dict(param_overrides or {})
     if overrides and len(problem_names) != 1:
-        raise ValueError("When using --set parameters, inject exactly one problem at a time.")
-
-    tot_tasks = []
-    fault_seed = str(getattr(session, "fault_seed", "") or "2026")
-    for task_level in TaskLevel:
-        random.seed(fault_seed)
-        problem = get_problem_instance(
-            problem_names=problem_names,
-            task_level=task_level,
-            scenario_name=session.scenario_name,
-            **scenario_params,
+        raise ValueError(
+            "When using --set parameters, inject exactly one problem at a time."
         )
-        tot_tasks.append(problem)
 
-    inject_meta = getattr(tot_tasks[0], "META", None)
-    if inject_meta is not None:
-        category = str(getattr(inject_meta, "root_cause_category", ""))
-        if category:
-            session.update_session("root_cause_category", category)
+    inject_problem = get_problem_instance(
+        problem_names=problem_names,
+        scenario_name=session.scenario_name,
+        **scenario_params,
+    )
+    if getattr(inject_problem, "root_cause_category", None):
+        session.update_session(
+            "root_cause_category", str(inject_problem.root_cause_category)
+        )
 
     failure_rows: list[tuple[int, str]] = []
-    inject_problem = tot_tasks[0]
     now_ts = datetime.now().timestamp()
     ParamsClass = getattr(type(inject_problem), "Params", None)
-    fault_params = None
-    if ParamsClass is not None:
-        try:
-            fault_params = ParamsClass(**overrides) if overrides else ParamsClass()
-        except ValidationError as exc:
-            raise ValueError(f"Invalid parameters for '{problem_names[0]}': {exc}") from exc
-        for problem in tot_tasks:
-            _sync_problem_runtime_from_params(problem, fault_params)
+    if hasattr(inject_problem, "resolve_params"):
+        fault_params = inject_problem.resolve_params(overrides)
+    elif ParamsClass is not None:
+        fault_params = ParamsClass(**overrides)
+    elif overrides:
+        raise ValueError(
+            f"Problem '{problem_names[0]}' does not accept --set parameters yet."
+        )
+    else:
+        fault_params = None
 
     if len(problem_names) > 1 and hasattr(inject_problem, "sub_faults"):
         sub_faults = list(getattr(inject_problem, "sub_faults"))
@@ -172,7 +131,7 @@ def inject_failure(
                     "session_id": session.session_id,
                     "problem_name": problem_name,
                     "root_cause_category": str(
-                        getattr(getattr(sub_problem, "META", None), "root_cause_category", "")
+                        getattr(sub_problem, "root_cause_category", "")
                     ),
                     "scenario_name": session.scenario_name,
                     "lab_name": session.lab_name,
@@ -196,7 +155,9 @@ def inject_failure(
             {
                 "session_id": session.session_id,
                 "problem_name": problem_names[0],
-                "root_cause_category": str(getattr(getattr(inject_problem, "META", None), "root_cause_category", "")),
+                "root_cause_category": str(
+                    getattr(inject_problem, "root_cause_category", "")
+                ),
                 "scenario_name": session.scenario_name,
                 "lab_name": session.lab_name,
                 "injection_params": params_snapshot,
@@ -207,16 +168,48 @@ def inject_failure(
         failure_rows.append((failure_id, problem_names[0]))
 
     if ParamsClass is not None:
-        inject_problem.inject_fault(params=fault_params)
+        try:
+            inject_problem.inject_fault(params=fault_params)
+        except Exception as exc:
+            for failure_id, problem_name in failure_rows:
+                store.update_failure_injection(
+                    session.session_id,
+                    failure_id,
+                    {"status": "inject_failed", "error": str(exc)},
+                )
+            log_error_event(
+                "failure_inject_error",
+                f"Failure injection failed: session={session.session_id}, problems={problem_names}: {exc}",
+                session_id=session.session_id,
+                problems=problem_names,
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            raise
     else:
-        inject_problem.inject_fault()
+        try:
+            inject_problem.inject_fault()
+        except Exception as exc:
+            for failure_id, problem_name in failure_rows:
+                store.update_failure_injection(
+                    session.session_id,
+                    failure_id,
+                    {"status": "inject_failed", "error": str(exc)},
+                )
+            log_error_event(
+                "failure_inject_error",
+                f"Failure injection failed: session={session.session_id}, problems={problem_names}: {exc}",
+                session_id=session.session_id,
+                problems=problem_names,
+                error=str(exc),
+                error_type=type(exc).__name__,
+            )
+            raise
 
     if not hasattr(inject_problem, "verify_fault"):
         raise RuntimeError(f"Problem {problem_names} does not implement verify_fault")
-    if fault_params is not None:
-        verify_result = inject_problem.verify_fault(params=fault_params)
-    else:
-        verify_result = inject_problem.verify_fault()
+
+    verify_result = _verify_with_retry(inject_problem, fault_params)
     verify_payload = _json_safe(verify_result)
     if not verify_result.get("verified", False):
         for failure_id, _problem_name in failure_rows:
@@ -225,7 +218,7 @@ def inject_failure(
                 failure_id,
                 {"status": "verify_failed", "verify_result": verify_payload},
             )
-        log_event(
+        log_error_event(
             "failure_verify_failed",
             f"Failure verification failed: session={session.session_id}, problems={problem_names}",
             session_id=session.session_id,
@@ -262,17 +255,11 @@ def inject_failure(
         session_id=session.session_id,
         problems=problem_names,
         scenario=session.scenario_name,
-        fault_seed=fault_seed,
     )
     task_description = inject_problem.get_task_description()
     session.update_session("task_description", task_description)
 
-    tot_gt = {}
-    for prob in tot_tasks:
-        gt = prob.get_submission().model_dump_json()
-        tot_gt.update(json.loads(gt))
-
-    session.write_gt(tot_gt)
+    session.write_gt(inject_problem.get_ground_truth().model_dump())
     log_event(
         "ground_truth_saved",
         f"Ground truth saved for session {session.session_id}.",

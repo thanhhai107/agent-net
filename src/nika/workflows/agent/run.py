@@ -2,94 +2,160 @@
 
 import asyncio
 import logging
-from dataclasses import replace
+import os
 
-from agent.composition import (
-    AgentRunConfig,
-    validate_agent_extensions,
-    validate_agent_composition,
-)
 from agent.registry import create_agent
-from nika.utils.logger import bind_session_dir, log_event
+from agent.sandbox import SANDBOX_SUPPORTED_AGENTS
+from agent.sandbox.config import resolve_sandbox_config, sandbox_gateway_agent_host
+from agent.sandbox.image import ensure_sandbox_image
+from agent.sandbox.manager import SandboxManager
+from nika.service.mcp_gateway.lifecycle import (
+    ENV_GATEWAY_AGENT_URL,
+    mcp_gateway_for_session,
+)
+from nika.utils.agent_config import (
+    resolve_agent_model,
+    resolve_agent_type,
+    resolve_llm_provider,
+    resolve_max_steps,
+    resolve_reasoning_effort,
+)
+from nika.utils.logger import bind_session_dir, log_error_event, log_event
 from nika.utils.session import Session
 
 logging.basicConfig(level=logging.INFO)
 
 
-def _resolve_requested_model(
-    agent_config: AgentRunConfig,
-    *,
-    requested_model: str | None,
-) -> str:
-    if requested_model:
-        return requested_model
-    return agent_config.model
+def _gateway_policy_mode(agent_type: str) -> str:
+    return "unified" if agent_type == "community.sade" else "two_phase"
 
 
 def start_agent(
-    agent_config: AgentRunConfig,
+    agent_type: str | None = None,
+    llm_provider: str | None = None,
+    model: str | None = None,
+    max_steps: int | None = None,
     *,
     session_id: str | None = None,
-    requested_model: str | None = None,
+    reasoning_effort: str | None = None,
+    stream_output: bool = True,
+    sandbox: bool | None = None,
+    sandbox_image: str | None = None,
+    sandbox_env_file: str | None = None,
+    sandbox_keep_container: bool | None = None,
+    sandbox_cpus: str | None = None,
+    sandbox_memory: str | None = None,
+    sandbox_network: str | None = None,
 ) -> None:
     """Load the running session, run the agent on ``task_description``, then end the session."""
-    validate_agent_extensions(agent_config)
+    agent_type = resolve_agent_type(agent_type)
+    max_steps = resolve_max_steps(max_steps)
+    reasoning_effort = resolve_reasoning_effort(reasoning_effort)
+    model = resolve_agent_model(agent_type, model)
+    llm_provider = resolve_llm_provider(llm_provider, agent_type=agent_type)
+    sandbox_config = resolve_sandbox_config(
+        enabled=sandbox,
+        image=sandbox_image,
+        env_file=sandbox_env_file,
+        network=sandbox_network,
+        keep_container=sandbox_keep_container,
+        cpus=sandbox_cpus,
+        memory=sandbox_memory,
+    )
+
     session = Session()
     session.load_running_session(session_id=session_id)
-    agent_config = replace(
-        agent_config,
-        session_id=session.session_id,
-        model=_resolve_requested_model(
-            agent_config,
-            requested_model=requested_model,
-        ),
-    )
-    validate_agent_composition(agent_config)
-
-    session.update_session("agent_type", agent_config.agent_type)
-    session.update_session("llm_backend", agent_config.llm_backend)
-    session.update_session("model", agent_config.model)
-    if agent_config.normalized_agent_type == "reflexion":
-        session.update_session("max_attempts", agent_config.max_attempts)
-    session.update_session("memory_mode", agent_config.memory.mode)
-    if agent_config.memory.enabled:
-        session.update_session("memory_bank", agent_config.memory.bank)
-        session.update_session("memory_top_k", agent_config.memory.top_k)
-        session.update_session("memory_token_budget", agent_config.memory.token_budget)
-        session.update_session("memory_max_skill_age", agent_config.memory.max_skill_age)
-        session.update_session("memory_pool_size", agent_config.memory.pool_size)
-        session.update_session(
-            "memory_evolution_threshold",
-            agent_config.memory.evolution_threshold,
-        )
-        session.update_session("memory_best_of_n", agent_config.memory.best_of_n)
-        session.update_session("memory_ppo_epsilon", agent_config.memory.ppo_epsilon)
-    session.update_session("tool_evolution_enabled", agent_config.tool_evolution.enabled)
-    if agent_config.tool_evolution.enabled:
-        session.update_session("tool_library_id", agent_config.tool_evolution.library_id)
-        session.update_session("tool_doc_chars", agent_config.tool_evolution.tool_doc_chars)
-        session.update_session(
-            "tool_convergence_threshold",
-            agent_config.tool_evolution.convergence_threshold,
-        )
+    session.update_session("agent_type", agent_type)
+    if llm_provider is not None:
+        session.update_session("llm_provider", llm_provider)
+    session.update_session("model", model)
+    if reasoning_effort is not None:
+        session.update_session("reasoning_effort", reasoning_effort)
     session.start_session()
 
     bind_session_dir(session.session_dir)
     log_event(
         "agent_start",
-        f"Starting agent: {agent_config.agent_type} (model={agent_config.model}) in session {session.session_id}",
+        f"Starting agent: {agent_type} (model={model}) in session {session.session_id}"
+        + (" [sandbox]" if sandbox_config.enabled else ""),
         session_id=session.session_id,
-        agent_type=agent_config.agent_type,
-        model=agent_config.model,
+        agent_type=agent_type,
+        model=model,
+        sandbox=sandbox_config.enabled,
     )
-    try:
-        agent = create_agent(agent_config)
-        asyncio.run(agent.run(task_description=session.task_description))
-    finally:
-        session.end_session()
-        log_event(
-            "agent_end",
-            f"Agent run ended for session {session.session_id}",
-            session_id=session.session_id,
-            agent_type=agent_config.agent_type,
+    if agent_type == "local_cli.codex_cli" and stream_output:
+        effort_line = (
+            f" | Reasoning effort: {reasoning_effort}" if reasoning_effort else ""
         )
+        mode_line = " | Sandbox: enabled" if sandbox_config.enabled else ""
+        print(
+            f"Session {session.session_id}\n"
+            f"Agent: local_cli.codex_cli | Model: {model}{effort_line}{mode_line}\n"
+            f"Results: {session.session_dir}\n",
+            flush=True,
+        )
+    try:
+        with mcp_gateway_for_session(
+            session.session_id,
+            scenario_name=session.scenario_name,
+            policy_mode=_gateway_policy_mode(agent_type),  # type: ignore[arg-type]
+            sandbox=sandbox_config.enabled,
+            sandbox_agent_host=sandbox_gateway_agent_host(sandbox_config.network),
+        ):
+            if sandbox_config.enabled:
+                if agent_type not in SANDBOX_SUPPORTED_AGENTS:
+                    raise ValueError(
+                        f"Sandbox mode supports {SANDBOX_SUPPORTED_AGENTS}, got {agent_type!r}"
+                    )
+                ensure_sandbox_image(
+                    sandbox_config.image,
+                    http_proxy=sandbox_config.http_proxy,
+                    https_proxy=sandbox_config.https_proxy,
+                )
+                gateway_agent_url = os.environ.get(ENV_GATEWAY_AGENT_URL, "")
+                if not gateway_agent_url:
+                    raise RuntimeError(
+                        f"{ENV_GATEWAY_AGENT_URL} was not set for sandbox execution"
+                    )
+                SandboxManager(sandbox_config).run(
+                    session=session,
+                    agent_type=agent_type,
+                    model=model,
+                    max_steps=max_steps,
+                    reasoning_effort=reasoning_effort,
+                    llm_provider=llm_provider,
+                    mcp_gateway_agent_url=gateway_agent_url,
+                    stream_output=stream_output,
+                )
+            else:
+                agent = create_agent(
+                    agent_type,
+                    session_id=session.session_id,
+                    llm_provider=llm_provider,
+                    model=model,
+                    max_steps=max_steps,
+                    reasoning_effort=reasoning_effort,
+                    stream_output=stream_output,
+                )
+                asyncio.run(agent.run(task_description=session.task_description))
+    except Exception as exc:
+        log_error_event(
+            "agent_error",
+            f"Agent run failed for session {session.session_id}: {exc}",
+            session_id=session.session_id,
+            agent_type=agent_type,
+            model=model,
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
+        raise
+
+    session.end_session()
+    log_event(
+        "agent_end",
+        f"Agent run completed for session {session.session_id}",
+        session_id=session.session_id,
+        agent_type=agent_type,
+    )
+    if agent_type == "local_cli.codex_cli" and stream_output:
+        print(f"\nDone. Results saved to {session.session_dir}\n", flush=True)

@@ -1,6 +1,5 @@
 """Skill-Pro style procedural memory."""
 
-from agent.memory.adapter import MemoryAugmentedAgent
 from agent.memory.attributes import infer_memory_attributes
 from agent.memory.models import (
     EvaluationEvidence,
@@ -22,7 +21,6 @@ from agent.memory.workflow import evolve_session_memory
 __all__ = [
     "EvaluationEvidence",
     "MemoryAttributes",
-    "MemoryAugmentedAgent",
     "MemoryQuery",
     "PPOGateDecision",
     "ProceduralMemoryModule",

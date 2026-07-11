@@ -4,17 +4,18 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from collections import defaultdict
 
 from nika.evaluator.result_log import (
-    RUN_FILENAME,
     build_eval_result_from_session_dir,
     default_summary_csv_path,
-    is_finished_session,
-    iter_session_dirs,
     missing_summary_artifacts,
     resolve_root_cause_category,
     write_eval_summary_csv,
+)
+from nika.utils.session_artifacts import (
+    RUN_FILENAME,
+    is_finished_session,
+    iter_session_dirs,
 )
 
 
@@ -94,50 +95,10 @@ def run_eval_summary(
 
         selected.append(session_dir)
 
-    eval_results = [build_eval_result_from_session_dir(session_dir) for session_dir in selected]
-    timelines: dict[tuple[str | None, str | None, str | None], list] = defaultdict(list)
-    for result in eval_results:
-        timelines[(result.tool_library_id, result.agent_type, result.model)].append(
-            result
-        )
-    for timeline_results in timelines.values():
-        timeline_results.sort(
-            key=lambda item: (
-                item.benchmark_index
-                if item.benchmark_index is not None
-                else 10**9,
-                item.session_id or "",
-            )
-        )
-        if not timeline_results:
-            continue
-        baseline = timeline_results[0]
-        baseline_score = sum(
-            value or 0.0
-            for value in (
-                baseline.detection_score,
-                baseline.localization_accuracy,
-                baseline.rca_accuracy,
-            )
-        ) / 3
-        previous_tokens: int | None = None
-        for result in timeline_results:
-            current_tokens = (result.in_tokens or 0) + (result.out_tokens or 0)
-            if previous_tokens and current_tokens:
-                result.efficiency_evolution_rate = round(
-                    (current_tokens - previous_tokens) / previous_tokens,
-                    4,
-                )
-            current_score = sum(
-                value or 0.0
-                for value in (
-                    result.detection_score,
-                    result.localization_accuracy,
-                    result.rca_accuracy,
-                )
-            ) / 3
-            result.evolutionary_gain = round(current_score - baseline_score, 4)
-            if current_tokens:
-                previous_tokens = current_tokens
-    out_path = write_eval_summary_csv(eval_results, output_path or default_summary_csv_path())
+    eval_results = [
+        build_eval_result_from_session_dir(session_dir) for session_dir in selected
+    ]
+    out_path = write_eval_summary_csv(
+        eval_results, output_path or default_summary_csv_path(results_dir)
+    )
     return out_path

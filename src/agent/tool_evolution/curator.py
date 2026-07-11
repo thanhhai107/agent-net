@@ -25,7 +25,7 @@ from agent.learning_llm import (
     learning_model,
     learning_timeout_seconds,
 )
-from agent.llm.model_factory import load_model
+from agent.extensions.llm import load_extension_model as load_model
 from agent.tool_evolution.models import (
     ComprehensionGap,
     DraftAnalyzerDraft,

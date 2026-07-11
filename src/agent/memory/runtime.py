@@ -143,7 +143,6 @@ class SkillToolRuntime:
             MessageLogger(
                 agent="memory_agent",
                 session_dir=str(session_dir),
-                extra_fields={"phase": "skill_mdp_runtime"},
             )
             if session_dir
             else None
@@ -895,7 +894,7 @@ class SkillToolRuntime:
 
     def _log(self, event: str, payload: dict[str, Any]) -> None:
         if self._logger is not None:
-            self._logger.log(event, payload)
+            self._logger.log(event, {"phase": "skill_mdp_runtime", **payload})
 
 
 class SkillAwareTool(BaseTool):

@@ -11,59 +11,72 @@ Runtime paths (`runtime/`, `results/`, `benchmark/`) resolve from the repository
 | Group | Purpose |
 |--------|---------|
 | `nika session` | List, inspect, and close active troubleshooting sessions |
-| `nika env` | List / deploy Kathará scenarios and create a session |
+| `nika env` | List / deploy Kathará or Containerlab scenarios and create a session |
 | `nika failure` | List, describe, inject, and inspect faults for a running session |
 | `nika exec` | Run a shell command inside a lab host container |
 | `nika agent` | Run a troubleshooting agent on one selected session task |
-| `nika eval` | Metrics, LLM judge, publish, and offline summary CSV for closed sessions |
-| `nika benchmark` | Full pipeline for benchmark YAML cases or a single `(scenario, problem)` case |
+| `nika eval` | Metrics, LLM judge, and offline summary CSV for closed sessions |
+| `nika benchmark` | Full pipeline for benchmark YAML rows or a single `(scenario, problem)` case |
 | `nika traffic` | Synthetic traffic (`od`, `web`) against the running lab |
 
 Use `nika <group> --help` and `nika <group> <command> --help` for generated option text.
 
 ## Global conventions
 
-### Sessions and `--session-id`
+### Sessions and `--session_id`
 
 - **`nika env run`** prints `session_id=…` and writes `runtime/sessions/{session_id}.json`.
-- Most commands that operate on a lab accept **`--session-id`** to target a specific session.
-- When **`--session-id` is omitted** and exactly **one** session is running, that session is selected automatically. With zero or multiple running sessions, the CLI raises an error asking you to pass `--session-id` or reduce concurrency.
-- **`nika session close`** undeploys the Kathará lab and clears runtime session state (confirmation prompt skippable with `-y` / `--yes`).
+- Most commands that operate on a lab accept **`--session_id`** to target a specific session.
+- When **`--session_id` is omitted** and exactly **one** session is running, that session is selected automatically. With zero or multiple running sessions, the CLI raises an error asking you to pass `--session_id` or reduce concurrency.
+- **`nika session close`** undeploys the lab and clears runtime session state (confirmation prompt skippable with `-y` / `--yes`).
 
-### Topology tier (`-t` / `--tier`)
+### Topology size (`-s` / `--size`)
 
 Same semantics as `nika env run`:
 
-- **Scalable** scenarios (see `TOPO_SIZE` on lab classes under `src/nika/net_env`) require **`-t s`**, **`-t m`**, or **`-t l`**.
-- **Non-scalable** scenarios must **omit** `-t`.
+- **Scalable** scenarios (see `TOPO_SIZE` on lab classes under `src/nika/net_env`) require **`-s s`**, **`-s m`**, or **`-s l`**.
+- **Non-scalable** scenarios must **omit** `-s`.
 
-This flag is reused on **`nika benchmark run`** and **`nika traffic run`** when a tier is required and not already implied by the session.
+This flag is reused on **`nika benchmark run`** and **`nika traffic run`** when a size is required and not already implied by the session.
+
+### Results directory (`--result_dir`)
+
+Session artifacts are written under **`{result_dir}/{session_id}/`**. Use this to isolate experiments (different datasets, models, agents, or benchmark runs) under separate folders.
+
+| Source | Variable / flag | Default |
+|--------|-----------------|---------|
+| CLI | `--result_dir PATH` on `nika env run`, `nika benchmark run` | `results/` at repo root |
+| `.env` | `NIKA_RESULT_DIR` | same as default |
+
+CLI `--result_dir` overrides `NIKA_RESULT_DIR` when both are set. Relative paths resolve from the repository root (e.g. `results/list1` → `<repo>/results/list1/`).
+
+```shell
+nika env run simple_bgp --result_dir results/list1
+# → results/list1/20260702-053412-abc123/
+
+NIKA_RESULT_DIR=results/gpt4-bgp nika benchmark run --config benchmark/benchmark_selected.yaml
+```
+
+**Benchmark resume** (batch mode, `--resume` by default): before running, NIKA scans **only** the resolved `--result_dir` for existing session dirs. Rows whose `run.json` has `status == finished` and a matching `benchmark_fingerprint` are skipped; incomplete sessions are cleaned and re-run. Re-run the same command with the same `--config` and `--result_dir` to continue after a failure. Pass **`--no-resume`** to execute every YAML row regardless of existing artifacts.
 
 ### Agent options
 
 Aligned with `nika agent run`:
 
-- **`-a` / `--agent`**: `react`, `plan-execute`, `reflexion`, or `mock`.
-- **`-b` / `--backend`**: LLM provider for `react`, `plan-execute`, `reflexion`, and `mock` (`openai`, `ollama`, `deepseek`, `custom`).
+- **`-a` / `--agent`**: `byo.langgraph`, `byo.mcp_agent`, `byo.autogen`, `local_cli.codex_cli`, `local_cli.claude_cli`, `community.sade`, `sdk.claude_sdk`, or `sdk.codex_sdk`.
+- **`-p` / `--provider`**: LLM provider for `byo.langgraph` only (`openai`, `ollama`, `deepseek`, `custom`).
 - **`-m` / `--model`**: model id.
-- **`-n` / `--max-steps`**: per-worker recursion limit for LangGraph agents; also caps executed plan items for `plan-execute`.
-- **`-r` / `--max-attempts`**: maximum Reflexion attempts for `reflexion` (default: `3`).
-- **`--tools <library-id>`**: enable DRAFT Tool Evolution for a LangGraph workflow. It refines contract guidance for fixed primitive tools while keeping source descriptions and input schemas immutable. Explorer records are derived from observed read-only tool trials only. State, path-rate, mastery, and LLM-failure telemetry are written under `runtime/tool_evolution/<library-id>/`.
-- **Tool Evolution knobs**: `--tool-doc-chars` and `--tool-convergence-threshold` control refined-contract size and document-freeze convergence.
-- **Memory Evolution knobs**: `--memory-max-skill-age`, `--memory-pool-size`, `--memory-evolution-threshold`, `--memory-best-of-n`, and `--memory-ppo-epsilon` control Skill-Pro runtime and offline evolution.
-- **Auto names**: Studio-created result roots, runtime runs, memory banks, and tool libraries share `<benchmark>-<NNNN>` such as `benchmark_test-0001`.
+- **`-n` / `--max-steps`**: max steps per phase (`byo.langgraph`, `byo.mcp_agent`, `byo.autogen`, `community.sade`, `sdk.claude_sdk`).
+- **`-e` / `--reasoning-effort`**: Codex `model_reasoning_effort` (`local_cli.codex_cli`, `sdk.codex_sdk`): `none`, `minimal`, `low`, `medium`, `high`, `xhigh`.
 
-Learning-module LLM calls inherit `-b/--backend` and `-m/--model` unless
-`NIKA_LEARNING_LLM_BACKEND` / `NIKA_LEARNING_LLM_MODEL` are set.
-
-`nika eval judge` uses **`-b`** and **`-m`** for the judge only (no agent in that command).
+`nika eval judge` uses **`-p`** and **`-m`** for the judge only (no agent in that command).
 
 ### Benchmark judge options
 
-`nika benchmark run` configures **both** agent and judge in one command. By default it runs **metrics and publish only**; pass **`--judge`** to also run the LLM judge. Judge options use a **prefix** to avoid clashing with the agent:
+`nika benchmark run` configures **both** agent and judge in one command. By default it runs **metrics only**; pass **`--judge`** to also run the LLM judge. Judge options use a **prefix** to avoid clashing with the agent:
 
 - **`--judge`**: enable LLM-as-judge after metrics.
-- **`--judge-backend`**
+- **`--judge-provider`**
 - **`--judge-model`**
 
 Both judge options are required when **`--judge`** is set.
@@ -72,26 +85,28 @@ Both judge options are required when **`--judge`** is set.
 
 ## `nika session`
 
-- **`nika session ps [-a]`**: list sessions. Default: running only; **`-a` / `--all`** includes finished sessions. Columns: session id, env id, scenario name, status, failure count, agent summary.
-- **`nika session inspect [SESSION_ID]`**: print the session document as JSON plus a table of `failure_injections`. Auto-selects when only one session is running.
-- **`nika session close [SESSION_ID | all] [-y]`**: undeploy the lab, mark failure records ended, and remove the runtime session file. Pass **`all`** to close every running session; **`-y`** skips the confirmation prompt.
+- **`nika session ps [-a]`**: list sessions. Default: running only; **`-a` / `--all`** includes finished sessions. Columns: session id, env id, status, failure count, agent summary.
+- **`nika session inspect [--session_id ID] [-c]`**: print the session document as JSON plus a table of `failure_injections`. Pass **`-c` / `--containers`** to also list running lab containers (docker-ps style). Auto-selects when only one session is running.
+- **`nika session containers [--session_id ID]`**: list containers in the session lab (CONTAINER ID, NAME, IMAGE, STATUS, NAMES). Auto-selects when only one session is running.
+- **`nika session close [--session_id ID] [-y]`**: undeploy the lab, mark failure records ended, and remove the runtime session file. When `--session_id` is omitted and only one session is running it is selected automatically; **`-y`** skips the confirmation prompt.
+- **`nika session wipe [-y]`**: close every running session and wipe all leftover Kathara, Containerlab, and runtime working files.
 
 ---
 
 ## `nika env`
 
 - **`nika env list`**: print registered scenario ids.
-- **`nika env run NAME [-t s|m|l] [--no-redeploy] [--instance-tag TAG]`**: deploy one instance, create a session, and print `session_id=…`.
-- **`nika env ps`**: list running lab instances (one row per deployed Kathará lab). Columns: env id, topology, status, age, active session count, endpoint.
+- **`nika env run NAME [-s s|m|l] [--no-redeploy] [--instance-tag TAG]`**: deploy one instance, create a session, and print `session_id=…`.
+- **`nika env ps`**: list running lab instances (one row per deployed lab). Columns: env id, size, status, age, active session count, endpoint.
 
 ---
 
 ## `nika failure`
 
 - **`nika failure list`**: injectable problem ids.
-- **`nika failure describe PROBLEM`**: print the typed parameter schema (JSON Schema or legacy field list) and an example `nika failure inject … --set …` line.
-- **`nika failure inject PROBLEM [PROBLEM …] [--session-id ID] [--set key=value …]`**: inject for a selected running session and write ground truth. Repeat **`--set`** to override injection parameters (see `describe` for valid keys).
-- **`nika failure ps [--session-id ID]`**: list persisted failure injection records for one session.
+- **`nika failure describe PROBLEM`**: print the typed parameter schema (JSON Schema) and an example `nika failure inject … --set …` line.
+- **`nika failure inject PROBLEM [PROBLEM …] [--session_id ID] [--set key=value …]`**: inject for a selected running session and write ground truth. Repeat **`--set`** to override injection parameters (see `describe` for valid keys).
+- **`nika failure ps [--session_id ID]`**: list persisted failure injection records for one session.
 
 ---
 
@@ -100,7 +115,7 @@ Both judge options are required when **`--judge`** is set.
 Run a shell command inside a host container for the selected session-bound lab:
 
 ```shell
-nika exec HOST COMMAND… [--session-id ID] [--timeout SECONDS]
+nika exec HOST COMMAND… [--session_id ID] [--timeout SECONDS]
 ```
 
 - **`HOST`**: container / pc name in the lab (e.g. `pc1`).
@@ -113,36 +128,24 @@ Example: `nika exec pc1 ping -c 3 10.0.0.2 --timeout 30`
 
 ## `nika agent`
 
-- **`nika agent list`**: supported agent types and LLM backends.
+- **`nika agent list`**: supported agent types (`byo.langgraph`, `byo.mcp_agent`, `byo.autogen`, `local_cli.codex_cli`, `local_cli.claude_cli`, `community.sade`, `sdk.claude_sdk`, `sdk.codex_sdk`), LLM providers, and Codex reasoning-effort levels.
 - **`nika agent run`**: run the agent on one selected session.
 
   | Flag | Applies to | Meaning |
   |------|------------|---------|
-  | `-a` / `--agent` | all | `react`, `plan-execute`, `reflexion`, or `mock` |
-  | `-b` / `--backend` | `react`, `mock` | `openai`, `ollama`, `deepseek`, or `custom` |
+  | `-a` / `--agent` | all | `byo.langgraph`, `byo.mcp_agent`, `byo.autogen`, `local_cli.codex_cli`, `local_cli.claude_cli`, `community.sade`, `sdk.claude_sdk`, or `sdk.codex_sdk` |
+  | `-p` / `--provider` | `byo.langgraph` | `openai`, `ollama`, `deepseek`, or `custom` |
   | `-m` / `--model` | all | model id |
-  | `-n` / `--max-steps` | LangGraph, `mock` | Worker step cap; plan-item cap for `plan-execute` |
-  | `-r` / `--max-attempts` | `reflexion` | Maximum attempt → evaluate → reflect cycles |
-  | `--session-id` | all | target session |
-  | `--tools` | LangGraph workflows | enable Tool Evolution with a persistent library id |
-  | `--tool-doc-chars`, `--tool-convergence-threshold` | Tool Evolution | tune refined-contract size and DRAFT convergence |
-  | `--memory` | LangGraph workflows | enable evolving procedural memory with a bank id |
-  | `--memory-read` | LangGraph workflows | read a frozen procedural-memory bank |
-  | `--memory-*` | memory | tune Skill-Pro runtime and offline evolution config |
+  | `-n` / `--max-steps` | `byo.langgraph`, `byo.mcp_agent`, `byo.autogen`, `community.sade`, `sdk.claude_sdk` | step cap per phase |
+  | `-e` / `--reasoning-effort` | `local_cli.codex_cli`, `sdk.codex_sdk` | Codex reasoning effort level |
+  | `--session_id` | all | target session |
 
   Examples:
 
   ```shell
-  nika agent run -a react -b custom -m openai/gpt-oss-20b -n 20
-  nika agent run -a plan-execute -b custom -m openai/gpt-oss-20b -n 20
-  nika agent run -a reflexion -b custom -m openai/gpt-oss-20b -n 20 -r 3
-  nika agent run -a react -b custom -m openai/gpt-oss-20b \
-    --tools experiment-a
-  nika agent run -a mock -n 5
+  nika agent run -a byo.langgraph -p openai -m gpt-5-mini -n 20
+  nika agent run -a local_cli.codex_cli -m gpt-5.4-mini -e medium
   ```
-
-  The `custom` backend accepts any OpenAI-compatible model id. Netmind is
-  selected only by `CUSTOM_API_URL`.
 
 ---
 
@@ -150,11 +153,10 @@ Example: `nika exec pc1 ping -c 3 10.0.0.2 --timeout 30`
 
 Eval commands operate on **closed** sessions only. Close the lab with **`nika session close`** before running eval; artifacts are read from and written to `results/{session_id}/`.
 
-- **`nika eval metrics [--session-id ID]`**: rule-based metrics → `eval_metrics.json`.
-- **`nika eval judge -b BACKEND -m MODEL [--session-id ID]`**: LLM judge → `llm_judge.json`.
-- **`nika eval publish [--session-id ID]`**: validate eval artifacts on a closed session and record publish completion.
-- **`nika eval summary [filters] [-o PATH]`**: scan finished sessions under `results/` and write one CSV.
-- **`nika eval clean [-y] [--force]`**: delete historical artifacts under `results/` and runtime session JSON files. Refuses when running sessions exist unless **`--force`** is passed.
+- **`nika eval metrics [--session_id ID] [--result_dir PATH]`**: rule-based metrics → `eval_metrics.json` (records eval completion in `events.jsonl`). With `--result_dir` and no `--session_id`, runs on every closed session under that directory.
+- **`nika eval judge -p PROVIDER -m MODEL [--session_id ID] [--result_dir PATH]`**: LLM judge → `llm_judge.json`. With `--result_dir` and no `--session_id`, judges every closed session under that directory.
+- **`nika eval summary [filters] [-o PATH] [--result_dir PATH]`**: scan finished sessions and write one CSV.
+- **`nika eval clean [-y] [--force]`**: delete historical artifacts under `results/`, runtime session JSON files, and the SQLite index at `runtime/sessions.db`. Refuses when running sessions exist unless **`--force`** is passed.
 
 ### `nika eval summary` filters
 
@@ -162,11 +164,12 @@ All filters are optional and repeatable. Omit filters to include every finished 
 
 | Option | Meaning |
 |--------|---------|
-| `-o` / `--output` | Output CSV path (default: `results/0_summary/evaluation_summary.csv`) |
+| `-o` / `--output` | Output CSV path (default: `{result_dir}/0_summary/evaluation_summary.csv`) |
+| `--result_dir` | Results parent directory to scan (default: `results/` or `NIKA_RESULT_DIR`) |
 | `-p` / `--problem` | Root-cause / problem id (e.g. `link_down`) |
 | `-e` / `--env` | Scenario / net env (e.g. `simple_bgp`) |
 | `-c` / `--category` | Root-cause category (e.g. `link_failure`) |
-| `--session-id` | Specific session id |
+| `--session_id` | Specific session id |
 | `-a` / `--agent` | Agent type |
 | `--model` | Agent model id |
 
@@ -176,73 +179,58 @@ Each finished session directory should contain at least `run.json`, `ground_trut
 
 ## `nika benchmark`
 
-Implements the end-to-end benchmark pipeline: start env → inject → agent → close session → eval (metrics, optional judge, publish). Run `nika eval summary` afterward to aggregate finished sessions.
+Implements the end-to-end benchmark pipeline: start env → inject → agent → close session → eval (metrics, optional judge). Run `nika eval summary` afterward to aggregate CSV rows across finished sessions.
 
 ### Batch mode (default)
 
-Omit the `SCENARIO` positional argument. Cases are read from a YAML file.
+Omit the `SCENARIO` positional argument. Rows are read from a YAML file.
 
 ```shell
 nika benchmark run
-nika benchmark run --file benchmark/benchmark_test.yaml
-nika benchmark run --file benchmark/benchmark_test.yaml \
-  -a react --tools experiment-a
+nika benchmark run --config benchmark/benchmark_selected.yaml
+nika benchmark run --batch-size 4
+nika benchmark run --result_dir results/list1
+nika benchmark run --result_dir results/list1 --batch-size 4   # resume skips completed rows in that dir only
 ```
 
-**Default YAML path**: `benchmark/benchmark_test.yaml` under the repository root.
+**Default config path**: `benchmark/benchmark_selected.yaml` under the repository root.
 
-Each benchmark command creates a result root named
-`results/<benchmark-name>-<timestamp>/`. Per-case artifacts are written under
-that parent as `<session_id>/run.json`, `<session_id>/messages.jsonl`, and the
-usual eval files.
+**`--result_dir`**: parent directory for session outputs (see [Results directory](#results-directory---result_dir)). Resume and skip logic inspect **only** this directory—not other folders under `results/` and not the SQLite index.
 
-YAML cases are treated as one online timeline and always run sequentially. Tool
-Evolution and evolving memory update after each case in that fixed order.
+**`--resume` / `--no-resume`** (batch mode): when `--resume` (default), scan `--result_dir` first, skip finished cases, clean incomplete ones, then run the rest. Works with any `--batch-size`.
 
-**YAML shape**:
+**`--batch-size`**: number of YAML rows to run simultaneously per batch (default `1`). Rows are chunked into groups of this size; each group runs fully in parallel (one subprocess per row) and the next group starts only after all rows in the current group have finished. Applies to batch mode only.
 
-```yaml
-cases:
-  - scenario: dc_clos_bgp
-    topo_size: s
-    problem: link_down
-    inject:
-      host_name: pc_0_0
-      intf_name: eth0
-```
+**YAML case fields**:
 
-Agent and judge options use the same flags as below.
+| Field | Meaning |
+|-------|---------|
+| `problem` | Problem id (same as `nika failure inject`) |
+| `scenario` | Scenario id (same as `nika env run`) |
+| `topo_size` | Size `s`, `m`, or `l`; **null/empty** for scenarios without sizes |
+| `inject` | Map of `--set key=value` pairs passed to `nika failure inject` |
 
-### Streamlit experiment studio
-
-```shell
-nika studio
-nika studio --host 0.0.0.0 --port 8502 --no-browser
-```
-
-The studio selects a baseline agent and composes optional Tool Evolution and
-memory modules in one run. It then shows live log and progress events from the
-same CLI workflows.
+Agent and judge options use the same flags as below (including `-a local_cli.codex_cli` and `-e` for Codex runs; `-n` applies to `byo.langgraph`, `byo.mcp_agent`, `byo.autogen`, and `community.sade`).
 
 ### Single-case mode
 
 Pass **`SCENARIO`** as the first positional argument (like `nika env run NAME`), plus **`--problem`**:
 
 ```shell
-nika benchmark run dc_clos_bgp --problem bgp_asn_misconfig -t s \
-  -a react -b custom -m openai/gpt-oss-20b -n 20 \
-  --judge
+nika benchmark run dc_clos_bgp --problem bgp_asn_misconfig -s s \
+  -a byo.langgraph -p openai -m gpt-5-mini -n 20 \
+  --judge --judge-provider openai --judge-model gpt-5-mini
 ```
 
-- **`-t` / `--tier`**: required only when `SCENARIO` is scalable.
-- **`--judge`**: optional; without it, only metrics and publish run after the agent finishes.
+- **`-s` / `--size`**: required only when `SCENARIO` is scalable.
+- **`--judge`**: optional; without it, only metrics run after the agent finishes.
 - Each benchmark case gets its own lab; the lab is torn down when the session closes (before evaluation).
 
 ---
 
 ## `nika traffic`
 
-Requires a deployed lab. By default the **current session** supplies the scenario name (Kathará lab name) and tier; override with **`--lab`** (and **`-t`** when the scenario needs a tier).
+Requires a deployed lab. By default the **current session** supplies the deployed lab name and size; override with **`--lab`** (and **`-s`** when the scenario needs a size).
 
 - **`nika traffic list`**: supported **`TYPE`** values for `run`.
 - **`nika traffic run TYPE …`**: start traffic; options depend on **`TYPE`**.

@@ -4,47 +4,15 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from nika.config import RESULTS_DIR
-from nika.utils.session_index import extract_gt_fields, extract_index_fields
+from nika.config import RESULTS_DIR, resolve_results_root
+from nika.utils.session_artifacts import (
+    RUN_FILENAME,
+    is_finished_session,
+    iter_session_dirs,
+)
 from nika.utils.session_resolve import resolve_running_session_id
+from nika.utils.session_index import extract_gt_fields, extract_index_fields
 from nika.utils.session_store import SessionStore
-
-
-RUN_FILENAME = "run.json"
-
-
-def _is_finished_session(run_meta: dict[str, Any]) -> bool:
-    return run_meta.get("status") == "finished" or run_meta.get("end_time") is not None
-
-
-def _iter_session_dirs(results_dir: str | Path | None = None) -> list[Path]:
-    root = Path(results_dir or RESULTS_DIR)
-    if not root.exists():
-        return []
-    return [
-        run_path.parent
-        for run_path in sorted(root.rglob(RUN_FILENAME))
-        if "0_summary" not in run_path.relative_to(root).parts
-    ]
-
-
-def find_session_dir(session_id: str, *, results_dir: str | Path | None = None) -> Path:
-    root = Path(results_dir or RESULTS_DIR)
-    direct = root / session_id
-    if (direct / RUN_FILENAME).exists():
-        return direct
-    if not root.exists():
-        raise FileNotFoundError(f"Session '{session_id}' not found under results/.")
-    for run_path in sorted(root.rglob(RUN_FILENAME)):
-        if "0_summary" in run_path.relative_to(root).parts:
-            continue
-        try:
-            run_meta = json.loads(run_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        if str(run_meta.get("session_id") or run_path.parent.name) == session_id:
-            return run_path.parent
-    raise FileNotFoundError(f"Session '{session_id}' not found under results/.")
 
 
 class Session:
@@ -58,17 +26,29 @@ class Session:
         scenario_name: str,
         lab_name: str,
         scenario_topo_size: str | None,
-        results_root: str | Path | None = None,
         scenario_params: dict | None = None,
-        topology: list[tuple[str, str]] | None = None,
+        result_dir: str | Path | None = None,
+        backend: str = "kathara",
+        topology_file: str | Path | None = None,
+        runtime_workdir: str | Path | None = None,
     ) -> None:
         self.session_id = session_id
         self.scenario_name = scenario_name
         self.lab_name = lab_name
         self.scenario_topo_size = scenario_topo_size
         self.scenario_params = scenario_params or {}
-        self.topology = topology or []
-        self.session_dir = os.path.join(str(results_root or RESULTS_DIR), session_id)
+        self.backend = backend
+        self.topology_file = str(topology_file) if topology_file is not None else None
+        self.runtime_workdir = (
+            str(runtime_workdir) if runtime_workdir is not None else None
+        )
+        self.scenario_params.setdefault("backend", backend)
+        if self.topology_file:
+            self.scenario_params.setdefault("topology_file", self.topology_file)
+        if self.runtime_workdir:
+            self.scenario_params.setdefault("runtime_workdir", self.runtime_workdir)
+        results_root = resolve_results_root(result_dir)
+        self.session_dir = os.path.join(str(results_root), session_id)
         os.makedirs(self.session_dir, exist_ok=True)
         self.store.create_session(
             {
@@ -77,14 +57,35 @@ class Session:
                 "scenario_name": self.scenario_name,
                 "scenario_topo_size": self.scenario_topo_size,
                 "scenario_params": self.scenario_params,
-                "topology": self.topology,
                 "session_dir": self.session_dir,
                 "status": "running",
+                "backend": self.backend,
+                "topology_file": self.topology_file,
+                "runtime_workdir": self.runtime_workdir,
             }
         )
         self._write_run_json({k: v for k, v in self.__dict__.items() if k != "store"})
 
+    def load_from_run_json(self, session_dir: str | Path) -> "Session":
+        """Load session metadata from a mounted ``run.json`` (sandbox execution)."""
+        session_path = Path(session_dir)
+        run_path = session_path / RUN_FILENAME
+        if not run_path.is_file():
+            raise FileNotFoundError(f"Missing session run metadata: {run_path}")
+        run_meta = json.loads(run_path.read_text(encoding="utf-8"))
+        for key, value in run_meta.items():
+            setattr(self, key, value)
+        self.session_dir = str(session_path.resolve())
+        return self
+
     def load_running_session(self, session_id: str | None = None):
+        if os.environ.get("NIKA_SANDBOX_EXECUTION") == "1":
+            session_dir = os.environ.get("NIKA_SESSION_DIR", "").strip()
+            if not session_dir:
+                raise ValueError(
+                    "NIKA_SESSION_DIR is required when NIKA_SANDBOX_EXECUTION=1"
+                )
+            return self.load_from_run_json(session_dir)
         resolved_id = resolve_running_session_id(session_id, store=self.store)
         session_meta = self.store.get_session(resolved_id)
         for key, value in session_meta.items():
@@ -94,21 +95,18 @@ class Session:
     def load_closed_session(
         self,
         session_id: str | None = None,
-        *,
-        results_dir: str | Path | None = None,
+        result_dir: str | Path | None = None,
     ):
-        """Load a finished session from ``results/{session_id}/run.json`` for offline eval."""
+        """Load a finished session from ``{result_dir}/{session_id}/run.json`` for offline eval."""
         if session_id is not None:
-            return self._load_closed_session_from_id(
-                session_id,
-                results_dir=results_dir,
-            )
+            return self._load_closed_session_from_id(session_id, result_dir=result_dir)
 
+        results_root = resolve_results_root(result_dir)
         candidates: list[tuple[float, dict]] = []
-        for session_dir in _iter_session_dirs(results_dir):
+        for session_dir in iter_session_dirs(results_root):
             run_path = session_dir / RUN_FILENAME
             run_meta = json.loads(run_path.read_text(encoding="utf-8"))
-            if not _is_finished_session(run_meta):
+            if not is_finished_session(run_meta):
                 continue
             sid = run_meta.get("session_id") or session_dir.name
             if self._session_is_still_running(sid):
@@ -117,16 +115,14 @@ class Session:
 
         if not candidates:
             raise FileNotFoundError(
-                "No closed session found under results/. Close a session with `nika session close` first."
+                f"No closed session found under {results_root}/. "
+                "Close a session with `nika session close` first."
             )
-        if len(candidates) > 1:
+        if result_dir is None and len(candidates) > 1:
             raise ValueError(
-                "Multiple closed sessions found under results/. Please pass --session-id to select one."
+                "Multiple closed sessions found under results/. Please pass --session_id to select one."
             )
-        return self._apply_closed_session_meta(
-            candidates[0][1],
-            results_dir=results_dir,
-        )
+        return self._apply_closed_session_meta(candidates[0][1])
 
     def _session_is_still_running(self, session_id: str) -> bool:
         try:
@@ -138,35 +134,56 @@ class Session:
         self,
         session_id: str,
         *,
-        results_dir: str | Path | None = None,
+        result_dir: str | Path | None = None,
     ):
         if self._session_is_still_running(session_id):
             raise ValueError(
                 f"Session '{session_id}' is still running. Close it with `nika session close` before running eval."
             )
 
-        session_dir = find_session_dir(session_id, results_dir=results_dir)
+        results_root = resolve_results_root(result_dir)
+        session_dir = self._find_closed_session_dir(session_id, result_dir=result_dir)
         run_path = session_dir / RUN_FILENAME
+        if not run_path.exists():
+            raise FileNotFoundError(
+                f"Closed session '{session_id}' not found under {results_root}/. "
+                "Close the session with `nika session close` first."
+            )
 
         run_meta = json.loads(run_path.read_text(encoding="utf-8"))
-        if not _is_finished_session(run_meta):
+        if not is_finished_session(run_meta):
             raise ValueError(
                 f"Session '{session_id}' is not closed. Run `nika session close` before running eval."
             )
         return self._apply_closed_session_meta(run_meta, session_dir=session_dir)
 
-    def _apply_closed_session_meta(
+    def _find_closed_session_dir(
         self,
-        run_meta: dict,
+        session_id: str,
         *,
-        session_dir: Path | None = None,
-        results_dir: str | Path | None = None,
+        result_dir: str | Path | None = None,
+    ) -> Path:
+        results_root = resolve_results_root(result_dir)
+        direct = results_root / session_id
+        if (direct / RUN_FILENAME).exists():
+            return direct
+        for session_dir in iter_session_dirs(results_root):
+            if session_dir.name == session_id:
+                return session_dir
+        row = self.store.index.get_row(session_id)
+        if row and row.get("session_dir"):
+            indexed = Path(row["session_dir"])
+            if result_dir is None or indexed.is_relative_to(results_root):
+                return indexed
+        return direct
+
+    def _apply_closed_session_meta(
+        self, run_meta: dict, *, session_dir: Path | None = None
     ):
         for key, value in run_meta.items():
             setattr(self, key, value)
-        resolved_dir = session_dir or find_session_dir(
-            run_meta.get("session_id") or "",
-            results_dir=results_dir,
+        resolved_dir = session_dir or Path(RESULTS_DIR) / (
+            run_meta.get("session_id") or ""
         )
         self.session_dir = str(resolved_dir)
         return self
@@ -175,6 +192,10 @@ class Session:
         if not hasattr(self, "session_id"):
             raise ValueError("Session ID is not set.")
         payload = {k: v for k, v in self.__dict__.items() if k != "store"}
+        if os.environ.get("NIKA_SANDBOX_EXECUTION") == "1":
+            if getattr(self, "session_dir", None):
+                self._write_run_json(payload)
+            return self.session_id
         self.store.update_session(self.session_id, payload)
         if getattr(self, "session_dir", None):
             self._write_run_json(payload)
@@ -193,22 +214,20 @@ class Session:
     def update_session(self, key: str, value: Any):
         setattr(self, key, value)
         if hasattr(self, "problem_names") and hasattr(self, "session_id"):
-            problem_names = list(getattr(self, "problem_names", []) or [])
-            if len(problem_names) > 1:
+            if len(self.problem_names) > 1:
                 self.root_cause_name = "multiple_faults"
-            elif problem_names:
-                self.root_cause_name = problem_names[0]
+            else:
+                self.root_cause_name = self.problem_names[0]
         self._write_session()
 
     def update_run_meta(self, key: str, value: Any):
         """Update ``run.json`` for a closed session (no runtime session document)."""
         setattr(self, key, value)
         if hasattr(self, "problem_names") and hasattr(self, "session_id"):
-            problem_names = list(getattr(self, "problem_names", []) or [])
-            if len(problem_names) > 1:
+            if len(self.problem_names) > 1:
                 self.root_cause_name = "multiple_faults"
-            elif problem_names:
-                self.root_cause_name = problem_names[0]
+            else:
+                self.root_cause_name = self.problem_names[0]
         payload = {k: v for k, v in self.__dict__.items() if k != "store"}
         self._write_run_json(payload)
         if hasattr(self, "session_id"):

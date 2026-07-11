@@ -14,8 +14,8 @@ from pathlib import Path
 from typing import Any
 
 from nika.config import RESULTS_DIR, SESSIONS_DB
+from nika.utils.session_artifacts import RUN_FILENAME, iter_session_dirs
 
-RUN_FILENAME = "run.json"
 GROUND_TRUTH_FILENAME = "ground_truth.json"
 EVAL_METRICS_FILENAME = "eval_metrics.json"
 LLM_JUDGE_FILENAME = "llm_judge.json"
@@ -26,18 +26,6 @@ def _is_finished_session(run_meta: dict) -> bool:
         return True
     return run_meta.get("end_time") is not None
 
-
-def _iter_session_dirs(results_dir: str | Path) -> list[Path]:
-    root = Path(results_dir)
-    if not root.exists():
-        return []
-    session_dirs: list[Path] = []
-    for entry in sorted(root.iterdir()):
-        if not entry.is_dir() or entry.name == "0_summary":
-            continue
-        if (entry / RUN_FILENAME).exists():
-            session_dirs.append(entry)
-    return session_dirs
 
 _JSON_LIST_FIELDS = frozenset({"problem_names", "faulty_devices"})
 
@@ -57,6 +45,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     agent_type TEXT,
     llm_provider TEXT,
     model TEXT,
+    reasoning_effort TEXT,
     start_time TEXT,
     end_time TEXT,
     detection_score REAL,
@@ -88,6 +77,7 @@ _UPSERT_COLUMNS = (
     "agent_type",
     "llm_provider",
     "model",
+    "reasoning_effort",
     "start_time",
     "end_time",
     "detection_score",
@@ -142,6 +132,7 @@ def extract_index_fields(doc: Mapping[str, Any]) -> dict[str, Any]:
         "agent_type": doc.get("agent_type"),
         "llm_provider": doc.get("llm_provider"),
         "model": doc.get("model"),
+        "reasoning_effort": doc.get("reasoning_effort"),
         "start_time": doc.get("start_time"),
         "end_time": doc.get("end_time"),
         "created_at": doc.get("created_at"),
@@ -156,7 +147,11 @@ def extract_index_fields(doc: Mapping[str, Any]) -> dict[str, Any]:
     if isinstance(llm_judge, dict):
         fields.update(extract_eval_fields({}, llm_judge))
 
-    return {k: v for k, v in fields.items() if v is not None or k in ("failure_count", "session_id", "status")}
+    return {
+        k: v
+        for k, v in fields.items()
+        if v is not None or k in ("failure_count", "session_id", "status")
+    }
 
 
 def extract_eval_fields(
@@ -223,7 +218,9 @@ class SessionIndex:
         for field in _JSON_LIST_FIELDS:
             if field in data and data[field] is not None:
                 data[field] = _json_loads(data[field])
-        if isinstance(data.get("root_cause_name"), str) and data["root_cause_name"].startswith("["):
+        if isinstance(data.get("root_cause_name"), str) and data[
+            "root_cause_name"
+        ].startswith("["):
             try:
                 data["root_cause_name"] = _json_loads(data["root_cause_name"])
             except (json.JSONDecodeError, TypeError):
@@ -283,7 +280,9 @@ class SessionIndex:
                 (session_id,),
             ).fetchone()
             if row is None:
-                self.upsert({"session_id": session_id, "failure_count": 1, "updated_at": now})
+                self.upsert(
+                    {"session_id": session_id, "failure_count": 1, "updated_at": now}
+                )
                 return
             conn.execute(
                 """
@@ -294,8 +293,14 @@ class SessionIndex:
                 (now, session_id),
             )
 
-    def mark_finished(self, session_id: str, *, doc: Mapping[str, Any] | None = None) -> None:
-        fields: dict[str, Any] = {"session_id": session_id, "status": "finished", "updated_at": _now_iso()}
+    def mark_finished(
+        self, session_id: str, *, doc: Mapping[str, Any] | None = None
+    ) -> None:
+        fields: dict[str, Any] = {
+            "session_id": session_id,
+            "status": "finished",
+            "updated_at": _now_iso(),
+        }
         if doc is not None:
             fields.update(extract_index_fields(doc))
             fields["status"] = "finished"
@@ -341,7 +346,7 @@ class SessionIndex:
     def rebuild_from_results(self, results_dir: str | Path | None = None) -> int:
         """Rebuild index rows from ``results/*/run.json`` artifacts."""
         count = 0
-        for session_dir in _iter_session_dirs(results_dir or RESULTS_DIR):
+        for session_dir in iter_session_dirs(results_dir or RESULTS_DIR):
             run_path = session_dir / RUN_FILENAME
             if not run_path.exists():
                 continue
@@ -384,7 +389,9 @@ class SessionIndex:
                     pass
 
             if fields.get("failure_count", 0) == 0:
-                problem_names = fields.get("problem_names") or run_meta.get("problem_names")
+                problem_names = fields.get("problem_names") or run_meta.get(
+                    "problem_names"
+                )
                 if problem_names:
                     fields["failure_count"] = len(problem_names)
 

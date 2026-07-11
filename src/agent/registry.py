@@ -2,37 +2,100 @@
 
 from typing import Any
 
-from agent.composition import (
-    AgentRunConfig,
-    validate_agent_composition,
-    workflow_agent_kwargs,
-    wrap_agent_extensions,
-)
-from agent.langgraph.plan_execute_agent import PlanExecuteAgent
-from agent.langgraph.react_agent import BasicReActAgent
-from agent.langgraph.reflexion_agent import ReflexionAgent
-from agent.mock.mock_agent import MockAgent
 
-
-def create_agent(config: AgentRunConfig) -> Any:
+def create_agent(
+    agent_type: str,
+    *,
+    session_id: str,
+    model: str,
+    llm_provider: str | None = None,
+    max_steps: int = 20,
+    reasoning_effort: str | None = None,
+    stream_output: bool = True,
+) -> Any:
     """Instantiate an agent for ``agent_type``."""
-    validate_agent_composition(config)
+    match agent_type.lower():
+        case "byo.langgraph":
+            from agent.byo.langgraph.react_agent import BasicReActAgent
 
-    normalized_type = config.normalized_agent_type
-    match normalized_type:
-        case "react":
-            agent = BasicReActAgent(**workflow_agent_kwargs(config))
-        case "plan-execute":
-            agent = PlanExecuteAgent(**workflow_agent_kwargs(config))
-        case "reflexion":
-            agent = ReflexionAgent(**workflow_agent_kwargs(config, reflexion=True))
+            if not llm_provider:
+                raise ValueError(
+                    "byo.langgraph agent requires an LLM provider: set NIKA_LLM_PROVIDER in .env or pass -p/--provider."
+                )
+            return BasicReActAgent(
+                session_id=session_id,
+                llm_provider=llm_provider,
+                model=model,
+                max_steps=max_steps,
+            )
         case "mock":
-            agent = MockAgent(
-                session_id=config.session_id,
-                model=config.model,
-                max_steps=config.max_steps,
+            from agent.mock.mock_agent import MockAgent
+
+            return MockAgent(
+                session_id=session_id,
+                model=model,
+                max_steps=max_steps,
+            )
+        case "sdk.claude_sdk":
+            from agent.sdk.claude_sdk.agent import ClaudeSdkAgent
+
+            return ClaudeSdkAgent(
+                session_id=session_id,
+                model=model,
+                max_steps=max_steps,
+                stream_output=stream_output,
+            )
+        case "sdk.codex_sdk":
+            from agent.sdk.codex_sdk.agent import CodexSdkAgent
+
+            return CodexSdkAgent(
+                session_id=session_id,
+                model=model,
+                reasoning_effort=reasoning_effort,
+                stream_output=stream_output,
+            )
+        case "local_cli.codex_cli":
+            from agent.local_cli.codex_cli.agent import CodexCliAgent
+
+            return CodexCliAgent(
+                session_id=session_id,
+                model=model,
+                reasoning_effort=reasoning_effort,
+                stream_output=stream_output,
+            )
+        case "local_cli.claude_cli":
+            from agent.local_cli.claude_cli.agent import ClaudeAgent
+
+            return ClaudeAgent(
+                session_id=session_id,
+                model=model,
+                stream_output=stream_output,
+            )
+        case "byo.mcp_agent":
+            from agent.byo.mcp_agent.agent import McpAgent
+
+            return McpAgent(
+                session_id=session_id,
+                model=model,
+                max_steps=max_steps,
+                stream_output=stream_output,
+            )
+        case "byo.autogen":
+            from agent.byo.autogen.agent import AutogenAgent
+
+            return AutogenAgent(
+                session_id=session_id,
+                model=model,
+                max_steps=max_steps,
+                stream_output=stream_output,
+            )
+        case "community.sade":
+            from agent.community.sade.agent import SadeAgent
+
+            return SadeAgent(
+                session_id=session_id,
+                model=model,
+                max_steps=max_steps,
             )
         case _:
-            raise ValueError(f"Unsupported agent type: {config.agent_type!r}")
-
-    return wrap_agent_extensions(agent, config)
+            raise ValueError(f"Unsupported agent type: {agent_type!r}")

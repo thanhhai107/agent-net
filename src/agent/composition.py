@@ -8,12 +8,7 @@ works with typed extension config.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
-
-from agent.memory.adapter import MemoryAugmentedAgent
-from agent.memory.service import ProceduralMemoryModule
-
-LANGGRAPH_DIAGNOSIS_AGENT_TYPES = frozenset({"react", "plan-execute", "reflexion"})
+LANGGRAPH_DIAGNOSIS_AGENT_TYPES = frozenset({"react", "byo.langgraph"})
 
 
 @dataclass(frozen=True)
@@ -44,17 +39,25 @@ class MemoryConfig:
 @dataclass(frozen=True)
 class AgentRunConfig:
     agent_type: str
-    llm_backend: str
+    llm_provider: str
     model: str
     max_steps: int
     session_id: str = ""
-    max_attempts: int = 3
     tool_evolution: ToolEvolutionConfig = field(default_factory=ToolEvolutionConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
 
     @property
     def normalized_agent_type(self) -> str:
         return self.agent_type.lower()
+
+    @property
+    def llm_backend(self) -> str:
+        """Compatibility name used by persisted pre-upstream run metadata."""
+        return self.llm_provider
+
+    @property
+    def extensions_enabled(self) -> bool:
+        return self.tool_evolution.enabled or self.memory.enabled
 
 
 def validate_agent_extensions(config: AgentRunConfig) -> None:
@@ -65,7 +68,7 @@ def validate_agent_extensions(config: AgentRunConfig) -> None:
         and agent_type not in LANGGRAPH_DIAGNOSIS_AGENT_TYPES
     ):
         raise ValueError(
-            "Tool Evolution supports react, plan-execute, and reflexion workflows."
+            "Tool Evolution supports only the NIKA ReAct diagnosis workflow."
         )
     if config.tool_evolution.tool_doc_chars < 100:
         raise ValueError("tool_evolution tool_doc_chars must be >= 100")
@@ -98,44 +101,3 @@ def validate_agent_composition(config: AgentRunConfig) -> None:
         raise ValueError("session_id is required to construct an agent")
     validate_agent_extensions(config)
 
-
-def workflow_agent_kwargs(
-    config: AgentRunConfig,
-    *,
-    reflexion: bool = False,
-) -> dict[str, Any]:
-    """Build constructor kwargs for LangGraph diagnosis workflows."""
-    kwargs = {
-        "session_id": config.session_id,
-        "llm_backend": config.llm_backend,
-        "model": config.model,
-        "max_steps": config.max_steps,
-        "tool_evolution_enabled": config.tool_evolution.enabled,
-        "tool_library_id": config.tool_evolution.library_id,
-        "tool_doc_chars": config.tool_evolution.tool_doc_chars,
-    }
-    if reflexion:
-        kwargs["max_attempts"] = config.max_attempts
-    return kwargs
-
-
-def wrap_agent_extensions(agent: Any, config: AgentRunConfig) -> Any:
-    """Wrap a constructed agent with agent-side extensions that need wrappers."""
-    if not config.memory.enabled:
-        return agent
-    return MemoryAugmentedAgent(
-        agent,
-        ProceduralMemoryModule(
-            bank_id=config.memory.bank,
-            llm_backend=config.llm_backend,
-            model=config.model,
-            pool_size=config.memory.pool_size,
-            evolution_threshold=config.memory.evolution_threshold,
-            best_of_n=config.memory.best_of_n,
-            ppo_epsilon=config.memory.ppo_epsilon,
-        ),
-        memory_mode=config.memory.mode,
-        memory_top_k=config.memory.top_k,
-        memory_token_budget=config.memory.token_budget,
-        memory_max_skill_age=config.memory.max_skill_age,
-    )

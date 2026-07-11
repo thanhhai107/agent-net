@@ -12,7 +12,10 @@ from typing import Any
 
 import streamlit as st
 
-from agent.llm.model_factory import DEFAULT_LLM_BACKEND, DEFAULT_MODEL
+from agent.extensions.config import (
+    DEFAULT_LLM_PROVIDER as DEFAULT_LLM_BACKEND,
+    DEFAULT_MODEL,
+)
 from nika.config import BENCHMARK_DIR, RESULTS_DIR
 from nika.utils.agent_config import resolve_max_steps
 from nika.visualization.experiment_runner import (
@@ -1043,10 +1046,7 @@ st.markdown('<div class="section-title">Studio</div>', unsafe_allow_html=True)
 with st.expander("Baseline Settings", expanded=True):
     b_col1, b_col2, b_col3 = st.columns([1.2, 1, 1.5], gap="small")
     with b_col1:
-        agent_type = st.selectbox(
-            "Workflow",
-            ["react", "plan-execute", "reflexion", "mock"],
-        )
+        agent_type = st.selectbox("Workflow", ["react"])
     with b_col2:
         backend_options = ["custom", "openai", "deepseek", "ollama"]
         llm_backend = st.selectbox(
@@ -1059,7 +1059,7 @@ with st.expander("Baseline Settings", expanded=True):
     with b_col3:
         model = st.text_input("Model", value=DEFAULT_MODEL)
 
-    b_col4, b_col5, b_col6 = st.columns([1.5, 1, 0.8], gap="small")
+    b_col4, b_col5 = st.columns([1.5, 1], gap="small")
     with b_col4:
         benchmark_name = st.text_input(
             "Benchmark",
@@ -1071,9 +1071,6 @@ with st.expander("Baseline Settings", expanded=True):
         default_max_steps = resolve_max_steps(None)
         max_steps_str = st.text_input("Steps", value=str(default_max_steps))
         max_steps = int(max_steps_str) if max_steps_str.isdigit() else default_max_steps
-    with b_col6:
-        max_attempts_str = st.text_input("Attempts", value="3")
-        max_attempts = int(max_attempts_str) if max_attempts_str.isdigit() else 3
  
 st.markdown("<div style='margin-top: 0.5rem;'></div>", unsafe_allow_html=True)
 col_modules = st.columns(2, gap="medium")
@@ -1209,7 +1206,6 @@ config = {
     "llm_backend": llm_backend,
     "model": model,
     "max_steps": int(max_steps),
-    "max_attempts": int(max_attempts),
     "parallel": 1,
     "tool_library_id": tool_library_id,
     "tool_doc_chars": int(tool_doc_chars),

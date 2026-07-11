@@ -13,7 +13,7 @@ _REDACTED = "[redacted]"
 @lru_cache(maxsize=1)
 def _known_root_cause_ids() -> tuple[str, ...]:
     try:
-        from nika.orchestrator.problems.prob_pool import list_avail_problem_names
+        from nika.problems.prob_pool import list_avail_problem_names
 
         return tuple(
             sorted(

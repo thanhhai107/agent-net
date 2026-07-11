@@ -10,10 +10,13 @@ import typer
 import yaml
 
 from agent.composition import MemoryConfig
-from agent.llm.model_factory import DEFAULT_LLM_BACKEND, DEFAULT_MODEL
+from agent.extensions.config import (
+    DEFAULT_LLM_PROVIDER as DEFAULT_LLM_BACKEND,
+    DEFAULT_MODEL,
+)
 from nika.utils.agent_config import resolve_max_steps
 from agent.memory.service import ProceduralMemoryModule
-from nika.config import MEMORY_DIR
+from agent.extensions.config import MEMORY_DIR
 from nika.workflows.benchmark.load_config import load_benchmark_yaml
 from nika.workflows.benchmark.run import (
     default_benchmark_yaml_path,

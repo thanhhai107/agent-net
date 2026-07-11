@@ -2,182 +2,120 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
+import re
 import subprocess
 import sys
-import textwrap
-import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-from langgraph.errors import GraphRecursionError
+from pydantic import ValidationError
 
-from agent.composition import (
-    AgentRunConfig,
-    MemoryConfig,
-    ToolEvolutionConfig,
-    validate_agent_extensions,
-)
-from nika.config import BENCHMARK_DIR, RESULTS_DIR
-from nika.net_env.net_env_pool import get_net_env_instance, scenario_requires_topo_tier
-from nika.utils.experiment_naming import benchmark_stem, next_experiment_id
-from nika.utils.kathara_cleanup import ensure_kathara_clean
-from nika.utils.logger import log_event
+from nika.config import BENCHMARK_DIR
+from nika.utils.session import Session
+from nika.utils.session_store import SessionStore
+from nika.net_env.net_env_pool import scenario_requires_topo_size
+from nika.problems.prob_pool import get_problem_instance
 from nika.workflows.agent.run import start_agent
-from nika.workflows.benchmark.inject_defaults import resolve_inject_params
 from nika.workflows.benchmark.load_config import load_benchmark_yaml
+from nika.workflows.benchmark.resume import (
+    benchmark_row_fingerprint,
+    benchmark_row_from_case,
+    scan_benchmark_cases,
+)
 from nika.workflows.env.start import start_net_env
 from nika.workflows.eval.session import eval_results
 from nika.workflows.failure.inject import inject_failure
-from nika.workflows.session.close import close_session
 
 _BENCHMARK_DONE_PREFIX = "benchmark_done "
-_BENCHMARK_FAILED_PREFIX = "benchmark_failed "
-_BENCHMARK_PROGRESS_PREFIX = "benchmark_progress "
-_BENCHMARK_SKIP_PREFIX = "benchmark_skip "
-_BENCHMARK_START_PREFIX = "benchmark_start "
-_BENCHMARK_SUMMARY_PREFIX = "benchmark_summary "
-
-NO_FAULT_PROBLEM = "no_fault"
-_NO_FAULT_ALIASES = frozenset({NO_FAULT_PROBLEM, "clean", "normal", "none", "healthy"})
-
-
-def _is_context_window_error(exc: Exception) -> bool:
-    text = f"{type(exc).__name__}: {exc}".lower()
-    return (
-        "contextwindowexceeded" in text
-        or "maximum context length" in text
-        or ("input length" in text and "context length" in text)
-    )
-
-
-def is_no_fault_problem(problem: str | None) -> bool:
-    """Return True for benchmark rows that intentionally inject no failure."""
-    return str(problem or "").strip().lower() in _NO_FAULT_ALIASES
+_BENCHMARK_DONE_RE = re.compile(
+    r"benchmark_done session_id=(\S+) scenario=(\S+) problem=(\S+) session_dir=(\S+)"
+)
 
 
 def default_benchmark_yaml_path() -> str:
-    return str(BENCHMARK_DIR / "benchmark_evaluate.yaml")
+    return str(BENCHMARK_DIR / "benchmark_selected.yaml")
 
 
-def _new_benchmark_results_root(benchmark_name: str) -> Path:
-    root = Path(RESULTS_DIR) / next_experiment_id(benchmark_name)
-    root.mkdir(parents=True, exist_ok=False)
-    return root
+def validate_inject_params(
+    problem: str,
+    scenario: str,
+    topo_size: str,
+    params: dict[str, str],
+) -> None:
+    """Raise ValueError if inject params do not satisfy the problem schema."""
+    if not params:
+        raise ValueError(
+            f"Missing inject parameters for {problem!r}. "
+            f"Use --config with a YAML case or pass complete --set key=value flags. "
+            f"Run `nika failure describe {problem}` for required fields."
+        )
 
-
-def _stable_fault_seed(benchmark_name: str, row: dict) -> str:
-    parts = [
-        benchmark_name,
-        str(row.get("scenario", "")),
-        str(row.get("problem", "")),
-        str(row.get("topo_size") or ""),
-        repr(sorted((row.get("inject") or {}).items())),
-        str(row.get("benchmark_index") or ""),
-    ]
-    return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()[:16]
+    kwargs: dict = {}
+    if topo_size:
+        kwargs["topo_size"] = topo_size
+    problem_inst = get_problem_instance(
+        problem_names=[problem],
+        scenario_name=scenario,
+        **kwargs,
+    )
+    params_class = getattr(type(problem_inst), "Params", None)
+    if params_class is None:
+        if params:
+            raise ValueError(f"Problem {problem!r} does not accept inject parameters.")
+        return
+    try:
+        params_class(**params)
+    except ValidationError as exc:
+        raise ValueError(
+            f"Invalid or incomplete inject parameters for {problem!r}: {exc}. "
+            f"Run `nika failure describe {problem}` for required fields."
+        ) from exc
 
 
 def _benchmark_row_cli_args(
     row: dict,
     *,
     agent_type: str,
-    llm_backend: str,
-    model: str,
-    max_steps: int,
-    max_attempts: int,
-    memory: MemoryConfig | None = None,
-    run_judge: bool = False,
-    judge_llm_backend: str | None = None,
-    judge_model: str | None = None,
-    tool_evolution: ToolEvolutionConfig | None = None,
-    result_root: str | Path | None = None,
-    fault_seed: str | None = None,
+    llm_provider: str | None,
+    model: str | None,
+    max_steps: int | None,
+    run_judge: bool,
+    judge_llm_provider: str | None,
+    judge_model: str | None,
+    result_dir: str | None = None,
+    session_tag: str | None = None,
 ) -> list[str]:
-    memory = memory or MemoryConfig()
-    tool_evolution = tool_evolution or ToolEvolutionConfig()
     args = [
         row["scenario"],
         "--problem",
         row["problem"],
         "-a",
         agent_type,
-        "-b",
-        llm_backend,
-        "-m",
-        model,
-        "-n",
-        str(max_steps),
-        "-r",
-        str(max_attempts),
     ]
-    if memory.mode == "evolve":
-        args += [
-            "--memory",
-            memory.bank,
-            "--memory-k",
-            str(memory.top_k),
-            "--memory-tokens",
-            str(memory.token_budget),
-            "--memory-max-skill-age",
-            str(memory.max_skill_age),
-            "--memory-pool-size",
-            str(memory.pool_size),
-            "--memory-evolution-threshold",
-            str(memory.evolution_threshold),
-            "--memory-best-of-n",
-            str(memory.best_of_n),
-            "--memory-ppo-epsilon",
-            str(memory.ppo_epsilon),
-        ]
-    elif memory.mode == "read":
-        args += [
-            "--memory-read",
-            memory.bank,
-            "--memory-k",
-            str(memory.top_k),
-            "--memory-tokens",
-            str(memory.token_budget),
-            "--memory-max-skill-age",
-            str(memory.max_skill_age),
-            "--memory-pool-size",
-            str(memory.pool_size),
-            "--memory-evolution-threshold",
-            str(memory.evolution_threshold),
-            "--memory-best-of-n",
-            str(memory.best_of_n),
-            "--memory-ppo-epsilon",
-            str(memory.ppo_epsilon),
-        ]
-    if tool_evolution.enabled:
-        args += [
-            "--tools",
-            tool_evolution.library_id,
-            "--tool-doc-chars",
-            str(tool_evolution.tool_doc_chars),
-            "--tool-convergence-threshold",
-            str(tool_evolution.convergence_threshold),
-        ]
+    if llm_provider:
+        args += ["-p", llm_provider]
+    if model:
+        args += ["-m", model]
+    if max_steps is not None:
+        args += ["-n", str(max_steps)]
     topo = row.get("topo_size") or ""
-    if topo and topo != "-":
-        args += ["-t", topo]
+    if topo:
+        args += ["-s", topo]
     inject = row.get("inject") or {}
     for key, value in inject.items():
         args += ["--set", f"{key}={value}"]
     if run_judge:
         args += [
             "--judge",
-            "--judge-backend",
-            judge_llm_backend,
+            "--judge-provider",
+            judge_llm_provider,
             "--judge-model",
             judge_model,
         ]
-    if result_root is not None:
-        args += ["--result-root", str(result_root)]
-    if fault_seed is not None:
-        args += ["--fault-seed", fault_seed]
-    if row.get("benchmark_index") is not None:
-        args += ["--benchmark-index", str(row["benchmark_index"])]
+    if result_dir:
+        args += ["--result_dir", result_dir]
+    if session_tag:
+        args += ["--session-tag", session_tag]
     return args
 
 
@@ -185,33 +123,27 @@ def _run_benchmark_row_subprocess(
     row: dict,
     *,
     agent_type: str,
-    llm_backend: str,
-    model: str,
-    max_steps: int,
-    max_attempts: int,
-    memory: MemoryConfig,
+    llm_provider: str | None,
+    model: str | None,
+    max_steps: int | None,
     run_judge: bool,
-    judge_llm_backend: str | None,
+    judge_llm_provider: str | None,
     judge_model: str | None,
-    tool_evolution: ToolEvolutionConfig,
-    result_root: str | Path | None = None,
-    fault_seed: str | None = None,
-) -> str | None:
-    """Run one YAML case via a subprocess for isolated Tool Evolution execution."""
+    result_dir: str | None = None,
+    session_tag: str | None = None,
+) -> None:
+    """Run one YAML row via a subprocess for thread-safe parallel batch execution."""
     cli_args = _benchmark_row_cli_args(
         row,
         agent_type=agent_type,
-        llm_backend=llm_backend,
+        llm_provider=llm_provider,
         model=model,
         max_steps=max_steps,
-        max_attempts=max_attempts,
-        memory=memory,
         run_judge=run_judge,
-        judge_llm_backend=judge_llm_backend,
+        judge_llm_provider=judge_llm_provider,
         judge_model=judge_model,
-        tool_evolution=tool_evolution,
-        result_root=result_root,
-        fault_seed=fault_seed,
+        result_dir=result_dir,
+        session_tag=session_tag,
     )
     proc = subprocess.run(
         [sys.executable, "-m", "nika.cli.main", "benchmark", "run", *cli_args],
@@ -228,439 +160,198 @@ def _run_benchmark_row_subprocess(
             f"[{scenario}/{problem}] `nika benchmark run {' '.join(cli_args)}` "
             f"exited {proc.returncode}:\n{output}"
         )
-    done_lines = [
-        line for line in output.splitlines() if line.startswith(_BENCHMARK_DONE_PREFIX)
-    ]
-    if done_lines:
-        print(done_lines[-1], flush=True)
-        for part in done_lines[-1].split():
-            if part.startswith("session_id="):
-                return part.split("=", 1)[1]
-    return None
+    if output:
+        print(output, end="" if output.endswith("\n") else "\n")
 
 
-def _event_token(value: object) -> str:
-    text = str(value if value is not None else "-").strip() or "-"
-    return "_".join(text.split())
-
-
-def _inject_event_tokens(inject: object) -> list[str]:
-    if isinstance(inject, dict):
-        return [
-            f"inject_{_event_token(key)}={_event_token(value)}"
-            for key, value in sorted(inject.items())
-        ]
-    return []
-
-
-def _progress_row_label(row: dict) -> str:
-    parts = [
-        f"scenario={_event_token(row.get('scenario', '?'))}",
-        f"topo_size={_event_token(row.get('topo_size') or '-')}",
-        f"problem={_event_token(row.get('problem', '?'))}",
-    ]
-    parts.extend(_inject_event_tokens(row.get("inject") or {}))
-    return " ".join(parts)
-
-
-def _completed_benchmark_indices(result_root: Path) -> set[int]:
-    """Return YAML benchmark indices that already have completed session outputs."""
-    completed: set[int] = set()
-    if not result_root.exists():
-        return completed
-    for run_file in result_root.glob("*/run.json"):
-        try:
-            run_meta = json.loads(run_file.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        if run_meta.get("status") != "finished":
-            continue
-        if not (run_file.parent / "eval_metrics.json").exists():
-            continue
-        try:
-            completed.add(int(run_meta["benchmark_index"]))
-        except (KeyError, TypeError, ValueError):
-            continue
-    return completed
-
-
-def _no_fault_ground_truth() -> dict[str, object]:
-    return {
-        "is_anomaly": False,
-        "faulty_devices": [],
-        "root_cause_name": [],
-    }
-
-
-def _diagnostic_task_description_for_current_state(
+def _run_benchmark_batch_parallel(
+    indexed_rows: list[tuple[int, dict]],
     *,
-    scenario: str,
-    tier: str | None,
-    lab_name: str,
-) -> str:
-    net_env = get_net_env_instance(scenario, topo_size=tier, lab_name=lab_name)
-    net_desc = net_env.get_info()
-    tmpl = """\
-        You are provided with the following network description and its current state:
-        {net_desc}
-
-        Your goal is to analyze the network condition and, if needed, use the available tools.
-        You need to generate a troubleshooting diagnosis report.
-        The report should reflect your assessment of the network's health,
-        indicate any abnormal behavior you identify, and describe relevant
-        findings based on your analysis.
-
-        Focus on producing an informative and coherent diagnostic report
-        derived from the network state.
-        Do not need to propose any solutions or remediation steps at this stage.
-        """
-    return textwrap.dedent(tmpl).format(net_desc=net_desc).strip()
-
-
-def _prepare_no_fault_session(
-    session,
-    *,
-    scenario: str,
-    tier: str | None,
+    agent_type: str,
+    llm_provider: str | None,
+    model: str | None,
+    max_steps: int | None,
+    run_judge: bool,
+    judge_llm_provider: str | None,
+    judge_model: str | None,
+    result_dir: str | None = None,
+    session_tag: str | None = None,
 ) -> None:
-    session.update_session("problem_names", [])
-    session.update_session("root_cause_name", NO_FAULT_PROBLEM)
-    session.update_session("root_cause_category", "none")
-    session.update_session(
-        "task_description",
-        _diagnostic_task_description_for_current_state(
-            scenario=scenario,
-            tier=tier,
-            lab_name=session.lab_name,
-        ),
+    """Run indexed rows simultaneously (one subprocess each), then return."""
+    shared_kwargs = dict(
+        agent_type=agent_type,
+        llm_provider=llm_provider,
+        model=model,
+        max_steps=max_steps,
+        run_judge=run_judge,
+        judge_llm_provider=judge_llm_provider,
+        judge_model=judge_model,
+        result_dir=result_dir,
+        session_tag=session_tag,
     )
-    session.write_gt(_no_fault_ground_truth())
-    log_event(
-        "no_fault_ground_truth_saved",
-        f"Clean benchmark control saved for session {session.session_id}.",
-        session_id=session.session_id,
-        scenario=scenario,
-        topo_size=tier,
-    )
+    with ThreadPoolExecutor(max_workers=len(indexed_rows)) as pool:
+        futures = [
+            pool.submit(_run_benchmark_row_subprocess, row, **shared_kwargs)
+            for _index, row in indexed_rows
+        ]
+        for future in as_completed(futures):
+            future.result()
 
 
-def run_single_benchmark(
+def run_single_case(
     problem: str,
     scenario: str,
     topo_size: str,
     agent_type: str,
-    llm_backend: str,
-    model: str,
-    max_steps: int,
-    max_attempts: int = 3,
+    llm_provider: str | None,
+    model: str | None,
+    max_steps: int | None,
     *,
-    memory: MemoryConfig | None = None,
+    inject_params: dict[str, str],
     run_judge: bool = False,
-    judge_llm_backend: str | None = None,
+    judge_llm_provider: str | None = None,
     judge_model: str | None = None,
-    tool_evolution: ToolEvolutionConfig | None = None,
-    result_root: str | Path | None = None,
-    fault_seed: str | None = None,
-    benchmark_index: int | None = None,
-    inject_params: dict[str, str] | None = None,
-) -> str:
-    """
-    Run a single benchmark case.
+    result_dir: str | None = None,
+    session_tag: str | None = None,
+) -> tuple[str, Path]:
+    """Run one benchmark case (env → inject → agent → eval).
 
     Returns:
-        The session id for the completed run.
+        The session id and session directory for the completed run.
     """
-    ensure_kathara_clean(context="benchmark case")
     print(
         f"Running benchmark for Problem: {problem}, Scenario: {scenario}, Topo Size: {topo_size}"
     )
-    memory = memory or MemoryConfig()
-    tool_evolution = tool_evolution or ToolEvolutionConfig()
-    validate_agent_extensions(
-        AgentRunConfig(
-            agent_type=agent_type,
-            llm_backend=llm_backend,
-            model=model,
-            max_steps=max_steps,
-            max_attempts=max_attempts,
-            tool_evolution=tool_evolution,
-            memory=memory,
-        )
-    )
 
-    tier = topo_size if topo_size else None
-    if scenario_requires_topo_tier(scenario) and not tier:
+    size = topo_size if topo_size else None
+    if scenario_requires_topo_size(scenario) and not size:
         raise ValueError(
-            f"Scenario '{scenario}' requires a non-empty topology tier (-t s|m|l)."
+            f"Scenario '{scenario}' requires a non-empty topology size (-s s|m|l)."
         )
-    if not scenario_requires_topo_tier(scenario):
-        tier = None
+    if not scenario_requires_topo_size(scenario):
+        size = None
 
-    session_id = start_net_env(scenario, tier, redeploy=True, results_root=result_root)
-    from nika.utils.session import Session
+    validate_inject_params(problem, scenario, topo_size or "", inject_params)
+    params = dict(inject_params)
 
-    session = Session().load_running_session(session_id=session_id)
-    session_dir = Path(
-        getattr(session, "session_dir", Path(result_root or RESULTS_DIR) / session_id)
+    session_id = start_net_env(
+        scenario, size, redeploy=True, result_dir=result_dir, session_tag=session_tag
     )
-    if fault_seed is not None:
-        session.update_session("fault_seed", fault_seed)
-    if benchmark_index is not None:
-        session.update_session("benchmark_index", benchmark_index)
+    session_dir = Path(SessionStore().get_session(session_id)["session_dir"])
 
-    actual_inject_params: dict[str, str] = {}
-    if is_no_fault_problem(problem):
-        if inject_params:
-            raise ValueError("No-fault benchmark cases do not accept inject parameters.")
-        _prepare_no_fault_session(
-            session,
-            scenario=scenario,
-            tier=tier,
-        )
-    else:
-        params = dict(
-            inject_params or resolve_inject_params(problem, scenario, topo_size or "")
-        )
-        actual_inject_params = params
-        inject_failure(
-            problem_names=[problem],
-            session_id=session_id,
-            param_overrides=params,
-        )
-        session = Session().load_running_session(session_id=session_id)
-        session_dir = Path(
-            getattr(session, "session_dir", Path(result_root or RESULTS_DIR) / session_id)
-        )
+    inject_failure(
+        problem_names=[problem], session_id=session_id, param_overrides=params
+    )
 
-    try:
-        try:
-            start_agent(
-                AgentRunConfig(
-                    agent_type=agent_type,
-                    llm_backend=llm_backend,
-                    model=model,
-                    max_steps=max_steps,
-                    max_attempts=max_attempts,
-                    tool_evolution=tool_evolution,
-                    memory=memory,
-                ),
-                session_id=session_id,
-            )
-        except GraphRecursionError:
-            log_event(
-                "agent_max_recursion",
-                f"Agent reached max recursion limit for session {session_id}; evaluating as missing submission.",
-                session_id=session_id,
-            )
-        except Exception as exc:
-            if not _is_context_window_error(exc):
-                raise
-            log_event(
-                "agent_context_window_exceeded",
-                (
-                    f"Agent exceeded the model context window for session {session_id}; "
-                    "evaluating as missing submission."
-                ),
-                session_id=session_id,
-                error=str(exc)[:500],
-            )
-        eval_results(
-            session_id=session_id,
-            run_judge=run_judge,
-            judge_llm_backend=judge_llm_backend,
-            judge_model=judge_model,
-        )
-    except Exception:
-        try:
-            close_session(session_id=session_id, undeploy=True)
-        except (FileNotFoundError, ValueError):
-            pass
-        raise
+    row = benchmark_row_from_case(
+        scenario=scenario,
+        problem=problem,
+        topo_size=topo_size,
+        inject_params=params,
+    )
+    Session().load_running_session(session_id=session_id).update_session(
+        "benchmark_fingerprint",
+        benchmark_row_fingerprint(row),
+    )
 
-    done_parts = [
-        f"{_BENCHMARK_DONE_PREFIX}session_id={session_id}",
-        f"scenario={_event_token(scenario)}",
-        f"problem={_event_token(problem)}",
-        f"session_dir={session_dir}",
-        f"topo_size={_event_token(topo_size or '-')}",
-        *_inject_event_tokens(actual_inject_params),
-    ]
-    print(" ".join(done_parts))
-    return session_id
+    start_agent(
+        agent_type=agent_type,
+        llm_provider=llm_provider,
+        model=model,
+        max_steps=max_steps,
+        session_id=session_id,
+        stream_output=False,
+    )
+
+    eval_results(
+        session_id=session_id,
+        run_judge=run_judge,
+        judge_llm_provider=judge_llm_provider,
+        judge_model=judge_model,
+    )
+
+    print(
+        f"{_BENCHMARK_DONE_PREFIX}session_id={session_id} scenario={scenario} "
+        f"problem={problem} session_dir={session_dir}"
+    )
+    return session_id, session_dir
 
 
 def run_benchmark_from_yaml(
     benchmark_file: str,
     agent_type: str,
-    llm_backend: str,
-    model: str,
-    max_steps: int,
-    max_attempts: int = 3,
+    llm_provider: str | None,
+    model: str | None,
+    max_steps: int | None,
     *,
-    memory: MemoryConfig | None = None,
+    batch_size: int = 1,
     run_judge: bool = False,
-    judge_llm_backend: str | None = None,
+    judge_llm_provider: str | None = None,
     judge_model: str | None = None,
-    tool_evolution: ToolEvolutionConfig | None = None,
-    result_root: str | Path | None = None,
-    resume: bool = False,
+    result_dir: str | None = None,
+    resume: bool = True,
+    session_tag: str | None = None,
 ) -> None:
     """
     Run benchmark cases defined in a YAML file.
 
-    The YAML file must contain a top-level ``cases`` list. Each case includes
-    ``scenario``, ``problem``, optional ``topo_size``, and deterministic
-    ``inject`` parameters.
+    Each case must include scenario, problem, optional topo_size, and inject params.
+
+    All rows are scanned first against existing session dirs under ``--result_dir``:
+    completed cases are skipped and incomplete ones are cleaned. Remaining cases run
+    sequentially when ``batch_size == 1`` (default), or in parallel chunks when
+    ``batch_size > 1``. Re-run the same command to resume after an interruption.
     """
-    memory_config = memory or MemoryConfig()
-    tool_config = tool_evolution or ToolEvolutionConfig()
-    validate_agent_extensions(
-        AgentRunConfig(
-            agent_type=agent_type,
-            llm_backend=llm_backend,
-            model=model,
-            max_steps=max_steps,
-            max_attempts=max_attempts,
-            tool_evolution=tool_config,
-            memory=memory_config,
-        )
-    )
+    if batch_size < 1:
+        raise ValueError("batch_size must be >= 1")
+
     rows = load_benchmark_yaml(benchmark_file)
 
     if not rows:
-        print(f"No benchmark cases found in {benchmark_file}")
+        print(f"No benchmark rows found in {benchmark_file}")
         return
-    benchmark_name = benchmark_stem(benchmark_file)
-    benchmark_root = (
-        Path(result_root)
-        if result_root is not None
-        else _new_benchmark_results_root(benchmark_name)
-    )
-    benchmark_root.mkdir(parents=True, exist_ok=True)
-    if tool_config.enabled:
-        print(
-            "tool_evolution_library "
-            f"id={tool_config.library_id} "
-            f"doc_chars={tool_config.tool_doc_chars} "
-            f"convergence={tool_config.convergence_threshold}"
-        )
-    if memory_config.enabled:
-        print(
-            "memory_bank "
-            f"id={memory_config.bank} "
-            f"mode={memory_config.mode} "
-            f"top_k={memory_config.top_k} "
-            f"tokens={memory_config.token_budget} "
-            f"max_age={memory_config.max_skill_age} "
-            f"pool={memory_config.pool_size} "
-            f"threshold={memory_config.evolution_threshold} "
-            f"best_of_n={memory_config.best_of_n} "
-            f"ppo_epsilon={memory_config.ppo_epsilon}"
-        )
 
-    total = len(rows)
-    prepared_rows: list[dict] = []
-    for index, raw_row in enumerate(rows):
-        row = dict(raw_row)
-        row["benchmark_index"] = str(index)
-        if not row.get("fault_seed"):
-            row["fault_seed"] = _stable_fault_seed(benchmark_name, row)
-        prepared_rows.append(row)
-    valid_indices = {int(row["benchmark_index"]) for row in prepared_rows}
-    completed_indices = (
-        _completed_benchmark_indices(benchmark_root) & valid_indices if resume else set()
-    )
-    skipped = len(completed_indices)
-    completed = skipped
-    failed = 0
-    batch_started_at = time.monotonic()
-    print(
-        f"{_BENCHMARK_PROGRESS_PREFIX}total={total} completed={completed} "
-        f"failed=0 skipped={skipped} yaml={benchmark_file} "
-        f"result_root={benchmark_root}",
-        flush=True,
+    _shared_kwargs = dict(
+        agent_type=agent_type,
+        llm_provider=llm_provider,
+        model=model,
+        max_steps=max_steps,
+        run_judge=run_judge,
+        judge_llm_provider=judge_llm_provider,
+        judge_model=judge_model,
+        result_dir=result_dir,
+        session_tag=session_tag,
     )
 
-    for index, row in enumerate(prepared_rows):
-        row_index = int(row["benchmark_index"])
-        if row_index in completed_indices:
-            print(
-                f"{_BENCHMARK_SKIP_PREFIX}index={index + 1}/{total} "
-                f"completed={completed} failed={failed} skipped={skipped} "
-                f"{_progress_row_label(row)}",
-                flush=True,
-            )
-            continue
-        case_started_at = time.monotonic()
-        print(
-            f"{_BENCHMARK_START_PREFIX}index={index + 1}/{total} "
-            f"{_progress_row_label(row)}",
-            flush=True,
-        )
-        try:
-            if tool_config.enabled:
-                session_id = _run_benchmark_row_subprocess(
-                    row,
-                    agent_type=agent_type,
-                    llm_backend=llm_backend,
-                    model=model,
-                    max_steps=max_steps,
-                    max_attempts=max_attempts,
-                    memory=memory_config,
-                    run_judge=run_judge,
-                    judge_llm_backend=judge_llm_backend,
-                    judge_model=judge_model,
-                    tool_evolution=tool_config,
-                    result_root=benchmark_root,
-                    fault_seed=row.get("fault_seed"),
-                )
-            else:
-                session_id = run_single_benchmark(
-                    problem=row["problem"],
-                    scenario=row["scenario"],
-                    topo_size=(
-                        ""
-                        if (row.get("topo_size") or "") == "-"
-                        else (row.get("topo_size") or "")
-                    ),
-                    agent_type=agent_type,
-                    llm_backend=llm_backend,
-                    model=model,
-                    max_steps=max_steps,
-                    max_attempts=max_attempts,
-                    memory=memory_config,
-                    run_judge=run_judge,
-                    judge_llm_backend=judge_llm_backend,
-                    judge_model=judge_model,
-                    tool_evolution=tool_config,
-                    result_root=benchmark_root,
-                    fault_seed=row.get("fault_seed"),
-                    inject_params=row.get("inject"),
-                    benchmark_index=int(row["benchmark_index"]),
-                )
-        except Exception as exc:
-            failed += 1
-            elapsed = time.monotonic() - case_started_at
-            error = str(exc).replace("\n", " ")[:500]
-            print(
-                f"{_BENCHMARK_FAILED_PREFIX}index={index + 1}/{total} "
-                f"completed={completed} failed={failed} elapsed_sec={elapsed:.1f} "
-                f"error_type={type(exc).__name__} error={error!r} "
-                f"{_progress_row_label(row)}",
-                flush=True,
-            )
-            raise
-        completed += 1
-        elapsed = time.monotonic() - case_started_at
-        print(
-            f"{_BENCHMARK_PROGRESS_PREFIX}index={index + 1}/{total} "
-            f"completed={completed} failed={failed} elapsed_sec={elapsed:.1f} "
-            f"session_id={session_id or '-'} {_progress_row_label(row)}",
-            flush=True,
-        )
-    total_elapsed = time.monotonic() - batch_started_at
-    print(
-        f"{_BENCHMARK_SUMMARY_PREFIX}total={total} completed={completed} "
-        f"failed={failed} skipped={skipped} elapsed_sec={total_elapsed:.1f}",
-        flush=True,
+    _results_root, pending = scan_benchmark_cases(
+        rows=rows,
+        result_dir=result_dir,
+        resume=resume,
     )
+    if not pending:
+        return
+
+    if batch_size == 1:
+        for index in pending:
+            row = rows[index]
+            label = f"[{index + 1}/{len(rows)}] {row['scenario']}/{row['problem']}"
+            print(f"{label} running")
+            run_single_case(
+                problem=row["problem"],
+                scenario=row["scenario"],
+                topo_size=row.get("topo_size") or "",
+                inject_params=row["inject"],
+                **_shared_kwargs,
+            )
+        return
+
+    for chunk_start in range(0, len(pending), batch_size):
+        chunk_indices = pending[chunk_start : chunk_start + batch_size]
+        indexed_rows = [(index, rows[index]) for index in chunk_indices]
+        first = chunk_indices[0] + 1
+        last = chunk_indices[-1] + 1
+        print(
+            f"[batch {chunk_start // batch_size + 1}] running {len(chunk_indices)} session(s) in parallel "
+            f"(rows {first}–{last} of {len(rows)})"
+        )
+        _run_benchmark_batch_parallel(indexed_rows, **_shared_kwargs)

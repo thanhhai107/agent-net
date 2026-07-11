@@ -24,7 +24,7 @@ from agent.learning_llm import (
     learning_model,
     learning_timeout_seconds,
 )
-from agent.llm.model_factory import load_model
+from agent.extensions.llm import load_extension_model as load_model
 from agent.memory.safety import redact_oracle_markers
 from agent.memory.attributes import infer_memory_attributes
 from agent.memory.models import (

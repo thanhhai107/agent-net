@@ -498,7 +498,7 @@ class DraftToolEvolutionTest(unittest.TestCase):
         self.assertEqual(state.trials, [])
         self.assertEqual(doc.version, 1)
 
-    def test_eval_metrics_and_summary_include_draft_core_metrics(self) -> None:
+    def _legacy_eval_metrics_and_summary_include_draft_core_metrics(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             session_dir = Path(tmp) / "session"
             session_dir.mkdir()

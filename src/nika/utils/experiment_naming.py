@@ -5,7 +5,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from nika.config import MEMORY_DIR, RESULTS_DIR, RUNTIME_DIR, TOOL_EVOLUTION_DIR
+from agent.extensions.config import MEMORY_DIR, TOOL_EVOLUTION_DIR
+from nika.config import RESULTS_DIR, RUNTIME_DIR
 
 STREAMLIT_RUNS_DIR = RUNTIME_DIR / "streamlit_runs"
 SEQUENCE_WIDTH = 4

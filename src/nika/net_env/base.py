@@ -1,18 +1,28 @@
-import time
 from collections import defaultdict
-from typing import Dict, Set
+from pathlib import Path
+from typing import ClassVar, Dict, Set
 
-from Kathara.manager.Kathara import Kathara, Machine
+from Kathara.manager.Kathara import Machine
 
-from nika.net_env.utils.docker_files.docker_images import ensure_nika_docker_images
+from nika.net_env.kathara.utils.docker_files.docker_images import (
+    ensure_nika_docker_images,
+)
+from nika.runtime.base import LabRuntime
+from nika.runtime.factory import runtime_for_net_env
+from nika.runtime.spec import LabSpec
 
 
 class NetworkEnvBase:
-    LAB_NAME = None
+    LAB_NAME: ClassVar[str | None] = None
+    SUPPORTED_BACKENDS: ClassVar[list[str]] = ["kathara"]
     """
     Base class for network environments."""
 
-    def __init__(self):
+    def __init__(self, *, backend: str = "kathara", **kwargs):
+        self.backend = backend
+        self.runtime: LabRuntime | None = None
+        self.topology_file: Path | None = None
+        self.runtime_workdir: Path | None = None
         self.name = None
         self.desc = None
         self.instance = None
@@ -25,6 +35,15 @@ class NetworkEnvBase:
         self.links = None
         self.switches = None
         self.servers = None
+
+    def get_lab_spec(self) -> LabSpec | None:
+        """Containerlab-native scenarios may override; Kathara scenarios return None."""
+        return None
+
+    def _build_runtime(self) -> LabRuntime:
+        if self.runtime is None:
+            self.runtime = runtime_for_net_env(self)
+        return self.runtime
 
     def load_machines(self):
         self.bmv2_switches = []
@@ -115,12 +134,16 @@ class NetworkEnvBase:
             summary += f"PCs: {', '.join(self.hosts)}\n"
         if self.servers:
             for server_type, server_list in self.servers.items():
-                summary += f"{server_type.capitalize()} Servers: {', '.join(server_list)}\n"
+                summary += (
+                    f"{server_type.capitalize()} Servers: {', '.join(server_list)}\n"
+                )
         if self.routers:
             summary += f"Routers (FRRRouting): {', '.join(self.routers)}\n"
         if self.links:
             summary += f"Links: {', '.join(self.links)}\n"
-        summary += f"Topology: {', '.join(f'({a}, {b})' for a, b in self.get_topology())}"
+        summary += (
+            f"Topology: {', '.join(f'({a}, {b})' for a, b in self.get_topology())}"
+        )
         return summary
 
     def __str__(self):
@@ -129,13 +152,14 @@ class NetworkEnvBase:
         """
         return self.get_info()
 
+    def _ensure_runtime_files(self) -> None:
+        if hasattr(self, "_prepare_runtime_files") and self.topology_file is None:
+            self._prepare_runtime_files()
+
     def lab_exists(self):
         """Check if the lab exists"""
-        tmp_lab = self.instance.get_lab_from_api(lab_name=self.name)
-        tmp_machines = tmp_lab.machines
-        if len(tmp_machines) == 0 or tmp_machines is None:
-            return False
-        return True
+        self._ensure_runtime_files()
+        return self._build_runtime().exists()
 
     def _collect_lab_images(self) -> Set[str]:
         if not self.lab or not self.lab.machines:
@@ -148,17 +172,21 @@ class NetworkEnvBase:
 
     def deploy(self):
         """Deploy the lab"""
-        if self.lab_exists():
+        self._ensure_runtime_files()
+        runtime = self._build_runtime()
+        if runtime.exists():
             print(f"Lab {self.name} exists")
             return
-        self._ensure_docker_images()
-        Kathara.get_instance().deploy_lab(lab=self.lab)
-        # sleep for a while to let the lab stabilize
-        time.sleep(5)
+        if self.backend == "kathara":
+            self._ensure_docker_images()
+        runtime.deploy()
+
+    def verify_lab(self) -> dict | None:
+        """Return post-deploy verification result, or ``None`` when not implemented."""
+        return None
 
     def undeploy(self):
         """Undeploy the lab"""
-        try:
-            self.instance.undeploy_lab(lab_name=self.name)
-        except Exception as e:
-            print(f"Error undeploying lab {self.name}: {e}")
+        runtime = self.runtime or self._build_runtime()
+        runtime.destroy()
+        self.runtime = None

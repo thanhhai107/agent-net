@@ -8,7 +8,7 @@ import shutil
 import typer
 
 from agent.tool_evolution.store import ToolEvolutionStore
-from nika.config import TOOL_EVOLUTION_DIR
+from agent.extensions.config import TOOL_EVOLUTION_DIR
 
 
 tools_app = typer.Typer(help="Inspect DRAFT tool-documentation libraries.")

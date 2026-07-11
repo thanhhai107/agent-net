@@ -12,11 +12,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from agent.llm.model_factory import DEFAULT_LLM_BACKEND, DEFAULT_MODEL
+from agent.extensions.config import (
+    DEFAULT_LLM_PROVIDER as DEFAULT_LLM_BACKEND,
+    DEFAULT_MODEL,
+)
 from nika.config import RESULTS_DIR, RUNTIME_DIR, _REPO_ROOT
-from nika.utils.agent_config import resolve_max_steps
 from nika.utils.experiment_naming import next_experiment_id
-from nika.utils.kathara_cleanup import ensure_kathara_clean
 from nika.workflows.benchmark.run import default_benchmark_yaml_path
 
 RUNS_DIR = RUNTIME_DIR / "streamlit_runs"
@@ -30,9 +31,6 @@ MODULE_LABELS = {
 }
 AGENT_LABELS = {
     "react": "ReAct",
-    "plan-execute": "Plan-Execute",
-    "reflexion": "Reflexion",
-    "mock": "Mock",
 }
 
 
@@ -66,16 +64,12 @@ def _common_agent_args(
     default_agent: str = "react",
 ) -> list[str]:
     return [
-        "-a",
-        _str(config.get("agent_type"), default_agent),
-        "-b",
+        "--provider",
         _str(config.get("llm_backend"), DEFAULT_LLM_BACKEND),
-        "-m",
+        "--model",
         _str(config.get("model"), DEFAULT_MODEL),
-        "-n",
-        str(_int(config.get("max_steps"), resolve_max_steps(None))),
-        "-r",
-        str(_int(config.get("max_attempts"), 3)),
+        "--max-steps",
+        str(_int(config.get("max_steps"), _int(os.getenv("NIKA_MAX_STEPS"), 20))),
     ]
 
 
@@ -84,7 +78,7 @@ def _judge_args(config: dict[str, Any]) -> list[str]:
         return []
     return [
         "--judge",
-        "--judge-backend",
+        "--judge-provider",
         _str(
             config.get("judge_backend"),
             _str(config.get("llm_backend"), DEFAULT_LLM_BACKEND),
@@ -98,18 +92,21 @@ def _judge_args(config: dict[str, Any]) -> list[str]:
 
 
 def _benchmark_command(config: dict[str, Any]) -> list[str]:
-    command = _python_module_command(
-        "benchmark",
-        "run",
-        "--file",
+    command = [
+        sys.executable,
+        "-m",
+        "nika.extensions.benchmark",
+        "--config",
         _str(config.get("benchmark_file"), default_benchmark_yaml_path()),
         *_common_agent_args(config),
         *_judge_args(config),
-    )
+    ]
     if config.get("result_root"):
-        command.extend(["--result-root", str(config["result_root"])])
+        command.extend(["--result-dir", str(config["result_root"])])
     if config.get("resume"):
         command.append("--resume")
+    else:
+        command.append("--no-resume")
     return command
 
 
@@ -561,15 +558,6 @@ def stop_run(run_dir: Path) -> None:
         except ProcessLookupError:
             pass
     
-    # Clean up lingering Kathara container environments.
-    try:
-        ensure_kathara_clean(context="studio stop")
-    except Exception as exc:
-        _append_run_log(
-            run_dir,
-            "ui_cleanup_failed " + json.dumps({"error": str(exc)}, ensure_ascii=False),
-        )
-
     check_and_start_next_queued()
 
 

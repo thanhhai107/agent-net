@@ -12,6 +12,7 @@ import typer
 from nika.generator.traffic.od_flows import ODFLowGenerator
 from nika.generator.traffic.web_access import WebBrowsingTrafficGenerator
 from nika.net_env.net_env_pool import get_net_env_instance, scenario_requires_topo_size
+from nika.runtime.factory import runtime_for_net_env
 from nika.utils.session_resolve import resolve_running_session_id
 from nika.utils.session_store import SessionStore
 
@@ -26,10 +27,14 @@ _TRAFFIC_TYPE_HELP: dict[str, str] = {
 def _net_env_kwargs_for_scenario(scenario: str, size: str | None) -> dict[str, Any]:
     if scenario_requires_topo_size(scenario):
         if not size:
-            raise typer.BadParameter(f"Scenario '{scenario}' requires -s/--size (s, m, or l).")
+            raise typer.BadParameter(
+                f"Scenario '{scenario}' requires -s/--size (s, m, or l)."
+            )
         return {"topo_size": size}
     if size is not None:
-        raise typer.BadParameter(f"Scenario '{scenario}' does not use topology sizes; omit -s/--size.")
+        raise typer.BadParameter(
+            f"Scenario '{scenario}' does not use topology sizes; omit -s/--size."
+        )
     return {}
 
 
@@ -40,7 +45,14 @@ def _resolve_lab_and_size(
     try:
         resolved_id = resolve_running_session_id()
         meta = SessionStore().get_session(resolved_id)
-    except (FileNotFoundError, ValueError, OSError, KeyError, TypeError, json.JSONDecodeError):
+    except (
+        FileNotFoundError,
+        ValueError,
+        OSError,
+        KeyError,
+        TypeError,
+        json.JSONDecodeError,
+    ):
         if not lab:
             raise typer.BadParameter(
                 "No valid running session found. Run `nika env run <scenario>` first, or pass --lab."
@@ -50,7 +62,9 @@ def _resolve_lab_and_size(
     resolved_lab = lab or meta.get("scenario_name")
     resolved_size = size if size is not None else meta.get("scenario_topo_size")
     if not resolved_lab:
-        raise typer.BadParameter("Session has no scenario_name; run `nika env run` or pass --lab.")
+        raise typer.BadParameter(
+            "Session has no scenario_name; run `nika env run` or pass --lab."
+        )
     return resolved_lab, resolved_size
 
 
@@ -77,33 +91,70 @@ def traffic_run(
         "--background/--no-background",
         help="Run traffic in the background where supported (od); web always blocks the CLI.",
     ),
-    lab: str | None = typer.Option(None, "--lab", help="Kathará lab name (defaults to current session scenario)."),
-    size: str | None = typer.Option(None, "-s", "--size", help="Topology size s, m, or l (when the scenario uses sizes)."),
+    lab: str | None = typer.Option(
+        None, "--lab", help="Kathará lab name (defaults to current session scenario)."
+    ),
+    size: str | None = typer.Option(
+        None,
+        "-s",
+        "--size",
+        help="Topology size s, m, or l (when the scenario uses sizes).",
+    ),
     # OD (iperf3) shared
-    interval: int = typer.Option(5, "--interval", help="iperf3 duration per client run (seconds)."),
-    unit: str = typer.Option("M", "--unit", help='OD matrix bitrate unit suffix: "K" or "M" (iperf -b).'),
-    udp: bool = typer.Option(True, "--udp/--no-udp", help="Use UDP for iperf3 OD flows."),
-    server_args: str = typer.Option("", "--server-args", help="Extra iperf3 server arguments."),
-    client_args: str = typer.Option("", "--client-args", help="Extra iperf3 client arguments."),
-    od_json: Path | None = typer.Option(None, "--od-json", help="Path to JSON OD matrix: {src: {dst: rate, ...}, ...}."),
-    mesh_mbps: int | None = typer.Option(None, "--mesh-mbps", help="Start full mesh among hosts at this many Mbit/s each."),
+    interval: int = typer.Option(
+        5, "--interval", help="iperf3 duration per client run (seconds)."
+    ),
+    unit: str = typer.Option(
+        "M", "--unit", help='OD matrix bitrate unit suffix: "K" or "M" (iperf -b).'
+    ),
+    udp: bool = typer.Option(
+        True, "--udp/--no-udp", help="Use UDP for iperf3 OD flows."
+    ),
+    server_args: str = typer.Option(
+        "", "--server-args", help="Extra iperf3 server arguments."
+    ),
+    client_args: str = typer.Option(
+        "", "--client-args", help="Extra iperf3 client arguments."
+    ),
+    od_json: Path | None = typer.Option(
+        None, "--od-json", help="Path to JSON OD matrix: {src: {dst: rate, ...}, ...}."
+    ),
+    mesh_mbps: int | None = typer.Option(
+        None,
+        "--mesh-mbps",
+        help="Start full mesh among hosts at this many Mbit/s each.",
+    ),
     all_to_host: str | None = typer.Option(
         None,
         "--all-to-host",
         help="Every other host sends to this host at --mbps (Mbit/s).",
     ),
-    mbps: int | None = typer.Option(None, "--mbps", help="Bitrate in Mbit/s for --all-to-host (od mode)."),
+    mbps: int | None = typer.Option(
+        None, "--mbps", help="Bitrate in Mbit/s for --all-to-host (od mode)."
+    ),
     # web-only
-    request_delay_min: float = typer.Option(1.0, "--request-delay-min", help="[web] Min pause between page fetches."),
-    request_delay_max: float = typer.Option(5.0, "--request-delay-max", help="[web] Max pause between page fetches."),
-    pages_min: int = typer.Option(3, "--pages-min", help="[web] Min pages per browsing session."),
-    pages_max: int = typer.Option(10, "--pages-max", help="[web] Max pages per browsing session."),
-    no_loop: bool = typer.Option(False, "--no-loop", help="[web] Run one browsing session per host then stop."),
+    request_delay_min: float = typer.Option(
+        1.0, "--request-delay-min", help="[web] Min pause between page fetches."
+    ),
+    request_delay_max: float = typer.Option(
+        5.0, "--request-delay-max", help="[web] Max pause between page fetches."
+    ),
+    pages_min: int = typer.Option(
+        3, "--pages-min", help="[web] Min pages per browsing session."
+    ),
+    pages_max: int = typer.Option(
+        10, "--pages-max", help="[web] Max pages per browsing session."
+    ),
+    no_loop: bool = typer.Option(
+        False, "--no-loop", help="[web] Run one browsing session per host then stop."
+    ),
 ) -> None:
     """Start traffic of the given TYPE against the current lab (or ``--lab``)."""
     t = traffic_type.strip().lower()
     if t not in _TRAFFIC_TYPE_HELP:
-        raise typer.BadParameter(f"Unknown TYPE {traffic_type!r}; try `nika traffic list`.")
+        raise typer.BadParameter(
+            f"Unknown TYPE {traffic_type!r}; try `nika traffic list`."
+        )
 
     size_n = _normalize_size(size)
     scenario, size_resolved = _resolve_lab_and_size(lab=lab, size=size_n)
@@ -138,14 +189,18 @@ def traffic_run(
         if od_json is not None:
             raw = json.loads(od_json.read_text(encoding="utf-8"))
             if not isinstance(raw, dict):
-                raise typer.BadParameter("OD JSON must be an object mapping src -> {dst: int, ...}.")
+                raise typer.BadParameter(
+                    "OD JSON must be an object mapping src -> {dst: int, ...}."
+                )
             od_dict = {}
             for sk, dv in raw.items():
                 if not isinstance(dv, dict):
                     raise typer.BadParameter(f"Invalid OD row for {sk!r}.")
                 od_dict[str(sk)] = {str(dk): int(val) for dk, val in dv.items()}
             if mesh_mbps is not None or all_to_host is not None or mbps is not None:
-                raise typer.BadParameter("Do not combine --od-json with --mesh-mbps / --all-to-host / --mbps.")
+                raise typer.BadParameter(
+                    "Do not combine --od-json with --mesh-mbps / --all-to-host / --mbps."
+                )
         elif mesh_mbps is not None:
             od_dict = {}
             for a in hosts:
@@ -154,7 +209,9 @@ def traffic_run(
                     if a != b:
                         od_dict[a][b] = mesh_mbps
             if mbps is not None and all_to_host is None:
-                raise typer.BadParameter("--mbps is only used with --all-to-host, not with --mesh-mbps.")
+                raise typer.BadParameter(
+                    "--mbps is only used with --all-to-host, not with --mesh-mbps."
+                )
         elif all_to_host is not None:
             if mbps is None:
                 raise typer.BadParameter("--all-to-host requires --mbps.")
@@ -167,7 +224,7 @@ def traffic_run(
                 "od mode requires one of: --od-json, --mesh-mbps, or --all-to-host with --mbps."
             )
 
-        gen = ODFLowGenerator(lab_name=net_env.lab.name)
+        gen = ODFLowGenerator(runtime=runtime_for_net_env(net_env))
 
         if background:
             labels = gen.start_traffic_background(

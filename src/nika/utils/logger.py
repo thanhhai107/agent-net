@@ -103,6 +103,11 @@ def log_event(event_type: str, message: str, **data) -> None:
 
     Example::
         log_event("env_start", "Lab deployed", scenario="simple_bgp", session_id="...")
-        log_event("failure_inject_error", "Inject failed", error="timeout")
+        log_error_event("failure_inject_error", "Inject failed", error="timeout")
     """
     system_logger.info(message, extra={"event_type": event_type, "data": data or None})
+
+
+def log_error_event(event_type: str, message: str, **data) -> None:
+    """Log a structured ERROR-level event to events.jsonl when a session dir is bound."""
+    system_logger.error(message, extra={"event_type": event_type, "data": data or None})

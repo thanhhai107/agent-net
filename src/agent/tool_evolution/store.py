@@ -8,7 +8,7 @@ import shutil
 from pathlib import Path
 from typing import Iterable
 
-from nika.config import TOOL_EVOLUTION_DIR
+from agent.extensions.config import TOOL_EVOLUTION_DIR
 
 from agent.tool_evolution.models import (
     ComprehensionGap,

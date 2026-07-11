@@ -38,26 +38,17 @@ class MessageLogger:
     session_dir:
         Path to the session results directory (must already exist or be
         creatable).
-    extra_fields:
-        Optional fields added to every event, such as a workflow ``phase``.
     """
 
-    def __init__(
-        self,
-        agent: str,
-        session_dir: str,
-        extra_fields: dict[str, Any] | None = None,
-    ) -> None:
+    def __init__(self, agent: str, session_dir: str) -> None:
         self.agent = agent
         self._path = Path(session_dir) / MESSAGES_FILENAME
-        self._extra_fields = extra_fields or {}
         os.makedirs(session_dir, exist_ok=True)
 
     def log(self, event_type: str, payload: dict[str, Any]) -> None:
         entry = {
             "timestamp": datetime.now().isoformat(),
             "agent": self.agent,
-            **self._extra_fields,
             "event": event_type,
             **payload,
         }
@@ -68,21 +59,9 @@ class MessageLogger:
 class AgentCallbackLogger(BaseCallbackHandler):
     """LangChain callback handler that delegates to ``MessageLogger``."""
 
-    def __init__(
-        self,
-        agent: str,
-        session_dir: str,
-        extra_fields: dict[str, Any] | None = None,
-    ) -> None:
+    def __init__(self, agent: str, session_dir: str) -> None:
         super().__init__()
-        self._logger = MessageLogger(
-            agent=agent,
-            session_dir=session_dir,
-            extra_fields=extra_fields,
-        )
-
-    def _log(self, event_type: str, payload: dict[str, Any]) -> None:
-        self._logger.log(event_type, payload)
+        self._logger = MessageLogger(agent=agent, session_dir=session_dir)
 
     def on_chat_model_start(
         self,
@@ -111,54 +90,35 @@ class AgentCallbackLogger(BaseCallbackHandler):
                     payload["generation_info"] = res.generation_info
                 message = getattr(res, "message", None)
                 if message:
-                    payload["invalid_tool_calls"] = getattr(message, "invalid_tool_calls", None)
+                    payload["invalid_tool_calls"] = getattr(
+                        message, "invalid_tool_calls", None
+                    )
                     payload["usage_metadata"] = getattr(message, "usage_metadata", None)
             self._logger.log("llm_end", payload)
         except Exception as exc:
             import traceback
+
             self._logger.log(
                 "llm_end_error",
-                {"error": str(exc), "traceback": traceback.format_exc(), "response": str(response)},
-            )
-
-    def on_tool_start(self, serialized: dict[str, Any], input_str: str, **kwargs) -> None:
-        self._logger.log(
-            "tool_start",
-            {
-                "tool": serialized,
-                "input": input_str,
-                "run_id": str(kwargs.get("run_id", "")),
-            },
-        )
-
-    def on_tool_end(self, output: ToolMessage, **kwargs) -> None:
-        serialized_output = getattr(output, "content", output)
-        status = getattr(output, "status", None)
-        if status == "error":
-            self._logger.log(
-                "tool_error",
                 {
-                    "output": serialized_output,
-                    "status": status,
-                    "run_id": str(kwargs.get("run_id", "")),
+                    "error": str(exc),
+                    "traceback": traceback.format_exc(),
+                    "response": str(response),
                 },
             )
+
+    def on_tool_start(
+        self, serialized: dict[str, Any], input_str: str, **kwargs
+    ) -> None:
+        self._logger.log("tool_start", {"tool": serialized, "input": input_str})
+
+    def on_tool_end(self, output: ToolMessage, **kwargs) -> None:
+        if output.status == "error":
+            self._logger.log("tool_error", {"output": output})
             return
         self._logger.log(
-            "tool_end",
-            {
-                "output": serialized_output,
-                "status": status,
-                "output_type": type(output).__name__,
-                "run_id": str(kwargs.get("run_id", "")),
-            },
+            "tool_end", {"output": output, "output_type": type(output).__name__}
         )
 
     def on_tool_error(self, error, **kwargs) -> None:
-        self._logger.log(
-            "tool_error",
-            {
-                "error": str(error),
-                "run_id": str(kwargs.get("run_id", "")),
-            },
-        )
+        self._logger.log("tool_error", {"error": str(error)})

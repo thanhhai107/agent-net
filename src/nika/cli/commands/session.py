@@ -11,7 +11,9 @@ session_app = typer.Typer(help="Active session management.")
 
 def _failure_summary(session: dict) -> str:
     """Summarise injected failures: name when there is one, count otherwise."""
-    n_failures = session.get("failure_count", len(session.get("failure_injections", [])))
+    n_failures = session.get(
+        "failure_count", len(session.get("failure_injections", []))
+    )
     if n_failures == 0:
         return "0"
     if n_failures == 1:
@@ -75,7 +77,9 @@ def _echo_containers_table(containers: list[dict], *, prefix: str = "") -> None:
 
 @session_app.command("ps")
 def session_ps(
-    all_sessions: bool = typer.Option(False, "--all", "-a", help="Include finished sessions."),
+    all_sessions: bool = typer.Option(
+        False, "--all", "-a", help="Include finished sessions."
+    ),
 ) -> None:
     """List sessions and their runtime status.
 
@@ -117,7 +121,11 @@ def session_ps(
 
 @session_app.command("inspect")
 def session_inspect(
-    session_id: str | None = typer.Argument(None, help="Session ID. Auto-selects when only one is running."),
+    session_id: str | None = typer.Option(
+        None,
+        "--session_id",
+        help="Target session id. Auto-selects when only one is running.",
+    ),
     containers: bool = typer.Option(
         False,
         "--containers",
@@ -142,7 +150,9 @@ def session_inspect(
     typer.echo(json.dumps(data, indent=2, default=str))
 
     if injections:
-        typer.echo(f"\nfailure_injections  ({len(injections)} record{'s' if len(injections) != 1 else ''}):")
+        typer.echo(
+            f"\nfailure_injections  ({len(injections)} record{'s' if len(injections) != 1 else ''}):"
+        )
         hdr = ["IDX", "PROBLEM", "STATUS", "PARAMS"]
         fi_rows: list[list[str]] = []
         for i, inj in enumerate(injections):
@@ -174,7 +184,11 @@ def session_inspect(
 
 @session_app.command("containers")
 def session_containers(
-    session_id: str | None = typer.Argument(None, help="Session ID. Auto-selects when only one is running."),
+    session_id: str | None = typer.Option(
+        None,
+        "--session_id",
+        help="Target session id. Auto-selects when only one is running.",
+    ),
 ) -> None:
     """List Kathara containers running in the session lab (docker-ps style).
 
@@ -205,17 +219,24 @@ def session_containers(
 
 @session_app.command("close")
 def session_close(
-    session_id: str | None = typer.Argument(None, help="Session ID. Auto-selects when only one is running."),
-    yes: bool = typer.Option(False, "-y", "--yes", help="Skip the confirmation prompt."),
+    session_id: str | None = typer.Option(
+        None,
+        "--session_id",
+        help="Target session id. Auto-selects when only one is running.",
+    ),
+    yes: bool = typer.Option(
+        False, "-y", "--yes", help="Skip the confirmation prompt."
+    ),
 ) -> None:
     """Close one session: stop containers and clean up runtime state.
 
-    Pass a SESSION_ID to close a specific session. When SESSION_ID is
-    omitted and only one session is running it is selected automatically.
+    Pass ``--session_id`` to close a specific session. When omitted and
+    only one session is running it is selected automatically.
 
     The Kathará lab is undeployed, all failure records are marked ended,
-    and the runtime session file is removed. Use ``nika session wipe`` to
-    close every running session and remove leftover Kathara resources.
+    the runtime workdir is removed when present, and the runtime session
+    file is removed. Use ``nika session wipe`` to close every running session
+    and remove leftover Kathara, Containerlab, and runtime resources.
     """
     from nika.workflows.session.close import close_session
 
@@ -238,24 +259,30 @@ def session_close(
 
 @session_app.command("wipe")
 def session_wipe(
-    yes: bool = typer.Option(False, "-y", "--yes", help="Skip the confirmation prompt."),
+    yes: bool = typer.Option(
+        False, "-y", "--yes", help="Skip the confirmation prompt."
+    ),
 ) -> None:
-    """Close all running sessions and wipe leftover Kathara resources.
+    """Close all running sessions and wipe leftover lab resources.
 
     Every running session is closed (lab undeployed, failure records ended,
-    runtime session file removed). Also runs ``kathara wipe`` to remove
-    leftover containers and networks when session files are missing.
+    runtime workdir removed, runtime session file removed). Also runs
+    ``kathara wipe``, ``clab destroy --all``, and removes leftover files
+    under ``runtime/`` when session files are missing.
     """
     from nika.utils.session_store import SessionStore
     from nika.workflows.session.close import close_session
 
     running = SessionStore().list_running_sessions()
+    leftover = "leftover Kathara and Containerlab resources"
     if running:
-        label = f"all {len(running)} running session(s) and leftover Kathara resources"
+        label = f"all {len(running)} running session(s) and {leftover}"
     else:
-        label = "leftover Kathara containers and networks"
+        label = leftover
     if not yes:
-        confirmed = typer.confirm(f"Stop lab containers and wipe {label}?", default=False)
+        confirmed = typer.confirm(
+            f"Stop lab containers and wipe {label}?", default=False
+        )
         if not confirmed:
             raise typer.Abort()
     try:

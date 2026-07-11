@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import sys
 
-from agent.llm.model_factory import DEFAULT_LLM_BACKEND, DEFAULT_MODEL
+from agent.extensions.config import (
+    DEFAULT_LLM_PROVIDER as DEFAULT_LLM_BACKEND,
+    DEFAULT_MODEL,
+)
 import nika.visualization.experiment_runner as experiment_runner
-from nika.utils.agent_config import resolve_max_steps
 from nika.visualization.experiment_runner import (
     build_experiment_command,
     build_command_plan,
@@ -23,7 +25,6 @@ def _config(**overrides: object) -> dict[str, object]:
         "llm_backend": "custom",
         "model": "openai/gpt-oss-20b",
         "max_steps": 100,
-        "max_attempts": 3,
         "tool_library_id": "tools-test",
         "tool_doc_chars": 640,
         "tool_convergence_threshold": 0.8,
@@ -43,33 +44,25 @@ def _config(**overrides: object) -> dict[str, object]:
 def test_baseline_command_uses_default_sequential_execution() -> None:
     command = build_experiment_command(_config())
 
-    assert command[:3] == [sys.executable, "-m", "nika.cli.main"]
-    assert command[3:6] == ["benchmark", "run", "--file"]
+    assert command[:3] == [sys.executable, "-m", "nika.extensions.benchmark"]
+    assert command[3] == "--config"
     assert "benchmark/benchmark_test.yaml" in command
-    assert command[command.index("-n") + 1] == "100"
+    assert command[command.index("--max-steps") + 1] == "100"
     assert "-j" not in command
     assert "--parallel" not in command
 
 
-def test_standard_agent_label_uses_selected_baseline_name() -> None:
-    plan = build_command_plan(
-        _config(agent_type="reflexion", modules=["memory_evolution"])
-    )
-
-    assert plan[0].variant == "benchmark"
-    assert plan[0].name == "Reflexion + Memory Evolution"
-
-
-def test_command_fallbacks_match_env_agent_config() -> None:
+def test_command_fallbacks_match_extension_defaults(monkeypatch) -> None:
+    monkeypatch.setenv("NIKA_MAX_STEPS", "20")
     config = _config()
     for key in ("llm_backend", "model", "max_steps"):
         config.pop(key)
 
     command = build_experiment_command(config)
 
-    assert command[command.index("-b") + 1] == DEFAULT_LLM_BACKEND
-    assert command[command.index("-m", command.index("-b")) + 1] == DEFAULT_MODEL
-    assert command[command.index("-n") + 1] == str(resolve_max_steps(None))
+    assert command[command.index("--provider") + 1] == DEFAULT_LLM_BACKEND
+    assert command[command.index("--model") + 1] == DEFAULT_MODEL
+    assert command[command.index("--max-steps") + 1] == "20"
 
 
 def test_tool_and_memory_modules_share_one_sequential_command() -> None:
@@ -77,7 +70,7 @@ def test_tool_and_memory_modules_share_one_sequential_command() -> None:
         _config(modules=["tool_evolution", "memory_evolution"])
     )
 
-    assert command[3:6] == ["benchmark", "run", "--file"]
+    assert command[:3] == [sys.executable, "-m", "nika.extensions.benchmark"]
     assert "-j" not in command
     assert "--parallel" not in command
 
@@ -125,7 +118,7 @@ def test_prepare_experiment_config_uses_one_sequential_name_for_outputs(
 
     assert prepared["experiment_id"] == "benchmark_test-0007"
     assert prepared["result_root"] == str(tmp_path / "results" / "benchmark_test-0007")
-    assert command[command.index("--result-root") + 1].endswith("benchmark_test-0007")
+    assert command[command.index("--result-dir") + 1].endswith("benchmark_test-0007")
     assert command[command.index("--tools") + 1] == "benchmark_test-0007"
     assert command[command.index("--memory") + 1] == "benchmark_test-0007"
 
@@ -139,7 +132,7 @@ def test_resume_command_uses_existing_result_root() -> None:
         )
     )
 
-    assert command[command.index("--result-root") + 1] == "/tmp/results/benchmark_evaluate-0001"
+    assert command[command.index("--result-dir") + 1] == "/tmp/results/benchmark_evaluate-0001"
     assert "--resume" in command
 
 
@@ -197,7 +190,7 @@ def test_resume_run_reuses_selected_run_directory(monkeypatch, tmp_path) -> None
     assert updated_spec["config"]["experiment_id"] == "benchmark_evaluate-0001"
     assert updated_spec["config"]["result_root"] == str(result_root)
     assert "--resume" in command
-    assert command[command.index("--result-root") + 1] == str(result_root)
+    assert command[command.index("--result-dir") + 1] == str(result_root)
     assert popen_calls
     log_text = (run_dir / "run.log").read_text(encoding="utf-8")
     assert "ui_run_resumed" in log_text

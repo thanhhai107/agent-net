@@ -43,3 +43,7 @@ def studio_command(
         typer.echo("\nStudio stopped.")
     except subprocess.CalledProcessError as exc:
         raise typer.Exit(code=exc.returncode) from exc
+
+
+if __name__ == "__main__":
+    typer.run(studio_command)

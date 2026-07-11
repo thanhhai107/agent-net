@@ -2,3 +2,5 @@
 
 DIAGNOSIS = "diagnosis"
 SUBMISSION = "submission"
+
+PHASES = (DIAGNOSIS, SUBMISSION)

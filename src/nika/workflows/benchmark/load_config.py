@@ -41,6 +41,11 @@ def load_benchmark_yaml(path: str | Path) -> list[dict[str, Any]]:
         inject = row.get("inject") or {}
         if not isinstance(inject, dict):
             raise ValueError(f"Benchmark case {idx} 'inject' must be a mapping")
+        if not inject:
+            raise ValueError(
+                f"Benchmark case {idx} ({row.get('scenario')}/{row.get('problem')}) "
+                f"missing non-empty 'inject' map in {path}"
+            )
         normalized.append(
             {
                 "scenario": str(row["scenario"]),

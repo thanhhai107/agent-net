@@ -4,20 +4,21 @@ from pathlib import Path
 
 import typer
 
-from agent.composition import (
-    MemoryConfig,
-    ToolEvolutionConfig,
+from nika.net_env.net_env_pool import scenario_requires_topo_size
+from nika.config import ENV_RESULT_DIR
+from nika.utils.agent_config import (
+    ENV_AGENT_TYPE,
+    ENV_JUDGE_MODEL,
+    ENV_JUDGE_PROVIDER,
+    ENV_LLM_PROVIDER,
+    ENV_MAX_STEPS,
+    ENV_MODEL,
 )
-from agent.llm.model_factory import DEFAULT_LLM_BACKEND, DEFAULT_MODEL
-from nika.net_env.net_env_pool import scenario_requires_topo_tier
-from nika.utils.agent_config import resolve_max_steps
-from nika.workflows.benchmark.inject_defaults import resolve_inject_params
 from nika.workflows.benchmark.run import (
-    _new_benchmark_results_root,
     default_benchmark_yaml_path,
-    is_no_fault_problem,
     run_benchmark_from_yaml,
-    run_single_benchmark,
+    run_single_case,
+    validate_inject_params,
 )
 
 benchmark_app = typer.Typer(
@@ -33,7 +34,9 @@ def _parse_set_options(raw_items: list[str] | None) -> dict[str, str]:
         key, value = raw.split("=", 1)
         key = key.strip()
         if not key:
-            raise typer.BadParameter(f"Invalid --set value {raw!r}. Key cannot be empty.")
+            raise typer.BadParameter(
+                f"Invalid --set value {raw!r}. Key cannot be empty."
+            )
         overrides[key] = value.strip()
     return overrides
 
@@ -45,269 +48,181 @@ def benchmark_run(
         metavar="SCENARIO",
         help="Scenario id for a single case (omit for YAML batch mode).",
     ),
-    file: Path | None = typer.Option(
+    config: Path | None = typer.Option(
         None,
-        "-f",
-        "--file",
-        help="Benchmark YAML path for batch mode. Defaults to benchmark/benchmark_evaluate.yaml.",
+        "--config",
+        help="Benchmark YAML path (batch mode). Defaults to benchmark/benchmark_selected.yaml under the repo root.",
     ),
     problem: str | None = typer.Option(
         None,
         "--problem",
         help="Problem id for a single case (required with SCENARIO).",
     ),
-    tier: str | None = typer.Option(
+    size: str | None = typer.Option(
         None,
-        "-t",
-        "--tier",
-        help="Topology tier s, m, or l (required only for scalable scenarios).",
+        "-s",
+        "--size",
+        help="Topology size s, m, or l (required only for scalable scenarios).",
     ),
     sets: list[str] | None = typer.Option(
         None,
         "--set",
-        help="Override inject parameters as key=value (single-case mode).",
+        help="Inject parameters as key=value (required in single-case mode).",
     ),
-    agent_type: str = typer.Option(
-        "react", "-a", "--agent", help="Agent implementation."
+    agent_type: str | None = typer.Option(
+        None,
+        "-a",
+        "--agent",
+        envvar=ENV_AGENT_TYPE,
+        help="Agent implementation (required unless NIKA_AGENT_TYPE is in .env).",
     ),
-    llm_backend: str = typer.Option(
-        DEFAULT_LLM_BACKEND,
-        "-b",
-        "--backend",
-        help="LLM provider (openai, ollama, deepseek, custom).",
+    llm_provider: str | None = typer.Option(
+        None,
+        "-p",
+        "--provider",
+        envvar=ENV_LLM_PROVIDER,
+        help="LLM provider for byo.langgraph only: openai, ollama, deepseek, custom.",
     ),
-    model: str = typer.Option(
-        DEFAULT_MODEL, "-m", "--model", help="Model id for the agent."
+    model: str | None = typer.Option(
+        None,
+        "-m",
+        "--model",
+        envvar=ENV_MODEL,
+        help="Model id (required unless agent-specific NIKA_*_MODEL or NIKA_MODEL is in .env).",
     ),
     max_steps: int | None = typer.Option(
         None,
         "-n",
         "--max-steps",
+        envvar=ENV_MAX_STEPS,
+        help="Max steps per phase (required unless NIKA_MAX_STEPS is in .env; byo.langgraph, byo.mcp_agent, byo.autogen, community.sade).",
+    ),
+    batch_size: int = typer.Option(
+        1,
+        "--batch-size",
         help=(
-            "Per-worker step limit for LangGraph agents; also the maximum "
-            "executed plan items for plan-execute. Defaults to NIKA_MAX_STEPS."
+            "YAML batch mode: number of rows to run simultaneously per batch. "
+            "Rows are chunked into groups of this size; each group runs fully in "
+            "parallel before the next group starts (default: 1)."
         ),
-    ),
-    max_attempts: int = typer.Option(
-        3,
-        "-r",
-        "--max-attempts",
-        min=1,
-        help="Maximum attempts for the reflexion agent; ignored by other agents.",
-    ),
-    memory: str | None = typer.Option(
-        None,
-        "--memory",
-        help="Enable evolving memory with this bank id.",
-    ),
-    memory_read: str | None = typer.Option(
-        None,
-        "--memory-read",
-        help="Read this memory bank without updating it.",
-    ),
-    memory_k: int = typer.Option(
-        5,
-        "--memory-k",
-        min=1,
-        max=20,
-        help="Maximum memories injected into one diagnosis.",
-    ),
-    memory_tokens: int = typer.Option(
-        1500,
-        "--memory-tokens",
-        min=100,
-        help="Maximum estimated tokens used by retrieved memory.",
-    ),
-    memory_max_skill_age: int = typer.Option(
-        4,
-        "--memory-max-skill-age",
-        min=1,
-        help="Maximum tool transitions controlled by one active Skill-Pro option.",
-    ),
-    memory_pool_size: int = typer.Option(
-        32,
-        "--memory-pool-size",
-        min=1,
-        help="Maximum active Skill-Pro skill pool size.",
-    ),
-    memory_evolution_threshold: int = typer.Option(
-        3,
-        "--memory-evolution-threshold",
-        min=1,
-        help="Minimum replay samples before Skill-Pro refinement/retirement decisions.",
-    ),
-    memory_best_of_n: int = typer.Option(
-        3,
-        "--memory-best-of-n",
-        min=1,
-        help="Number of candidate Skill-Pro procedures proposed per episode.",
-    ),
-    memory_ppo_epsilon: float = typer.Option(
-        0.2,
-        "--memory-ppo-epsilon",
-        min=0.0,
-        help="PPO-style clipping epsilon for Skill-Pro evolution gate.",
     ),
     run_judge: bool = typer.Option(
         False,
         "--judge",
-        help="Run LLM-as-judge after metrics (default: metrics and publish only).",
+        help="Run LLM-as-judge after metrics (default: metrics only).",
     ),
-    judge_backend: str | None = typer.Option(
+    judge_provider: str | None = typer.Option(
         None,
-        "--judge-backend",
-        help="LLM provider for the judge (defaults to the global LLM backend when --judge is set).",
+        "--judge-provider",
+        envvar=ENV_JUDGE_PROVIDER,
+        help="LLM provider for the judge (required with --judge unless set in .env).",
     ),
     judge_model: str | None = typer.Option(
         None,
         "--judge-model",
-        help="Model id for the judge (defaults to the global LLM model when --judge is set).",
+        envvar=ENV_JUDGE_MODEL,
+        help="Model id for the judge (required with --judge unless set in .env).",
     ),
-    tools: str | None = typer.Option(
+    result_dir: str | None = typer.Option(
         None,
-        "--tools",
-        help="Enable DRAFT Tool Evolution with this documentation library id.",
+        "--result_dir",
+        envvar=ENV_RESULT_DIR,
+        help="Results parent directory (default: results/). Session output goes to {result_dir}/{session_id}.",
     ),
-    tool_doc_chars: int = typer.Option(
-        500,
-        "--tool-doc-chars",
-        min=100,
-        help="Maximum DRAFT refined-doc characters appended to each tool.",
-    ),
-    tool_convergence_threshold: float = typer.Option(
-        0.75,
-        "--tool-convergence-threshold",
-        min=0.0,
-        max=1.0,
-        help="DRAFT documentation convergence threshold for freezing docs.",
-    ),
-    result_root: Path | None = typer.Option(
+    session_tag: str | None = typer.Option(
         None,
-        "--result-root",
-        hidden=True,
-        help="Internal benchmark result root for row subprocess execution.",
-    ),
-    fault_seed: str | None = typer.Option(
-        None,
-        "--fault-seed",
-        hidden=True,
-        help="Internal deterministic fault seed for row subprocess execution.",
-    ),
-    benchmark_index: int | None = typer.Option(
-        None,
-        "--benchmark-index",
-        hidden=True,
-        help="Internal zero-based YAML case index for timeline reporting.",
+        "--session-tag",
+        help="Optional tag embedded in each session id (YYYYMMDD-HHMMSS-tag-{hex}).",
     ),
     resume: bool = typer.Option(
-        False,
-        "--resume",
-        help="Resume a YAML batch by skipping completed benchmark indices in --result-root.",
+        True,
+        "--resume/--no-resume",
+        help=(
+            "YAML batch mode: scan all rows, skip completed cases, run the rest (default). "
+            "Use --no-resume to re-run every case."
+        ),
     ),
 ) -> None:
-    """Run one benchmark case from YAML, or a single case when SCENARIO and --problem are set."""
-    if not run_judge and (judge_backend is not None or judge_model is not None):
-        raise typer.BadParameter(
-            "Pass --judge to enable LLM judge; omit --judge-backend/--judge-model otherwise."
-        )
-    judge_backend = judge_backend or DEFAULT_LLM_BACKEND
-    judge_model = judge_model or DEFAULT_MODEL
-    if memory is not None and memory_read is not None:
-        raise typer.BadParameter("Use either --memory or --memory-read, not both.")
-    memory_mode = "evolve" if memory is not None else "read" if memory_read else "off"
-    memory_bank = memory or memory_read or "default"
-    resolved_max_steps = resolve_max_steps(max_steps)
-    tool_evolution_enabled = tools is not None
-    tool_library_id = tools or "default"
-    memory_config = MemoryConfig(
-        mode=memory_mode,
-        bank=memory_bank,
-        top_k=memory_k,
-        token_budget=memory_tokens,
-        max_skill_age=memory_max_skill_age,
-        pool_size=memory_pool_size,
-        evolution_threshold=memory_evolution_threshold,
-        best_of_n=memory_best_of_n,
-        ppo_epsilon=memory_ppo_epsilon,
-    )
-    tool_config = ToolEvolutionConfig(
-        enabled=tool_evolution_enabled,
-        library_id=tool_library_id,
-        tool_doc_chars=tool_doc_chars,
-        convergence_threshold=tool_convergence_threshold,
-    )
+    """Run one benchmark row from YAML, or a single case when SCENARIO and --problem are set."""
+    if run_judge:
+        from nika.utils.agent_config import resolve_judge_model, resolve_judge_provider
 
-    if scenario is not None and file is not None:
+        judge_provider = resolve_judge_provider(judge_provider)
+        judge_model = resolve_judge_model(judge_model)
+    elif judge_provider is not None or judge_model is not None:
         raise typer.BadParameter(
-            "Use either SCENARIO (single-case mode) or --file (batch mode), not both."
+            "Pass --judge to enable LLM judge; omit --judge-provider/--judge-model otherwise."
+        )
+
+    if scenario is not None and config is not None:
+        raise typer.BadParameter(
+            "Use either SCENARIO (single-case mode) or --config (batch mode), not both."
         )
 
     single_mode = scenario is not None
 
     if single_mode:
-        if resume:
-            raise typer.BadParameter("--resume applies to YAML batch mode only.")
+        if batch_size != 1:
+            raise typer.BadParameter(
+                "--batch-size applies to YAML batch mode only; omit it for a single case."
+            )
         if not problem:
             raise typer.BadParameter("--problem is required when SCENARIO is given.")
-        if scenario_requires_topo_tier(scenario) and not tier:
+        if scenario_requires_topo_size(scenario) and not size:
             raise typer.BadParameter(
-                f"Scenario '{scenario}' requires -t/--tier (s, m, or l)."
+                f"Scenario '{scenario}' requires -s/--size (s, m, or l)."
             )
-        if not scenario_requires_topo_tier(scenario) and tier is not None:
+        if not scenario_requires_topo_size(scenario) and size is not None:
             raise typer.BadParameter(
-                f"Scenario '{scenario}' does not use tiers; omit -t/--tier."
+                f"Scenario '{scenario}' does not use sizes; omit -s/--size."
             )
-        topo = tier or ""
-        benchmark_root = result_root or _new_benchmark_results_root(scenario)
-        if is_no_fault_problem(problem):
-            if sets:
-                raise typer.BadParameter(
-                    "--set is invalid for no-fault benchmark cases."
-                )
-            inject_params = {}
-        else:
-            inject_params = resolve_inject_params(problem, scenario, topo)
-            inject_params.update(_parse_set_options(sets))
-        run_single_benchmark(
+        topo = size or ""
+        inject_params = _parse_set_options(sets)
+        if not inject_params:
+            raise typer.BadParameter(
+                "Single-case mode requires complete inject parameters via --set key=value. "
+                "Use batch mode with --config to run curated YAML cases."
+            )
+        try:
+            validate_inject_params(problem, scenario, topo, inject_params)
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc)) from exc
+        run_single_case(
             problem=problem,
             scenario=scenario,
             topo_size=topo,
             agent_type=agent_type,
-            llm_backend=llm_backend,
+            llm_provider=llm_provider,
             model=model,
-            max_steps=resolved_max_steps,
-            max_attempts=max_attempts,
-            memory=memory_config,
-            run_judge=run_judge,
-            judge_llm_backend=judge_backend,
-            judge_model=judge_model,
-            tool_evolution=tool_config,
-            result_root=benchmark_root,
-            fault_seed=fault_seed,
-            benchmark_index=benchmark_index,
+            max_steps=max_steps,
             inject_params=inject_params,
+            run_judge=run_judge,
+            judge_llm_provider=judge_provider,
+            judge_model=judge_model,
+            result_dir=result_dir,
+            session_tag=session_tag,
         )
         return
 
     if problem is not None:
         raise typer.BadParameter(
-            "--problem without SCENARIO is invalid; pass SCENARIO or use batch mode with --file."
+            "--problem without SCENARIO is invalid; pass SCENARIO or use batch mode with --config."
         )
-    if sets:
-        raise typer.BadParameter("--set applies to single-case mode only.")
-    benchmark_path = str(file) if file is not None else default_benchmark_yaml_path()
+
+    benchmark_path = (
+        str(config) if config is not None else default_benchmark_yaml_path()
+    )
     run_benchmark_from_yaml(
         benchmark_file=benchmark_path,
         agent_type=agent_type,
-        llm_backend=llm_backend,
+        llm_provider=llm_provider,
         model=model,
-        max_steps=resolved_max_steps,
-        max_attempts=max_attempts,
-        memory=memory_config,
+        max_steps=max_steps,
+        batch_size=batch_size,
         run_judge=run_judge,
-        judge_llm_backend=judge_backend,
+        judge_llm_provider=judge_provider,
         judge_model=judge_model,
-        tool_evolution=tool_config,
-        result_root=result_root,
+        result_dir=result_dir,
         resume=resume,
+        session_tag=session_tag,
     )
