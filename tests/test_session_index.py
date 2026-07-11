@@ -114,7 +114,7 @@ class SessionIndexTestCase(unittest.TestCase):
 
         session = Session().load_closed_session(
             session_id=session_id,
-            results_dir=custom_root,
+            result_dir=custom_root,
         )
 
         self.assertEqual(session.session_id, session_id)

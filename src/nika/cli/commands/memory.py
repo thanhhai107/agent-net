@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 import typer
 import yaml
 
-from agent.composition import MemoryConfig
 from agent.extensions.config import (
     DEFAULT_LLM_PROVIDER as DEFAULT_LLM_BACKEND,
     DEFAULT_MODEL,
@@ -17,11 +18,8 @@ from agent.extensions.config import (
 from nika.utils.agent_config import resolve_max_steps
 from agent.memory.service import ProceduralMemoryModule
 from agent.extensions.config import MEMORY_DIR
-from nika.workflows.benchmark.load_config import load_benchmark_yaml
-from nika.workflows.benchmark.run import (
-    default_benchmark_yaml_path,
-    run_benchmark_from_yaml,
-)
+from nika.config import BENCHMARK_DIR
+from nika.extensions.benchmark import load_custom_benchmark
 
 memory_app = typer.Typer(help="Manage Skill-Pro procedural-skill banks.")
 
@@ -39,7 +37,7 @@ def _limited_yaml_path(source: Path, *, limit: int | None, bank: str) -> Path:
         return source
     if limit < 1:
         raise typer.BadParameter("--limit must be >= 1")
-    rows = load_benchmark_yaml(source)[:limit]
+    rows = load_custom_benchmark(source)[:limit]
     if not rows:
         raise typer.BadParameter(f"{source} has no benchmark cases")
     safe_bank = re.sub(r"[^A-Za-z0-9_.-]+", "_", bank).strip("._") or "default"
@@ -56,7 +54,7 @@ def _limited_yaml_path(source: Path, *, limit: int | None, bank: str) -> Path:
 @memory_app.command("run")
 def memory_run(
     file: Path = typer.Option(
-        Path(default_benchmark_yaml_path()),
+        BENCHMARK_DIR / "benchmark_test.yaml",
         "-f",
         "--file",
         help="Shared memory/tool-evolution benchmark YAML. Defaults to benchmark/benchmark_test.yaml.",
@@ -78,7 +76,6 @@ def memory_run(
         "--reset-bank/--keep-bank",
         help="Clear the bank before running.",
     ),
-    agent_type: str = typer.Option("react", "-a", "--agent", help="Agent workflow."),
     llm_backend: str = typer.Option(
         DEFAULT_LLM_BACKEND,
         "-b",
@@ -91,13 +88,6 @@ def memory_run(
         "-n",
         "--max-steps",
         help="Per-worker step limit. Defaults to NIKA_MAX_STEPS.",
-    ),
-    max_attempts: int = typer.Option(
-        3,
-        "-r",
-        "--max-attempts",
-        min=1,
-        help="Maximum attempts for reflexion.",
     ),
     k: int = typer.Option(
         5,
@@ -128,23 +118,32 @@ def memory_run(
     typer.echo(
         "Running memory-only benchmark: "
         f"yaml={selected_yaml} bank={bank} mode={mode} "
-        f"agent={agent_type} backend={llm_backend} model={model}"
+        f"backend={llm_backend} model={model}"
     )
-    run_benchmark_from_yaml(
-        benchmark_file=str(selected_yaml),
-        agent_type=agent_type,
-        llm_backend=llm_backend,
-        model=model,
-        max_steps=resolved_max_steps,
-        max_attempts=max_attempts,
-        memory=MemoryConfig(
-            mode=mode,
-            bank=bank,
-            top_k=k,
-            token_budget=tokens,
-        ),
-        run_judge=False,
-    )
+    memory_flag = "--memory-read" if read else "--memory"
+    command = [
+        sys.executable,
+        "-m",
+        "nika.extensions.benchmark",
+        "--config",
+        str(selected_yaml),
+        "--provider",
+        llm_backend,
+        "--model",
+        model,
+        "--max-steps",
+        str(resolved_max_steps),
+        memory_flag,
+        bank,
+        "--memory-k",
+        str(k),
+        "--memory-tokens",
+        str(tokens),
+    ]
+    try:
+        subprocess.run(command, check=True)
+    except subprocess.CalledProcessError as exc:
+        raise typer.Exit(code=exc.returncode) from exc
 
 
 @memory_app.command("inspect")
@@ -211,3 +210,7 @@ def memory_clear(
         raise typer.Abort()
     _module(bank).clear()
     typer.echo(f"Reset memory bank and rebuilt Skill-Pro seed pool: {bank}")
+
+
+if __name__ == "__main__":
+    memory_app()

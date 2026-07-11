@@ -56,3 +56,7 @@ def reset_library(
         raise typer.Abort()
     shutil.rmtree(store.library_dir)
     typer.echo(json.dumps({"deleted": store.library_id}))
+
+
+if __name__ == "__main__":
+    tools_app()

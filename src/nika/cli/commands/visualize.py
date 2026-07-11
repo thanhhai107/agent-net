@@ -54,3 +54,7 @@ def visualize_command(
         typer.echo("\nDashboard stopped.")
     except subprocess.CalledProcessError as exc:
         raise typer.Exit(code=exc.returncode) from exc
+
+
+if __name__ == "__main__":
+    typer.run(visualize_command)
