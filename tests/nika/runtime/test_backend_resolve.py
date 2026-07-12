@@ -84,7 +84,12 @@ class BackendResolveTest(unittest.TestCase):
 
         from nika.workflows.env.start import start_net_env
 
-        with patch("nika.workflows.env.start.get_net_env_instance") as mock_env:
+        with (
+            patch("nika.workflows.env.start.get_net_env_instance") as mock_env,
+            patch("nika.workflows.env.start.refresh_logger"),
+            patch("nika.workflows.env.start.bind_session_dir"),
+            patch("nika.workflows.env.start.log_event"),
+        ):
             mock_env.return_value.lab_exists.return_value = True
             mock_env.return_value.name = "min3clos__tag"
             mock_env.return_value.deploy = lambda: None

@@ -1,6 +1,6 @@
-"""Online Skill-Pro runtime that binds memory, prompt, skills, and tools.
+"""Online Skill-Pro runtime that binds Procedural Memory, prompts, skills, and tools.
 
-The offline memory module learns reusable procedures after a session closes.
+The offline Procedural Memory module learns reusable procedures after a session closes.
 This runtime is the read-time counterpart: it injects retrieved procedures into
 the diagnosis prompt, adds tool-specific skill hints to tool descriptions, and
 keeps an active Skill-MDP option across tool calls.
@@ -18,11 +18,11 @@ from langchain_core.messages import ToolMessage
 from langchain_core.tools import BaseTool
 from pydantic import ConfigDict, Field
 
-from agent.memory.attributes import infer_memory_attributes
-from agent.memory.models import MemoryQuery, SkillRetrieval
-from agent.memory.safety import redact_oracle_markers
-from agent.memory.service import ProceduralMemoryModule
-from agent.tool_evolution.runtime import ToolEvolutionRuntime
+from agent.procedural_memory.attributes import infer_procedural_memory_attributes
+from agent.procedural_memory.models import ProceduralMemoryQuery, SkillRetrieval
+from agent.procedural_memory.safety import redact_oracle_markers
+from agent.procedural_memory.service import ProceduralMemoryModule
+from agent.tool_refinement.runtime import ToolRefinementRuntime
 from agent.utils.loggers import MessageLogger
 
 INTEGRATED_GUIDANCE_MARKER = "[Integrated learning guidance - not evidence]"
@@ -95,27 +95,27 @@ class SkillToolRuntime:
     def __init__(
         self,
         *,
-        memory: ProceduralMemoryModule,
-        memory_mode: str,
+        procedural_memory: ProceduralMemoryModule,
+        procedural_memory_mode: str,
         session: Any,
         task_description: str,
         tools: list[BaseTool],
         session_dir: str | Path = "",
-        tool_evolution_runtime: ToolEvolutionRuntime | None = None,
+        tool_refinement_runtime: ToolRefinementRuntime | None = None,
         top_k: int = 5,
         token_budget: int = 1500,
         max_skill_age: int = 4,
         meta_controller_llm: Any | None = None,
     ) -> None:
-        self.memory = memory
-        self.memory_mode = memory_mode
+        self.procedural_memory = procedural_memory
+        self.procedural_memory_mode = procedural_memory_mode
         self.session = session
         self.task_description = task_description
         self.tool_names = [tool.name for tool in tools]
         self.tool_descriptions = {
             tool.name: (getattr(tool, "description", "") or "") for tool in tools
         }
-        self.tool_evolution_runtime = tool_evolution_runtime
+        self.tool_refinement_runtime = tool_refinement_runtime
         self.top_k = top_k
         self.token_budget = token_budget
         self.max_skill_age = max(1, max_skill_age)
@@ -141,7 +141,7 @@ class SkillToolRuntime:
         self.followup_guidance_count = 0
         self._logger = (
             MessageLogger(
-                agent="memory_agent",
+                agent="procedural_memory_agent",
                 session_dir=str(session_dir),
             )
             if session_dir
@@ -199,10 +199,10 @@ class SkillToolRuntime:
             limit=1200,
         )
         tool_guidance = ""
-        if self.tool_evolution_runtime is not None:
-            tool_guidance = self.tool_evolution_runtime.tool_runtime_guidance(
+        if self.tool_refinement_runtime is not None:
+            tool_guidance = self.tool_refinement_runtime.tool_runtime_guidance(
                 tool.name,
-                max_chars=min(320, self.tool_evolution_runtime.tool_doc_chars),
+                max_chars=min(320, self.tool_refinement_runtime.tool_doc_chars),
             )
         if not tool_guidance:
             return description
@@ -314,8 +314,8 @@ class SkillToolRuntime:
         )
         transition_count = len(self.recent_transitions)
         return {
-            "memory_mode": self.memory_mode,
-            "bank_id": self.memory.bank_id,
+            "procedural_memory_mode": self.procedural_memory_mode,
+            "bank_id": self.procedural_memory.bank_id,
             "active_skill_id": self.active_skill.skill.skill_id
             if self.active_skill
             else "",
@@ -382,7 +382,7 @@ class SkillToolRuntime:
         with self._lock:
             query = self._query(extra_text="decision prompt before next action")
             if not activate_skill:
-                retrieved = self.memory.retrieve(query=query, session_id="")
+                retrieved = self.procedural_memory.retrieve(query=query, session_id="")
                 return self.active_skill, self._merge_active_with_retrieved(retrieved)
             termination_reason = (
                 ""
@@ -410,7 +410,7 @@ class SkillToolRuntime:
                         },
                     )
                 self._select_active_skill(query=query, source="prompt")
-            retrieved = self.memory.retrieve(query=query, session_id="")
+            retrieved = self.procedural_memory.retrieve(query=query, session_id="")
             return self.active_skill, self._merge_active_with_retrieved(retrieved)
 
     def _query(
@@ -420,7 +420,7 @@ class SkillToolRuntime:
         tools: list[str] | None = None,
         top_k: int | None = None,
         token_budget: int | None = None,
-    ) -> MemoryQuery:
+    ) -> ProceduralMemoryQuery:
         query_tools = list(tools) if tools is not None else self._recent_tool_scope()
         text = " ".join(
             item
@@ -431,13 +431,13 @@ class SkillToolRuntime:
             ]
             if item
         )
-        attrs = infer_memory_attributes(
+        attrs = infer_procedural_memory_attributes(
             text,
             scenario=self.scenario,
             topology_class=self.topology_class,
             tools=query_tools,
         )
-        return MemoryQuery(
+        return ProceduralMemoryQuery(
             text=text,
             scenario=self.scenario,
             topology_class=self.topology_class,
@@ -461,7 +461,7 @@ class SkillToolRuntime:
 
     def _active_skill_termination_reason(
         self,
-        query: MemoryQuery,
+        query: ProceduralMemoryQuery,
         *,
         allow_context_mismatch: bool = True,
         source: str = "",
@@ -481,7 +481,7 @@ class SkillToolRuntime:
         if not allow_context_mismatch:
             return ""
         active_id = self.active_skill.skill.skill_id
-        for item in self.memory.retrieve(query=query, session_id=""):
+        for item in self.procedural_memory.retrieve(query=query, session_id=""):
             if item.skill.skill_id == active_id and item.score > 0.05:
                 return ""
         return "context_mismatch"
@@ -489,7 +489,7 @@ class SkillToolRuntime:
     def _meta_controller_termination_reason(
         self,
         *,
-        query: MemoryQuery,
+        query: ProceduralMemoryQuery,
         source: str,
     ) -> str:
         if (
@@ -609,11 +609,11 @@ class SkillToolRuntime:
     def _select_active_skill(
         self,
         *,
-        query: MemoryQuery,
+        query: ProceduralMemoryQuery,
         source: str,
     ) -> None:
         session_id = str(getattr(self.session, "session_id", "") or "")
-        self.active_skill = self.memory.select_skill(
+        self.active_skill = self.procedural_memory.select_skill(
             query=query,
             session_id=session_id,
             top_k=max(1, self.top_k),

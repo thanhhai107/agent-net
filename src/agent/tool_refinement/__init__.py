@@ -1,7 +1,7 @@
 """DRAFT-style primitive tool documentation refinement."""
 
-from agent.tool_evolution.curator import finalize_tool_evolution_session
-from agent.tool_evolution.models import (
+from agent.tool_refinement.curator import finalize_tool_refinement_session
+from agent.tool_refinement.models import (
     ComprehensionGap,
     DraftAnalyzerSuggestion,
     DraftExploration,
@@ -13,8 +13,8 @@ from agent.tool_evolution.models import (
     ToolParameterDoc,
     ToolTrial,
 )
-from agent.tool_evolution.runtime import ToolEvolutionRuntime
-from agent.tool_evolution.store import ToolEvolutionStore
+from agent.tool_refinement.runtime import ToolRefinementRuntime
+from agent.tool_refinement.store import ToolRefinementStore
 
 __all__ = [
     "ComprehensionGap",
@@ -25,9 +25,9 @@ __all__ = [
     "DraftToolStats",
     "DraftToolState",
     "ToolDocumentation",
-    "ToolEvolutionRuntime",
-    "ToolEvolutionStore",
+    "ToolRefinementRuntime",
+    "ToolRefinementStore",
     "ToolParameterDoc",
     "ToolTrial",
-    "finalize_tool_evolution_session",
+    "finalize_tool_refinement_session",
 ]

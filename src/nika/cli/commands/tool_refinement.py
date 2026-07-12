@@ -7,21 +7,21 @@ import shutil
 
 import typer
 
-from agent.tool_evolution.store import ToolEvolutionStore
-from agent.extensions.config import TOOL_EVOLUTION_DIR
+from agent.tool_refinement.store import ToolRefinementStore
+from agent.extensions.config import TOOL_REFINEMENT_DIR
 
 
-tools_app = typer.Typer(help="Inspect DRAFT tool-documentation libraries.")
+tools_app = typer.Typer(help="Inspect DRAFT Tool Refinement libraries.")
 
 
 @tools_app.command("libraries")
 def list_libraries() -> None:
-    """List available DRAFT documentation libraries."""
-    if not TOOL_EVOLUTION_DIR.exists():
+    """List available DRAFT Tool Refinement libraries."""
+    if not TOOL_REFINEMENT_DIR.exists():
         return
-    for path in sorted(TOOL_EVOLUTION_DIR.iterdir()):
+    for path in sorted(TOOL_REFINEMENT_DIR.iterdir()):
         if path.is_dir() and (path / "state.json").exists():
-            stats = ToolEvolutionStore(path.name).stats()
+            stats = ToolRefinementStore(path.name).stats()
             typer.echo(
                 f"{path.name}\tdocs={stats['documents']}\t"
                 f"trials={stats['trials']}\texplore={stats['explorations']}\t"
@@ -38,8 +38,8 @@ def list_libraries() -> None:
 def show_library(
     library_id: str = typer.Argument(..., help="Tool library id."),
 ) -> None:
-    """Print one DRAFT library as JSON."""
-    state = ToolEvolutionStore(library_id).load()
+    """Print one DRAFT Tool Refinement library as JSON."""
+    state = ToolRefinementStore(library_id).load()
     typer.echo(state.model_dump_json(indent=2))
 
 
@@ -49,7 +49,7 @@ def reset_library(
     yes: bool = typer.Option(False, "-y", "--yes", help="Skip confirmation."),
 ) -> None:
     """Delete one persistent tool library."""
-    store = ToolEvolutionStore(library_id)
+    store = ToolRefinementStore(library_id)
     if not store.library_dir.exists():
         raise typer.BadParameter(f"Tool library does not exist: {store.library_id}")
     if not yes and not typer.confirm(f"Delete tool library '{store.library_id}'?"):

@@ -7,16 +7,16 @@ import json
 from pathlib import Path
 from typing import Any
 
-from agent.memory.models import EvaluationEvidence, SkillStep
-from agent.memory.runtime import (
+from agent.procedural_memory.models import EvaluationEvidence, SkillStep
+from agent.procedural_memory.runtime import (
     strip_integrated_learning_guidance,
 )
-from agent.memory.service import ProceduralMemoryModule, _metric_success
+from agent.procedural_memory.service import ProceduralMemoryModule, _metric_success
 from agent.utils.phases import DIAGNOSIS
 from nika.evaluator.result_log import MESSAGES_FILENAME
 
 DIAGNOSIS_AGENT_NAMES = frozenset({DIAGNOSIS, "diagnosis_agent"})
-MEMORY_AGENT_NAME = "memory_agent"
+PROCEDURAL_MEMORY_AGENT_NAME = "procedural_memory_agent"
 
 
 def _parse_args(raw: Any) -> dict[str, Any]:
@@ -126,7 +126,7 @@ def _extract_runtime_skill_steps(entries: list[dict[str, Any]]) -> list[SkillSte
     steps: list[SkillStep] = []
     for entry in entries:
         if (
-            entry.get("agent") != MEMORY_AGENT_NAME
+            entry.get("agent") != PROCEDURAL_MEMORY_AGENT_NAME
             or entry.get("event") != "skill_transition"
         ):
             continue
@@ -173,9 +173,9 @@ def _runtime_overhead_metrics(runtime_snapshot: dict[str, Any]) -> dict[str, int
     metrics: dict[str, int] = {}
     for field in fields:
         try:
-            metrics[f"memory_{field}"] = int(runtime_snapshot.get(field) or 0)
+            metrics[f"procedural_memory_{field}"] = int(runtime_snapshot.get(field) or 0)
         except (TypeError, ValueError):
-            metrics[f"memory_{field}"] = 0
+            metrics[f"procedural_memory_{field}"] = 0
     return metrics
 
 
@@ -204,28 +204,28 @@ def _short_text(value: Any, *, limit: int = 900) -> str:
     return text
 
 
-async def evolve_session_memory(
+async def update_procedural_memory_from_session(
     *,
     run_meta: dict[str, Any],
     metrics: dict[str, Any],
     session_dir: str | Path,
 ) -> dict[str, Any]:
-    if run_meta.get("memory_mode", "off") != "evolve":
-        return {"status": "skipped", "reason": "memory_mode is not evolve"}
+    if run_meta.get("procedural_memory_mode", "off") != "evolve":
+        return {"status": "skipped", "reason": "procedural_memory_mode is not evolve"}
     session_path = Path(session_dir)
-    bank_id = str(run_meta.get("memory_bank") or "default")
+    bank_id = str(run_meta.get("procedural_memory_bank") or "default")
     gt = _load_json(session_path / "ground_truth.json")
-    runtime_snapshot = _load_json(session_path / "memory_runtime_session.json")
+    runtime_snapshot = _load_json(session_path / "procedural_memory_runtime_session.json")
     metrics_with_runtime = dict(metrics)
     metrics_with_runtime.update(_runtime_overhead_metrics(runtime_snapshot))
     module = ProceduralMemoryModule(
         bank_id=bank_id,
         llm_backend=run_meta.get("llm_backend"),
         model=run_meta.get("model"),
-        pool_size=_int_meta(run_meta, "memory_pool_size", 32),
-        evolution_threshold=_int_meta(run_meta, "memory_evolution_threshold", 3),
-        best_of_n=_int_meta(run_meta, "memory_best_of_n", 3),
-        ppo_epsilon=_float_meta(run_meta, "memory_ppo_epsilon", 0.2),
+        pool_size=_int_meta(run_meta, "procedural_memory_pool_size", 32),
+        evolution_threshold=_int_meta(run_meta, "procedural_memory_update_threshold", 3),
+        best_of_n=_int_meta(run_meta, "procedural_memory_best_of_n", 3),
+        ppo_epsilon=_float_meta(run_meta, "procedural_memory_ppo_epsilon", 0.2),
     )
     evidence = EvaluationEvidence(
         session_id=str(run_meta.get("session_id") or session_path.name),
@@ -250,12 +250,12 @@ async def evolve_session_memory(
         {
             "method": "Skill-Pro",
             "bank_id": bank_id,
-            "memory_config": {
-                "top_k": _int_meta(run_meta, "memory_top_k", 5),
-                "token_budget": _int_meta(run_meta, "memory_token_budget", 1500),
+            "procedural_memory_config": {
+                "top_k": _int_meta(run_meta, "procedural_memory_top_k", 5),
+                "token_budget": _int_meta(run_meta, "procedural_memory_token_budget", 1500),
                 "selection_policy": "similarity_top_k_then_online_value",
                 "meta_controller": "llm_with_deterministic_fallback",
-                "max_skill_age": _int_meta(run_meta, "memory_max_skill_age", 4),
+                "max_skill_age": _int_meta(run_meta, "procedural_memory_max_skill_age", 4),
                 "pool_size": module.pool_size,
                 "evolution_threshold": module.evolution_threshold,
                 "best_of_n": module.best_of_n,
@@ -263,7 +263,7 @@ async def evolve_session_memory(
             },
         }
     )
-    (session_path / "memory_update.json").write_text(
+    (session_path / "procedural_memory_update.json").write_text(
         json.dumps(report, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )

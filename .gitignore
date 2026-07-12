@@ -27,3 +27,5 @@ uv.lock
 .pytest_cache/
 .ruff_cache/
 **/MagicMock/**
+.codex/
+.kilo/

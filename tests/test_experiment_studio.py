@@ -30,14 +30,14 @@ def _config(**overrides: object) -> dict[str, object]:
         "tool_library_id": "tools-test",
         "tool_doc_chars": 640,
         "tool_convergence_threshold": 0.8,
-        "memory_bank": "memory-test",
-        "memory_k": 5,
-        "memory_tokens": 1500,
-        "memory_max_skill_age": 6,
-        "memory_pool_size": 24,
-        "memory_evolution_threshold": 2,
-        "memory_best_of_n": 5,
-        "memory_ppo_epsilon": 0.15,
+        "procedural_memory_bank": "procedural-memory-test",
+        "procedural_memory_k": 5,
+        "procedural_memory_tokens": 1500,
+        "procedural_memory_max_skill_age": 6,
+        "procedural_memory_pool_size": 24,
+        "procedural_memory_update_threshold": 2,
+        "procedural_memory_best_of_n": 5,
+        "procedural_memory_ppo_epsilon": 0.15,
     }
     config.update(overrides)
     return config
@@ -71,6 +71,20 @@ def test_result_summary_uses_selected_benchmark_metrics() -> None:
     assert "total_tokens" not in RESULT_SUMMARY_COLUMNS
 
 
+def test_clean_control_composite_requires_false_detection_and_empty_sets() -> None:
+    from nika.visualization.experiment_dashboard import _metric_total
+
+    correct = {
+        "detection_score": 1.0,
+        "localization_f1": 1.0,
+        "rca_f1": 1.0,
+    }
+    inconsistent = {**correct, "localization_f1": 0.0}
+
+    assert _metric_total(correct, is_anomaly=False) == 1.0
+    assert _metric_total(inconsistent, is_anomaly=False) < 1.0
+
+
 def test_command_fallbacks_match_extension_defaults(monkeypatch) -> None:
     monkeypatch.setenv("NIKA_MAX_STEPS", "20")
     config = _config()
@@ -86,33 +100,41 @@ def test_command_fallbacks_match_extension_defaults(monkeypatch) -> None:
 
 def test_tool_and_memory_modules_share_one_sequential_command() -> None:
     command = build_experiment_command(
-        _config(modules=["tool_evolution", "memory_evolution"])
+        _config(modules=["tool_refinement", "procedural_memory"])
     )
 
     assert command[:3] == [sys.executable, "-m", "nika.extensions.benchmark"]
     assert "-j" not in command
     assert "--parallel" not in command
 
-    assert command[command.index("--tools") + 1] == "tools-test"
-    assert command[command.index("--tool-doc-chars") + 1] == "640"
-    assert command[command.index("--tool-convergence-threshold") + 1] == "0.8"
-    assert command[command.index("--memory") + 1] == "memory-test"
-    assert command[command.index("--memory-max-skill-age") + 1] == "6"
-    assert command[command.index("--memory-pool-size") + 1] == "24"
-    assert command[command.index("--memory-evolution-threshold") + 1] == "2"
-    assert command[command.index("--memory-best-of-n") + 1] == "5"
-    assert command[command.index("--memory-ppo-epsilon") + 1] == "0.15"
+    assert command[command.index("--tool-refinement") + 1] == "tools-test"
+    assert command[command.index("--tool-refinement-doc-chars") + 1] == "640"
+    assert (
+        command[command.index("--tool-refinement-convergence-threshold") + 1]
+        == "0.8"
+    )
+    assert (
+        command[command.index("--procedural-memory") + 1]
+        == "procedural-memory-test"
+    )
+    assert command[command.index("--procedural-memory-max-skill-age") + 1] == "6"
+    assert command[command.index("--procedural-memory-pool-size") + 1] == "24"
+    assert (
+        command[command.index("--procedural-memory-update-threshold") + 1] == "2"
+    )
+    assert command[command.index("--procedural-memory-best-of-n") + 1] == "5"
+    assert command[command.index("--procedural-memory-ppo-epsilon") + 1] == "0.15"
 
 def test_command_plan_for_memory_has_no_service_prerequisite() -> None:
     plan = build_command_plan(
         _config(
-            modules=["memory_evolution"],
+            modules=["procedural_memory"],
         )
     )
 
     assert len(plan) == 1
     assert plan[0].variant == "benchmark"
-    assert plan[0].name == "ReAct + Memory Evolution"
+    assert plan[0].name == "ReAct + Procedural Memory"
 
 
 def test_prepare_experiment_config_uses_one_sequential_name_for_outputs(
@@ -128,9 +150,9 @@ def test_prepare_experiment_config_uses_one_sequential_name_for_outputs(
 
     prepared = prepare_experiment_config(
         _config(
-            modules=["tool_evolution", "memory_evolution"],
+            modules=["tool_refinement", "procedural_memory"],
             tool_library_id="",
-            memory_bank="",
+            procedural_memory_bank="",
         )
     )
     command = build_experiment_command(prepared)
@@ -138,8 +160,10 @@ def test_prepare_experiment_config_uses_one_sequential_name_for_outputs(
     assert prepared["experiment_id"] == "benchmark_test-0007"
     assert prepared["result_root"] == str(tmp_path / "results" / "benchmark_test-0007")
     assert command[command.index("--result-dir") + 1].endswith("benchmark_test-0007")
-    assert command[command.index("--tools") + 1] == "benchmark_test-0007"
-    assert command[command.index("--memory") + 1] == "benchmark_test-0007"
+    assert command[command.index("--tool-refinement") + 1] == "benchmark_test-0007"
+    assert (
+        command[command.index("--procedural-memory") + 1] == "benchmark_test-0007"
+    )
 
 
 def test_resume_command_uses_existing_result_root() -> None:

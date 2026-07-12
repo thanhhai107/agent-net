@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from agent.extensions.config import MEMORY_DIR, TOOL_EVOLUTION_DIR
+from agent.extensions.config import PROCEDURAL_MEMORY_DIR, TOOL_REFINEMENT_DIR
 from nika.config import RESULTS_DIR, RUNTIME_DIR
 
 STREAMLIT_RUNS_DIR = RUNTIME_DIR / "streamlit_runs"
@@ -52,8 +52,8 @@ def next_experiment_id(
     roots = roots or [
         Path(RESULTS_DIR),
         STREAMLIT_RUNS_DIR,
-        Path(MEMORY_DIR),
-        Path(TOOL_EVOLUTION_DIR),
+        Path(PROCEDURAL_MEMORY_DIR),
+        Path(TOOL_REFINEMENT_DIR),
     ]
     used = _existing_indices(stem, roots)
     index = 1

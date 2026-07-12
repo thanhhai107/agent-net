@@ -1,12 +1,12 @@
 import unittest
 
-from agent.memory.models import (
+from agent.procedural_memory.models import (
     ProceduralSkill,
     SkillExperience,
     SkillStep,
     SkillTransition,
 )
-from agent.memory.policy_scorer import (
+from agent.procedural_memory.policy_scorer import (
     BehavioralReplayPolicyScorer,
     PolicyReplayDraft,
     PolicyReplayItem,

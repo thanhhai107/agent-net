@@ -8,8 +8,8 @@ from typing import Any
 
 from langchain_core.tools import BaseTool
 
-from agent.tool_evolution.models import ToolDocumentation, ToolParameterDoc, utc_now
-from agent.tool_evolution.store import ToolEvolutionStore
+from agent.tool_refinement.models import ToolDocumentation, ToolParameterDoc, utc_now
+from agent.tool_refinement.store import ToolRefinementStore
 
 
 SOURCE_CONTRACT_VERSION = 1
@@ -113,7 +113,7 @@ def _clip(text: Any, *, limit: int) -> str:
     return value[: limit - 3] + "..."
 
 
-class ToolEvolutionRuntime:
+class ToolRefinementRuntime:
     """Inject refined documentation while keeping the primitive tool surface fixed."""
 
     def __init__(
@@ -122,13 +122,13 @@ class ToolEvolutionRuntime:
         session: Any,
         primitive_tools: list[BaseTool],
         library_id: str,
-        store: ToolEvolutionStore | None = None,
+        store: ToolRefinementStore | None = None,
         tool_doc_chars: int = 500,
     ) -> None:
         self.session = session
         self.primitive_tools = list(primitive_tools)
         self.library_id = library_id
-        self.store = store or ToolEvolutionStore(library_id)
+        self.store = store or ToolRefinementStore(library_id)
         self.tool_doc_chars = max(100, int(tool_doc_chars))
         self._base_descriptions = {
             tool.name: _primitive_description(tool) for tool in self.primitive_tools

@@ -394,11 +394,11 @@ RESULT_DETAIL_COLUMNS = [
     "paired_ties",
     "token_in",
     "token_out",
-    "memory_reward",
-    "memory_advantage",
-    "memory_success",
-    "memory_added_tokens",
-    "memory_delta_tokens_step",
+    "procedural_memory_reward",
+    "procedural_memory_advantage",
+    "procedural_memory_success",
+    "procedural_memory_added_tokens",
+    "procedural_memory_delta_tokens_step",
     "duration",
     "modules",
     "agent",
@@ -420,10 +420,10 @@ RESULT_NUMERIC_COLUMNS = {
     "paired_delta_detection",
     "paired_delta_localization_f1",
     "paired_delta_rca_f1",
-    "memory_reward",
-    "memory_advantage",
-    "memory_success",
-    "memory_delta_tokens_step",
+    "procedural_memory_reward",
+    "procedural_memory_advantage",
+    "procedural_memory_success",
+    "procedural_memory_delta_tokens_step",
 }
 
 RESULT_INTEGER_COLUMNS = {
@@ -441,7 +441,7 @@ RESULT_INTEGER_COLUMNS = {
     "token_in",
     "token_out",
     "total_tokens",
-    "memory_added_tokens",
+    "procedural_memory_added_tokens",
 }
 
 
@@ -570,11 +570,19 @@ def _result_column_config() -> dict[str, object]:
         "token_in": st.column_config.NumberColumn("Token In", format="%d"),
         "token_out": st.column_config.NumberColumn("Token Out", format="%d"),
         "total_tokens": st.column_config.NumberColumn("Total Tokens", format="%d"),
-        "memory_reward": st.column_config.NumberColumn("Mem Reward", format="%.2f"),
-        "memory_advantage": st.column_config.NumberColumn("Mem Adv", format="%.2f"),
-        "memory_success": st.column_config.NumberColumn("Mem Success", format="%.2f"),
-        "memory_added_tokens": st.column_config.NumberColumn("Mem Tokens", format="%d"),
-        "memory_delta_tokens_step": st.column_config.NumberColumn(
+        "procedural_memory_reward": st.column_config.NumberColumn(
+            "Procedural Memory Reward", format="%.2f"
+        ),
+        "procedural_memory_advantage": st.column_config.NumberColumn(
+            "Procedural Memory Advantage", format="%.2f"
+        ),
+        "procedural_memory_success": st.column_config.NumberColumn(
+            "Procedural Memory Success", format="%.2f"
+        ),
+        "procedural_memory_added_tokens": st.column_config.NumberColumn(
+            "Procedural Memory Tokens", format="%d"
+        ),
+        "procedural_memory_delta_tokens_step": st.column_config.NumberColumn(
             "Mem Δ Tokens/Step", format="%.2f"
         ),
         "duration": st.column_config.TextColumn("Duration", width="small"),
@@ -619,23 +627,21 @@ def _case_key(meta: dict) -> object:
 
 def _is_baseline_meta(meta: dict) -> bool:
     return (
-        not bool(meta.get("tool_evolution_enabled"))
-        and str(meta.get("memory_mode") or "off") == "off"
+        not bool(meta.get("tool_refinement_enabled"))
+        and str(meta.get("procedural_memory_mode") or "off") == "off"
     )
 
 
 def _metric_total(metrics: dict, *, is_anomaly: bool) -> float | None:
-    values = [_float(metrics.get("detection_score"))]
-    if is_anomaly:
-        values.extend(
-            [
-                _float(metrics.get("localization_f1")),
-                _float(metrics.get("rca_f1")),
-            ]
-        )
+    del is_anomaly
+    values = [
+        _float(metrics.get("detection_score")),
+        _float(metrics.get("localization_f1")),
+        _float(metrics.get("rca_f1")),
+    ]
     if any(value is None for value in values):
         return None
-    return sum(value or 0.0 for value in values) / 3
+    return sum(value or 0.0 for value in values) / len(values)
 
 
 def _root_case_map(run_paths: list[Path]) -> dict[object, dict[str, object]]:
@@ -774,11 +780,11 @@ def _result_rows(*, benchmark_name: str | None = None) -> list[dict[str, object]
         out_tokens: list[float] = []
         tool_errors: list[float] = []
         durations: list[float] = []
-        memory_rewards: list[float] = []
-        memory_advantages: list[float] = []
-        memory_successes: list[float] = []
-        memory_added_tokens: list[float] = []
-        memory_delta_tokens: list[float] = []
+        procedural_memory_rewards: list[float] = []
+        procedural_memory_advantages: list[float] = []
+        procedural_memory_successes: list[float] = []
+        procedural_memory_added_tokens: list[float] = []
+        procedural_memory_delta_tokens: list[float] = []
         submitted = 0
         finished = 0
         failed = 0
@@ -827,29 +833,29 @@ def _result_rows(*, benchmark_name: str | None = None) -> list[dict[str, object]
             detection_fp += _float(metrics.get("detection_fp")) or 0.0
             detection_fn += _float(metrics.get("detection_fn")) or 0.0
 
-            memory_update = metrics.get("memory_update") or {}
-            if isinstance(memory_update, dict):
+            procedural_memory_update = metrics.get("procedural_memory") or {}
+            if isinstance(procedural_memory_update, dict):
                 for key, target in (
-                    ("episode_reward", memory_rewards),
-                    ("episode_advantage", memory_advantages),
-                    ("total_added_tokens", memory_added_tokens),
-                    ("delta_prompt_tokens_per_step", memory_delta_tokens),
+                    ("episode_reward", procedural_memory_rewards),
+                    ("episode_advantage", procedural_memory_advantages),
+                    ("total_added_tokens", procedural_memory_added_tokens),
+                    ("delta_prompt_tokens_per_step", procedural_memory_delta_tokens),
                 ):
-                    value = _float(memory_update.get(key))
+                    value = _float(procedural_memory_update.get(key))
                     if value is not None:
                         target.append(value)
-                if memory_update.get("episode_success") is not None:
-                    memory_successes.append(
-                        1.0 if memory_update.get("episode_success") else 0.0
+                if procedural_memory_update.get("episode_success") is not None:
+                    procedural_memory_successes.append(
+                        1.0 if procedural_memory_update.get("episode_success") else 0.0
                     )
             dur = _parse_duration(meta)
             if dur is not None:
                 durations.append(dur)
 
-            if meta.get("tool_evolution_enabled"):
-                result_modules.add("Tool Evolution")
-            if meta.get("memory_mode") and meta.get("memory_mode") != "off":
-                result_modules.add("Memory Evolution")
+            if meta.get("tool_refinement_enabled"):
+                result_modules.add("Tool Refinement")
+            if meta.get("procedural_memory_mode") and meta.get("procedural_memory_mode") != "off":
+                result_modules.add("Procedural Memory")
             if meta.get("agent_type"):
                 agent_name = str(meta["agent_type"])
                 agents.add(agent_name)
@@ -888,11 +894,11 @@ def _result_rows(*, benchmark_name: str | None = None) -> list[dict[str, object]
             "tool_errors": _sum(tool_errors),
             "token_in": _sum(in_tokens),
             "token_out": _sum(out_tokens),
-            "memory_reward": _avg(memory_rewards),
-            "memory_advantage": _avg(memory_advantages),
-            "memory_success": _avg(memory_successes),
-            "memory_added_tokens": _sum(memory_added_tokens),
-            "memory_delta_tokens_step": _avg(memory_delta_tokens),
+            "procedural_memory_reward": _avg(procedural_memory_rewards),
+            "procedural_memory_advantage": _avg(procedural_memory_advantages),
+            "procedural_memory_success": _avg(procedural_memory_successes),
+            "procedural_memory_added_tokens": _sum(procedural_memory_added_tokens),
+            "procedural_memory_delta_tokens_step": _avg(procedural_memory_delta_tokens),
             "duration": f"{int(sum(durations))}s" if durations else "-",
             "modules": ", ".join(sorted(result_modules)) or "-",
             "agent": ", ".join(sorted(agents)) or "-",
@@ -1067,7 +1073,7 @@ st.markdown('<div class="section-title">Studio</div>', unsafe_allow_html=True)
 with st.expander("Baseline Settings", expanded=True):
     b_col1, b_col2, b_col3 = st.columns([1.2, 1, 1.5], gap="small")
     with b_col1:
-        agent_type = st.selectbox("Workflow", ["react"])
+        agent_type = st.selectbox("Workflow", ["react", "plan-execute", "reflexion"])
     with b_col2:
         backend_options = ["custom", "openai", "deepseek", "ollama"]
         llm_backend = st.selectbox(
@@ -1080,7 +1086,7 @@ with st.expander("Baseline Settings", expanded=True):
     with b_col3:
         model = st.text_input("Model", value=DEFAULT_MODEL)
 
-    b_col4, b_col5 = st.columns([1.5, 1], gap="small")
+    b_col4, b_col5, b_col6 = st.columns([1.5, 1, 1], gap="small")
     with b_col4:
         benchmark_name = st.text_input(
             "Benchmark",
@@ -1092,13 +1098,21 @@ with st.expander("Baseline Settings", expanded=True):
         default_max_steps = resolve_max_steps(None)
         max_steps_str = st.text_input("Steps", value=str(default_max_steps))
         max_steps = int(max_steps_str) if max_steps_str.isdigit() else default_max_steps
+    with b_col6:
+        max_attempts = st.number_input(
+            "Attempts",
+            min_value=1,
+            max_value=10,
+            value=3,
+            disabled=agent_type != "reflexion",
+        )
  
 st.markdown("<div style='margin-top: 0.5rem;'></div>", unsafe_allow_html=True)
 col_modules = st.columns(2, gap="medium")
 
 with col_modules[0]:
-    with st.expander("Tool Evolution Settings", expanded=False):
-        tool_selected = st.checkbox("Enable Tool Evolution", value=False)
+    with st.expander("Tool Refinement Settings", expanded=False):
+        tool_selected = st.checkbox("Enable Tool Refinement", value=False)
         st.markdown("<div style='margin-top: 0.5rem;'></div>", unsafe_allow_html=True)
         
         t_col1, t_col2 = st.columns([1.5, 1], gap="small")
@@ -1129,86 +1143,86 @@ with col_modules[0]:
         )
 
 with col_modules[1]:
-    with st.expander("Memory Evolution Settings", expanded=False):
-        memory_selected = st.checkbox("Enable Memory Evolution", value=False)
+    with st.expander("Procedural Memory Settings", expanded=False):
+        procedural_memory_selected = st.checkbox("Enable Procedural Memory", value=False)
         st.markdown("<div style='margin-top: 0.5rem;'></div>", unsafe_allow_html=True)
         
         m_col1, m_col2, m_col3 = st.columns([1.5, 1, 1.2], gap="small")
         with m_col1:
-            memory_bank = st.text_input(
-                "Memory bank", 
+            procedural_memory_bank = st.text_input(
+                "Procedural Memory bank",
                 value="",
                 placeholder="auto",
-                disabled=not memory_selected
+                disabled=not procedural_memory_selected
             )
         with m_col2:
-            memory_k = st.number_input(
-                "Memory top-k", 
+            procedural_memory_k = st.number_input(
+                "Procedural Memory top-k",
                 min_value=1, 
                 max_value=20, 
                 value=5, 
-                disabled=not memory_selected
+                disabled=not procedural_memory_selected
             )
         with m_col3:
-            memory_tokens = st.number_input(
-                "Memory tokens", 
+            procedural_memory_tokens = st.number_input(
+                "Procedural Memory tokens",
                 min_value=100, 
                 max_value=8000, 
                 value=1500, 
                 step=100, 
-                disabled=not memory_selected
+                disabled=not procedural_memory_selected
             )
             
         m_col4, m_col5 = st.columns(2, gap="small")
         with m_col4:
-            memory_max_skill_age = st.number_input(
+            procedural_memory_max_skill_age = st.number_input(
                 "Skill max age",
                 min_value=1,
                 max_value=20,
                 value=4,
-                disabled=not memory_selected,
+                disabled=not procedural_memory_selected,
             )
             
         with m_col5:
-            memory_pool_size = st.number_input(
+            procedural_memory_pool_size = st.number_input(
                 "Skill pool",
                 min_value=1,
                 max_value=200,
                 value=32,
-                disabled=not memory_selected,
+                disabled=not procedural_memory_selected,
             )
             
         m_col10, m_col11, m_col12 = st.columns(3, gap="small")
         with m_col10:
-            memory_evolution_threshold = st.number_input(
-                "Evolution samples",
+            procedural_memory_update_threshold = st.number_input(
+                "Update samples",
                 min_value=1,
                 max_value=50,
                 value=3,
-                disabled=not memory_selected,
+                disabled=not procedural_memory_selected,
             )
         with m_col11:
-            memory_best_of_n = st.number_input(
+            procedural_memory_best_of_n = st.number_input(
                 "Best of N",
                 min_value=1,
                 max_value=20,
                 value=3,
-                disabled=not memory_selected,
+                disabled=not procedural_memory_selected,
             )
         with m_col12:
-            memory_ppo_epsilon = st.number_input(
+            procedural_memory_ppo_epsilon = st.number_input(
                 "PPO epsilon",
                 min_value=0.0,
                 value=0.2,
                 step=0.05,
-                disabled=not memory_selected,
+                disabled=not procedural_memory_selected,
             )
 
 modules = []
 if tool_selected:
-    modules.append("tool_evolution")
-if memory_selected:
-    modules.append("memory_evolution")
+    modules.append("tool_refinement")
+if procedural_memory_selected:
+    modules.append("procedural_memory")
 
 # Evaluation Settings
 st.markdown("<div style='margin-top: 0.5rem;'></div>", unsafe_allow_html=True)
@@ -1227,18 +1241,19 @@ config = {
     "llm_backend": llm_backend,
     "model": model,
     "max_steps": int(max_steps),
+    "max_attempts": int(max_attempts),
     "parallel": 1,
     "tool_library_id": tool_library_id,
     "tool_doc_chars": int(tool_doc_chars),
     "tool_convergence_threshold": float(tool_convergence_threshold),
-    "memory_bank": memory_bank,
-    "memory_k": int(memory_k),
-    "memory_tokens": int(memory_tokens),
-    "memory_max_skill_age": int(memory_max_skill_age),
-    "memory_pool_size": int(memory_pool_size),
-    "memory_evolution_threshold": int(memory_evolution_threshold),
-    "memory_best_of_n": int(memory_best_of_n),
-    "memory_ppo_epsilon": float(memory_ppo_epsilon),
+    "procedural_memory_bank": procedural_memory_bank,
+    "procedural_memory_k": int(procedural_memory_k),
+    "procedural_memory_tokens": int(procedural_memory_tokens),
+    "procedural_memory_max_skill_age": int(procedural_memory_max_skill_age),
+    "procedural_memory_pool_size": int(procedural_memory_pool_size),
+    "procedural_memory_update_threshold": int(procedural_memory_update_threshold),
+    "procedural_memory_best_of_n": int(procedural_memory_best_of_n),
+    "procedural_memory_ppo_epsilon": float(procedural_memory_ppo_epsilon),
     "run_judge": bool(run_judge),
     "judge_backend": judge_backend,
     "judge_model": judge_model,

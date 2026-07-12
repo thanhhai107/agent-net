@@ -9,8 +9,8 @@ from nika.config import RUNTIME_DIR
 DEFAULT_LLM_PROVIDER = "custom"
 DEFAULT_MODEL = "openai/gpt-oss-20b"
 
-MEMORY_DIR = RUNTIME_DIR / "memory"
-TOOL_EVOLUTION_DIR = RUNTIME_DIR / "tool_evolution"
+PROCEDURAL_MEMORY_DIR = RUNTIME_DIR / "procedural_memory"
+TOOL_REFINEMENT_DIR = RUNTIME_DIR / "tool_refinement"
 
 
 def default_llm_provider() -> str:
@@ -19,4 +19,3 @@ def default_llm_provider() -> str:
 
 def default_model() -> str:
     return os.getenv("NIKA_MODEL", DEFAULT_MODEL).strip() or DEFAULT_MODEL
-

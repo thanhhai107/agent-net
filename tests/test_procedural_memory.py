@@ -1,4 +1,4 @@
-"""Tests for Skill-Pro procedural memory."""
+"""Tests for Skill-Pro Procedural Memory."""
 
 from __future__ import annotations
 
@@ -13,10 +13,10 @@ from unittest.mock import AsyncMock, patch
 
 from langchain_core.tools import StructuredTool
 
-from agent.memory.attributes import infer_memory_attributes
-from agent.memory.models import (
+from agent.procedural_memory.attributes import infer_procedural_memory_attributes
+from agent.procedural_memory.models import (
     EvaluationEvidence,
-    MemoryQuery,
+    ProceduralMemoryQuery,
     ProceduralSkill,
     SemanticGradientDraft,
     SkillCandidateDraft,
@@ -24,18 +24,99 @@ from agent.memory.models import (
     SkillStep,
     SkillTransition,
 )
-from agent.memory.runtime import SkillToolRuntime
-from agent.memory.service import (
+from agent.procedural_memory.runtime import SkillToolRuntime
+from agent.procedural_memory.service import (
     ProceduralMemoryModule,
     _evidence_score,
     _metric_success,
 )
-from agent.memory.workflow import evolve_session_memory, extract_skill_steps
+from agent.procedural_memory.workflow import (
+    update_procedural_memory_from_session,
+    extract_skill_steps,
+)
+from agent.tool_refinement.runtime import ToolRefinementRuntime
+from agent.tool_refinement.store import ToolRefinementStore
 from nika.evaluator.result_log import build_eval_result_from_session_dir
 from nika.workflows.eval.session import run_eval_metrics
 
 
-class SkillProMemoryTest(unittest.TestCase):
+class SkillProProceduralMemoryTest(unittest.TestCase):
+    def test_combined_runtime_injects_tool_refinement_guidance_once(self) -> None:
+        def inspect(host: str) -> str:
+            return host
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tool = StructuredTool.from_function(
+                inspect,
+                name="inspect_host",
+                description="Inspect one host.",
+            )
+            refinement_store = ToolRefinementStore(
+                "combined",
+                root=Path(tmp) / "tool_refinement",
+            )
+            refinement = ToolRefinementRuntime(
+                session=SimpleNamespace(),
+                primitive_tools=[tool],
+                library_id="combined",
+                store=refinement_store,
+            )
+            state = refinement_store.load()
+            state.documents["inspect_host"].usage_notes = [
+                "Use observed identifiers only."
+            ]
+            refinement_store.save(state)
+            refinement = ToolRefinementRuntime(
+                session=SimpleNamespace(),
+                primitive_tools=[tool],
+                library_id="combined",
+                store=refinement_store,
+            )
+            primitive = refinement.build_tools(append_docs=False)[0]
+            module = ProceduralMemoryModule(
+                bank_id="combined",
+                store_path=Path(tmp) / "skills.json",
+            )
+            runtime = SkillToolRuntime(
+                procedural_memory=module,
+                procedural_memory_mode="read",
+                session=SimpleNamespace(),
+                task_description="Inspect current connectivity.",
+                tools=[primitive],
+                tool_refinement_runtime=refinement,
+            )
+
+            description = runtime.wrap_tools([primitive])[0].description
+
+        self.assertEqual(description.count("Use observed identifiers only."), 1)
+        self.assertNotIn("DRAFT refined guidance", description)
+        self.assertIn("DRAFT contract notes", description)
+
+    def test_atomic_store_failure_preserves_previous_skill_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            module = ProceduralMemoryModule(
+                bank_id="atomic",
+                store_path=Path(tmp) / "skills.json",
+            )
+            state = module.store.load()
+            state.iteration = 1
+            module.store.save(state)
+            previous = module.store.state_path.read_text(encoding="utf-8")
+            state.iteration = 2
+
+            with patch(
+                "agent.utils.atomic.os.replace",
+                side_effect=OSError("simulated interruption"),
+            ):
+                with self.assertRaisesRegex(OSError, "simulated interruption"):
+                    module.store.save(state)
+
+            self.assertEqual(
+                module.store.state_path.read_text(encoding="utf-8"),
+                previous,
+            )
+            self.assertEqual(list(Path(tmp).glob(".*.tmp")), [])
+
     def test_batch_gradient_and_best_of_n_use_independent_llm_calls(self) -> None:
         schemas: list[type] = []
         prompts: list[str] = []
@@ -107,7 +188,7 @@ class SkillProMemoryTest(unittest.TestCase):
                 best_of_n=3,
             )
             with patch(
-                "agent.memory.service.load_model", return_value=FakeModel()
+                "agent.procedural_memory.service.load_model", return_value=FakeModel()
             ) as load_model:
                 first = module.learn_from_episode(
                     evidence=evidence("batch-1"), tool_steps=steps
@@ -126,7 +207,7 @@ class SkillProMemoryTest(unittest.TestCase):
         load_model.assert_called_once()
 
     def test_attribute_mining_ignores_scenario_design_noise(self) -> None:
-        attrs = infer_memory_attributes(
+        attrs = infer_procedural_memory_attributes(
             (
                 "Network Description: OSPF enterprise network with DHCP, DNS, "
                 "HTTP web services and load balancer.\n\n"
@@ -279,7 +360,7 @@ class SkillProMemoryTest(unittest.TestCase):
                     "output": "plain callback output",
                 },
                 {
-                    "agent": "memory_agent",
+                    "agent": "procedural_memory_agent",
                     "phase": "skill_mdp_runtime",
                     "event": "skill_transition",
                     "active_skill_id": "seed_react_decision",
@@ -332,7 +413,7 @@ class SkillProMemoryTest(unittest.TestCase):
                 ],
             )
             retrieved = module.retrieve(
-                query=MemoryQuery(
+                query=ProceduralMemoryQuery(
                     text="BGP route is not advertised",
                     scenario="dc_clos_bgp",
                     protocols=["bgp"],
@@ -381,7 +462,7 @@ class SkillProMemoryTest(unittest.TestCase):
             module.store.save(state)
 
             retrieved = module.retrieve(
-                query=MemoryQuery(
+                query=ProceduralMemoryQuery(
                     text="Generic enterprise network diagnosis with no current observations.",
                     scenario="ospf_enterprise_dhcp",
                     top_k=5,
@@ -421,7 +502,7 @@ class SkillProMemoryTest(unittest.TestCase):
             module.store.save(state)
 
             retrieved = module.retrieve(
-                query=MemoryQuery(
+                query=ProceduralMemoryQuery(
                     text="Current evidence shows the host uses an incorrect default gateway.",
                     scenario="ospf_enterprise_dhcp",
                     services=["addressing"],
@@ -488,7 +569,7 @@ class SkillProMemoryTest(unittest.TestCase):
             module.store.save(state)
 
             retrieved = module.retrieve(
-                query=MemoryQuery(
+                query=ProceduralMemoryQuery(
                     text=(
                         "curl_web_test shows DNS name lookup SERVFAIL from "
                         "the configured resolver."
@@ -883,7 +964,7 @@ class SkillProMemoryTest(unittest.TestCase):
             )
             module.store.save(state)
             retrieved = module.retrieve(
-                query=MemoryQuery(
+                query=ProceduralMemoryQuery(
                     text="Host reachability failure",
                     scenario="simple_bgp",
                     tools=["ping_pair"],
@@ -917,7 +998,9 @@ class SkillProMemoryTest(unittest.TestCase):
             module.store.save(state)
 
             retrieved = module.retrieve(
-                query=MemoryQuery(text="Current reachability evidence", top_k=20)
+                query=ProceduralMemoryQuery(
+                    text="Current reachability evidence", top_k=20
+                )
             )
 
         self.assertNotIn("unverified", {item.skill.skill_id for item in retrieved})
@@ -985,7 +1068,7 @@ class SkillProMemoryTest(unittest.TestCase):
             )
             module.store.save(state)
             retrieved = module.retrieve(
-                query=MemoryQuery(
+                query=ProceduralMemoryQuery(
                     text="DNS lookup failure",
                     services=["dns"],
                     tools=["dig_query"],
@@ -1266,8 +1349,12 @@ class SkillProMemoryTest(unittest.TestCase):
                 [
                     current,
                     experience("service-2", "DNS lookup and DHCP service evidence."),
-                    experience("service-3", "DNS server response and DHCP lease evidence."),
-                    experience("p4-no-fault", "P4 hosts have successful ICMP reachability."),
+                    experience(
+                        "service-3", "DNS server response and DHCP lease evidence."
+                    ),
+                    experience(
+                        "p4-no-fault", "P4 hosts have successful ICMP reachability."
+                    ),
                 ]
             )
 
@@ -1276,7 +1363,9 @@ class SkillProMemoryTest(unittest.TestCase):
         self.assertEqual(len(batch), 3)
         self.assertNotIn("p4-no-fault", {item.experience_id for item in batch})
 
-    def test_refining_generic_seed_preserves_seed_and_resets_candidate_stats(self) -> None:
+    def test_refining_generic_seed_preserves_seed_and_resets_candidate_stats(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             module = ProceduralMemoryModule(
                 bank_id="skill",
@@ -1326,7 +1415,7 @@ class SkillProMemoryTest(unittest.TestCase):
                 evolution_threshold=1,
             )
             retrieved = module.retrieve(
-                query=MemoryQuery(
+                query=ProceduralMemoryQuery(
                     text="Plan a diagnosis with little evidence",
                     scenario="simple_bgp",
                     top_k=3,
@@ -1402,7 +1491,7 @@ class SkillProMemoryTest(unittest.TestCase):
             module.store.save(state)
 
             retrieved = module.retrieve(
-                query=MemoryQuery(
+                query=ProceduralMemoryQuery(
                     text="BGP route is not advertised",
                     scenario="dc_clos_bgp",
                     protocols=["bgp"],
@@ -1455,7 +1544,7 @@ class SkillProMemoryTest(unittest.TestCase):
             module.store.save(state)
 
             retrieved = module.retrieve(
-                query=MemoryQuery(
+                query=ProceduralMemoryQuery(
                     text=(
                         "Observed ping from host to server returned Network is "
                         "unreachable while checking DHCP."
@@ -1703,7 +1792,7 @@ class SkillProMemoryTest(unittest.TestCase):
             )
 
             active = module.select_skill(
-                query=MemoryQuery(
+                query=ProceduralMemoryQuery(
                     text="DNS record gives the wrong address",
                     scenario="ospf_enterprise_dhcp",
                     protocols=["dns"],
@@ -1744,7 +1833,7 @@ class SkillProMemoryTest(unittest.TestCase):
             module.store.save(state)
 
             active = module.select_skill(
-                query=MemoryQuery(
+                query=ProceduralMemoryQuery(
                     text="Several root-cause hypotheses remain plausible.",
                     scenario="simple_bgp",
                     top_k=3,
@@ -1804,7 +1893,7 @@ class SkillProMemoryTest(unittest.TestCase):
             module.store.save(state)
 
             active = module.select_skill(
-                query=MemoryQuery(
+                query=ProceduralMemoryQuery(
                     text="Host reachability failure",
                     scenario="simple_bgp",
                     tools=["ping_host"],
@@ -1843,8 +1932,8 @@ class SkillProMemoryTest(unittest.TestCase):
                 store_path=Path(tmp) / "skills.json",
             )
             runtime = SkillToolRuntime(
-                memory=module,
-                memory_mode="read",
+                procedural_memory=module,
+                procedural_memory_mode="read",
                 session=SimpleNamespace(
                     session_id="s2",
                     scenario_name="simple_bgp",
@@ -1884,8 +1973,8 @@ class SkillProMemoryTest(unittest.TestCase):
                 store_path=Path(tmp) / "skills.json",
             )
             runtime = SkillToolRuntime(
-                memory=module,
-                memory_mode="read",
+                procedural_memory=module,
+                procedural_memory_mode="read",
                 session=SimpleNamespace(
                     session_id="s2",
                     scenario_name="simple_bgp",
@@ -2005,8 +2094,8 @@ class SkillProMemoryTest(unittest.TestCase):
             )
             module.store.save(state)
             runtime = SkillToolRuntime(
-                memory=module,
-                memory_mode="read",
+                procedural_memory=module,
+                procedural_memory_mode="read",
                 session=SimpleNamespace(
                     session_id="s2",
                     scenario_name="simple_bgp",
@@ -2084,8 +2173,8 @@ class SkillProMemoryTest(unittest.TestCase):
             module.store.save(state)
             meta = FakeMetaController()
             runtime = SkillToolRuntime(
-                memory=module,
-                memory_mode="read",
+                procedural_memory=module,
+                procedural_memory_mode="read",
                 session=SimpleNamespace(
                     session_id="s2",
                     scenario_name="simple_bgp",
@@ -2168,8 +2257,8 @@ class SkillProMemoryTest(unittest.TestCase):
             module.store.save(state)
             meta = FakeMetaController()
             runtime = SkillToolRuntime(
-                memory=module,
-                memory_mode="read",
+                procedural_memory=module,
+                procedural_memory_mode="read",
                 session=SimpleNamespace(
                     session_id="s2",
                     scenario_name="simple_bgp",
@@ -2239,8 +2328,8 @@ class SkillProMemoryTest(unittest.TestCase):
             )
             module.store.save(state)
             runtime = SkillToolRuntime(
-                memory=module,
-                memory_mode="read",
+                procedural_memory=module,
+                procedural_memory_mode="read",
                 session=SimpleNamespace(
                     session_id="s2",
                     scenario_name="simple_bgp",
@@ -2311,8 +2400,8 @@ class SkillProMemoryTest(unittest.TestCase):
             )
             module.store.save(state)
             runtime = SkillToolRuntime(
-                memory=module,
-                memory_mode="read",
+                procedural_memory=module,
+                procedural_memory_mode="read",
                 session=SimpleNamespace(
                     session_id="s2",
                     scenario_name="simple_bgp",
@@ -2369,8 +2458,8 @@ class SkillProMemoryTest(unittest.TestCase):
             )
             module.store.save(state)
             runtime = SkillToolRuntime(
-                memory=module,
-                memory_mode="read",
+                procedural_memory=module,
+                procedural_memory_mode="read",
                 session=SimpleNamespace(
                     session_id="s2",
                     scenario_name="simple_bgp",
@@ -2449,8 +2538,8 @@ class SkillProMemoryTest(unittest.TestCase):
             )
             module.store.save(state)
             runtime = SkillToolRuntime(
-                memory=module,
-                memory_mode="read",
+                procedural_memory=module,
+                procedural_memory_mode="read",
                 session=SimpleNamespace(
                     session_id="s2",
                     scenario_name="simple_bgp",
@@ -2561,8 +2650,8 @@ class SkillProMemoryTest(unittest.TestCase):
             )
             module.store.save(state)
             runtime = SkillToolRuntime(
-                memory=module,
-                memory_mode="read",
+                procedural_memory=module,
+                procedural_memory_mode="read",
                 session=SimpleNamespace(
                     session_id="s2",
                     scenario_name="simple_bgp",
@@ -2656,8 +2745,8 @@ class SkillProMemoryTest(unittest.TestCase):
             )
             module.store.save(state)
             runtime = SkillToolRuntime(
-                memory=module,
-                memory_mode="read",
+                procedural_memory=module,
+                procedural_memory_mode="read",
                 session=SimpleNamespace(
                     session_id="s2",
                     scenario_name="simple_bgp",
@@ -2688,7 +2777,6 @@ class SkillProMemoryTest(unittest.TestCase):
         self.assertEqual(deviations[-1]["active_skill_id"], "prompt_ping")
         self.assertEqual(deviations[-1]["tool"], "show_route")
         self.assertEqual(transitions[-1]["active_skill_id"], "prompt_ping")
-
 
     def test_skill_tool_wrapper_preserves_content_and_artifact_tools(self) -> None:
         def reachability(host: str) -> tuple[str, dict[str, str]]:
@@ -2726,8 +2814,8 @@ class SkillProMemoryTest(unittest.TestCase):
                 ],
             )
             runtime = SkillToolRuntime(
-                memory=module,
-                memory_mode="read",
+                procedural_memory=module,
+                procedural_memory_mode="read",
                 session=SimpleNamespace(
                     session_id="s2",
                     scenario_name="simple_bgp",
@@ -2899,7 +2987,9 @@ class SkillProMemoryTest(unittest.TestCase):
                 store_path=Path(tmp) / "skills.json",
                 evolution_threshold=1,
             )
-            with patch("agent.memory.service.load_model", return_value=FakeModel()):
+            with patch(
+                "agent.procedural_memory.service.load_model", return_value=FakeModel()
+            ):
                 report = module.learn_from_episode(
                     evidence=EvaluationEvidence(
                         session_id="s1",
@@ -2969,7 +3059,7 @@ class SkillProMemoryTest(unittest.TestCase):
                     },
                 ),
                 patch(
-                    "agent.memory.service.load_model",
+                    "agent.procedural_memory.service.load_model",
                     return_value=FailingModel(),
                 ) as load_model,
             ):
@@ -3020,8 +3110,8 @@ class SkillProMemoryTest(unittest.TestCase):
                         "scenario_topo_size": "small",
                         "problem_names": ["dns_record_error"],
                         "root_cause_name": "dns_record_error",
-                        "memory_mode": "evolve",
-                        "memory_bank": "skill",
+                        "procedural_memory_mode": "evolve",
+                        "procedural_memory_bank": "skill",
                     }
                 ),
                 encoding="utf-8",
@@ -3050,7 +3140,7 @@ class SkillProMemoryTest(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            (session_dir / "memory_runtime_session.json").write_text(
+            (session_dir / "procedural_memory_runtime_session.json").write_text(
                 json.dumps(
                     {
                         "prompt_added_tokens": 80,
@@ -3064,17 +3154,20 @@ class SkillProMemoryTest(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            with patch("agent.memory.store.MEMORY_DIR", Path(tmp) / "memory"):
+            with patch(
+                "agent.procedural_memory.store.PROCEDURAL_MEMORY_DIR",
+                Path(tmp) / "procedural_memory",
+            ):
                 report = asyncio.run(
-                    evolve_session_memory(
+                    update_procedural_memory_from_session(
                         run_meta={
-                            "memory_mode": "evolve",
-                            "memory_bank": "skill",
-                            "memory_pool_size": 24,
-                            "memory_evolution_threshold": 2,
-                            "memory_best_of_n": 5,
-                            "memory_ppo_epsilon": 0.15,
-                            "memory_max_skill_age": 6,
+                            "procedural_memory_mode": "evolve",
+                            "procedural_memory_bank": "skill",
+                            "procedural_memory_pool_size": 24,
+                            "procedural_memory_update_threshold": 2,
+                            "procedural_memory_best_of_n": 5,
+                            "procedural_memory_ppo_epsilon": 0.15,
+                            "procedural_memory_max_skill_age": 6,
                             "session_id": "s1",
                             "task_description": "DNS record resolves to wrong host",
                             "scenario_name": "enterprise",
@@ -3089,16 +3182,16 @@ class SkillProMemoryTest(unittest.TestCase):
                         session_dir=session_dir,
                     )
                 )
-            self.assertTrue((session_dir / "memory_update.json").exists())
+            self.assertTrue((session_dir / "procedural_memory_update.json").exists())
 
         self.assertEqual(report["method"], "Skill-Pro")
-        self.assertEqual(report["memory_config"]["pool_size"], 24)
-        self.assertEqual(report["memory_config"]["evolution_threshold"], 2)
-        self.assertEqual(report["memory_config"]["best_of_n"], 5)
-        self.assertEqual(report["memory_config"]["ppo_epsilon"], 0.15)
-        self.assertEqual(report["memory_config"]["max_skill_age"], 6)
+        self.assertEqual(report["procedural_memory_config"]["pool_size"], 24)
+        self.assertEqual(report["procedural_memory_config"]["evolution_threshold"], 2)
+        self.assertEqual(report["procedural_memory_config"]["best_of_n"], 5)
+        self.assertEqual(report["procedural_memory_config"]["ppo_epsilon"], 0.15)
+        self.assertEqual(report["procedural_memory_config"]["max_skill_age"], 6)
         self.assertEqual(
-            report["memory_config"]["selection_policy"],
+            report["procedural_memory_config"]["selection_policy"],
             "similarity_top_k_then_online_value",
         )
         self.assertEqual(report["total_added_tokens"], 120)
@@ -3122,8 +3215,8 @@ class SkillProMemoryTest(unittest.TestCase):
                         "scenario_topo_size": "small",
                         "problem_names": ["dns_record_error"],
                         "root_cause_name": "dns_record_error",
-                        "memory_mode": "evolve",
-                        "memory_bank": "skill",
+                        "procedural_memory_mode": "evolve",
+                        "procedural_memory_bank": "skill",
                     }
                 ),
                 encoding="utf-8",
@@ -3155,11 +3248,11 @@ class SkillProMemoryTest(unittest.TestCase):
                 def __init__(self) -> None:
                     self.session_dir = str(session_dir)
                     self.session_id = "s1"
-                    self.memory_mode = "evolve"
-                    self.memory_bank = "skill"
+                    self.procedural_memory_mode = "evolve"
+                    self.procedural_memory_bank = "skill"
                     self.llm_backend = "custom"
                     self.model = "test-model"
-                    self.tool_evolution_enabled = False
+                    self.tool_refinement_enabled = False
                     self.store = None
 
                 def load_closed_session(self, *, session_id=None) -> None:
@@ -3169,7 +3262,7 @@ class SkillProMemoryTest(unittest.TestCase):
                     updates.append((key, value))
                     setattr(self, key, value)
 
-            memory_report = {
+            procedural_memory_report = {
                 "status": "accepted",
                 "skill_id": "skill_dns",
                 "runtime_skill_ids": ["seed_react_decision"],
@@ -3198,8 +3291,8 @@ class SkillProMemoryTest(unittest.TestCase):
             with (
                 patch("nika.workflows.eval.session.Session", FakeSession),
                 patch(
-                    "agent.memory.workflow.evolve_session_memory",
-                    new=AsyncMock(return_value=memory_report),
+                    "agent.procedural_memory.workflow.update_procedural_memory_from_session",
+                    new=AsyncMock(return_value=procedural_memory_report),
                 ),
             ):
                 run_eval_metrics(session_id="s1")
@@ -3207,24 +3300,28 @@ class SkillProMemoryTest(unittest.TestCase):
             metrics = json.loads((session_dir / "eval_metrics.json").read_text())
             result = build_eval_result_from_session_dir(session_dir)
 
-        self.assertEqual(metrics["memory_update"], memory_report)
-        self.assertEqual(result.memory_update_status, "accepted")
-        self.assertEqual(result.memory_skill_id, "skill_dns")
-        self.assertEqual(result.memory_runtime_skill_ids, ["seed_react_decision"])
-        self.assertEqual(result.memory_episode_reward, 0.81)
-        self.assertEqual(result.memory_episode_baseline, 0.34)
-        self.assertEqual(result.memory_episode_advantage, 0.47)
-        self.assertTrue(result.memory_episode_success)
-        self.assertEqual(result.memory_total_added_tokens, 120)
-        self.assertEqual(result.memory_delta_prompt_tokens_per_step, 30.0)
-        self.assertEqual(result.memory_prompt_added_tokens, 80)
-        self.assertEqual(result.memory_tool_description_added_tokens, 20)
-        self.assertEqual(result.memory_followup_added_tokens, 20)
-        self.assertEqual(result.memory_ppo_j_score, 0.42)
-        self.assertEqual(result.memory_candidate_alignment, 0.73)
-        self.assertEqual(result.memory_baseline_alignment, 0.21)
-        self.assertEqual(result.memory_semantic_gradient_count, 3)
-        self.assertEqual(result.memory_verification_method, "alignment_surrogate")
-        self.assertEqual(result.memory_verified_success_count, 2)
-        self.assertEqual(result.memory_skills, 7)
-        self.assertIn(("memory_update", memory_report), updates)
+        self.assertEqual(metrics["procedural_memory"], procedural_memory_report)
+        self.assertEqual(result.procedural_memory_update_status, "accepted")
+        self.assertEqual(result.procedural_memory_skill_id, "skill_dns")
+        self.assertEqual(
+            result.procedural_memory_runtime_skill_ids, ["seed_react_decision"]
+        )
+        self.assertEqual(result.procedural_memory_episode_reward, 0.81)
+        self.assertEqual(result.procedural_memory_episode_baseline, 0.34)
+        self.assertEqual(result.procedural_memory_episode_advantage, 0.47)
+        self.assertTrue(result.procedural_memory_episode_success)
+        self.assertEqual(result.procedural_memory_total_added_tokens, 120)
+        self.assertEqual(result.procedural_memory_delta_prompt_tokens_per_step, 30.0)
+        self.assertEqual(result.procedural_memory_prompt_added_tokens, 80)
+        self.assertEqual(result.procedural_memory_tool_description_added_tokens, 20)
+        self.assertEqual(result.procedural_memory_followup_added_tokens, 20)
+        self.assertEqual(result.procedural_memory_ppo_j_score, 0.42)
+        self.assertEqual(result.procedural_memory_candidate_alignment, 0.73)
+        self.assertEqual(result.procedural_memory_baseline_alignment, 0.21)
+        self.assertEqual(result.procedural_memory_semantic_gradient_count, 3)
+        self.assertEqual(
+            result.procedural_memory_verification_method, "alignment_surrogate"
+        )
+        self.assertEqual(result.procedural_memory_verified_success_count, 2)
+        self.assertEqual(result.procedural_memory_skills, 7)
+        self.assertIn(("procedural_memory", procedural_memory_report), updates)

@@ -14,7 +14,7 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-class MemoryAttributes(BaseModel):
+class ProceduralMemoryAttributes(BaseModel):
     protocols: list[str] = Field(default_factory=list)
     services: list[str] = Field(default_factory=list)
     symptoms: list[str] = Field(default_factory=list)
@@ -22,7 +22,7 @@ class MemoryAttributes(BaseModel):
     tools: list[str] = Field(default_factory=list)
 
 
-class MemoryQuery(BaseModel):
+class ProceduralMemoryQuery(BaseModel):
     text: str
     scenario: str = ""
     topology_class: str = ""
@@ -159,7 +159,7 @@ class ProceduralSkill(BaseModel):
     updated_at: str = Field(default_factory=utc_now)
 
     @property
-    def memory_id(self) -> str:
+    def procedural_memory_id(self) -> str:
         return self.skill_id
 
     def content_hash(self) -> str:
@@ -224,13 +224,9 @@ class ProceduralSkill(BaseModel):
 
 
 class SkillRetrieval(BaseModel):
-    memory: ProceduralSkill
+    skill: ProceduralSkill
     score: float
     reasons: list[str] = Field(default_factory=list)
-
-    @property
-    def skill(self) -> ProceduralSkill:
-        return self.memory
 
 
 class PPOGateDecision(BaseModel):
@@ -257,7 +253,7 @@ class PPOGateDecision(BaseModel):
     verification_error: str = ""
 
 
-class SkillMemoryState(BaseModel):
+class ProceduralMemoryState(BaseModel):
     bank_id: str
     skills: dict[str, ProceduralSkill] = Field(default_factory=dict)
     episodes: list[EvaluationEvidence] = Field(default_factory=list)

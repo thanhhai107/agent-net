@@ -8,9 +8,10 @@ import shutil
 from pathlib import Path
 from typing import Iterable
 
-from agent.extensions.config import TOOL_EVOLUTION_DIR
+from agent.extensions.config import TOOL_REFINEMENT_DIR
+from agent.utils.atomic import atomic_write_text
 
-from agent.tool_evolution.models import (
+from agent.tool_refinement.models import (
     ComprehensionGap,
     DocumentationRevision,
     DraftToolState,
@@ -25,8 +26,8 @@ def safe_library_id(library_id: str) -> str:
     return cleaned or "default"
 
 
-class ToolEvolutionStore:
-    """Persistent DRAFT library under ``runtime/tool_evolution/<library_id>``."""
+class ToolRefinementStore:
+    """Persistent DRAFT library under ``runtime/tool_refinement/<library_id>``."""
 
     def __init__(
         self,
@@ -34,7 +35,7 @@ class ToolEvolutionStore:
         root: str | Path | None = None,
     ) -> None:
         self.library_id = safe_library_id(library_id)
-        self.root = Path(root) if root is not None else TOOL_EVOLUTION_DIR
+        self.root = Path(root) if root is not None else TOOL_REFINEMENT_DIR
         self.library_dir = self.root / self.library_id
         self.state_path = self.library_dir / "state.json"
 
@@ -72,7 +73,11 @@ class ToolEvolutionStore:
                     exploration.trial_id = trial_id
                     exploration.status = matches[0].status
                     changed = True
-            if not trial_id or trial_id not in trials_by_id or trial_id in seen_trial_ids:
+            if (
+                not trial_id
+                or trial_id not in trials_by_id
+                or trial_id in seen_trial_ids
+            ):
                 changed = True
                 continue
             normalized.append(exploration)
@@ -85,11 +90,7 @@ class ToolEvolutionStore:
     def save(self, state: DraftToolState) -> DraftToolState:
         state.library_id = self.library_id
         state.updated_at = utc_now()
-        self.library_dir.mkdir(parents=True, exist_ok=True)
-        self.state_path.write_text(
-            state.model_dump_json(indent=2),
-            encoding="utf-8",
-        )
+        atomic_write_text(self.state_path, state.model_dump_json(indent=2))
         return state
 
     def clear(self) -> None:
@@ -162,7 +163,9 @@ class ToolEvolutionStore:
                 revision.metrics.get("llm_attempted") == 1.0
                 for revision in state.revisions
             ),
-            "llm_failures": sum(bool(revision.llm_error) for revision in state.revisions),
+            "llm_failures": sum(
+                bool(revision.llm_error) for revision in state.revisions
+            ),
             "llm_rewrites": sum(
                 revision.metrics.get("llm_rewrite") == 1.0
                 for revision in state.revisions
@@ -175,9 +178,7 @@ class ToolEvolutionStore:
                 else 0.0
             ),
             "avg_success_path_rate": (
-                sum(success_rates) / len(success_rates)
-                if success_rates
-                else 0.0
+                sum(success_rates) / len(success_rates) if success_rates else 0.0
             ),
             "tool_stats": {
                 name: stat.model_dump(mode="json")

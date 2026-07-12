@@ -12,10 +12,10 @@ from langchain.agents import create_agent
 from agent.byo.langgraph.phases.diagnosis import DiagnosisPhase
 from agent.byo.langgraph.react_agent import BasicReActAgent
 from agent.composition import AgentRunConfig
-from agent.memory.runtime import SkillToolRuntime
-from agent.memory.service import ProceduralMemoryModule
-from agent.tool_evolution.integration import write_tool_evolution_session
-from agent.tool_evolution.runtime import ToolEvolutionRuntime
+from agent.procedural_memory.runtime import SkillToolRuntime
+from agent.procedural_memory.service import ProceduralMemoryModule
+from agent.tool_refinement.integration import write_tool_refinement_session
+from agent.tool_refinement.runtime import ToolRefinementRuntime
 from agent.utils.phases import DIAGNOSIS
 from agent.utils.template import OVERALL_DIAGNOSIS_PROMPT
 from nika.utils.session import Session
@@ -43,46 +43,50 @@ class LearningDiagnosisPhase(DiagnosisPhase):
         )
         self.config = config
         self.session = Session().load_running_session(session_id=config.session_id)
-        self.tool_evolution_runtime: ToolEvolutionRuntime | None = None
+        self.tool_refinement_runtime: ToolRefinementRuntime | None = None
         self.skill_tool_runtime: SkillToolRuntime | None = None
         self._base_tools = []
 
     async def load_tools(self) -> None:
         await super().load_tools()
-        if self.config.tool_evolution.enabled:
-            self.tool_evolution_runtime = ToolEvolutionRuntime(
+        if self.config.tool_refinement.enabled:
+            self.tool_refinement_runtime = ToolRefinementRuntime(
                 session=self.session,
                 primitive_tools=self.tools or [],
-                library_id=self.config.tool_evolution.library_id,
-                tool_doc_chars=self.config.tool_evolution.tool_doc_chars,
+                library_id=self.config.tool_refinement.library_id,
+                tool_doc_chars=self.config.tool_refinement.tool_doc_chars,
             )
-            self.tools = self.tool_evolution_runtime.build_tools()
+            self.tools = self.tool_refinement_runtime.build_tools(
+                append_docs=not self.config.procedural_memory.enabled
+            )
         self._base_tools = list(self.tools or [])
 
-    def install_memory(self, task_description: str, session_dir: str) -> None:
-        memory_config = self.config.memory
-        if not memory_config.enabled:
+    def install_procedural_memory(
+        self, task_description: str, session_dir: str
+    ) -> None:
+        procedural_memory_config = self.config.procedural_memory
+        if not procedural_memory_config.enabled:
             return
-        memory = ProceduralMemoryModule(
-            bank_id=memory_config.bank,
+        procedural_memory = ProceduralMemoryModule(
+            bank_id=procedural_memory_config.bank,
             llm_backend=self.config.llm_provider,
             model=self.config.model,
-            pool_size=memory_config.pool_size,
-            evolution_threshold=memory_config.evolution_threshold,
-            best_of_n=memory_config.best_of_n,
-            ppo_epsilon=memory_config.ppo_epsilon,
+            pool_size=procedural_memory_config.pool_size,
+            evolution_threshold=procedural_memory_config.evolution_threshold,
+            best_of_n=procedural_memory_config.best_of_n,
+            ppo_epsilon=procedural_memory_config.ppo_epsilon,
         )
         self.skill_tool_runtime = SkillToolRuntime(
-            memory=memory,
-            memory_mode=memory_config.mode,
+            procedural_memory=procedural_memory,
+            procedural_memory_mode=procedural_memory_config.mode,
             session=self.session,
             task_description=task_description,
             tools=list(self._base_tools),
             session_dir=session_dir,
-            tool_evolution_runtime=self.tool_evolution_runtime,
-            top_k=memory_config.top_k,
-            token_budget=memory_config.token_budget,
-            max_skill_age=memory_config.max_skill_age,
+            tool_refinement_runtime=self.tool_refinement_runtime,
+            top_k=procedural_memory_config.top_k,
+            token_budget=procedural_memory_config.token_budget,
+            max_skill_age=procedural_memory_config.max_skill_age,
             meta_controller_llm=self.llm,
         )
         self.tools = self.skill_tool_runtime.wrap_tools(list(self._base_tools))
@@ -113,12 +117,14 @@ class LearningReActAgent(BasicReActAgent):
         self.extension_config = config
         self._learning_phase = LearningDiagnosisPhase(config)
         asyncio.run(self._learning_phase.load_tools())
-        if config.tool_evolution.enabled and not config.memory.enabled:
+        if config.tool_refinement.enabled and not config.procedural_memory.enabled:
             self._diagnosis_runner = self._learning_phase.get_agent()
 
     async def run(self, task_description: str):
-        if self.extension_config.memory.enabled:
-            self._learning_phase.install_memory(task_description, self.session_dir)
+        if self.extension_config.procedural_memory.enabled:
+            self._learning_phase.install_procedural_memory(
+                task_description, self.session_dir
+            )
             self._diagnosis_runner = self._learning_phase.get_agent()
         try:
             return await super().run(task_description)
@@ -126,14 +132,14 @@ class LearningReActAgent(BasicReActAgent):
             self._write_extension_snapshots()
 
     def _write_extension_snapshots(self) -> None:
-        write_tool_evolution_session(
-            self._learning_phase.tool_evolution_runtime,
+        write_tool_refinement_session(
+            self._learning_phase.tool_refinement_runtime,
             self.session_dir,
         )
         runtime = self._learning_phase.skill_tool_runtime
         if runtime is None:
             return
-        path = Path(self.session_dir) / "memory_runtime_session.json"
+        path = Path(self.session_dir) / "procedural_memory_runtime_session.json"
         path.write_text(
             json.dumps(runtime.snapshot(), ensure_ascii=False, indent=2),
             encoding="utf-8",
@@ -151,4 +157,3 @@ def create_react_agent(config: AgentRunConfig):
             max_steps=config.max_steps,
         )
     return LearningReActAgent(config)
-

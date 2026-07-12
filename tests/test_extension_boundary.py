@@ -6,22 +6,22 @@ from argparse import Namespace
 import pytest
 
 from agent.byo.langgraph.react_agent import BasicReActAgent
-from agent.composition import AgentRunConfig, MemoryConfig
+from agent.composition import AgentRunConfig, ProceduralMemoryConfig
 from agent.extensions import react_agent as react_extension
 from agent.extensions import run as extension_run
 from agent.extensions.react_agent import LearningReActAgent
 from nika.extensions import benchmark as benchmark_extension
 from nika.extensions.benchmark import load_custom_benchmark
-from nika.cli.commands import memory as memory_command
+from nika.cli.commands import procedural_memory as procedural_memory_command
 
 
-def _config(*, memory_mode: str = "off") -> AgentRunConfig:
+def _config(*, procedural_memory_mode: str = "off") -> AgentRunConfig:
     return AgentRunConfig(
         agent_type="byo.langgraph",
         llm_provider="custom",
         model="openai/gpt-oss-20b",
         max_steps=20,
-        memory=MemoryConfig(mode=memory_mode),
+        procedural_memory=ProceduralMemoryConfig(mode=procedural_memory_mode),
     )
 
 
@@ -112,7 +112,241 @@ def test_custom_benchmark_allows_empty_inject_only_for_clean_control(
         load_custom_benchmark(invalid)
 
 
-def test_memory_command_routes_through_extension_benchmark(
+def test_extension_parser_uses_canonical_feature_terms() -> None:
+    parser = benchmark_extension.build_parser()
+    canonical = parser.parse_args(
+        [
+            "--config",
+            "benchmark.yaml",
+            "--tool-refinement",
+            "refinement-bank",
+            "--procedural-memory",
+            "procedural-bank",
+        ]
+    )
+
+    assert (canonical.tool_refinement, canonical.procedural_memory) == (
+        "refinement-bank",
+        "procedural-bank",
+    )
+    help_text = parser.format_help()
+    assert "--tool-refinement" in help_text
+    assert "--procedural-memory" in help_text
+
+
+def test_clean_control_scores_false_and_empty_submission_as_fully_correct() -> None:
+    from agent.procedural_memory.service import _metric_success
+
+    scores = benchmark_extension._clean_control_scores(
+        {
+            "is_anomaly": 0,
+            "faulty_devices": [],
+            "root_cause_name": [],
+        }
+    )
+
+    assert set(scores.values()) == {1.0}
+    assert _metric_success(scores) is True
+
+
+def test_clean_control_scores_each_component_independently() -> None:
+    scores = benchmark_extension._clean_control_scores(
+        {
+            "is_anomaly": True,
+            "faulty_devices": ["router1"],
+            "root_cause_name": [],
+        }
+    )
+
+    assert scores["detection_score"] == 0.0
+    assert scores["localization_f1"] == 0.0
+    assert scores["rca_f1"] == 1.0
+
+
+def test_clean_control_ground_truth_uses_complete_empty_schema(monkeypatch) -> None:
+    updates: dict[str, object] = {}
+    ground_truth: list[dict] = []
+
+    class FakeSession:
+        def update_session(self, key, value):
+            updates[key] = value
+
+        def write_gt(self, value):
+            ground_truth.append(value)
+
+    monkeypatch.setattr(
+        benchmark_extension,
+        "_clean_task_description",
+        lambda _session: "Inspect the clean network.",
+    )
+
+    benchmark_extension._prepare_clean_control(FakeSession())
+
+    assert updates == {
+        "problem_names": ["no_fault"],
+        "root_cause_category": "none",
+        "task_description": "Inspect the clean network.",
+    }
+    assert ground_truth == [
+        {
+            "is_anomaly": False,
+            "faulty_devices": [],
+            "root_cause_category": "none",
+            "root_cause_name": [],
+            "detailed_cause": "",
+        }
+    ]
+
+
+def test_clean_control_normalization_updates_artifact_before_learning(
+    monkeypatch, tmp_path: Path
+) -> None:
+    submission = {
+        "is_anomaly": False,
+        "faulty_devices": [],
+        "root_cause_name": [],
+    }
+    metrics = {
+        "detection_score": 1.0,
+        "localization_f1": 0.0,
+        "rca_f1": 0.0,
+        "tool_calls": 4,
+    }
+    (tmp_path / "submission.json").write_text(
+        benchmark_extension.json.dumps(submission), encoding="utf-8"
+    )
+    (tmp_path / "eval_metrics.json").write_text(
+        benchmark_extension.json.dumps(metrics), encoding="utf-8"
+    )
+    persisted: list[dict] = []
+
+    class FakeSession:
+        def load_closed_session(self, *, session_id):
+            assert session_id == "clean-session"
+            return self
+
+        def update_run_meta(self, key, value):
+            assert key == "eval_metrics"
+            persisted.append(value)
+
+    monkeypatch.setattr(benchmark_extension, "Session", FakeSession)
+    monkeypatch.setattr(benchmark_extension, "log_event", lambda *_args, **_kwargs: None)
+
+    benchmark_extension._normalize_clean_control_metrics(
+        "clean-session", tmp_path
+    )
+
+    normalized = benchmark_extension._read_json(tmp_path / "eval_metrics.json")
+    assert normalized["tool_calls"] == 4
+    assert normalized["detection_score"] == 1.0
+    assert normalized["localization_f1"] == 1.0
+    assert normalized["rca_f1"] == 1.0
+    assert persisted == [normalized]
+
+
+def test_clean_control_without_submission_keeps_upstream_missing_scores(
+    monkeypatch, tmp_path: Path
+) -> None:
+    metrics = {
+        "detection_score": -1.0,
+        "localization_f1": -1.0,
+        "rca_f1": -1.0,
+    }
+    metrics_path = tmp_path / "eval_metrics.json"
+    metrics_path.write_text(
+        benchmark_extension.json.dumps(metrics), encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        benchmark_extension,
+        "Session",
+        lambda: pytest.fail("a missing submission must not update run metadata"),
+    )
+
+    benchmark_extension._normalize_clean_control_metrics("missing", tmp_path)
+
+    assert benchmark_extension._read_json(metrics_path) == metrics
+
+
+def test_clean_control_path_never_injects_and_normalizes_before_learning(
+    monkeypatch, tmp_path: Path
+) -> None:
+    calls: list[str] = []
+
+    class FakeSession:
+        session_id = "clean-session"
+
+        def load_running_session(self, *, session_id):
+            assert session_id == "clean-session"
+            return self
+
+        def update_session(self, _key, _value):
+            calls.append("fingerprint")
+
+    class FakeStore:
+        def get_session(self, session_id):
+            assert session_id == "clean-session"
+            return {"session_dir": str(tmp_path)}
+
+    monkeypatch.setattr(
+        benchmark_extension,
+        "start_net_env",
+        lambda *_args, **_kwargs: "clean-session",
+    )
+    monkeypatch.setattr(benchmark_extension, "Session", FakeSession)
+    monkeypatch.setattr(benchmark_extension, "SessionStore", FakeStore)
+    monkeypatch.setattr(
+        benchmark_extension,
+        "_prepare_clean_control",
+        lambda _session: calls.append("prepare_clean"),
+    )
+    monkeypatch.setattr(
+        benchmark_extension,
+        "inject_failure",
+        lambda **_kwargs: pytest.fail("clean controls must not inject a fault"),
+    )
+    monkeypatch.setattr(
+        benchmark_extension,
+        "start_agent",
+        lambda *_args, **_kwargs: calls.append("agent"),
+    )
+    monkeypatch.setattr(
+        benchmark_extension,
+        "eval_results",
+        lambda **_kwargs: calls.append("eval"),
+    )
+    monkeypatch.setattr(
+        benchmark_extension,
+        "_normalize_clean_control_metrics",
+        lambda *_args: calls.append("normalize"),
+    )
+    monkeypatch.setattr(
+        benchmark_extension,
+        "_update_learning",
+        lambda *_args: calls.append("learn"),
+    )
+
+    benchmark_extension.run_extended_case(
+        {
+            "scenario": "simple_bgp",
+            "topo_size": "",
+            "problem": "no_fault",
+            "inject": {},
+        },
+        config=_config(),
+        result_dir=str(tmp_path),
+    )
+
+    assert calls == [
+        "prepare_clean",
+        "fingerprint",
+        "agent",
+        "eval",
+        "normalize",
+        "learn",
+    ]
+
+
+def test_procedural_memory_command_routes_through_extension_benchmark(
     monkeypatch, tmp_path: Path
 ) -> None:
     benchmark = tmp_path / "benchmark.yaml"
@@ -127,12 +361,12 @@ def test_memory_command_routes_through_extension_benchmark(
     )
     calls: list[list[str]] = []
     monkeypatch.setattr(
-        memory_command.subprocess,
+        procedural_memory_command.subprocess,
         "run",
         lambda command, check: calls.append(command),
     )
 
-    memory_command.memory_run(
+    procedural_memory_command.procedural_memory_run(
         file=benchmark,
         limit=None,
         bank="test-bank",
@@ -147,7 +381,7 @@ def test_memory_command_routes_through_extension_benchmark(
 
     command = calls[0]
     assert command[1:3] == ["-m", "nika.extensions.benchmark"]
-    assert command[command.index("--memory") + 1] == "test-bank"
+    assert command[command.index("--procedural-memory") + 1] == "test-bank"
     assert command[command.index("--provider") + 1] == "custom"
 
 
@@ -187,18 +421,18 @@ def test_baseline_fault_row_routes_to_upstream_single_case(
             judge=False,
             judge_provider=None,
             judge_model=None,
-            tools=None,
-            tool_doc_chars=500,
-            tool_convergence_threshold=0.75,
-            memory=None,
-            memory_read=None,
-            memory_k=5,
-            memory_tokens=1500,
-            memory_max_skill_age=4,
-            memory_pool_size=32,
-            memory_evolution_threshold=3,
-            memory_best_of_n=3,
-            memory_ppo_epsilon=0.2,
+            tool_refinement=None,
+            tool_refinement_doc_chars=500,
+            tool_refinement_convergence_threshold=0.75,
+            procedural_memory=None,
+            procedural_memory_read=None,
+            procedural_memory_k=5,
+            procedural_memory_tokens=1500,
+            procedural_memory_max_skill_age=4,
+            procedural_memory_pool_size=32,
+            procedural_memory_update_threshold=3,
+            procedural_memory_best_of_n=3,
+            procedural_memory_ppo_epsilon=0.2,
         )
     )
 

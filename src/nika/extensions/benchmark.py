@@ -11,13 +11,15 @@ from typing import Any
 
 import yaml
 
-from agent.composition import AgentRunConfig, MemoryConfig, ToolEvolutionConfig
+from agent.composition import AgentRunConfig, ProceduralMemoryConfig, ToolRefinementConfig
 from agent.extensions.config import default_llm_provider, default_model
 from agent.extensions.react_agent import configure_custom_provider_environment
 from agent.extensions.run import start_agent
-from agent.memory.workflow import evolve_session_memory
-from agent.tool_evolution.curator import finalize_tool_evolution_session
+from agent.procedural_memory.workflow import update_procedural_memory_from_session
+from agent.tool_refinement.curator import finalize_tool_refinement_session
 from nika.evaluator.result_log import EVAL_METRICS_FILENAME
+from nika.evaluator.scoring import score_detection
+from nika.utils.logger import log_event
 from nika.net_env.net_env_pool import (
     get_net_env_instance,
     scenario_backend,
@@ -99,7 +101,13 @@ def _prepare_clean_control(session: Session) -> None:
     session.update_session("root_cause_category", "none")
     session.update_session("task_description", _clean_task_description(session))
     session.write_gt(
-        {"is_anomaly": False, "faulty_devices": [], "root_cause_name": []}
+        {
+            "is_anomaly": False,
+            "faulty_devices": [],
+            "root_cause_category": "none",
+            "root_cause_name": [],
+            "detailed_cause": "",
+        }
     )
 
 
@@ -107,16 +115,57 @@ def _read_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
 
 
+def _empty_list_score(value: Any) -> float:
+    return 1.0 if isinstance(value, list) and not value else 0.0
+
+
+def _clean_control_scores(submission: dict[str, Any]) -> dict[str, float]:
+    detection = score_detection(submission, {"is_anomaly": False})
+    localization = _empty_list_score(submission.get("faulty_devices"))
+    rca = _empty_list_score(submission.get("root_cause_name"))
+    return {
+        "detection_score": detection,
+        "localization_accuracy": localization,
+        "localization_precision": localization,
+        "localization_recall": localization,
+        "localization_f1": localization,
+        "rca_accuracy": rca,
+        "rca_precision": rca,
+        "rca_recall": rca,
+        "rca_f1": rca,
+    }
+
+
+def _normalize_clean_control_metrics(session_id: str, session_dir: Path) -> None:
+    """Apply empty-set semantics after the unchanged upstream evaluator runs."""
+    submission_path = session_dir / "submission.json"
+    metrics_path = session_dir / EVAL_METRICS_FILENAME
+    if not submission_path.exists() or not metrics_path.exists():
+        return
+    submission = _read_json(submission_path)
+    metrics = _read_json(metrics_path)
+    metrics.update(_clean_control_scores(submission))
+    metrics_path.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
+    Session().load_closed_session(session_id=session_id).update_run_meta(
+        "eval_metrics", metrics
+    )
+    log_event(
+        "clean_control_metrics_saved",
+        f"Applied no-fault empty-set scoring for session {session_id}.",
+        session_id=session_id,
+    )
+
+
 def _update_learning(session_id: str, config: AgentRunConfig) -> None:
     session = Session().load_closed_session(session_id=session_id)
     session_dir = Path(session.session_dir)
     metrics = _read_json(session_dir / EVAL_METRICS_FILENAME)
     run_meta = _read_json(session_dir / "run.json")
-    if config.tool_evolution.enabled:
-        finalize_tool_evolution_session(session_id=session_id, metrics=metrics)
-    if config.memory.mode == "evolve":
+    if config.tool_refinement.enabled:
+        finalize_tool_refinement_session(session_id=session_id, metrics=metrics)
+    if config.procedural_memory.mode == "evolve":
         asyncio.run(
-            evolve_session_memory(
+            update_procedural_memory_from_session(
                 run_meta=run_meta,
                 metrics=metrics,
                 session_dir=session_dir,
@@ -170,6 +219,8 @@ def run_extended_case(
             judge_llm_provider=judge_provider,
             judge_model=judge_model,
         )
+        if is_no_fault(row["problem"]):
+            _normalize_clean_control_metrics(session_id, session_dir)
         _update_learning(session_id, config)
     except Exception:
         try:
@@ -182,28 +233,35 @@ def run_extended_case(
 
 def run_batch(args: argparse.Namespace) -> int:
     rows = load_custom_benchmark(args.config)
-    memory_mode = "evolve" if args.memory else "read" if args.memory_read else "off"
+    procedural_memory_mode = (
+        "evolve"
+        if args.procedural_memory
+        else "read"
+        if args.procedural_memory_read
+        else "off"
+    )
     config = AgentRunConfig(
-        agent_type="byo.langgraph",
+        agent_type=getattr(args, "agent", "react"),
         llm_provider=args.provider,
         model=args.model,
         max_steps=args.max_steps,
-        memory=MemoryConfig(
-            mode=memory_mode,
-            bank=args.memory or args.memory_read or "default",
-            top_k=args.memory_k,
-            token_budget=args.memory_tokens,
-            max_skill_age=args.memory_max_skill_age,
-            pool_size=args.memory_pool_size,
-            evolution_threshold=args.memory_evolution_threshold,
-            best_of_n=args.memory_best_of_n,
-            ppo_epsilon=args.memory_ppo_epsilon,
+        max_attempts=getattr(args, "max_attempts", 3),
+        procedural_memory=ProceduralMemoryConfig(
+            mode=procedural_memory_mode,
+            bank=args.procedural_memory or args.procedural_memory_read or "default",
+            top_k=args.procedural_memory_k,
+            token_budget=args.procedural_memory_tokens,
+            max_skill_age=args.procedural_memory_max_skill_age,
+            pool_size=args.procedural_memory_pool_size,
+            evolution_threshold=args.procedural_memory_update_threshold,
+            best_of_n=args.procedural_memory_best_of_n,
+            ppo_epsilon=args.procedural_memory_ppo_epsilon,
         ),
-        tool_evolution=ToolEvolutionConfig(
-            enabled=bool(args.tools),
-            library_id=args.tools or "default",
-            tool_doc_chars=args.tool_doc_chars,
-            convergence_threshold=args.tool_convergence_threshold,
+        tool_refinement=ToolRefinementConfig(
+            enabled=bool(args.tool_refinement),
+            library_id=args.tool_refinement or "default",
+            tool_doc_chars=args.tool_refinement_doc_chars,
+            convergence_threshold=args.tool_refinement_convergence_threshold,
         ),
     )
     _root, pending = scan_benchmark_cases(
@@ -224,7 +282,11 @@ def run_batch(args: argparse.Namespace) -> int:
         )
         print(f"benchmark_start {label} {inject_label}".rstrip(), flush=True)
         try:
-            if config.extensions_enabled or is_no_fault(row["problem"]):
+            if (
+                config.extensions_enabled
+                or config.normalized_agent_type not in {"react", "byo.langgraph"}
+                or is_no_fault(row["problem"])
+            ):
                 session_id, session_dir = run_extended_case(
                     row,
                     config=config,
@@ -271,32 +333,96 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", required=True)
     parser.add_argument("--provider", default=default_llm_provider())
     parser.add_argument("--model", default=default_model())
+    parser.add_argument(
+        "--agent",
+        choices=("react", "plan-execute", "reflexion"),
+        default="react",
+    )
     parser.add_argument("--max-steps", type=int, default=20)
+    parser.add_argument("--max-attempts", type=int, default=3)
     parser.add_argument("--result-dir")
     parser.add_argument("--resume", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--judge", action="store_true")
     parser.add_argument("--judge-provider")
     parser.add_argument("--judge-model")
-    parser.add_argument("--tools")
-    parser.add_argument("--tool-doc-chars", type=int, default=500)
-    parser.add_argument("--tool-convergence-threshold", type=float, default=0.75)
-    parser.add_argument("--memory")
-    parser.add_argument("--memory-read")
-    parser.add_argument("--memory-k", type=int, default=5)
-    parser.add_argument("--memory-tokens", type=int, default=1500)
-    parser.add_argument("--memory-max-skill-age", type=int, default=4)
-    parser.add_argument("--memory-pool-size", type=int, default=32)
-    parser.add_argument("--memory-evolution-threshold", type=int, default=3)
-    parser.add_argument("--memory-best-of-n", type=int, default=3)
-    parser.add_argument("--memory-ppo-epsilon", type=float, default=0.2)
+    parser.add_argument("--tool-refinement", metavar="LIBRARY_ID")
+    parser.add_argument(
+        "--tool-refinement-doc-chars",
+        dest="tool_refinement_doc_chars",
+        type=int,
+        default=500,
+        metavar="CHARS",
+    )
+    parser.add_argument(
+        "--tool-refinement-convergence-threshold",
+        dest="tool_refinement_convergence_threshold",
+        type=float,
+        default=0.75,
+        metavar="THRESHOLD",
+    )
+    parser.add_argument("--procedural-memory", metavar="BANK_ID")
+    parser.add_argument(
+        "--procedural-memory-read", dest="procedural_memory_read", metavar="BANK_ID"
+    )
+    parser.add_argument(
+        "--procedural-memory-k",
+        dest="procedural_memory_k",
+        type=int,
+        default=5,
+        metavar="TOP_K",
+    )
+    parser.add_argument(
+        "--procedural-memory-tokens",
+        dest="procedural_memory_tokens",
+        type=int,
+        default=1500,
+        metavar="TOKEN_BUDGET",
+    )
+    parser.add_argument(
+        "--procedural-memory-max-skill-age",
+        dest="procedural_memory_max_skill_age",
+        type=int,
+        default=4,
+        metavar="MAX_SKILL_AGE",
+    )
+    parser.add_argument(
+        "--procedural-memory-pool-size",
+        dest="procedural_memory_pool_size",
+        type=int,
+        default=32,
+        metavar="POOL_SIZE",
+    )
+    parser.add_argument(
+        "--procedural-memory-update-threshold",
+        dest="procedural_memory_update_threshold",
+        type=int,
+        default=3,
+        metavar="UPDATE_THRESHOLD",
+    )
+    parser.add_argument(
+        "--procedural-memory-best-of-n",
+        dest="procedural_memory_best_of_n",
+        type=int,
+        default=3,
+        metavar="BEST_OF_N",
+    )
+    parser.add_argument(
+        "--procedural-memory-ppo-epsilon",
+        dest="procedural_memory_ppo_epsilon",
+        type=float,
+        default=0.2,
+        metavar="PPO_EPSILON",
+    )
     return parser
 
 
 def main() -> None:
     configure_custom_provider_environment()
     args = build_parser().parse_args()
-    if args.memory and args.memory_read:
-        raise SystemExit("Use either --memory or --memory-read, not both")
+    if args.procedural_memory and args.procedural_memory_read:
+        raise SystemExit(
+            "Use either --procedural-memory or --procedural-memory-read, not both"
+        )
     if args.judge and (not args.judge_provider or not args.judge_model):
         raise SystemExit("--judge-provider and --judge-model are required with --judge")
     raise SystemExit(run_batch(args))

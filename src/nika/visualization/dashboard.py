@@ -304,10 +304,10 @@ def _read_artifact_text(
 
 def _module_labels(meta: dict[str, Any]) -> list[str]:
     labels: list[str] = []
-    if meta.get("tool_evolution_enabled"):
-        labels.append("Tool Evolution")
-    if meta.get("memory_mode") and meta.get("memory_mode") != "off":
-        labels.append("Memory Evolution")
+    if meta.get("tool_refinement_enabled"):
+        labels.append("Tool Refinement")
+    if meta.get("procedural_memory_mode") and meta.get("procedural_memory_mode") != "off":
+        labels.append("Procedural Memory")
     return labels or ["-"]
 
 

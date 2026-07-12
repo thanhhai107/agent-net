@@ -16,12 +16,12 @@ from agent.extensions.config import (
     DEFAULT_MODEL,
 )
 from nika.utils.agent_config import resolve_max_steps
-from agent.memory.service import ProceduralMemoryModule
-from agent.extensions.config import MEMORY_DIR
+from agent.procedural_memory.service import ProceduralMemoryModule
+from agent.extensions.config import PROCEDURAL_MEMORY_DIR
 from nika.config import BENCHMARK_DIR
 from nika.extensions.benchmark import load_custom_benchmark
 
-memory_app = typer.Typer(help="Manage Skill-Pro procedural-skill banks.")
+procedural_memory_app = typer.Typer(help="Manage Skill-Pro Procedural Memory banks.")
 
 
 def _module(bank: str) -> ProceduralMemoryModule:
@@ -41,7 +41,7 @@ def _limited_yaml_path(source: Path, *, limit: int | None, bank: str) -> Path:
     if not rows:
         raise typer.BadParameter(f"{source} has no benchmark cases")
     safe_bank = re.sub(r"[^A-Za-z0-9_.-]+", "_", bank).strip("._") or "default"
-    target_dir = Path(MEMORY_DIR) / "runs"
+    target_dir = Path(PROCEDURAL_MEMORY_DIR) / "runs"
     target_dir.mkdir(parents=True, exist_ok=True)
     target = target_dir / f"{safe_bank}.first-{len(rows)}.yaml"
     target.write_text(
@@ -51,21 +51,23 @@ def _limited_yaml_path(source: Path, *, limit: int | None, bank: str) -> Path:
     return target
 
 
-@memory_app.command("run")
-def memory_run(
+@procedural_memory_app.command("run")
+def procedural_memory_run(
     file: Path = typer.Option(
         BENCHMARK_DIR / "benchmark_test.yaml",
         "-f",
         "--file",
-        help="Shared memory/tool-evolution benchmark YAML. Defaults to benchmark/benchmark_test.yaml.",
+        help="Shared Procedural Memory/Tool Refinement benchmark YAML. Defaults to benchmark/benchmark_test.yaml.",
     ),
     limit: int | None = typer.Option(
         None,
         "--limit",
         min=1,
-        help="Run only the first N rows for a quick memory-only smoke test.",
+        help="Run only the first N rows for a quick Procedural Memory smoke test.",
     ),
-    bank: str = typer.Option("memory-smoke", "--bank", help="Memory-bank id."),
+    bank: str = typer.Option(
+        "procedural-memory-smoke", "--bank", help="Procedural Memory bank id."
+    ),
     read: bool = typer.Option(
         False,
         "--read",
@@ -104,23 +106,25 @@ def memory_run(
         help="Estimated token budget for retrieved skills.",
     ),
 ) -> None:
-    """Run a Skill-Pro memory-only benchmark stream with concise defaults."""
+    """Run a Skill-Pro Procedural Memory benchmark with concise defaults."""
     mode = "read" if read else "evolve"
     if not file.exists():
         raise typer.BadParameter(f"YAML does not exist: {file}")
 
     if reset_bank:
         _module(bank).clear()
-        typer.echo(f"Reset memory bank and rebuilt Skill-Pro seed pool: {bank}")
+        typer.echo(
+            f"Reset Procedural Memory bank and rebuilt Skill-Pro seed pool: {bank}"
+        )
     resolved_max_steps = resolve_max_steps(max_steps)
 
     selected_yaml = _limited_yaml_path(file, limit=limit, bank=bank)
     typer.echo(
-        "Running memory-only benchmark: "
+        "Running Procedural Memory benchmark: "
         f"yaml={selected_yaml} bank={bank} mode={mode} "
         f"backend={llm_backend} model={model}"
     )
-    memory_flag = "--memory-read" if read else "--memory"
+    procedural_memory_flag = "--procedural-memory-read" if read else "--procedural-memory"
     command = [
         sys.executable,
         "-m",
@@ -133,11 +137,11 @@ def memory_run(
         model,
         "--max-steps",
         str(resolved_max_steps),
-        memory_flag,
+        procedural_memory_flag,
         bank,
-        "--memory-k",
+        "--procedural-memory-k",
         str(k),
-        "--memory-tokens",
+        "--procedural-memory-tokens",
         str(tokens),
     ]
     try:
@@ -146,9 +150,11 @@ def memory_run(
         raise typer.Exit(code=exc.returncode) from exc
 
 
-@memory_app.command("inspect")
-def memory_inspect(
-    bank: str = typer.Option("default", "--bank", help="Memory-bank id."),
+@procedural_memory_app.command("inspect")
+def procedural_memory_inspect(
+    bank: str = typer.Option(
+        "default", "--bank", help="Procedural Memory bank id."
+    ),
 ) -> None:
     """Print skill, episode, and PPO decision counts for one bank."""
     typer.echo(
@@ -160,15 +166,17 @@ def memory_inspect(
     )
 
 
-@memory_app.command("health")
-def memory_health(
-    bank: str = typer.Option("default", "--bank", help="Memory-bank id."),
+@procedural_memory_app.command("health")
+def procedural_memory_health(
+    bank: str = typer.Option(
+        "default", "--bank", help="Procedural Memory bank id."
+    ),
 ) -> None:
     """Check local JSON skill store readiness."""
     report = {
         "bank_id": bank,
         "store": {
-            "backend": "SkillMemoryStore",
+            "backend": "ProceduralMemoryStore",
             "ready": False,
         },
     }
@@ -184,9 +192,11 @@ def memory_health(
     typer.echo(json.dumps(report, ensure_ascii=False, indent=2))
 
 
-@memory_app.command("snapshot")
-def memory_snapshot(
-    bank: str = typer.Option("default", "--bank", help="Memory-bank id."),
+@procedural_memory_app.command("snapshot")
+def procedural_memory_snapshot(
+    bank: str = typer.Option(
+        "default", "--bank", help="Procedural Memory bank id."
+    ),
     output: Path | None = typer.Option(
         None,
         "-o",
@@ -195,22 +205,28 @@ def memory_snapshot(
     ),
 ) -> None:
     """Export a reproducible JSONL snapshot of one skill bank."""
-    target = output or (Path(MEMORY_DIR) / f"{bank}.snapshot.jsonl")
+    target = output or (Path(PROCEDURAL_MEMORY_DIR) / f"{bank}.snapshot.jsonl")
     path = _module(bank).snapshot(session_id="manual", output_path=target)
-    typer.echo(f"Wrote memory snapshot: {path}")
+    typer.echo(f"Wrote Procedural Memory snapshot: {path}")
 
 
-@memory_app.command("clear")
-def memory_clear(
-    bank: str = typer.Option("default", "--bank", help="Memory-bank id."),
+@procedural_memory_app.command("clear")
+def procedural_memory_clear(
+    bank: str = typer.Option(
+        "default", "--bank", help="Procedural Memory bank id."
+    ),
     yes: bool = typer.Option(False, "-y", "--yes", help="Skip confirmation."),
 ) -> None:
     """Delete one experiment bank from the local JSON skill store."""
-    if not yes and not typer.confirm(f"Clear memory bank '{bank}'?", default=False):
+    if not yes and not typer.confirm(
+        f"Clear Procedural Memory bank '{bank}'?", default=False
+    ):
         raise typer.Abort()
     _module(bank).clear()
-    typer.echo(f"Reset memory bank and rebuilt Skill-Pro seed pool: {bank}")
+    typer.echo(
+        f"Reset Procedural Memory bank and rebuilt Skill-Pro seed pool: {bank}"
+    )
 
 
 if __name__ == "__main__":
-    memory_app()
+    procedural_memory_app()

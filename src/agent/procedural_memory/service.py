@@ -1,4 +1,4 @@
-"""Skill-Pro procedural memory service.
+"""Skill-Pro Procedural Memory service.
 
 This adapts the official Skill-Pro semantics to NIKA's diagnosis-agent
 boundary: a Skill-MDP style selector injects active procedural skills before
@@ -25,11 +25,11 @@ from agent.learning_llm import (
     learning_timeout_seconds,
 )
 from agent.extensions.llm import load_extension_model as load_model
-from agent.memory.safety import redact_oracle_markers
-from agent.memory.attributes import infer_memory_attributes
-from agent.memory.models import (
+from agent.procedural_memory.safety import redact_oracle_markers
+from agent.procedural_memory.attributes import infer_procedural_memory_attributes
+from agent.procedural_memory.models import (
     EvaluationEvidence,
-    MemoryQuery,
+    ProceduralMemoryQuery,
     PPOGateDecision,
     ProceduralSkill,
     SemanticGradient,
@@ -42,12 +42,12 @@ from agent.memory.models import (
     SkillTransition,
     utc_now,
 )
-from agent.memory.policy_scorer import (
+from agent.procedural_memory.policy_scorer import (
     BehavioralReplayPolicyScorer,
     PolicyScorer,
     StructuredReplayPolicyScorer,
 )
-from agent.memory.store import SkillMemoryStore, public_episode_evidence
+from agent.procedural_memory.store import ProceduralMemoryStore, public_episode_evidence
 
 DEFAULT_POOL_SIZE = 32
 EXPERIENCE_POOL_SIZE = 1000
@@ -241,7 +241,7 @@ def _learned_skill_unstable(skill: ProceduralSkill) -> bool:
     return repeated_failures or (failure_rate >= 0.6 and (weak_score or negative_gain))
 
 
-def _activation_similarity(skill: ProceduralSkill, query: MemoryQuery) -> float:
+def _activation_similarity(skill: ProceduralSkill, query: ProceduralMemoryQuery) -> float:
     state_text = " ".join(
         [
             query.text,
@@ -296,7 +296,7 @@ def _experience_signature(exp: SkillExperience) -> tuple[frozenset[str], frozens
             ),
         ]
     )
-    attrs = infer_memory_attributes(text, scenario=exp.scenario, tools=tools)
+    attrs = infer_procedural_memory_attributes(text, scenario=exp.scenario, tools=tools)
     return (
         frozenset(attrs.protocols),
         frozenset(attrs.services),
@@ -379,7 +379,7 @@ class ProceduralMemoryModule:
             if learning_backend(llm_backend) and learning_model(model)
             else StructuredReplayPolicyScorer()
         )
-        self.store = SkillMemoryStore(
+        self.store = ProceduralMemoryStore(
             bank_id=bank_id,
             root=store_path.parent if store_path else None,
         )
@@ -540,7 +540,7 @@ class ProceduralMemoryModule:
         ]
         return skills
 
-    def retrieve(self, *, query: MemoryQuery, session_id: str = "") -> list[SkillRetrieval]:
+    def retrieve(self, *, query: ProceduralMemoryQuery, session_id: str = "") -> list[SkillRetrieval]:
         state = self.store.load()
         scored: list[SkillRetrieval] = []
         query_text = " ".join(
@@ -599,7 +599,7 @@ class ProceduralMemoryModule:
                 if len(token) > 3 and token in query_text:
                     score += 0.01
             if score > 0:
-                scored.append(SkillRetrieval(memory=skill, score=score, reasons=reasons))
+                scored.append(SkillRetrieval(skill=skill, score=score, reasons=reasons))
         scored.sort(key=lambda item: item.score, reverse=True)
         selected: list[SkillRetrieval] = []
         used_tokens = 0
@@ -616,7 +616,7 @@ class ProceduralMemoryModule:
     def select_skill(
         self,
         *,
-        query: MemoryQuery,
+        query: ProceduralMemoryQuery,
         session_id: str = "",
         top_k: int | None = None,
         record_reuse: bool = True,
@@ -651,7 +651,7 @@ class ProceduralMemoryModule:
         self,
         *,
         skill: ProceduralSkill,
-        query: MemoryQuery,
+        query: ProceduralMemoryQuery,
     ) -> tuple[float, list[str], bool]:
         if _is_seed_skill(skill):
             return 0.0, [], False
@@ -714,7 +714,7 @@ class ProceduralMemoryModule:
             stored.updated_at = utc_now()
             state.skills[stored.skill_id] = stored
             self.store.save(state)
-            selected.memory = stored
+            selected.skill = stored
         return selected
 
     def format_context(
@@ -769,7 +769,7 @@ class ProceduralMemoryModule:
     ) -> ProceduralSkill:
         if not tool_steps:
             raise ValueError("Skill-Pro requires at least one observed execution step.")
-        attrs = infer_memory_attributes(
+        attrs = infer_procedural_memory_attributes(
             _episode_attribute_text(evidence, tool_steps),
             scenario=evidence.scenario,
             topology_class=evidence.topology_class,
@@ -1439,7 +1439,7 @@ class ProceduralMemoryModule:
         maintenance_logs = self._normalize_experience_pools(state)
         if maintenance_logs:
             state.maintenance_log.extend(maintenance_logs)
-        total_added_tokens = int(evidence.metrics.get("memory_total_added_tokens") or 0)
+        total_added_tokens = int(evidence.metrics.get("procedural_memory_total_added_tokens") or 0)
         delta_prompt_tokens_per_step = (
             total_added_tokens / max(evidence.steps or len(tool_steps), 1)
         )
@@ -1462,13 +1462,13 @@ class ProceduralMemoryModule:
                     6,
                 ),
                 "prompt_added_tokens": int(
-                    evidence.metrics.get("memory_prompt_added_tokens") or 0
+                    evidence.metrics.get("procedural_memory_prompt_added_tokens") or 0
                 ),
                 "tool_description_added_tokens": int(
-                    evidence.metrics.get("memory_tool_description_added_tokens") or 0
+                    evidence.metrics.get("procedural_memory_tool_description_added_tokens") or 0
                 ),
                 "followup_added_tokens": int(
-                    evidence.metrics.get("memory_followup_added_tokens") or 0
+                    evidence.metrics.get("procedural_memory_followup_added_tokens") or 0
                 ),
             }
 
@@ -1587,22 +1587,22 @@ class ProceduralMemoryModule:
                     6,
                 ),
                 "prompt_added_tokens": int(
-                    evidence.metrics.get("memory_prompt_added_tokens") or 0
+                    evidence.metrics.get("procedural_memory_prompt_added_tokens") or 0
                 ),
                 "tool_description_added_tokens": int(
-                    evidence.metrics.get("memory_tool_description_added_tokens") or 0
+                    evidence.metrics.get("procedural_memory_tool_description_added_tokens") or 0
                 ),
                 "followup_added_tokens": int(
-                    evidence.metrics.get("memory_followup_added_tokens") or 0
+                    evidence.metrics.get("procedural_memory_followup_added_tokens") or 0
                 ),
                 "prompt_injection_count": int(
-                    evidence.metrics.get("memory_prompt_injection_count") or 0
+                    evidence.metrics.get("procedural_memory_prompt_injection_count") or 0
                 ),
                 "tool_description_injection_count": int(
-                    evidence.metrics.get("memory_tool_description_injection_count") or 0
+                    evidence.metrics.get("procedural_memory_tool_description_injection_count") or 0
                 ),
                 "followup_guidance_count": int(
-                    evidence.metrics.get("memory_followup_guidance_count") or 0
+                    evidence.metrics.get("procedural_memory_followup_guidance_count") or 0
                 ),
                 "semantic_gradient_source": "deferred",
                 "semantic_gradient_llm_attempted": False,
@@ -1779,22 +1779,22 @@ class ProceduralMemoryModule:
                 6,
             ),
             "prompt_added_tokens": int(
-                evidence.metrics.get("memory_prompt_added_tokens") or 0
+                evidence.metrics.get("procedural_memory_prompt_added_tokens") or 0
             ),
             "tool_description_added_tokens": int(
-                evidence.metrics.get("memory_tool_description_added_tokens") or 0
+                evidence.metrics.get("procedural_memory_tool_description_added_tokens") or 0
             ),
             "followup_added_tokens": int(
-                evidence.metrics.get("memory_followup_added_tokens") or 0
+                evidence.metrics.get("procedural_memory_followup_added_tokens") or 0
             ),
             "prompt_injection_count": int(
-                evidence.metrics.get("memory_prompt_injection_count") or 0
+                evidence.metrics.get("procedural_memory_prompt_injection_count") or 0
             ),
             "tool_description_injection_count": int(
-                evidence.metrics.get("memory_tool_description_injection_count") or 0
+                evidence.metrics.get("procedural_memory_tool_description_injection_count") or 0
             ),
             "followup_guidance_count": int(
-                evidence.metrics.get("memory_followup_guidance_count") or 0
+                evidence.metrics.get("procedural_memory_followup_guidance_count") or 0
             ),
             "semantic_gradient_source": gradient_source,
             "semantic_gradient_llm_attempted": bool(
@@ -1889,7 +1889,7 @@ class ProceduralMemoryModule:
             },
             transitions=transitions,
             step_count=evidence.steps,
-            total_added_tokens=int(evidence.metrics.get("memory_total_added_tokens") or 0),
+            total_added_tokens=int(evidence.metrics.get("procedural_memory_total_added_tokens") or 0),
             success=success,
             ground_truth_is_anomaly=evidence.ground_truth_is_anomaly,
         )

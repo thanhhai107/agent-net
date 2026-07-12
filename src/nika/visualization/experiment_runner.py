@@ -26,11 +26,13 @@ SPEC_FILENAME = "spec.json"
 META_FILENAME = "meta.json"
 
 MODULE_LABELS = {
-    "tool_evolution": "Tool Evolution",
-    "memory_evolution": "Memory Evolution",
+    "tool_refinement": "Tool Refinement",
+    "procedural_memory": "Procedural Memory",
 }
 AGENT_LABELS = {
     "react": "ReAct",
+    "plan-execute": "Plan-and-Execute",
+    "reflexion": "Reflexion",
 }
 
 
@@ -64,12 +66,16 @@ def _common_agent_args(
     default_agent: str = "react",
 ) -> list[str]:
     return [
+        "--agent",
+        _str(config.get("agent_type"), default_agent),
         "--provider",
         _str(config.get("llm_backend"), DEFAULT_LLM_BACKEND),
         "--model",
         _str(config.get("model"), DEFAULT_MODEL),
         "--max-steps",
         str(_int(config.get("max_steps"), _int(os.getenv("NIKA_MAX_STEPS"), 20))),
+        "--max-attempts",
+        str(_int(config.get("max_attempts"), 3)),
     ]
 
 
@@ -131,7 +137,7 @@ def _command_experiment_id(config: dict[str, Any]) -> str:
 def experiment_label(config: dict[str, Any]) -> str:
     modules = selected_modules(config)
     labels = [AGENT_LABELS.get(agent_type(config), agent_type(config))]
-    ordered = ["tool_evolution", "memory_evolution"]
+    ordered = ["tool_refinement", "procedural_memory"]
     labels.extend(MODULE_LABELS[item] for item in ordered if item in modules)
     label = " + ".join(labels)
     if config.get("resume"):
@@ -142,8 +148,8 @@ def experiment_label(config: dict[str, Any]) -> str:
 def build_experiment_command(config: dict[str, Any]) -> list[str]:
     """Build the CLI command for one run with all selected modules enabled."""
     modules = selected_modules(config)
-    tool_enabled = "tool_evolution" in modules
-    memory_enabled = "memory_evolution" in modules
+    tool_enabled = "tool_refinement" in modules
+    procedural_memory_enabled = "procedural_memory" in modules
     default_library_id = _command_experiment_id(config)
 
     command = _benchmark_command(config)
@@ -151,40 +157,40 @@ def build_experiment_command(config: dict[str, Any]) -> list[str]:
     if tool_enabled:
         command.extend(
             [
-                "--tools",
+                "--tool-refinement",
                 _str(
                     config.get("tool_library_id"),
                     default_library_id,
                 ),
-                "--tool-doc-chars",
+                "--tool-refinement-doc-chars",
                 str(_int(config.get("tool_doc_chars"), 500)),
-                "--tool-convergence-threshold",
+                "--tool-refinement-convergence-threshold",
                 _str(config.get("tool_convergence_threshold"), "0.75"),
             ]
         )
 
-    if memory_enabled:
+    if procedural_memory_enabled:
         command.extend(
             [
-                "--memory",
+                "--procedural-memory",
                 _str(
-                    config.get("memory_bank"),
+                    config.get("procedural_memory_bank"),
                     default_library_id,
                 ),
-                "--memory-k",
-                str(_int(config.get("memory_k"), 5)),
-                "--memory-tokens",
-                str(_int(config.get("memory_tokens"), 1500)),
-                "--memory-max-skill-age",
-                str(_int(config.get("memory_max_skill_age"), 4)),
-                "--memory-pool-size",
-                str(_int(config.get("memory_pool_size"), 32)),
-                "--memory-evolution-threshold",
-                str(_int(config.get("memory_evolution_threshold"), 3)),
-                "--memory-best-of-n",
-                str(_int(config.get("memory_best_of_n"), 3)),
-                "--memory-ppo-epsilon",
-                _str(config.get("memory_ppo_epsilon"), "0.2"),
+                "--procedural-memory-k",
+                str(_int(config.get("procedural_memory_k"), 5)),
+                "--procedural-memory-tokens",
+                str(_int(config.get("procedural_memory_tokens"), 1500)),
+                "--procedural-memory-max-skill-age",
+                str(_int(config.get("procedural_memory_max_skill_age"), 4)),
+                "--procedural-memory-pool-size",
+                str(_int(config.get("procedural_memory_pool_size"), 32)),
+                "--procedural-memory-update-threshold",
+                str(_int(config.get("procedural_memory_update_threshold"), 3)),
+                "--procedural-memory-best-of-n",
+                str(_int(config.get("procedural_memory_best_of_n"), 3)),
+                "--procedural-memory-ppo-epsilon",
+                _str(config.get("procedural_memory_ppo_epsilon"), "0.2"),
             ]
         )
     return command
@@ -212,10 +218,10 @@ def prepare_experiment_config(config: dict[str, Any]) -> dict[str, Any]:
     if not str(prepared.get("result_root") or "").strip():
         prepared["result_root"] = str(RESULTS_DIR / run_id)
     modules = selected_modules(prepared)
-    if "tool_evolution" in modules and not str(prepared.get("tool_library_id") or "").strip():
+    if "tool_refinement" in modules and not str(prepared.get("tool_library_id") or "").strip():
         prepared["tool_library_id"] = run_id
-    if "memory_evolution" in modules and not str(prepared.get("memory_bank") or "").strip():
-        prepared["memory_bank"] = run_id
+    if "procedural_memory" in modules and not str(prepared.get("procedural_memory_bank") or "").strip():
+        prepared["procedural_memory_bank"] = run_id
     return prepared
 
 
@@ -234,10 +240,10 @@ def prepare_resume_config(
     if not str(config.get("result_root") or "").strip():
         config["result_root"] = str(RESULTS_DIR / source_run_id)
     modules = selected_modules(config)
-    if "tool_evolution" in modules and not str(config.get("tool_library_id") or "").strip():
+    if "tool_refinement" in modules and not str(config.get("tool_library_id") or "").strip():
         config["tool_library_id"] = source_run_id
-    if "memory_evolution" in modules and not str(config.get("memory_bank") or "").strip():
-        config["memory_bank"] = source_run_id
+    if "procedural_memory" in modules and not str(config.get("procedural_memory_bank") or "").strip():
+        config["procedural_memory_bank"] = source_run_id
 
     config["experiment_id"] = resume_run_id or source_run_id
     config["resume"] = True

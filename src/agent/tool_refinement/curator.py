@@ -26,7 +26,7 @@ from agent.learning_llm import (
     learning_timeout_seconds,
 )
 from agent.extensions.llm import load_extension_model as load_model
-from agent.tool_evolution.models import (
+from agent.tool_refinement.models import (
     ComprehensionGap,
     DraftAnalyzerDraft,
     DraftAnalyzerSuggestion,
@@ -40,7 +40,7 @@ from agent.tool_evolution.models import (
     ToolTrial,
     utc_now,
 )
-from agent.tool_evolution.store import ToolEvolutionStore
+from agent.tool_refinement.store import ToolRefinementStore
 from agent.utils.phases import DIAGNOSIS
 from nika.evaluator.result_log import MESSAGES_FILENAME
 from nika.utils.session import Session
@@ -77,6 +77,36 @@ def _stable_id(*parts: Any, prefix: str) -> str:
     encoded = json.dumps(parts, sort_keys=True, ensure_ascii=False, default=str)
     digest = hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:16]
     return f"{prefix}_{digest}"
+
+
+def _tool_outcome(event: str, output: Any) -> str:
+    """Classify semantic tool outcomes without treating observations as failures."""
+    if event == "tool_error":
+        return "error"
+    if output in (None, "", [], {}):
+        return "unknown"
+    if isinstance(output, dict):
+        status = str(output.get("status") or "").strip().lower()
+        if status in {"error", "failed", "failure", "timeout"}:
+            return "error"
+        if output.get("error") not in (None, "", False, [], {}):
+            return "error"
+        return "success"
+    text = str(output).strip()
+    try:
+        structured = json.loads(text)
+    except (TypeError, ValueError):
+        structured = None
+    if isinstance(structured, dict):
+        if not structured:
+            return "success"
+        return _tool_outcome(event, structured)
+    lowered = text.lower()
+    explicit_error = re.match(
+        r"^(?:error|exception|traceback|fatal|command failed|tool failed)\b",
+        lowered,
+    ) or re.search(r"\bexit (?:code|status)\s*[=:]?\s*[1-9]\d*\b", lowered)
+    return "error" if explicit_error else "success"
 
 
 def _text_similarity(left: str, right: str) -> float:
@@ -284,8 +314,8 @@ def extract_tool_trials(
                 run_id, start = anonymous_starts.pop(0)
             if start is None:
                 continue
-            status = "success" if event == "tool_end" else "error"
             output = entry.get("output") or entry.get("error") or ""
+            status = _tool_outcome(str(event), output)
             trial = ToolTrial(
                 trial_id=_stable_id(session_id, run_id, start, output, prefix="trial"),
                 session_id=session_id,
@@ -293,7 +323,7 @@ def extract_tool_trials(
                 task_description=task_description,
                 arguments=start["arguments"],
                 status=status,
-                output_summary=_short_text(output) if status == "success" else "",
+                output_summary=_short_text(output) if status != "error" else "",
                 error_summary=_short_text(output) if status == "error" else "",
                 timestamp=start["timestamp"],
             )
@@ -498,8 +528,7 @@ def _exploration_is_read_only(
             if normalized_value in _MUTATING_OPERATION_VALUES:
                 return False
     command = " ".join(
-        str(parameters.get(key) or "")
-        for key in ("command", "cmd", "args")
+        str(parameters.get(key) or "") for key in ("command", "cmd", "args")
     )
     combined = " ".join((str(tool_name or ""), command, str(text or "")))
     return _MUTATING_TEXT_RE.search(combined) is None
@@ -899,7 +928,9 @@ def _apply_draft_proposal(
 ) -> None:
     if proposal.tool_usage_description.strip():
         doc.tool_usage_description = proposal.tool_usage_description.strip()
-    observed_errors = [trial.error_summary for trial in trials if trial.status == "error"]
+    observed_errors = [
+        trial.error_summary for trial in trials if trial.status == "error"
+    ]
     grounded_constraint = (
         "Tool arguments must be grounded in currently observed topology evidence."
     )
@@ -941,7 +972,7 @@ def _apply_draft_proposal(
 
 
 def rewrite_documentation(
-    store: ToolEvolutionStore,
+    store: ToolRefinementStore,
     *,
     trials: list[ToolTrial],
     tool_descriptions: dict[str, str],
@@ -1025,10 +1056,14 @@ def rewrite_documentation(
                     if value not in current.examples and len(current.examples) < 5:
                         current.examples.append(value)
 
-            if trial.success and trial.arguments and _exploration_is_read_only(
-                tool_name=trial.tool_name,
-                parameters=trial.arguments,
-                text=trial.task_description,
+            if (
+                trial.success
+                and trial.arguments
+                and _exploration_is_read_only(
+                    tool_name=trial.tool_name,
+                    parameters=trial.arguments,
+                    text=trial.task_description,
+                )
             ):
                 example = {"arguments": trial.arguments}
                 if example not in doc.positive_examples:
@@ -1129,9 +1164,7 @@ def rewrite_documentation(
         all_evidence_trials = [
             trial for trial in state.trials if trial.tool_name == tool_name
         ]
-        all_evidence_gaps = [
-            gap for gap in state.gaps if gap.tool_name == tool_name
-        ]
+        all_evidence_gaps = [gap for gap in state.gaps if gap.tool_name == tool_name]
         contract_rejected = False
         if proposal is not None:
             contract_errors = _proposal_contract_errors(
@@ -1309,7 +1342,7 @@ def rewrite_documentation(
     return revisions
 
 
-def finalize_tool_evolution_session(
+def finalize_tool_refinement_session(
     *,
     session_id: str,
     metrics: dict[str, Any],
@@ -1327,7 +1360,7 @@ def finalize_tool_evolution_session(
     convergence_threshold = float(raw_convergence_threshold)
     session_dir = Path(session.session_dir)
     trace_path = session_dir / MESSAGES_FILENAME
-    store = ToolEvolutionStore(library_id)
+    store = ToolRefinementStore(library_id)
     documented_tools_at_start = set(store.load().documents)
     trials, tool_descriptions = extract_tool_trials(
         trace_path,
@@ -1395,7 +1428,7 @@ def finalize_tool_evolution_session(
             "tool_doc_chars": getattr(session, "tool_doc_chars", None),
         },
     }
-    (session_dir / "tool_evolution.json").write_text(
+    (session_dir / "tool_refinement.json").write_text(
         json.dumps(report, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )

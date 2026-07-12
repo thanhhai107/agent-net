@@ -11,25 +11,25 @@ from pathlib import Path
 from langchain_core.tools import StructuredTool
 from unittest.mock import patch
 
-from agent.tool_evolution.curator import (
+from agent.tool_refinement.curator import (
     extract_tool_trials,
     identify_comprehension_gaps,
     rewrite_documentation,
 )
-from agent.tool_evolution.models import (
+from agent.tool_refinement.models import (
     DraftAnalyzerDraft,
     DraftExploration,
     DraftRewriteProposal,
     ToolDocumentation,
     ToolParameterDoc,
 )
-from agent.tool_evolution.runtime import ToolEvolutionRuntime
-from agent.tool_evolution.store import ToolEvolutionStore
+from agent.tool_refinement.runtime import ToolRefinementRuntime
+from agent.tool_refinement.store import ToolRefinementStore
 from nika.evaluator.result_log import build_eval_result_from_session_dir
 from nika.workflows.eval.session import run_eval_metrics
 
 
-class DraftToolEvolutionTest(unittest.TestCase):
+class DraftToolRefinementTest(unittest.TestCase):
     def test_primitive_contract_change_reopens_frozen_documentation(self) -> None:
         def ping(host: str) -> str:
             return host
@@ -38,13 +38,13 @@ class DraftToolEvolutionTest(unittest.TestCase):
             return host * count
 
         with tempfile.TemporaryDirectory() as tmp:
-            store = ToolEvolutionStore("draft", root=tmp)
+            store = ToolRefinementStore("draft", root=tmp)
             first_tool = StructuredTool.from_function(
                 ping,
                 name="ping_host",
                 description="Ping one host.",
             )
-            ToolEvolutionRuntime(
+            ToolRefinementRuntime(
                 session=object(),
                 primitive_tools=[first_tool],
                 library_id="draft",
@@ -77,7 +77,7 @@ class DraftToolEvolutionTest(unittest.TestCase):
                 name="ping_host",
                 description="Ping one host one or more times.",
             )
-            ToolEvolutionRuntime(
+            ToolRefinementRuntime(
                 session=object(),
                 primitive_tools=[second_tool],
                 library_id="draft",
@@ -105,7 +105,7 @@ class DraftToolEvolutionTest(unittest.TestCase):
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            store = ToolEvolutionStore("draft", root=tmp)
+            store = ToolRefinementStore("draft", root=tmp)
             trials, _ = extract_tool_trials(
                 self._trace(
                     tmp,
@@ -140,7 +140,7 @@ class DraftToolEvolutionTest(unittest.TestCase):
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            store = ToolEvolutionStore("draft", root=tmp)
+            store = ToolRefinementStore("draft", root=tmp)
             trials, _ = extract_tool_trials(
                 self._trace(
                     tmp,
@@ -174,14 +174,16 @@ class DraftToolEvolutionTest(unittest.TestCase):
             {trial.trial_id for trial in trials},
         )
         self.assertTrue(all(item.status == "success" for item in state.explorations))
-        self.assertTrue(all(item.observation == "route missing" for item in state.explorations))
+        self.assertTrue(
+            all(item.observation == "route missing" for item in state.explorations)
+        )
         self.assertEqual(state.explorations[0].diversity_score, 1.0)
         self.assertEqual(state.explorations[1].diversity_score, 0.0)
         self.assertEqual(state.explorations[1].reflection_count, 1)
 
     def test_documentation_mastery_is_independent_of_rca_score(self) -> None:
         def evolve(root: str, rca_f1: float) -> float:
-            store = ToolEvolutionStore("draft", root=root)
+            store = ToolRefinementStore("draft", root=root)
             trials, _ = extract_tool_trials(
                 self._trace(
                     root,
@@ -276,6 +278,48 @@ class DraftToolEvolutionTest(unittest.TestCase):
         self.assertEqual(trials[0].task_description, "Check interface state")
         self.assertEqual(docs["show_iface"], "Inspect interface.")
 
+    def test_tool_end_with_explicit_failure_is_not_positive_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            trace = self._trace(
+                tmp,
+                [
+                    ("tool_start", "1", "show_route", "{'router': 'r1'}", ""),
+                    ("tool_end", "1", "show_route", "", "Error: command failed"),
+                    ("tool_start", "2", "show_route", "{'router': 'r2'}", ""),
+                    ("tool_end", "2", "show_route", "", ""),
+                    ("tool_start", "3", "show_route", "{'router': 'r3'}", ""),
+                    ("tool_end", "3", "show_route", "", "route not found"),
+                ],
+            )
+            trials, _ = extract_tool_trials(trace, session_id="semantic-outcome")
+
+        self.assertEqual(
+            [trial.status for trial in trials],
+            ["error", "unknown", "success"],
+        )
+        self.assertFalse(trials[0].success)
+        self.assertFalse(trials[1].success)
+        self.assertTrue(trials[2].success)
+
+    def test_atomic_store_failure_preserves_previous_tool_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = ToolRefinementStore("atomic", root=tmp)
+            state = store.load()
+            state.library_usage_description = "stable state"
+            store.save(state)
+            previous = store.state_path.read_text(encoding="utf-8")
+            state.library_usage_description = "interrupted update"
+
+            with patch(
+                "agent.utils.atomic.os.replace",
+                side_effect=OSError("simulated interruption"),
+            ):
+                with self.assertRaisesRegex(OSError, "simulated interruption"):
+                    store.save(state)
+
+            self.assertEqual(store.state_path.read_text(encoding="utf-8"), previous)
+            self.assertEqual(list(store.library_dir.glob(".*.tmp")), [])
+
     def test_trial_extraction_strips_integrated_runtime_guidance(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             trace = Path(tmp) / "messages.jsonl"
@@ -345,7 +389,7 @@ class DraftToolEvolutionTest(unittest.TestCase):
 
     def test_rewrites_documentation_with_preconditions_and_constraints(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            store = ToolEvolutionStore("draft", root=tmp)
+            store = ToolRefinementStore("draft", root=tmp)
             trials, _ = extract_tool_trials(
                 self._trace(
                     tmp,
@@ -402,7 +446,7 @@ class DraftToolEvolutionTest(unittest.TestCase):
 
     def test_final_diagnosis_metrics_do_not_create_tool_contract_gaps(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            store = ToolEvolutionStore("draft", root=tmp)
+            store = ToolRefinementStore("draft", root=tmp)
             trials, _ = extract_tool_trials(
                 self._trace(
                     tmp,
@@ -477,13 +521,11 @@ class DraftToolEvolutionTest(unittest.TestCase):
             )
 
         gaps = identify_comprehension_gaps(trials)
-        self.assertFalse(
-            any(gap.gap_type == "diagnostic_semantic_gap" for gap in gaps)
-        )
+        self.assertFalse(any(gap.gap_type == "diagnostic_semantic_gap" for gap in gaps))
 
     def test_draft_does_not_learn_from_documented_tool_without_trace(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            store = ToolEvolutionStore("draft", root=tmp)
+            store = ToolRefinementStore("draft", root=tmp)
             rewrite_documentation(
                 store,
                 trials=[],
@@ -513,7 +555,7 @@ class DraftToolEvolutionTest(unittest.TestCase):
                         "scenario_topo_size": "small",
                         "problem_names": ["link_down"],
                         "root_cause_name": "link_down",
-                        "tool_evolution_enabled": True,
+                        "tool_refinement_enabled": True,
                         "tool_library_id": "draft",
                     }
                 ),
@@ -546,8 +588,8 @@ class DraftToolEvolutionTest(unittest.TestCase):
                 def __init__(self) -> None:
                     self.session_dir = str(session_dir)
                     self.session_id = "s-draft"
-                    self.tool_evolution_enabled = True
-                    self.memory_mode = "off"
+                    self.tool_refinement_enabled = True
+                    self.procedural_memory_mode = "off"
                     self.store = None
 
                 def load_closed_session(self, *, session_id=None) -> None:
@@ -582,7 +624,7 @@ class DraftToolEvolutionTest(unittest.TestCase):
             with (
                 patch("nika.workflows.eval.session.Session", FakeSession),
                 patch(
-                    "agent.tool_evolution.curator.finalize_tool_evolution_session",
+                    "agent.tool_refinement.curator.finalize_tool_refinement_session",
                     return_value=draft_report,
                 ),
             ):
@@ -612,8 +654,8 @@ class DraftToolEvolutionTest(unittest.TestCase):
             description="Ping a host.",
         )
         with tempfile.TemporaryDirectory() as tmp:
-            store = ToolEvolutionStore("draft", root=tmp)
-            ToolEvolutionRuntime(
+            store = ToolRefinementStore("draft", root=tmp)
+            ToolRefinementRuntime(
                 session=object(),
                 primitive_tools=[tool],
                 library_id="draft",
@@ -629,7 +671,7 @@ class DraftToolEvolutionTest(unittest.TestCase):
             assert doc is not None
             doc.usage_notes.append("Use exact host names from the active topology.")
             store.upsert_document(doc)
-            runtime = ToolEvolutionRuntime(
+            runtime = ToolRefinementRuntime(
                 session=object(),
                 primitive_tools=[tool],
                 library_id="draft",
@@ -658,7 +700,7 @@ class DraftToolEvolutionTest(unittest.TestCase):
             description="Ping a host.",
         )
         with tempfile.TemporaryDirectory() as tmp:
-            store = ToolEvolutionStore("draft", root=tmp)
+            store = ToolRefinementStore("draft", root=tmp)
             state = store.load()
             state.documents["ping_pair"] = ToolDocumentation(
                 name="ping_pair",
@@ -666,7 +708,7 @@ class DraftToolEvolutionTest(unittest.TestCase):
                 usage_notes=["Use exact host names from the active topology."],
             )
             store.save(state)
-            runtime = ToolEvolutionRuntime(
+            runtime = ToolRefinementRuntime(
                 session=object(),
                 primitive_tools=[tool],
                 library_id="draft",
@@ -701,8 +743,8 @@ class DraftToolEvolutionTest(unittest.TestCase):
             ),
         ]
         with tempfile.TemporaryDirectory() as tmp:
-            store = ToolEvolutionStore("draft", root=tmp)
-            runtime = ToolEvolutionRuntime(
+            store = ToolRefinementStore("draft", root=tmp)
+            runtime = ToolRefinementRuntime(
                 session=object(),
                 primitive_tools=tools,
                 library_id="draft",
@@ -747,7 +789,7 @@ class DraftToolEvolutionTest(unittest.TestCase):
                 )
 
         with tempfile.TemporaryDirectory() as tmp:
-            store = ToolEvolutionStore("draft", root=tmp)
+            store = ToolRefinementStore("draft", root=tmp)
             trials, _ = extract_tool_trials(
                 self._trace(
                     tmp,
@@ -759,7 +801,7 @@ class DraftToolEvolutionTest(unittest.TestCase):
                 session_id="s1",
             )
             with patch(
-                "agent.tool_evolution.curator.load_model", return_value=FakeModel()
+                "agent.tool_refinement.curator.load_model", return_value=FakeModel()
             ):
                 revisions = rewrite_documentation(
                     store,
@@ -822,15 +864,15 @@ class DraftToolEvolutionTest(unittest.TestCase):
             description="Return the current state as JSON.",
         )
         with tempfile.TemporaryDirectory() as tmp:
-            store = ToolEvolutionStore("draft", root=tmp)
-            ToolEvolutionRuntime(
+            store = ToolRefinementStore("draft", root=tmp)
+            ToolRefinementRuntime(
                 session=object(),
                 primitive_tools=[tool],
                 library_id="draft",
                 store=store,
             )
             with patch(
-                "agent.tool_evolution.curator.load_model", return_value=FakeModel()
+                "agent.tool_refinement.curator.load_model", return_value=FakeModel()
             ):
                 for session_id in ("s1", "s2"):
                     trials, _ = extract_tool_trials(
@@ -859,7 +901,9 @@ class DraftToolEvolutionTest(unittest.TestCase):
         self.assertEqual(doc.preconditions, [])
         self.assertEqual(
             doc.constraints,
-            ["Tool arguments must be grounded in currently observed topology evidence."],
+            [
+                "Tool arguments must be grounded in currently observed topology evidence."
+            ],
         )
         self.assertEqual(doc.failure_modes, [])
         self.assertEqual(doc.usage_notes, [])
@@ -902,8 +946,8 @@ class DraftToolEvolutionTest(unittest.TestCase):
             description="Collect the current reachability matrix.",
         )
         with tempfile.TemporaryDirectory() as tmp:
-            store = ToolEvolutionStore("draft", root=tmp)
-            ToolEvolutionRuntime(
+            store = ToolRefinementStore("draft", root=tmp)
+            ToolRefinementRuntime(
                 session=object(),
                 primitive_tools=[tool],
                 library_id="draft",
@@ -921,7 +965,7 @@ class DraftToolEvolutionTest(unittest.TestCase):
                 task_description="Investigate reachability loss.",
             )
             with patch(
-                "agent.tool_evolution.curator.load_model",
+                "agent.tool_refinement.curator.load_model",
                 return_value=FakeModel(),
             ):
                 revisions = rewrite_documentation(
@@ -962,7 +1006,7 @@ class DraftToolEvolutionTest(unittest.TestCase):
                 raise TimeoutError("draft timeout")
 
         with tempfile.TemporaryDirectory() as tmp:
-            store = ToolEvolutionStore("draft", root=tmp)
+            store = ToolRefinementStore("draft", root=tmp)
             trials, _ = extract_tool_trials(
                 self._trace(
                     tmp,
@@ -982,7 +1026,7 @@ class DraftToolEvolutionTest(unittest.TestCase):
                     },
                 ),
                 patch(
-                    "agent.tool_evolution.curator.load_model",
+                    "agent.tool_refinement.curator.load_model",
                     return_value=FailingModel(),
                 ) as load_model,
             ):
@@ -1020,7 +1064,7 @@ class DraftToolEvolutionTest(unittest.TestCase):
 
         huge_output = "reachable " + ("x" * 8000)
         with tempfile.TemporaryDirectory() as tmp:
-            store = ToolEvolutionStore("draft", root=tmp)
+            store = ToolRefinementStore("draft", root=tmp)
             trials, _ = extract_tool_trials(
                 self._trace(
                     tmp,
@@ -1032,7 +1076,7 @@ class DraftToolEvolutionTest(unittest.TestCase):
                 session_id="s1",
             )
             with patch(
-                "agent.tool_evolution.curator.load_model", return_value=FakeModel()
+                "agent.tool_refinement.curator.load_model", return_value=FakeModel()
             ):
                 rewrite_documentation(
                     store,
@@ -1049,7 +1093,7 @@ class DraftToolEvolutionTest(unittest.TestCase):
 
     def test_path_rate_counts_tools_documented_before_session(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            store = ToolEvolutionStore("draft", root=tmp)
+            store = ToolRefinementStore("draft", root=tmp)
             rewrite_documentation(
                 store,
                 trials=[],

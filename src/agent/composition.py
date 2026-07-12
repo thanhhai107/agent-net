@@ -8,11 +8,13 @@ works with typed extension config.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-LANGGRAPH_DIAGNOSIS_AGENT_TYPES = frozenset({"react", "byo.langgraph"})
+LANGGRAPH_DIAGNOSIS_AGENT_TYPES = frozenset(
+    {"react", "byo.langgraph", "plan-execute", "reflexion"}
+)
 
 
 @dataclass(frozen=True)
-class ToolEvolutionConfig:
+class ToolRefinementConfig:
     enabled: bool = False
     library_id: str = "default"
     tool_doc_chars: int = 500
@@ -20,7 +22,7 @@ class ToolEvolutionConfig:
 
 
 @dataclass(frozen=True)
-class MemoryConfig:
+class ProceduralMemoryConfig:
     mode: str = "off"
     bank: str = "default"
     top_k: int = 5
@@ -42,13 +44,19 @@ class AgentRunConfig:
     llm_provider: str
     model: str
     max_steps: int
+    max_attempts: int = 3
     session_id: str = ""
-    tool_evolution: ToolEvolutionConfig = field(default_factory=ToolEvolutionConfig)
-    memory: MemoryConfig = field(default_factory=MemoryConfig)
+    tool_refinement: ToolRefinementConfig = field(default_factory=ToolRefinementConfig)
+    procedural_memory: ProceduralMemoryConfig = field(
+        default_factory=ProceduralMemoryConfig
+    )
 
     @property
     def normalized_agent_type(self) -> str:
-        return self.agent_type.lower()
+        normalized = self.agent_type.strip().lower().replace("_", "-")
+        if normalized == "plan-and-execute":
+            return "plan-execute"
+        return normalized
 
     @property
     def llm_backend(self) -> str:
@@ -57,42 +65,51 @@ class AgentRunConfig:
 
     @property
     def extensions_enabled(self) -> bool:
-        return self.tool_evolution.enabled or self.memory.enabled
+        return self.tool_refinement.enabled or self.procedural_memory.enabled
 
 
 def validate_agent_extensions(config: AgentRunConfig) -> None:
     """Validate extension compatibility without requiring a live session."""
     agent_type = config.normalized_agent_type
+    if agent_type not in LANGGRAPH_DIAGNOSIS_AGENT_TYPES:
+        supported = ", ".join(sorted(LANGGRAPH_DIAGNOSIS_AGENT_TYPES))
+        raise ValueError(f"unsupported local workflow; choose one of: {supported}")
+    if config.max_steps < 1:
+        raise ValueError("max_steps must be >= 1")
+    if config.max_attempts < 1:
+        raise ValueError("max_attempts must be >= 1")
     if (
-        config.tool_evolution.enabled
+        config.tool_refinement.enabled
         and agent_type not in LANGGRAPH_DIAGNOSIS_AGENT_TYPES
     ):
         raise ValueError(
-            "Tool Evolution supports only the NIKA ReAct diagnosis workflow."
+            "Tool Refinement supports only the NIKA ReAct diagnosis workflow."
         )
-    if config.tool_evolution.tool_doc_chars < 100:
-        raise ValueError("tool_evolution tool_doc_chars must be >= 100")
-    if not 0 <= config.tool_evolution.convergence_threshold <= 1:
-        raise ValueError("tool_evolution convergence_threshold must be in [0, 1]")
-    if config.memory.mode not in {"off", "read", "evolve"}:
-        raise ValueError("memory_mode must be one of: off, read, evolve")
-    if config.memory.top_k < 1:
-        raise ValueError("memory top_k must be >= 1")
-    if config.memory.token_budget < 100:
-        raise ValueError("memory token_budget must be >= 100")
-    if config.memory.max_skill_age < 1:
-        raise ValueError("memory max_skill_age must be >= 1")
-    if config.memory.pool_size < 1:
-        raise ValueError("memory pool_size must be >= 1")
-    if config.memory.evolution_threshold < 1:
-        raise ValueError("memory evolution_threshold must be >= 1")
-    if config.memory.best_of_n < 1:
-        raise ValueError("memory best_of_n must be >= 1")
-    if config.memory.ppo_epsilon < 0:
-        raise ValueError("memory ppo_epsilon must be >= 0")
-    if config.memory.enabled and agent_type not in LANGGRAPH_DIAGNOSIS_AGENT_TYPES:
+    if config.tool_refinement.tool_doc_chars < 100:
+        raise ValueError("Tool Refinement documentation size must be >= 100")
+    if not 0 <= config.tool_refinement.convergence_threshold <= 1:
+        raise ValueError("Tool Refinement convergence threshold must be in [0, 1]")
+    if config.procedural_memory.mode not in {"off", "read", "evolve"}:
+        raise ValueError("Procedural Memory mode must be one of: off, read, evolve")
+    if config.procedural_memory.top_k < 1:
+        raise ValueError("Procedural Memory top-k must be >= 1")
+    if config.procedural_memory.token_budget < 100:
+        raise ValueError("Procedural Memory token budget must be >= 100")
+    if config.procedural_memory.max_skill_age < 1:
+        raise ValueError("Procedural Memory maximum skill age must be >= 1")
+    if config.procedural_memory.pool_size < 1:
+        raise ValueError("Procedural Memory pool size must be >= 1")
+    if config.procedural_memory.evolution_threshold < 1:
+        raise ValueError("Procedural Memory update threshold must be >= 1")
+    if config.procedural_memory.best_of_n < 1:
+        raise ValueError("Procedural Memory best-of-N must be >= 1")
+    if config.procedural_memory.ppo_epsilon < 0:
+        raise ValueError("Procedural Memory PPO epsilon must be >= 0")
+    if config.procedural_memory.enabled and agent_type not in LANGGRAPH_DIAGNOSIS_AGENT_TYPES:
         supported = ", ".join(sorted(LANGGRAPH_DIAGNOSIS_AGENT_TYPES))
-        raise ValueError(f"memory is supported only for these workflows: {supported}")
+        raise ValueError(
+            f"Procedural Memory is supported only for these workflows: {supported}"
+        )
 
 
 def validate_agent_composition(config: AgentRunConfig) -> None:
@@ -100,4 +117,3 @@ def validate_agent_composition(config: AgentRunConfig) -> None:
     if not config.session_id:
         raise ValueError("session_id is required to construct an agent")
     validate_agent_extensions(config)
-

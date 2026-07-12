@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from agent.memory.models import MemoryAttributes
+from agent.procedural_memory.models import ProceduralMemoryAttributes
 
 
 PROTOCOL_KEYWORDS = {
@@ -70,19 +70,19 @@ def _attribute_text(text: str) -> str:
     return raw
 
 
-def infer_memory_attributes(
+def infer_procedural_memory_attributes(
     text: str,
     *,
     scenario: str = "",
     topology_class: str = "",
     task_stage: str = "diagnosis",
     tools: list[str] | None = None,
-) -> MemoryAttributes:
+) -> ProceduralMemoryAttributes:
     # Scenario/topology names are stored separately and should not leak broad,
     # always-present design facts (for example OSPF/DHCP in every enterprise
     # task) into the transfer signature.
     haystack = " ".join([_attribute_text(text), " ".join(tools or [])]).lower()
-    return MemoryAttributes(
+    return ProceduralMemoryAttributes(
         protocols=_matches(haystack, PROTOCOL_KEYWORDS),
         services=_matches(haystack, SERVICE_KEYWORDS),
         symptoms=_matches(haystack, SYMPTOM_KEYWORDS),

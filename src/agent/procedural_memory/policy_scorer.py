@@ -14,7 +14,7 @@ from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, Field
 
-from agent.memory.models import ProceduralSkill, SkillExperience
+from agent.procedural_memory.models import ProceduralSkill, SkillExperience
 
 
 class PolicyReplayItem(BaseModel):
