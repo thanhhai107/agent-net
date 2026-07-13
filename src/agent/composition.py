@@ -20,6 +20,11 @@ class ToolRefinementConfig:
     library_id: str = "default"
     tool_doc_chars: int = 500
     convergence_threshold: float = 0.75
+    exploration_similarity_threshold: float = 0.9
+    explorer_reflection_limit: int = 3
+    explorer_model: str = ""
+    analyzer_model: str = ""
+    rewriter_model: str = ""
 
 
 @dataclass(frozen=True)
@@ -34,6 +39,13 @@ class ProceduralMemoryConfig:
     best_of_n: int = 3
     ppo_epsilon: float = 0.2
     selection_epsilon: float = 0.3
+    experience_pool_size: int = 1000
+    golden_pool_size: int = 20
+    baseline_ema_alpha: float = 0.1
+    selection_epsilon_decay_cases: int = 500
+    acceptance_margin: float = 0.001
+    evolver_model: str = ""
+    policy_scorer_model: str = ""
 
     @property
     def enabled(self) -> bool:
@@ -91,6 +103,10 @@ def validate_agent_extensions(config: AgentRunConfig) -> None:
         raise ValueError("Tool Refinement documentation size must be >= 100")
     if not 0 <= config.tool_refinement.convergence_threshold <= 1:
         raise ValueError("Tool Refinement convergence threshold must be in [0, 1]")
+    if not 0 <= config.tool_refinement.exploration_similarity_threshold <= 1:
+        raise ValueError("Tool Refinement exploration similarity must be in [0, 1]")
+    if config.tool_refinement.explorer_reflection_limit < 0:
+        raise ValueError("Tool Refinement reflection limit must be >= 0")
     if config.procedural_memory.mode not in {"off", "read", "evolve"}:
         raise ValueError("Procedural Memory mode must be one of: off, read, evolve")
     if config.procedural_memory.top_k < 1:
@@ -109,6 +125,16 @@ def validate_agent_extensions(config: AgentRunConfig) -> None:
         raise ValueError("Procedural Memory PPO epsilon must be in [0, 1]")
     if not 0 <= config.procedural_memory.selection_epsilon <= 1:
         raise ValueError("Procedural Memory selection epsilon must be in [0, 1]")
+    if config.procedural_memory.experience_pool_size < 1:
+        raise ValueError("Procedural Memory experience pool size must be >= 1")
+    if config.procedural_memory.golden_pool_size < 1:
+        raise ValueError("Procedural Memory golden pool size must be >= 1")
+    if not 0 < config.procedural_memory.baseline_ema_alpha <= 1:
+        raise ValueError("Procedural Memory baseline EMA alpha must be in (0, 1]")
+    if config.procedural_memory.selection_epsilon_decay_cases < 1:
+        raise ValueError("Procedural Memory epsilon decay cases must be >= 1")
+    if config.procedural_memory.acceptance_margin < 0:
+        raise ValueError("Procedural Memory acceptance margin must be >= 0")
     if (
         config.procedural_memory.enabled
         and agent_type not in LANGGRAPH_DIAGNOSIS_AGENT_TYPES

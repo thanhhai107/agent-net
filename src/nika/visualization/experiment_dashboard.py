@@ -11,14 +11,15 @@ from pathlib import Path
 from typing import Any
 
 import streamlit as st
+import yaml
 
+from agent.composition import ProceduralMemoryConfig, ToolRefinementConfig
 from agent.extensions.config import (
     DEFAULT_LLM_PROVIDER as DEFAULT_LLM_BACKEND,
     DEFAULT_MODEL,
 )
 from nika.config import BENCHMARK_DIR, RESULTS_DIR
 from nika.extensions.benchmark import load_custom_benchmark
-from nika.utils.agent_config import resolve_max_steps
 from nika.visualization.experiment_runner import (
     build_command_plan,
     create_run,
@@ -31,7 +32,12 @@ from nika.visualization.experiment_runner import (
     run_status,
     stop_run,
 )
-from nika.workflows.benchmark.run import default_benchmark_yaml_path
+
+
+TOOL_REFINEMENT_DEFAULTS = ToolRefinementConfig()
+PROCEDURAL_MEMORY_DEFAULTS = ProceduralMemoryConfig()
+DEFAULT_STUDIO_BENCHMARK = str(BENCHMARK_DIR / "benchmark_evaluate.yaml")
+DEFAULT_STUDIO_MAX_STEPS = 50
 
 
 st.set_page_config(
@@ -45,106 +51,110 @@ st.markdown(
     """
     <style>
       :root {
-        --ink: #0f172a;
-        --muted: #64748b;
-        --panel: rgba(255, 255, 255, 0.78);
-        --panel-strong: #f1f5f9;
-        --line: rgba(15, 23, 42, 0.08);
-        --cyan: #0ea5e9;
-        --blue: #2563eb;
-        --red: #e11d48;
-        --amber: #d97706;
-        --violet: #7c3aed;
+        --nika-text: var(--text-color, #0f172a);
+        --nika-bg: var(--background-color, #f8fafc);
+        --nika-secondary: var(--secondary-background-color, #f1f5f9);
+        --nika-accent: var(--primary-color, #0ea5e9);
+        --nika-muted: color-mix(in srgb, var(--nika-text) 62%, transparent);
+        --nika-panel: color-mix(in srgb, var(--nika-secondary) 88%, transparent);
+        --nika-elevated: color-mix(in srgb, var(--nika-bg) 82%, var(--nika-secondary));
+        --nika-line: color-mix(in srgb, var(--nika-text) 14%, transparent);
+        --nika-shadow: color-mix(in srgb, var(--nika-text) 10%, transparent);
+        --nika-accent-soft: color-mix(in srgb, var(--nika-accent) 14%, transparent);
+        --nika-accent-text: color-mix(in srgb, var(--nika-accent) 72%, var(--nika-text));
+        --nika-success: #22c55e;
+        --nika-danger: #ef4444;
+        --nika-warning: #f59e0b;
       }
 
       .stApp {
-        background:
-          radial-gradient(circle at 12% 4%, rgba(203, 213, 225, 0.4), transparent 24rem),
-          radial-gradient(circle at 92% 12%, rgba(186, 230, 253, 0.35), transparent 26rem),
-          #f8fafc;
-        color: var(--ink);
+        background: var(--nika-bg);
+        color: var(--nika-text);
       }
       header[data-testid="stHeader"] {display: none !important;}
       .block-container {max-width: 1480px; padding: 2.8rem 2rem 4rem !important;}
       section[data-testid="stSidebar"] {
-        background: rgba(241, 245, 249, 0.96);
-        border-right: 1px solid var(--line);
+        background: var(--nika-secondary);
+        border-right: 1px solid var(--nika-line);
       }
       section[data-testid="stSidebar"] .block-container {padding: 1.35rem 1.15rem;}
       h1, h2, h3 {letter-spacing: -.025em;}
       h1 {font-size: clamp(2rem, 3vw, 3.15rem) !important; line-height: 1.05 !important;}
       h2 {font-size: 1.28rem !important;}
-      h3 {font-size: 1.02rem !important; color: #334155 !important;}
+      h3 {font-size: 1.02rem !important; color: var(--nika-text) !important;}
 
       .section-card {
-        border:1px solid var(--line); border-radius:12px; padding:1.2rem;
-        background:var(--panel); margin:.55rem 0 1rem;
-        box-shadow:0 14px 35px rgba(15, 23, 42, 0.04);
+        border:1px solid var(--nika-line); border-radius:12px; padding:1.2rem;
+        background:var(--nika-panel); margin:.55rem 0 1rem;
+        box-shadow:0 14px 35px var(--nika-shadow);
       }
       .section-title {
-        color: #1e293b; font-weight: 750; font-size: 1.1rem; margin: 1.2rem 0 .9rem;
+        color: var(--nika-text); font-weight: 750; font-size: 1.1rem; margin: 1.2rem 0 .9rem;
       }
       .mini-grid {display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:.55rem;}
       .mini-item {
-        border:1px solid var(--line); border-radius:12px; background:rgba(255, 255, 255, 0.7);
+        border:1px solid var(--nika-line); border-radius:12px; background:var(--nika-elevated);
         padding:.55rem .65rem; min-height:58px;
       }
-      .mini-label {font-size:.7rem; color:var(--muted); font-weight:700;}
-      .mini-value {font-size:.82rem; color:#1e293b; font-weight:750; overflow-wrap:anywhere;}
+      .mini-label {font-size:.7rem; color:var(--nika-muted); font-weight:700;}
+      .mini-value {font-size:.82rem; color:var(--nika-text); font-weight:750; overflow-wrap:anywhere;}
 
       .status-pill {
         display:inline-flex; align-items:center; gap:.45rem; padding:.34rem .65rem;
-        border:1px solid var(--line); border-radius:999px; color:#b9c7d9;
-        background:rgba(255,255,255,.7); font-size:.78rem; font-weight:700;
+        border:1px solid var(--nika-line); border-radius:999px; color:var(--nika-text);
+        background:var(--nika-elevated); font-size:.78rem; font-weight:700;
       }
       .status-dot {width:7px; height:7px; border-radius:50%; background:#8a98aa;}
-      .status-running .status-dot {background:#10b981; box-shadow:0 0 12px rgba(16,185,129,.45);}
+      .status-running .status-dot {background:var(--nika-success); box-shadow:0 0 12px color-mix(in srgb, var(--nika-success) 45%, transparent);}
       .status-finished .status-dot {background:#3b82f6;}
-      .status-failed .status-dot {background:#ff647c; box-shadow:0 0 12px rgba(255,100,124,.65);}
-      .status-queued .status-dot {background:#ffb454; box-shadow:0 0 12px rgba(255,180,84,.65);}
+      .status-failed .status-dot {background:var(--nika-danger); box-shadow:0 0 12px color-mix(in srgb, var(--nika-danger) 55%, transparent);}
+      .status-queued .status-dot {background:var(--nika-warning); box-shadow:0 0 12px color-mix(in srgb, var(--nika-warning) 55%, transparent);}
 
       [data-testid="stMetric"] {
         min-height: 112px;
-        border: 1px solid var(--line);
+        border: 1px solid var(--nika-line);
         border-radius: 16px;
         padding: 17px 18px;
-        background: linear-gradient(145deg, rgba(255, 255, 255, 0.95), rgba(241, 245, 249, 0.9));
-        box-shadow: 0 12px 35px rgba(15, 23, 42, 0.04);
+        background: var(--nika-elevated);
+        box-shadow: 0 12px 35px var(--nika-shadow);
       }
-      [data-testid="stMetricLabel"] {color: var(--muted); font-size: .78rem;}
-      [data-testid="stMetricValue"] {color: var(--ink); font-weight: 700;}
+      [data-testid="stMetricLabel"] {color: var(--nika-muted); font-size: .78rem;}
+      [data-testid="stMetricValue"] {color: var(--nika-text); font-weight: 700;}
 
       [data-testid="stTabs"] {
-        border: 1px solid var(--line) !important;
-        border-radius: 16px !important;
-        background: var(--panel) !important;
-        padding: 1.2rem !important;
-        box-shadow: 0 10px 30px rgba(15, 23, 42, 0.03) !important;
+        border: none !important;
+        background: transparent !important;
+        padding: 0px !important;
+        box-shadow: none !important;
       }
       [data-testid="stTabs"] [data-baseweb="tab-list"] {
-        gap: .35rem; background: rgba(241, 245, 249, 0.85); border: 1px solid var(--line);
-        border-radius: 12px; padding: .32rem; margin: 0 0 1rem 0 !important;
+        gap: 1.5rem; background: transparent; border: none;
+        border-bottom: 1px solid var(--nika-line);
+        border-radius: 0px; padding: 0px; margin: 0 0 1rem 0 !important;
       }
       [data-testid="stTabs"] [data-baseweb="tab-panel"] {
         padding-top: 0px !important;
         padding-bottom: 0px !important;
       }
       [data-testid="stTabs"] [data-baseweb="tab"] {
-        height: 42px; border-radius: 10px; padding: 0 1.2rem;
-        color: var(--muted);
+        height: auto; border-radius: 0px; padding: 0.5rem 0;
+        background: transparent !important;
+        color: var(--nika-muted);
+        border-bottom: 2px solid transparent !important;
       }
       [data-testid="stTabs"] [aria-selected="true"] {
-        background: rgba(14, 165, 233, 0.1); color: #0284c7;
+        background: transparent !important; color: var(--nika-accent-text);
+        border-bottom: 2px solid var(--nika-accent) !important;
       }
       div[data-baseweb="tab-border"] {
         display: none !important;
       }
       [data-testid="stDataFrame"] {
-        border: 1px solid var(--line); border-radius: 14px; overflow: hidden;
+        border: 1px solid var(--nika-line); border-radius: 14px; overflow: hidden;
       }
       [data-testid="stExpander"] {
-        border: 1px solid var(--line); border-radius: 13px;
-        background: rgba(255, 255, 255, 0.7);
+        border: 1px solid var(--nika-line); border-radius: 13px;
+        background: var(--nika-panel);
       }
 
       div[data-testid="stCheckbox"] label {font-weight:700;}
@@ -179,15 +189,15 @@ st.markdown(
 
       /* Secondary button styling */
       button[data-testid="baseButton-secondary"], .stDownloadButton > button {
-        border: 1px solid rgba(14, 165, 233, .28) !important;
-        background: rgba(14, 165, 233, .08) !important;
-        color: #0284c7 !important;
+        border: 1px solid color-mix(in srgb, var(--nika-accent) 38%, transparent) !important;
+        background: var(--nika-accent-soft) !important;
+        color: var(--nika-accent-text) !important;
         transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1) !important;
       }
       button[data-testid="baseButton-secondary"]:hover, .stDownloadButton > button:hover {
-        border-color: #0ea5e9 !important;
-        color: #0369a1 !important;
-        background: rgba(14, 165, 233, .15) !important;
+        border-color: var(--nika-accent) !important;
+        color: var(--nika-accent-text) !important;
+        background: color-mix(in srgb, var(--nika-accent) 22%, transparent) !important;
         transform: translateY(-1.5px);
         box-shadow: 0 6px 20px rgba(14, 165, 233, 0.15) !important;
       }
@@ -206,40 +216,40 @@ st.markdown(
         box-shadow: 0 6px 20px rgba(37, 99, 235, 0.24) !important;
       }
       div.st-key-studio_resume_button button {
-        border: 1px solid rgba(217, 119, 6, .38) !important;
-        background: rgba(251, 191, 36, .18) !important;
-        color: #b45309 !important;
+        border: 1px solid color-mix(in srgb, var(--nika-warning) 48%, transparent) !important;
+        background: color-mix(in srgb, var(--nika-warning) 16%, transparent) !important;
+        color: color-mix(in srgb, var(--nika-warning) 72%, var(--nika-text)) !important;
       }
       div.st-key-studio_resume_button button:hover {
-        border-color: #d97706 !important;
-        background: rgba(251, 191, 36, .28) !important;
-        color: #92400e !important;
+        border-color: var(--nika-warning) !important;
+        background: color-mix(in srgb, var(--nika-warning) 25%, transparent) !important;
+        color: color-mix(in srgb, var(--nika-warning) 72%, var(--nika-text)) !important;
         box-shadow: 0 6px 20px rgba(217, 119, 6, 0.18) !important;
       }
       div.st-key-studio_stop_button button {
-        border: 1px solid rgba(220, 38, 38, .38) !important;
-        background: rgba(239, 68, 68, .12) !important;
-        color: #dc2626 !important;
+        border: 1px solid color-mix(in srgb, var(--nika-danger) 48%, transparent) !important;
+        background: color-mix(in srgb, var(--nika-danger) 14%, transparent) !important;
+        color: color-mix(in srgb, var(--nika-danger) 76%, var(--nika-text)) !important;
       }
       div.st-key-studio_stop_button button:hover {
-        border-color: #b91c1c !important;
-        background: rgba(239, 68, 68, .22) !important;
-        color: #b91c1c !important;
+        border-color: var(--nika-danger) !important;
+        background: color-mix(in srgb, var(--nika-danger) 24%, transparent) !important;
+        color: color-mix(in srgb, var(--nika-danger) 76%, var(--nika-text)) !important;
         box-shadow: 0 6px 20px rgba(239, 68, 68, 0.18) !important;
       }
 
       div[data-testid="stCodeBlock"] {
-        border: 2px solid var(--cyan) !important;
+        border: 2px solid var(--nika-accent) !important;
         border-radius: 12px !important;
-        background: #f0f9ff !important;
+        background: var(--nika-secondary) !important;
         box-shadow: 0 4px 18px rgba(14, 165, 233, 0.14) !important;
       }
       textarea {
         font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important;
         font-size:.78rem !important;
-        background-color: #f8fafc !important;
-        color: var(--ink) !important;
-        border: 1px solid var(--line) !important;
+        background-color: var(--nika-secondary) !important;
+        color: var(--nika-text) !important;
+        border: 1px solid var(--nika-line) !important;
       }
 
       .nika-brand {display:flex; align-items:center; gap:.75rem; margin:.2rem 0 1.6rem;}
@@ -248,28 +258,28 @@ st.markdown(
         color:#ffffff; background:linear-gradient(135deg,#38bdf8,#0284c7);
         font-size:1.15rem; font-weight:900; box-shadow:0 0 24px rgba(14, 165, 233, .2);
       }
-      .nika-brand-title {font-size:1.05rem; font-weight:800; letter-spacing:.08em; color: #0f172a;}
-      .nika-brand-sub {font-size:.72rem; color:var(--muted); letter-spacing:.04em;}
+      .nika-brand-title {font-size:1.05rem; font-weight:800; letter-spacing:.08em; color: var(--nika-text);}
+      .nika-brand-sub {font-size:.72rem; color:var(--nika-muted); letter-spacing:.04em;}
 
       .eyebrow {
-        color:#0284c7; font-size:.74rem; font-weight:800; letter-spacing:.14em;
+        color:var(--nika-accent-text); font-size:.74rem; font-weight:800; letter-spacing:.14em;
         text-transform:uppercase; margin-bottom:.55rem;
       }
 
       /* Custom styling for multiselect tags */
       div[data-baseweb="tag"] {
-        background-color: rgba(14, 165, 233, .08) !important;
-        border: 1px solid rgba(14, 165, 233, .2) !important;
+        background-color: var(--nika-accent-soft) !important;
+        border: 1px solid color-mix(in srgb, var(--nika-accent) 28%, transparent) !important;
         border-radius: 6px !important;
-        color: #0369a1 !important;
+        color: var(--nika-accent-text) !important;
         padding: 2px 8px !important;
       }
       div[data-baseweb="tag"] span {
-        color: #0369a1 !important;
+        color: var(--nika-accent-text) !important;
         font-weight: 600 !important;
       }
       div[data-baseweb="tag"] svg {
-        fill: #0369a1 !important;
+        fill: var(--nika-accent-text) !important;
       }
       @media (max-width: 900px) {.mini-grid {grid-template-columns:1fr 1fr;}}
     </style>
@@ -279,7 +289,7 @@ st.markdown(
 
 
 def _benchmark_path_from_name(value: str) -> Path:
-    raw = value.strip() or Path(default_benchmark_yaml_path()).stem
+    raw = value.strip() or Path(DEFAULT_STUDIO_BENCHMARK).stem
     path = Path(raw).expanduser()
     if path.is_absolute() or path.parent != Path("."):
         return path if path.suffix in {".yaml", ".yml"} else path.with_suffix(".yaml")
@@ -289,6 +299,15 @@ def _benchmark_path_from_name(value: str) -> Path:
 
 def _count_rows(path: Path) -> int:
     return len(load_custom_benchmark(path))
+
+
+def _default_evolve_cases(path: Path, *, row_count: int) -> int:
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    configured = data.get("evolve_first_cases") if isinstance(data, dict) else None
+    if isinstance(configured, int) and not isinstance(configured, bool):
+        if 0 <= configured <= row_count:
+            return configured
+    return row_count
 
 
 def _status_html(status: str) -> str:
@@ -1041,9 +1060,9 @@ def _case_event_html(
     return (
         f"<div style='{style}; color: {color};'>"
         f"<b>[Case {index}]</b> {verb}: "
-        f"<code style='font-size: 0.75rem; background: #f1f5f9; "
+        f"<code style='font-size: 0.75rem; background: var(--nika-secondary); "
         f"padding: 2px 4px; border-radius: 4px;'>{case_summary}</code>"
-        f"<div style='margin-top: 2px; color: #64748b;'>inject: "
+        f"<div style='margin-top: 2px; color: var(--nika-muted);'>inject: "
         f"<code style='font-size: 0.75rem;'>{inject_summary}</code></div>"
         f"</div>"
     )
@@ -1068,7 +1087,7 @@ st.markdown(
 
 st.markdown('<div class="section-title">Studio</div>', unsafe_allow_html=True)
 
-with st.expander("Baseline Settings", expanded=True):
+with st.expander("Baseline Settings", expanded=False):
     b_col1, b_col2, b_col3 = st.columns([1.2, 1, 1.5], gap="small")
     with b_col1:
         agent_type = st.selectbox("Workflow", ["react", "plan-execute", "reflexion"])
@@ -1088,23 +1107,30 @@ with st.expander("Baseline Settings", expanded=True):
     with b_col4:
         benchmark_name = st.text_input(
             "Benchmark",
-            value=Path(default_benchmark_yaml_path()).stem,
+            value=Path(DEFAULT_STUDIO_BENCHMARK).stem,
         )
         benchmark_path = _benchmark_path_from_name(benchmark_name)
         benchmark_error: str | None = None
         try:
             row_count = _count_rows(benchmark_path)
+            default_evolve_cases = _default_evolve_cases(
+                benchmark_path,
+                row_count=row_count,
+            )
         except FileNotFoundError:
             row_count = None
+            default_evolve_cases = 0
             benchmark_error = f"Benchmark YAML not found: {benchmark_path}"
         except OSError as exc:
             row_count = None
+            default_evolve_cases = 0
             benchmark_error = f"Cannot read benchmark YAML: {exc}"
         except ValueError as exc:
             row_count = None
+            default_evolve_cases = 0
             benchmark_error = f"Invalid benchmark YAML: {exc}"
     with b_col5:
-        default_max_steps = resolve_max_steps(None)
+        default_max_steps = DEFAULT_STUDIO_MAX_STEPS
         max_steps_str = st.text_input("Steps", value=str(default_max_steps))
         max_steps = int(max_steps_str) if max_steps_str.isdigit() else default_max_steps
     with b_col6:
@@ -1115,6 +1141,20 @@ with st.expander("Baseline Settings", expanded=True):
             value=3,
             disabled=agent_type != "reflexion",
         )
+
+    st.markdown("<div style='margin-top: 1rem;'></div>", unsafe_allow_html=True)
+    e_col1, e_col2, e_col3 = st.columns([1.2, 1, 1.5], gap="small")
+    with e_col1:
+        st.markdown(
+            "<div style='margin-top: 2rem;'></div>", unsafe_allow_html=True
+        )  # aligns checkbox vertically with text_inputs
+        run_judge = st.checkbox("Run LLM judge", value=False)
+    with e_col2:
+        judge_backend = st.text_input(
+            "Judge backend", value=llm_backend, disabled=not run_judge
+        )
+    with e_col3:
+        judge_model = st.text_input("Judge model", value=model, disabled=not run_judge)
 
 st.markdown("<div style='margin-top: 0.5rem;'></div>", unsafe_allow_html=True)
 col_modules = st.columns(2, gap="medium")
@@ -1134,31 +1174,65 @@ with col_modules[0]:
             )
         with t_col2:
             tool_doc_chars = st.number_input(
-                "Tool doc chars",
+                "Documentation budget (chars)",
                 min_value=100,
-                max_value=2000,
-                value=500,
+                max_value=4000,
+                value=TOOL_REFINEMENT_DEFAULTS.tool_doc_chars,
                 step=50,
                 disabled=not tool_selected,
             )
 
         tool_convergence_threshold = st.number_input(
-            "Convergence",
+            "Convergence threshold",
             min_value=0.0,
             max_value=1.0,
-            value=0.75,
+            value=TOOL_REFINEMENT_DEFAULTS.convergence_threshold,
             step=0.05,
+            format="%.2f",
             disabled=not tool_selected,
         )
+        t_col3, t_col4 = st.columns(2, gap="small")
+        with t_col3:
+            tool_exploration_similarity_threshold = st.number_input(
+                "Exploration similarity threshold",
+                min_value=0.0,
+                max_value=1.0,
+                value=(TOOL_REFINEMENT_DEFAULTS.exploration_similarity_threshold),
+                step=0.05,
+                format="%.2f",
+                disabled=not tool_selected,
+            )
+        with t_col4:
+            tool_explorer_reflection_limit = st.number_input(
+                "Explorer reflection limit",
+                min_value=0,
+                max_value=20,
+                value=TOOL_REFINEMENT_DEFAULTS.explorer_reflection_limit,
+                disabled=not tool_selected,
+            )
+        t_col5, t_col6, t_col7 = st.columns(3, gap="small")
+        with t_col5:
+            tool_explorer_model = st.text_input(
+                "Explorer model", value=model, disabled=not tool_selected
+            )
+        with t_col6:
+            tool_analyzer_model = st.text_input(
+                "Analyzer model", value=model, disabled=not tool_selected
+            )
+        with t_col7:
+            tool_rewriter_model = st.text_input(
+                "Rewriter model", value=model, disabled=not tool_selected
+            )
 
 with col_modules[1]:
     with st.expander("Procedural Memory Settings", expanded=False):
         procedural_memory_selected = st.checkbox(
-            "Enable Procedural Memory", value=False
+            "Enable Procedural Memory",
+            value=False,
         )
         st.markdown("<div style='margin-top: 0.5rem;'></div>", unsafe_allow_html=True)
 
-        m_col1, m_col2, m_col3 = st.columns([1.5, 1, 1.2], gap="small")
+        m_col1, m_col2, m_col3, m_col4 = st.columns([1.5, 1, 1.2, 1.1], gap="small")
         with m_col1:
             procedural_memory_bank = st.text_input(
                 "Procedural Memory bank",
@@ -1168,73 +1242,148 @@ with col_modules[1]:
             )
         with m_col2:
             procedural_memory_k = st.number_input(
-                "Procedural Memory top-k",
+                "Retrieval candidates",
                 min_value=1,
                 max_value=20,
-                value=5,
+                value=PROCEDURAL_MEMORY_DEFAULTS.top_k,
                 disabled=not procedural_memory_selected,
             )
         with m_col3:
             procedural_memory_tokens = st.number_input(
-                "Procedural Memory tokens",
+                "Retrieval token budget",
                 min_value=100,
                 max_value=8000,
-                value=1500,
+                value=PROCEDURAL_MEMORY_DEFAULTS.token_budget,
                 step=100,
                 disabled=not procedural_memory_selected,
             )
-
-        m_col4, m_col5 = st.columns(2, gap="small")
         with m_col4:
+            procedural_memory_evolve_until = st.number_input(
+                "Evolve first cases",
+                min_value=0,
+                max_value=max(int(row_count or 0), 1),
+                value=int(default_evolve_cases),
+                step=1,
+                disabled=not procedural_memory_selected or row_count is None,
+            )
+
+        m_col5, m_col6 = st.columns(2, gap="small")
+        with m_col5:
             procedural_memory_max_skill_age = st.number_input(
-                "Skill max age",
+                "Max actions / activation",
                 min_value=1,
-                max_value=20,
-                value=8,
+                max_value=100,
+                value=PROCEDURAL_MEMORY_DEFAULTS.max_skill_age,
                 disabled=not procedural_memory_selected,
             )
 
-        with m_col5:
+        with m_col6:
             procedural_memory_pool_size = st.number_input(
-                "Skill pool",
+                "Skill pool capacity",
                 min_value=1,
-                max_value=200,
-                value=32,
+                max_value=512,
+                value=PROCEDURAL_MEMORY_DEFAULTS.pool_size,
                 disabled=not procedural_memory_selected,
             )
 
         m_col10, m_col11, m_col12, m_col13 = st.columns(4, gap="small")
         with m_col10:
             procedural_memory_update_threshold = st.number_input(
-                "Update samples",
+                "Trajectories / update",
                 min_value=1,
-                max_value=50,
-                value=6,
+                max_value=100,
+                value=PROCEDURAL_MEMORY_DEFAULTS.evolution_threshold,
                 disabled=not procedural_memory_selected,
             )
         with m_col11:
             procedural_memory_best_of_n = st.number_input(
-                "Best of N",
+                "PPO candidates",
                 min_value=1,
                 max_value=20,
-                value=3,
+                value=PROCEDURAL_MEMORY_DEFAULTS.best_of_n,
                 disabled=not procedural_memory_selected,
             )
         with m_col12:
             procedural_memory_ppo_epsilon = st.number_input(
-                "PPO epsilon",
+                "PPO clip epsilon",
                 min_value=0.0,
-                value=0.2,
+                max_value=1.0,
+                value=PROCEDURAL_MEMORY_DEFAULTS.ppo_epsilon,
                 step=0.05,
+                format="%.2f",
                 disabled=not procedural_memory_selected,
             )
         with m_col13:
             procedural_memory_selection_epsilon = st.number_input(
-                "Selection epsilon",
+                "Exploration epsilon",
                 min_value=0.0,
                 max_value=1.0,
-                value=0.3,
+                value=PROCEDURAL_MEMORY_DEFAULTS.selection_epsilon,
                 step=0.05,
+                format="%.2f",
+                disabled=not procedural_memory_selected,
+            )
+
+        m_col14, m_col15, m_col16 = st.columns(3, gap="small")
+        with m_col14:
+            procedural_memory_experience_pool_size = st.number_input(
+                "Experience buffer",
+                min_value=1,
+                max_value=10000,
+                value=PROCEDURAL_MEMORY_DEFAULTS.experience_pool_size,
+                step=100,
+                disabled=not procedural_memory_selected,
+            )
+        with m_col15:
+            procedural_memory_golden_pool_size = st.number_input(
+                "Golden buffer",
+                min_value=1,
+                max_value=1000,
+                value=PROCEDURAL_MEMORY_DEFAULTS.golden_pool_size,
+                disabled=not procedural_memory_selected,
+            )
+        with m_col16:
+            procedural_memory_epsilon_decay_cases = st.number_input(
+                "Exploration decay cases",
+                min_value=1,
+                max_value=10000,
+                value=PROCEDURAL_MEMORY_DEFAULTS.selection_epsilon_decay_cases,
+                step=50,
+                disabled=not procedural_memory_selected,
+            )
+
+        m_col17, m_col18 = st.columns(2, gap="small")
+        with m_col17:
+            procedural_memory_baseline_ema_alpha = st.number_input(
+                "Baseline EMA alpha",
+                min_value=0.01,
+                max_value=1.0,
+                value=PROCEDURAL_MEMORY_DEFAULTS.baseline_ema_alpha,
+                step=0.01,
+                format="%.2f",
+                disabled=not procedural_memory_selected,
+            )
+        with m_col18:
+            procedural_memory_acceptance_margin = st.number_input(
+                "PPO acceptance margin",
+                min_value=0.0,
+                max_value=1.0,
+                value=PROCEDURAL_MEMORY_DEFAULTS.acceptance_margin,
+                step=0.001,
+                format="%.3f",
+                disabled=not procedural_memory_selected,
+            )
+        m_col19, m_col20 = st.columns(2, gap="small")
+        with m_col19:
+            procedural_memory_evolver_model = st.text_input(
+                "Critic / Evolver model",
+                value=model,
+                disabled=not procedural_memory_selected,
+            )
+        with m_col20:
+            procedural_memory_policy_scorer_model = st.text_input(
+                "PPO policy scorer model",
+                value=model,
                 disabled=not procedural_memory_selected,
             )
 
@@ -1243,18 +1392,6 @@ if tool_selected:
     modules.append("tool_refinement")
 if procedural_memory_selected:
     modules.append("procedural_memory")
-
-# Evaluation Settings
-st.markdown("<div style='margin-top: 0.5rem;'></div>", unsafe_allow_html=True)
-with st.expander("Evaluation Settings", expanded=False):
-    run_judge = st.checkbox("Run LLM judge", value=False)
-    e_col1, e_col2 = st.columns(2, gap="small")
-    with e_col1:
-        judge_backend = st.text_input(
-            "Judge backend", value=llm_backend, disabled=not run_judge
-        )
-    with e_col2:
-        judge_model = st.text_input("Judge model", value=model, disabled=not run_judge)
 
 config = {
     "benchmark_file": str(benchmark_path),
@@ -1268,7 +1405,15 @@ config = {
     "tool_library_id": tool_library_id,
     "tool_doc_chars": int(tool_doc_chars),
     "tool_convergence_threshold": float(tool_convergence_threshold),
+    "tool_exploration_similarity_threshold": float(
+        tool_exploration_similarity_threshold
+    ),
+    "tool_explorer_reflection_limit": int(tool_explorer_reflection_limit),
+    "tool_explorer_model": tool_explorer_model,
+    "tool_analyzer_model": tool_analyzer_model,
+    "tool_rewriter_model": tool_rewriter_model,
     "procedural_memory_bank": procedural_memory_bank,
+    "procedural_memory_evolve_until": int(procedural_memory_evolve_until),
     "procedural_memory_k": int(procedural_memory_k),
     "procedural_memory_tokens": int(procedural_memory_tokens),
     "procedural_memory_max_skill_age": int(procedural_memory_max_skill_age),
@@ -1277,6 +1422,17 @@ config = {
     "procedural_memory_best_of_n": int(procedural_memory_best_of_n),
     "procedural_memory_ppo_epsilon": float(procedural_memory_ppo_epsilon),
     "procedural_memory_selection_epsilon": float(procedural_memory_selection_epsilon),
+    "procedural_memory_experience_pool_size": int(
+        procedural_memory_experience_pool_size
+    ),
+    "procedural_memory_golden_pool_size": int(procedural_memory_golden_pool_size),
+    "procedural_memory_baseline_ema_alpha": float(procedural_memory_baseline_ema_alpha),
+    "procedural_memory_selection_epsilon_decay_cases": int(
+        procedural_memory_epsilon_decay_cases
+    ),
+    "procedural_memory_acceptance_margin": float(procedural_memory_acceptance_margin),
+    "procedural_memory_evolver_model": procedural_memory_evolver_model,
+    "procedural_memory_policy_scorer_model": (procedural_memory_policy_scorer_model),
     "run_judge": bool(run_judge),
     "judge_backend": judge_backend,
     "judge_model": judge_model,
@@ -1284,28 +1440,28 @@ config = {
 prepared_config = prepare_experiment_config(config)
 plan = build_command_plan(prepared_config)
 
-# Renders the commands directly under the Current Config grid with a top spacing
 st.markdown('<div style="margin-top: 1rem;"></div>', unsafe_allow_html=True)
-for item in plan:
+with st.expander("Command Preview", expanded=False):
+    for item in plan:
 
-    def format_command_multiline(cmd_parts: list[str]) -> str:
-        if not cmd_parts:
-            return ""
-        lines = []
-        current_line = []
-        for i, part in enumerate(cmd_parts):
-            quoted = shlex.quote(part)
-            if part.startswith("-") and i >= 3:
-                if current_line:
-                    lines.append(" ".join(current_line))
-                current_line = [quoted]
-            else:
-                current_line.append(quoted)
-        if current_line:
-            lines.append(" ".join(current_line))
-        return " \\\n  ".join(lines)
+        def format_command_multiline(cmd_parts: list[str]) -> str:
+            if not cmd_parts:
+                return ""
+            lines = []
+            current_line = []
+            for i, part in enumerate(cmd_parts):
+                quoted = shlex.quote(part)
+                if part.startswith("-") and i >= 3:
+                    if current_line:
+                        lines.append(" ".join(current_line))
+                    current_line = [quoted]
+                else:
+                    current_line.append(quoted)
+            if current_line:
+                lines.append(" ".join(current_line))
+            return " \\\n  ".join(lines)
 
-    st.code(format_command_multiline(item.command), language="bash")
+        st.code(format_command_multiline(item.command), language="bash")
 
 
 all_runs = list_runs()
@@ -1439,7 +1595,7 @@ if selected is not None:
 
 def format_event_message_html(ev: dict) -> str | None:
     event = ev.get("event")
-    style = "font-size: 0.8rem; padding: 6px 0; border-bottom: 1px solid rgba(15, 23, 42, 0.05); color: #334155; line-height: 1.4;"
+    style = "font-size: 0.8rem; padding: 6px 0; border-bottom: 1px solid var(--nika-line); color: var(--nika-text); line-height: 1.4;"
 
     if event == "ui_step_start":
         cmd = ev.get("command") or ""
@@ -1458,34 +1614,40 @@ def format_event_message_html(ev: dict) -> str | None:
             cmd_str = str(cmd)
         if len(cmd_str) > 80:
             cmd_str = cmd_str[:77] + "..."
-        return f"<div style='{style}'><b>[Step {ev.get('index')}/{ev.get('total')}]</b> Starting: <code style='font-size: 0.75rem; background: #f1f5f9; padding: 2px 4px; border-radius: 4px;'>{cmd_str}</code></div>"
+        return f"<div style='{style}'><b>[Step {ev.get('index')}/{ev.get('total')}]</b> Starting: <code style='font-size: 0.75rem; background: var(--nika-secondary); padding: 2px 4px; border-radius: 4px;'>{cmd_str}</code></div>"
     elif event == "ui_step_done":
         ret = ev.get("returncode", "0")
         status_word = "Completed" if str(ret) == "0" else "Failed"
-        color = "#16a34a" if str(ret) == "0" else "#dc2626"
+        color = "var(--nika-success)" if str(ret) == "0" else "var(--nika-danger)"
         return f"<div style='{style}'><b>[Step {ev.get('index')}/{ev.get('total')}]</b> <span style='color: {color}; font-weight: bold;'>{status_word}</span> (Exit: <code>{ret}</code>)</div>"
     elif event == "ui_run_done":
         code = ev.get("exit_code", "0")
-        return f"<div style='{style}; font-weight: bold; color: #1e293b;'>Run Finished (Exit: <code>{code}</code>)</div>"
+        return f"<div style='{style}; font-weight: bold; color: var(--nika-text);'>Run Finished (Exit: <code>{code}</code>)</div>"
     elif event == "ui_run_resumed":
-        return f"<div style='{style}; color: #2563eb;'><b>Run Resumed</b> in-place with existing results.</div>"
+        return f"<div style='{style}; color: var(--nika-accent-text);'><b>Run Resumed</b> in-place with existing results.</div>"
     elif event == "ui_run_stopped":
-        return f"<div style='{style}; color: #d97706;'><b>Run Stopped</b> by user. Starting next queued run if available.</div>"
+        return f"<div style='{style}; color: var(--nika-warning);'><b>Run Stopped</b> by user. Starting next queued run if available.</div>"
     elif event == "benchmark_start":
-        return _case_event_html(ev, style=style, verb="Starting", color="#334155")
+        return _case_event_html(
+            ev, style=style, verb="Starting", color="var(--nika-text)"
+        )
     elif event == "benchmark_skip":
         return _case_event_html(
             ev,
             style=style,
             verb="Skipped existing result",
-            color="#64748b",
+            color="var(--nika-muted)",
         )
     elif event == "benchmark_progress":
         return None
     elif event == "benchmark_done":
-        return _case_event_html(ev, style=style, verb="Finished", color="#16a34a")
+        return _case_event_html(
+            ev, style=style, verb="Finished", color="var(--nika-success)"
+        )
     elif event == "benchmark_failed":
-        return _case_event_html(ev, style=style, verb="Failed", color="#dc2626")
+        return _case_event_html(
+            ev, style=style, verb="Failed", color="var(--nika-danger)"
+        )
     return None
 
 
@@ -1500,8 +1662,8 @@ with tab_progress:
     pct = int(fraction * 100)
     st.markdown(
         f"""
-        <div style="margin: 0.5rem auto 1rem auto; width: 98%; max-width: 1400px; height: 28px; background-color: rgba(15, 23, 42, 0.06); border-radius: 8px; position: relative; overflow: hidden; display: flex; align-items: center; box-shadow: inset 0 1px 2px rgba(0,0,0,0.06); box-sizing: border-box;">
-          <div style="width: {pct}%; height: 100%; background: linear-gradient(90deg, #0ea5e9, #2563eb); border-radius: 8px; transition: width 0.4s ease;"></div>
+        <div style="margin: 0.5rem 0 1rem 0; width: 100%; height: 28px; background-color: var(--nika-secondary); border: 1px solid var(--nika-line); border-radius: 8px; position: relative; overflow: hidden; display: flex; align-items: center; box-shadow: inset 0 1px 2px var(--nika-shadow); box-sizing: border-box;">
+          <div style="width: {pct}%; height: 100%; background: var(--nika-accent); border-radius: 7px; transition: width 0.4s ease;"></div>
           <div style="position: absolute; width: 100%; text-align: center; left: 0; top: 0; line-height: 28px; font-size: 0.82rem; font-weight: 800; color: #ffffff; text-shadow: 0 1.5px 4px rgba(0, 0, 0, 0.95); z-index: 2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0 12px; box-sizing: border-box; pointer-events: none; letter-spacing: 0.02em;">
             {progress_label} ({pct}%)
           </div>
@@ -1520,7 +1682,7 @@ with tab_progress:
         st.markdown('<div style="margin-top: 0.8rem;"></div>', unsafe_allow_html=True)
         # Render HTML block with all events inside to snapping them perfectly
         st.markdown(
-            f"<div style='border: 1px solid rgba(15, 23, 42, 0.08); border-radius: 10px; padding: 0.2rem 0.8rem; background: #ffffff;'>{''.join(formatted_msgs[-12:])}</div>",
+            f"<div style='border: 1px solid var(--nika-line); border-radius: 10px; padding: 0.2rem 0.8rem; background: var(--nika-panel);'>{''.join(formatted_msgs[-12:])}</div>",
             unsafe_allow_html=True,
         )
 

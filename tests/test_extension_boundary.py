@@ -28,7 +28,7 @@ def _config(*, procedural_memory_mode: str = "off") -> AgentRunConfig:
     return AgentRunConfig(
         agent_type="byo.langgraph",
         llm_provider="custom",
-        model="openai/gpt-oss-20b",
+        model="openai/gpt-oss-120b",
         max_steps=20,
         procedural_memory=ProceduralMemoryConfig(mode=procedural_memory_mode),
     )
@@ -119,7 +119,7 @@ def test_learning_module_failure_does_not_block_other_update(
     config = AgentRunConfig(
         agent_type="react",
         llm_provider="custom",
-        model="openai/gpt-oss-20b",
+        model="openai/gpt-oss-120b",
         max_steps=20,
         tool_refinement=ToolRefinementConfig(enabled=True),
         procedural_memory=ProceduralMemoryConfig(mode="evolve"),
@@ -158,7 +158,7 @@ def test_baseline_factory_constructs_original_agent(monkeypatch) -> None:
         {
             "session_id": "",
             "llm_provider": "custom",
-            "model": "openai/gpt-oss-20b",
+            "model": "openai/gpt-oss-120b",
             "max_steps": 20,
         }
     ]
@@ -178,7 +178,7 @@ def test_modules_off_delegates_to_original_nika_runner(monkeypatch) -> None:
         {
             "agent_type": "byo.langgraph",
             "llm_provider": "custom",
-            "model": "openai/gpt-oss-20b",
+            "model": "openai/gpt-oss-120b",
             "max_steps": 20,
             "session_id": "session-1",
             "stream_output": False,
@@ -239,6 +239,18 @@ def test_extension_parser_uses_canonical_feature_terms() -> None:
     assert canonical.procedural_memory_max_skill_age == 8
     assert canonical.procedural_memory_update_threshold == 6
     assert canonical.procedural_memory_selection_epsilon == 0.3
+    assert canonical.tool_refinement_exploration_similarity_threshold == 0.9
+    assert canonical.tool_refinement_explorer_reflection_limit == 3
+    assert canonical.procedural_memory_experience_pool_size == 1000
+    assert canonical.procedural_memory_golden_pool_size == 20
+    assert canonical.procedural_memory_baseline_ema_alpha == 0.1
+    assert canonical.procedural_memory_selection_epsilon_decay_cases == 500
+    assert canonical.procedural_memory_acceptance_margin == 0.001
+    assert canonical.tool_refinement_explorer_model == ""
+    assert canonical.tool_refinement_analyzer_model == ""
+    assert canonical.tool_refinement_rewriter_model == ""
+    assert canonical.procedural_memory_evolver_model == ""
+    assert canonical.procedural_memory_policy_scorer_model == ""
     help_text = parser.format_help()
     assert "--tool-refinement" in help_text
     assert "--procedural-memory" in help_text
@@ -481,7 +493,7 @@ def test_procedural_memory_command_routes_through_extension_benchmark(
         read=False,
         reset_bank=False,
         llm_backend="custom",
-        model="openai/gpt-oss-20b",
+        model="openai/gpt-oss-120b",
         max_steps=20,
         k=4,
         tokens=1200,
@@ -534,7 +546,7 @@ def test_baseline_fault_row_routes_to_upstream_single_case(
         Namespace(
             config=str(benchmark),
             provider="custom",
-            model="openai/gpt-oss-20b",
+            model="openai/gpt-oss-120b",
             max_steps=20,
             result_dir=str(tmp_path / "results"),
             resume=False,
@@ -559,3 +571,62 @@ def test_baseline_fault_row_routes_to_upstream_single_case(
     assert result == 0
     assert calls[0]["agent_type"] == "byo.langgraph"
     assert calls[0]["llm_provider"] == "custom"
+
+
+def test_benchmark_switches_memory_to_read_after_evolve_cutoff(
+    monkeypatch, tmp_path: Path
+) -> None:
+    benchmark = tmp_path / "benchmark.yaml"
+    benchmark.write_text(
+        "cases:\n"
+        "  - {scenario: simple_bgp, problem: no_fault, inject: {}}\n"
+        "  - {scenario: simple_bgp, problem: no_fault, inject: {}}\n"
+        "  - {scenario: simple_bgp, problem: no_fault, inject: {}}\n",
+        encoding="utf-8",
+    )
+    modes: list[str] = []
+    monkeypatch.setattr(
+        benchmark_extension,
+        "scan_benchmark_cases",
+        lambda **_kwargs: (tmp_path, [1, 2]),
+    )
+
+    def run_case(_row, *, config, **_kwargs):
+        modes.append(config.procedural_memory.mode)
+        index = len(modes)
+        return f"session-{index}", tmp_path / f"session-{index}"
+
+    monkeypatch.setattr(benchmark_extension, "run_extended_case", run_case)
+
+    result = benchmark_extension.run_batch(
+        Namespace(
+            config=str(benchmark),
+            agent="react",
+            provider="custom",
+            model="openai/gpt-oss-120b",
+            max_steps=20,
+            max_attempts=3,
+            result_dir=str(tmp_path / "results"),
+            resume=True,
+            judge=False,
+            judge_provider=None,
+            judge_model=None,
+            tool_refinement=None,
+            tool_refinement_doc_chars=500,
+            tool_refinement_convergence_threshold=0.75,
+            procedural_memory="shared-bank",
+            procedural_memory_read=None,
+            procedural_memory_evolve_until=2,
+            procedural_memory_k=5,
+            procedural_memory_tokens=1500,
+            procedural_memory_max_skill_age=8,
+            procedural_memory_pool_size=32,
+            procedural_memory_update_threshold=6,
+            procedural_memory_best_of_n=3,
+            procedural_memory_ppo_epsilon=0.2,
+            procedural_memory_selection_epsilon=0.3,
+        )
+    )
+
+    assert result == 0
+    assert modes == ["evolve", "read"]

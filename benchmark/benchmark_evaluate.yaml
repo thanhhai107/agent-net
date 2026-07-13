@@ -1,7 +1,4 @@
-# 125-case curriculum-evaluation benchmark.
-# The 100 fault cases preserve curriculum order: 44 evolution variants,
-# then benchmark_selected.yaml as one case per root cause.
-# The 25 no-fault clean controls are deterministically interleaved.
+evolve_first_cases: 54
 cases:
 - scenario: ospf_enterprise_dhcp
   topo_size: m

@@ -38,6 +38,8 @@ def studio_command(
         "true" if no_browser else "false",
         "--browser.gatherUsageStats",
         "false",
+        "--theme.base",
+        "light",
     ]
     typer.echo(f"Opening NIKA Experiment Studio at http://{host}:{port}")
     try:

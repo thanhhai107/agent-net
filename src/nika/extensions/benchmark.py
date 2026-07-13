@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import json
 import textwrap
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -272,6 +273,12 @@ def run_extended_case(
 
 def run_batch(args: argparse.Namespace) -> int:
     rows = load_custom_benchmark(args.config)
+    evolve_until = getattr(args, "procedural_memory_evolve_until", None)
+    if evolve_until is not None and not 0 <= evolve_until <= len(rows):
+        raise ValueError(
+            "--procedural-memory-evolve-until must be between 0 and "
+            f"the benchmark size ({len(rows)})"
+        )
     procedural_memory_mode = (
         "evolve"
         if args.procedural_memory
@@ -296,12 +303,38 @@ def run_batch(args: argparse.Namespace) -> int:
             best_of_n=args.procedural_memory_best_of_n,
             ppo_epsilon=args.procedural_memory_ppo_epsilon,
             selection_epsilon=getattr(args, "procedural_memory_selection_epsilon", 0.3),
+            experience_pool_size=getattr(
+                args, "procedural_memory_experience_pool_size", 1000
+            ),
+            golden_pool_size=getattr(args, "procedural_memory_golden_pool_size", 20),
+            baseline_ema_alpha=getattr(
+                args, "procedural_memory_baseline_ema_alpha", 0.1
+            ),
+            selection_epsilon_decay_cases=getattr(
+                args, "procedural_memory_selection_epsilon_decay_cases", 500
+            ),
+            acceptance_margin=getattr(
+                args, "procedural_memory_acceptance_margin", 0.001
+            ),
+            evolver_model=getattr(args, "procedural_memory_evolver_model", ""),
+            policy_scorer_model=getattr(
+                args, "procedural_memory_policy_scorer_model", ""
+            ),
         ),
         tool_refinement=ToolRefinementConfig(
             enabled=bool(args.tool_refinement),
             library_id=args.tool_refinement or "default",
             tool_doc_chars=args.tool_refinement_doc_chars,
             convergence_threshold=args.tool_refinement_convergence_threshold,
+            exploration_similarity_threshold=getattr(
+                args, "tool_refinement_exploration_similarity_threshold", 0.9
+            ),
+            explorer_reflection_limit=getattr(
+                args, "tool_refinement_explorer_reflection_limit", 3
+            ),
+            explorer_model=getattr(args, "tool_refinement_explorer_model", ""),
+            analyzer_model=getattr(args, "tool_refinement_analyzer_model", ""),
+            rewriter_model=getattr(args, "tool_refinement_rewriter_model", ""),
         ),
     )
     _root, pending = scan_benchmark_cases(
@@ -313,23 +346,35 @@ def run_batch(args: argparse.Namespace) -> int:
     completed = len(rows) - len(pending)
     for index in pending:
         row = rows[index]
+        case_config = config
+        if config.procedural_memory.mode == "evolve" and evolve_until is not None:
+            case_mode = "evolve" if index < evolve_until else "read"
+            case_config = replace(
+                config,
+                procedural_memory=replace(
+                    config.procedural_memory,
+                    mode=case_mode,
+                ),
+            )
         label = (
             f"index={index + 1}/{len(rows)} scenario={row['scenario']} "
             f"topo_size={row.get('topo_size') or '-'} problem={row['problem']}"
         )
+        if case_config.procedural_memory.enabled:
+            label += f" procedural_memory_mode={case_config.procedural_memory.mode}"
         inject_label = " ".join(
             f"inject_{key}={value}" for key, value in sorted(row["inject"].items())
         )
         print(f"benchmark_start {label} {inject_label}".rstrip(), flush=True)
         try:
             if (
-                config.extensions_enabled
-                or config.normalized_agent_type not in {"react", "byo.langgraph"}
+                case_config.extensions_enabled
+                or case_config.normalized_agent_type not in {"react", "byo.langgraph"}
                 or is_no_fault(row["problem"])
             ):
                 session_id, session_dir = run_extended_case(
                     row,
-                    config=config,
+                    config=case_config,
                     result_dir=args.result_dir,
                     run_judge=args.judge,
                     judge_provider=args.judge_provider,
@@ -402,9 +447,34 @@ def build_parser() -> argparse.ArgumentParser:
         default=0.75,
         metavar="THRESHOLD",
     )
+    parser.add_argument(
+        "--tool-refinement-exploration-similarity-threshold",
+        dest="tool_refinement_exploration_similarity_threshold",
+        type=float,
+        default=0.9,
+    )
+    parser.add_argument(
+        "--tool-refinement-explorer-reflection-limit",
+        dest="tool_refinement_explorer_reflection_limit",
+        type=int,
+        default=3,
+    )
+    parser.add_argument("--tool-refinement-explorer-model", default="")
+    parser.add_argument("--tool-refinement-analyzer-model", default="")
+    parser.add_argument("--tool-refinement-rewriter-model", default="")
     parser.add_argument("--procedural-memory", metavar="BANK_ID")
     parser.add_argument(
         "--procedural-memory-read", dest="procedural_memory_read", metavar="BANK_ID"
+    )
+    parser.add_argument(
+        "--procedural-memory-evolve-until",
+        dest="procedural_memory_evolve_until",
+        type=int,
+        metavar="CASE_COUNT",
+        help=(
+            "Evolve on the first CASE_COUNT benchmark cases, then reuse the same "
+            "bank read-only. Zero reads for all cases."
+        ),
     )
     parser.add_argument(
         "--procedural-memory-k",
@@ -462,6 +532,38 @@ def build_parser() -> argparse.ArgumentParser:
         default=0.3,
         metavar="SELECTION_EPSILON",
     )
+    parser.add_argument(
+        "--procedural-memory-experience-pool-size",
+        dest="procedural_memory_experience_pool_size",
+        type=int,
+        default=1000,
+    )
+    parser.add_argument(
+        "--procedural-memory-golden-pool-size",
+        dest="procedural_memory_golden_pool_size",
+        type=int,
+        default=20,
+    )
+    parser.add_argument(
+        "--procedural-memory-baseline-ema-alpha",
+        dest="procedural_memory_baseline_ema_alpha",
+        type=float,
+        default=0.1,
+    )
+    parser.add_argument(
+        "--procedural-memory-selection-epsilon-decay-cases",
+        dest="procedural_memory_selection_epsilon_decay_cases",
+        type=int,
+        default=500,
+    )
+    parser.add_argument(
+        "--procedural-memory-acceptance-margin",
+        dest="procedural_memory_acceptance_margin",
+        type=float,
+        default=0.001,
+    )
+    parser.add_argument("--procedural-memory-evolver-model", default="")
+    parser.add_argument("--procedural-memory-policy-scorer-model", default="")
     return parser
 
 
@@ -471,6 +573,10 @@ def main() -> None:
     if args.procedural_memory and args.procedural_memory_read:
         raise SystemExit(
             "Use either --procedural-memory or --procedural-memory-read, not both"
+        )
+    if args.procedural_memory_evolve_until is not None and not args.procedural_memory:
+        raise SystemExit(
+            "--procedural-memory-evolve-until requires --procedural-memory"
         )
     if args.judge and (not args.judge_provider or not args.judge_model):
         raise SystemExit("--judge-provider and --judge-model are required with --judge")

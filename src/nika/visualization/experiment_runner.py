@@ -12,18 +12,23 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from agent.composition import ProceduralMemoryConfig, ToolRefinementConfig
 from agent.extensions.config import (
     DEFAULT_LLM_PROVIDER as DEFAULT_LLM_BACKEND,
     DEFAULT_MODEL,
 )
 from nika.config import RESULTS_DIR, RUNTIME_DIR, _REPO_ROOT
+from nika.config import BENCHMARK_DIR
 from nika.utils.experiment_naming import next_experiment_id
-from nika.workflows.benchmark.run import default_benchmark_yaml_path
 
 RUNS_DIR = RUNTIME_DIR / "streamlit_runs"
 LOG_FILENAME = "run.log"
 SPEC_FILENAME = "spec.json"
 META_FILENAME = "meta.json"
+DEFAULT_STUDIO_BENCHMARK = str(BENCHMARK_DIR / "benchmark_evaluate.yaml")
+DEFAULT_STUDIO_MAX_STEPS = 50
+TOOL_REFINEMENT_DEFAULTS = ToolRefinementConfig()
+PROCEDURAL_MEMORY_DEFAULTS = ProceduralMemoryConfig()
 
 MODULE_LABELS = {
     "tool_refinement": "Tool Refinement",
@@ -73,7 +78,7 @@ def _common_agent_args(
         "--model",
         _str(config.get("model"), DEFAULT_MODEL),
         "--max-steps",
-        str(_int(config.get("max_steps"), _int(os.getenv("NIKA_MAX_STEPS"), 20))),
+        str(_int(config.get("max_steps"), DEFAULT_STUDIO_MAX_STEPS)),
         "--max-attempts",
         str(_int(config.get("max_attempts"), 3)),
     ]
@@ -103,7 +108,7 @@ def _benchmark_command(config: dict[str, Any]) -> list[str]:
         "-m",
         "nika.extensions.benchmark",
         "--config",
-        _str(config.get("benchmark_file"), default_benchmark_yaml_path()),
+        _str(config.get("benchmark_file"), DEFAULT_STUDIO_BENCHMARK),
         *_common_agent_args(config),
         *_judge_args(config),
     ]
@@ -130,7 +135,7 @@ def _command_experiment_id(config: dict[str, Any]) -> str:
     if configured:
         return configured
     return next_experiment_id(
-        _str(config.get("benchmark_file"), default_benchmark_yaml_path())
+        _str(config.get("benchmark_file"), DEFAULT_STUDIO_BENCHMARK)
     )
 
 
@@ -150,6 +155,9 @@ def build_experiment_command(config: dict[str, Any]) -> list[str]:
     modules = selected_modules(config)
     tool_enabled = "tool_refinement" in modules
     procedural_memory_enabled = "procedural_memory" in modules
+    procedural_memory_mode = str(
+        config.get("procedural_memory_mode") or "evolve"
+    ).lower()
     default_library_id = _command_experiment_id(config)
 
     command = _benchmark_command(config)
@@ -163,38 +171,156 @@ def build_experiment_command(config: dict[str, Any]) -> list[str]:
                     default_library_id,
                 ),
                 "--tool-refinement-doc-chars",
-                str(_int(config.get("tool_doc_chars"), 500)),
+                str(
+                    _int(
+                        config.get("tool_doc_chars"),
+                        TOOL_REFINEMENT_DEFAULTS.tool_doc_chars,
+                    )
+                ),
                 "--tool-refinement-convergence-threshold",
-                _str(config.get("tool_convergence_threshold"), "0.75"),
+                _str(
+                    config.get("tool_convergence_threshold"),
+                    str(TOOL_REFINEMENT_DEFAULTS.convergence_threshold),
+                ),
+                "--tool-refinement-exploration-similarity-threshold",
+                _str(
+                    config.get("tool_exploration_similarity_threshold"),
+                    str(TOOL_REFINEMENT_DEFAULTS.exploration_similarity_threshold),
+                ),
+                "--tool-refinement-explorer-reflection-limit",
+                str(
+                    _int(
+                        config.get("tool_explorer_reflection_limit"),
+                        TOOL_REFINEMENT_DEFAULTS.explorer_reflection_limit,
+                    )
+                ),
+                "--tool-refinement-explorer-model",
+                _str(
+                    config.get("tool_explorer_model"),
+                    _str(config.get("model"), DEFAULT_MODEL),
+                ),
+                "--tool-refinement-analyzer-model",
+                _str(
+                    config.get("tool_analyzer_model"),
+                    _str(config.get("model"), DEFAULT_MODEL),
+                ),
+                "--tool-refinement-rewriter-model",
+                _str(
+                    config.get("tool_rewriter_model"),
+                    _str(config.get("model"), DEFAULT_MODEL),
+                ),
             ]
         )
-
     if procedural_memory_enabled:
         command.extend(
             [
-                "--procedural-memory",
+                "--procedural-memory-read"
+                if procedural_memory_mode == "read"
+                else "--procedural-memory",
                 _str(
                     config.get("procedural_memory_bank"),
                     default_library_id,
                 ),
                 "--procedural-memory-k",
-                str(_int(config.get("procedural_memory_k"), 5)),
+                str(
+                    _int(
+                        config.get("procedural_memory_k"),
+                        PROCEDURAL_MEMORY_DEFAULTS.top_k,
+                    )
+                ),
                 "--procedural-memory-tokens",
-                str(_int(config.get("procedural_memory_tokens"), 1500)),
+                str(
+                    _int(
+                        config.get("procedural_memory_tokens"),
+                        PROCEDURAL_MEMORY_DEFAULTS.token_budget,
+                    )
+                ),
                 "--procedural-memory-max-skill-age",
-                str(_int(config.get("procedural_memory_max_skill_age"), 8)),
+                str(
+                    _int(
+                        config.get("procedural_memory_max_skill_age"),
+                        PROCEDURAL_MEMORY_DEFAULTS.max_skill_age,
+                    )
+                ),
                 "--procedural-memory-pool-size",
-                str(_int(config.get("procedural_memory_pool_size"), 32)),
+                str(
+                    _int(
+                        config.get("procedural_memory_pool_size"),
+                        PROCEDURAL_MEMORY_DEFAULTS.pool_size,
+                    )
+                ),
                 "--procedural-memory-update-threshold",
-                str(_int(config.get("procedural_memory_update_threshold"), 6)),
+                str(
+                    _int(
+                        config.get("procedural_memory_update_threshold"),
+                        PROCEDURAL_MEMORY_DEFAULTS.evolution_threshold,
+                    )
+                ),
                 "--procedural-memory-best-of-n",
-                str(_int(config.get("procedural_memory_best_of_n"), 3)),
+                str(
+                    _int(
+                        config.get("procedural_memory_best_of_n"),
+                        PROCEDURAL_MEMORY_DEFAULTS.best_of_n,
+                    )
+                ),
                 "--procedural-memory-ppo-epsilon",
-                _str(config.get("procedural_memory_ppo_epsilon"), "0.2"),
+                _str(
+                    config.get("procedural_memory_ppo_epsilon"),
+                    str(PROCEDURAL_MEMORY_DEFAULTS.ppo_epsilon),
+                ),
                 "--procedural-memory-selection-epsilon",
-                _str(config.get("procedural_memory_selection_epsilon"), "0.3"),
+                _str(
+                    config.get("procedural_memory_selection_epsilon"),
+                    str(PROCEDURAL_MEMORY_DEFAULTS.selection_epsilon),
+                ),
+                "--procedural-memory-experience-pool-size",
+                str(
+                    _int(
+                        config.get("procedural_memory_experience_pool_size"),
+                        PROCEDURAL_MEMORY_DEFAULTS.experience_pool_size,
+                    )
+                ),
+                "--procedural-memory-golden-pool-size",
+                str(
+                    _int(
+                        config.get("procedural_memory_golden_pool_size"),
+                        PROCEDURAL_MEMORY_DEFAULTS.golden_pool_size,
+                    )
+                ),
+                "--procedural-memory-baseline-ema-alpha",
+                _str(
+                    config.get("procedural_memory_baseline_ema_alpha"),
+                    str(PROCEDURAL_MEMORY_DEFAULTS.baseline_ema_alpha),
+                ),
+                "--procedural-memory-selection-epsilon-decay-cases",
+                str(
+                    _int(
+                        config.get("procedural_memory_selection_epsilon_decay_cases"),
+                        PROCEDURAL_MEMORY_DEFAULTS.selection_epsilon_decay_cases,
+                    )
+                ),
+                "--procedural-memory-acceptance-margin",
+                _str(
+                    config.get("procedural_memory_acceptance_margin"),
+                    str(PROCEDURAL_MEMORY_DEFAULTS.acceptance_margin),
+                ),
+                "--procedural-memory-evolver-model",
+                _str(
+                    config.get("procedural_memory_evolver_model"),
+                    _str(config.get("model"), DEFAULT_MODEL),
+                ),
+                "--procedural-memory-policy-scorer-model",
+                _str(
+                    config.get("procedural_memory_policy_scorer_model"),
+                    _str(config.get("model"), DEFAULT_MODEL),
+                ),
             ]
         )
+        evolve_until = config.get("procedural_memory_evolve_until")
+        if procedural_memory_mode != "read" and evolve_until is not None:
+            command.extend(
+                ["--procedural-memory-evolve-until", str(_int(evolve_until, 0))]
+            )
     return command
 
 
@@ -212,7 +338,7 @@ def build_command_plan(config: dict[str, Any]) -> list[CommandPlan]:
 
 def prepare_experiment_config(config: dict[str, Any]) -> dict[str, Any]:
     prepared = dict(config)
-    benchmark_file = _str(prepared.get("benchmark_file"), default_benchmark_yaml_path())
+    benchmark_file = _str(prepared.get("benchmark_file"), DEFAULT_STUDIO_BENCHMARK)
     run_id = _str(prepared.get("experiment_id"), "")
     if not run_id:
         run_id = next_experiment_id(benchmark_file)

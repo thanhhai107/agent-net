@@ -217,13 +217,15 @@ async def _generate_candidate(
     trials: list[ToolTrial],
     prior_explorations: list[DraftExploration],
     session_id: str,
+    similarity_threshold: float = DRAFT_EXPLORATION_SIMILARITY_THRESHOLD,
+    reflection_limit: int = DRAFT_EXPLORER_REFLECTION_LIMIT,
 ) -> tuple[DraftExplorerDraft | None, dict[str, Any], int, str]:
     current_trials = [trial for trial in trials if trial.session_id == session_id]
     grounded = _grounded_identifier_values(current_trials)
     explorer = llm.with_structured_output(DraftExplorerDraft)
     feedback: list[str] = []
     last_error = ""
-    for reflection_count in range(DRAFT_EXPLORER_REFLECTION_LIMIT + 1):
+    for reflection_count in range(reflection_limit + 1):
         try:
             raw = await explorer.ainvoke(
                 _explorer_prompt(
@@ -286,15 +288,15 @@ async def _generate_candidate(
             ),
             default=0.0,
         )
-        if max_similarity >= DRAFT_EXPLORATION_SIMILARITY_THRESHOLD:
+        if max_similarity >= similarity_threshold:
             last_error = (
                 f"candidate similarity {max_similarity:.3f} exceeds "
-                f"{DRAFT_EXPLORATION_SIMILARITY_THRESHOLD:.3f}"
+                f"{similarity_threshold:.3f}"
             )
             feedback.append(last_error)
             continue
         return candidate, parameters, reflection_count, ""
-    return None, {}, DRAFT_EXPLORER_REFLECTION_LIMIT, last_error
+    return None, {}, reflection_limit, last_error
 
 
 async def run_active_exploration(
@@ -308,6 +310,10 @@ async def run_active_exploration(
     llm_backend: str,
     model: str,
     convergence_threshold: float,
+    exploration_similarity_threshold: float = DRAFT_EXPLORATION_SIMILARITY_THRESHOLD,
+    explorer_reflection_limit: int = DRAFT_EXPLORER_REFLECTION_LIMIT,
+    analyzer_model: str | None = None,
+    rewriter_model: str | None = None,
 ) -> dict[str, Any]:
     """Run one DRAFT exploration episode for each used, unfrozen tool."""
 
@@ -373,12 +379,19 @@ async def run_active_exploration(
         all_trials = list(state.trials)
         prior = [item for item in state.explorations if item.tool_name == tool_name]
         candidate, parameters, reflections, error = await _generate_candidate(
-            llm=llm,
+            llm=(
+                llm
+                if (not analyzer_model or analyzer_model == model)
+                and (not rewriter_model or rewriter_model == model)
+                else None
+            ),
             tool=tool,
             doc=doc,
             trials=all_trials,
             prior_explorations=prior,
             session_id=session_id,
+            similarity_threshold=exploration_similarity_threshold,
+            reflection_limit=explorer_reflection_limit,
         )
         if candidate is None:
             skipped[tool_name] = error or "no diverse valid exploration"
@@ -465,6 +478,8 @@ async def run_active_exploration(
             metrics={},
             llm_backend=llm_backend,
             model=model,
+            analyzer_model=analyzer_model,
+            rewriter_model=rewriter_model,
             convergence_threshold=convergence_threshold,
             llm=llm,
         )

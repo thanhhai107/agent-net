@@ -39,6 +39,34 @@ def _write_extension_metadata(session: Session, config: AgentRunConfig) -> None:
         "procedural_memory_selection_epsilon",
         config.procedural_memory.selection_epsilon,
     )
+    session.update_session(
+        "procedural_memory_experience_pool_size",
+        config.procedural_memory.experience_pool_size,
+    )
+    session.update_session(
+        "procedural_memory_golden_pool_size",
+        config.procedural_memory.golden_pool_size,
+    )
+    session.update_session(
+        "procedural_memory_baseline_ema_alpha",
+        config.procedural_memory.baseline_ema_alpha,
+    )
+    session.update_session(
+        "procedural_memory_selection_epsilon_decay_cases",
+        config.procedural_memory.selection_epsilon_decay_cases,
+    )
+    session.update_session(
+        "procedural_memory_acceptance_margin",
+        config.procedural_memory.acceptance_margin,
+    )
+    session.update_session(
+        "procedural_memory_evolver_model",
+        config.procedural_memory.evolver_model,
+    )
+    session.update_session(
+        "procedural_memory_policy_scorer_model",
+        config.procedural_memory.policy_scorer_model,
+    )
     session.update_session("tool_refinement_enabled", config.tool_refinement.enabled)
     session.update_session("tool_library_id", config.tool_refinement.library_id)
     session.update_session("tool_doc_chars", config.tool_refinement.tool_doc_chars)
@@ -46,6 +74,17 @@ def _write_extension_metadata(session: Session, config: AgentRunConfig) -> None:
         "tool_convergence_threshold",
         config.tool_refinement.convergence_threshold,
     )
+    session.update_session(
+        "tool_exploration_similarity_threshold",
+        config.tool_refinement.exploration_similarity_threshold,
+    )
+    session.update_session(
+        "tool_explorer_reflection_limit",
+        config.tool_refinement.explorer_reflection_limit,
+    )
+    session.update_session("tool_explorer_model", config.tool_refinement.explorer_model)
+    session.update_session("tool_analyzer_model", config.tool_refinement.analyzer_model)
+    session.update_session("tool_rewriter_model", config.tool_refinement.rewriter_model)
 
 
 def start_agent(config: AgentRunConfig, *, session_id: str | None = None) -> None:

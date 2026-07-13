@@ -377,6 +377,13 @@ class ProceduralMemoryModule:
         evolution_threshold: int = 6,
         best_of_n: int = 3,
         ppo_epsilon: float = PPO_EPSILON,
+        experience_pool_size: int = EXPERIENCE_POOL_SIZE,
+        golden_pool_size: int = GOLDEN_POOL_SIZE,
+        baseline_ema_alpha: float = BASELINE_EMA_ALPHA,
+        selection_epsilon_decay_cases: int = SELECTION_EPSILON_DECAY_EPISODES,
+        acceptance_margin: float = 0.001,
+        evolver_model: str = "",
+        policy_scorer_model: str = "",
         policy_scorer: PolicyScorer | None = None,
     ) -> None:
         self.bank_id = bank_id
@@ -386,7 +393,15 @@ class ProceduralMemoryModule:
         self.evolution_threshold = evolution_threshold
         self.best_of_n = max(1, best_of_n)
         self.ppo_epsilon = ppo_epsilon
+        self.experience_pool_size = max(1, experience_pool_size)
+        self.golden_pool_size = max(1, golden_pool_size)
+        self.baseline_ema_alpha = baseline_ema_alpha
+        self.selection_epsilon_decay_cases = max(1, selection_epsilon_decay_cases)
+        self.acceptance_margin = max(0.0, acceptance_margin)
+        self.evolver_model = evolver_model.strip()
+        self.policy_scorer_model = policy_scorer_model.strip()
         self._learning_llm_instance: Any | None = None
+        self._policy_llm_instance: Any | None = None
         self.policy_scorer = policy_scorer or self._default_policy_scorer()
         self.store = ProceduralMemoryStore(
             bank_id=bank_id,
@@ -396,7 +411,7 @@ class ProceduralMemoryModule:
 
     def _default_policy_scorer(self) -> PolicyScorer:
         selected_backend = learning_backend(self.llm_backend)
-        selected_model = learning_model(self.model)
+        selected_model = self._selected_policy_scorer_model()
         if selected_backend == "custom" and selected_model:
             base_url = (
                 os.getenv("NIKA_SKILL_LOGPROB_URL", "").strip()
@@ -406,9 +421,7 @@ class ProceduralMemoryModule:
                 os.getenv("NIKA_SKILL_LOGPROB_API_KEY", "").strip()
                 or os.getenv("CUSTOM_API_KEY", "").strip()
             )
-            scorer_model = (
-                os.getenv("NIKA_SKILL_LOGPROB_MODEL", "").strip() or selected_model
-            )
+            scorer_model = selected_model
             if base_url and api_key:
                 return PolicyLogprobScorer(
                     base_url=base_url,
@@ -417,12 +430,12 @@ class ProceduralMemoryModule:
                     timeout=learning_timeout_seconds(),
                 )
         if selected_backend and selected_model:
-            return BehavioralReplayPolicyScorer(self._learning_llm)
+            return BehavioralReplayPolicyScorer(self._policy_llm)
         return StructuredReplayPolicyScorer()
 
     def _learning_llm(self) -> Any | None:
         selected_backend = learning_backend(self.llm_backend)
-        selected_model = learning_model(self.model)
+        selected_model = self._selected_evolver_model()
         if not selected_backend or not selected_model:
             return None
         if self._learning_llm_instance is None:
@@ -433,6 +446,32 @@ class ProceduralMemoryModule:
                 max_retries=learning_max_retries(),
             )
         return self._learning_llm_instance
+
+    def _policy_llm(self) -> Any | None:
+        selected_backend = learning_backend(self.llm_backend)
+        selected_model = self._selected_policy_scorer_model()
+        if not selected_backend or not selected_model:
+            return None
+        if self._policy_llm_instance is None:
+            self._policy_llm_instance = load_model(
+                selected_backend,
+                selected_model,
+                timeout=learning_timeout_seconds(),
+                max_retries=learning_max_retries(),
+            )
+        return self._policy_llm_instance
+
+    def _selected_evolver_model(self) -> str:
+        return self.evolver_model or learning_model(self.model) or self.model or ""
+
+    def _selected_policy_scorer_model(self) -> str:
+        return (
+            self.policy_scorer_model
+            or os.getenv("NIKA_SKILL_LOGPROB_MODEL", "").strip()
+            or learning_model(self.model)
+            or self.model
+            or ""
+        )
 
     def clear(self) -> None:
         self.store.clear()
@@ -716,7 +755,7 @@ class ProceduralMemoryModule:
     def decayed_selection_epsilon(self, initial: float) -> float:
         iteration = self.store.load().iteration
         progress = min(
-            max(iteration, 0) / float(SELECTION_EPSILON_DECAY_EPISODES),
+            max(iteration, 0) / float(self.selection_epsilon_decay_cases),
             1.0,
         )
         return initial + progress * (0.05 - initial)
@@ -997,7 +1036,7 @@ class ProceduralMemoryModule:
         candidate_index: int,
     ) -> SkillCandidateDraft | None:
         """Sample one candidate independently from the aggregated batch signal."""
-        if not learning_backend(self.llm_backend) or not learning_model(self.model):
+        if not learning_backend(self.llm_backend) or not self._selected_evolver_model():
             return None
         parent_payload = (
             parent.format_for_llm()
@@ -1163,7 +1202,7 @@ class ProceduralMemoryModule:
                 proposed_update="Preserve the current skill until more evidence arrives.",
                 component_update=SkillComponentGradient(is_related=False),
             )
-        if learning_backend(self.llm_backend) and learning_model(self.model):
+        if learning_backend(self.llm_backend) and self._selected_evolver_model():
             prompt = (
                 "You are the Skill-Pro batch semantic-gradient aggregator. "
                 "Consolidate recurring, causally supported updates and discard "
@@ -1362,7 +1401,7 @@ class ProceduralMemoryModule:
         skill: ProceduralSkill | None = None,
     ) -> tuple[SemanticGradient | None, str]:
         selected_backend = learning_backend(self.llm_backend)
-        selected_model = learning_model(self.model)
+        selected_model = self._selected_evolver_model()
         if not selected_backend or not selected_model:
             return None, ""
         metric_keys = (
@@ -1493,7 +1532,7 @@ class ProceduralMemoryModule:
             samples=sample_batch,
         )
         j_score = replay["j_score"]
-        margin = 0.001
+        margin = self.acceptance_margin
         parent_safe = baseline is None or not _learned_skill_unstable(baseline)
         verified_success_count = sum(item.success for item in sample_batch)
         positive_advantage_count = sum(item.advantage > 0 for item in sample_batch)
@@ -1656,7 +1695,7 @@ class ProceduralMemoryModule:
                 state.experiences.append(segment)
                 existing_experience_ids.add(segment.experience_id)
             self._update_golden_pool(state, segment)
-        state.experiences = state.experiences[-EXPERIENCE_POOL_SIZE:]
+        state.experiences = state.experiences[-self.experience_pool_size :]
         self._update_baseline(
             state,
             baseline_key,
@@ -2038,7 +2077,7 @@ class ProceduralMemoryModule:
             ),
             "semantic_gradient_source": gradient_source,
             "semantic_gradient_llm_attempted": bool(
-                learning_backend(self.llm_backend) and learning_model(self.model)
+                learning_backend(self.llm_backend) and self._selected_evolver_model()
             ),
             "semantic_gradient_llm_failed": bool(gradient_error),
             "semantic_gradient_llm_error": gradient_error,
@@ -2476,7 +2515,7 @@ class ProceduralMemoryModule:
         state.baselines[scenario] = (
             reward
             if old is None
-            else (1 - BASELINE_EMA_ALPHA) * old + BASELINE_EMA_ALPHA * reward
+            else (1 - self.baseline_ema_alpha) * old + self.baseline_ema_alpha * reward
         )
 
     def _update_golden_pool(self, state, experience: SkillExperience) -> None:
@@ -2486,7 +2525,7 @@ class ProceduralMemoryModule:
         pool[experience.experience_id] = experience.model_copy(deep=True)
         state.golden_experiences = sorted(
             pool.values(), key=lambda item: item.reward, reverse=True
-        )[:GOLDEN_POOL_SIZE]
+        )[: self.golden_pool_size]
 
     def _skill_effective_score(self, skill: ProceduralSkill) -> float:
         prior = skill.prior_score or max(skill.score, 0.0)
@@ -2570,7 +2609,7 @@ class ProceduralMemoryModule:
             kept.values(),
             key=lambda item: item.reward,
             reverse=True,
-        )[:GOLDEN_POOL_SIZE]
+        )[: self.golden_pool_size]
         return logs
 
     def _maintain(self, state) -> None:

@@ -236,6 +236,23 @@ async def update_procedural_memory_from_session(
         ),
         best_of_n=_int_meta(run_meta, "procedural_memory_best_of_n", 3),
         ppo_epsilon=_float_meta(run_meta, "procedural_memory_ppo_epsilon", 0.2),
+        experience_pool_size=_int_meta(
+            run_meta, "procedural_memory_experience_pool_size", 1000
+        ),
+        golden_pool_size=_int_meta(run_meta, "procedural_memory_golden_pool_size", 20),
+        baseline_ema_alpha=_float_meta(
+            run_meta, "procedural_memory_baseline_ema_alpha", 0.1
+        ),
+        selection_epsilon_decay_cases=_int_meta(
+            run_meta, "procedural_memory_selection_epsilon_decay_cases", 500
+        ),
+        acceptance_margin=_float_meta(
+            run_meta, "procedural_memory_acceptance_margin", 0.001
+        ),
+        evolver_model=str(run_meta.get("procedural_memory_evolver_model") or ""),
+        policy_scorer_model=str(
+            run_meta.get("procedural_memory_policy_scorer_model") or ""
+        ),
     )
     evidence = EvaluationEvidence(
         session_id=str(run_meta.get("session_id") or session_path.name),
@@ -280,6 +297,13 @@ async def update_procedural_memory_from_session(
                 "evolution_threshold": module.evolution_threshold,
                 "best_of_n": module.best_of_n,
                 "ppo_epsilon": module.ppo_epsilon,
+                "experience_pool_size": module.experience_pool_size,
+                "golden_pool_size": module.golden_pool_size,
+                "baseline_ema_alpha": module.baseline_ema_alpha,
+                "selection_epsilon_decay_cases": (module.selection_epsilon_decay_cases),
+                "acceptance_margin": module.acceptance_margin,
+                "evolver_model": module._selected_evolver_model(),
+                "policy_scorer_model": module._selected_policy_scorer_model(),
             },
         }
     )

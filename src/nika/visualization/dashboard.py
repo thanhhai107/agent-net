@@ -11,6 +11,7 @@ from typing import Any
 import streamlit as st
 import importlib
 import nika.visualization.data
+
 importlib.reload(nika.visualization.data)
 
 from nika.visualization.data import (  # noqa: E402
@@ -77,18 +78,28 @@ st.markdown(
       [data-testid="stMetricLabel"] {color: var(--muted); font-size: .78rem;}
       [data-testid="stMetricValue"] {color: var(--ink); font-weight: 700;}
 
+      [data-testid="stTabs"] {
+        border: none !important;
+        background: transparent !important;
+        padding: 0px !important;
+        box-shadow: none !important;
+      }
       [data-testid="stTabs"] [data-baseweb="tab-list"] {
-        gap: .35rem; background: rgba(241, 245, 249, 0.85); border: 1px solid var(--line);
-        border-radius: 14px; padding: .32rem; margin: .7rem 0 1.2rem;
+        gap: 1.5rem; background: transparent; border: none;
+        border-bottom: 1px solid var(--line);
+        border-radius: 0px; padding: 0px; margin: .7rem 0 1.2rem;
         display: flex; width: 100%;
       }
       [data-testid="stTabs"] [data-baseweb="tab"] {
-        height: 42px; border-radius: 10px; padding: 0 1.2rem;
+        height: auto; border-radius: 0px; padding: 0.5rem 0;
+        background: transparent !important;
         color: var(--muted);
         flex: 1; text-align: center; justify-content: center;
+        border-bottom: 2px solid transparent !important;
       }
       [data-testid="stTabs"] [aria-selected="true"] {
-        background: rgba(14, 165, 233, 0.1); color: #0284c7;
+        background: transparent !important; color: #0284c7;
+        border-bottom: 2px solid #0284c7 !important;
       }
       [data-testid="stDataFrame"] {
         border: 1px solid var(--line); border-radius: 14px; overflow: hidden;
@@ -297,7 +308,10 @@ def _read_artifact_text(
         return ""
     if len(lines) > max_lines:
         return "\n".join(
-            [f"... truncated {len(lines) - max_lines} earlier lines ...", *lines[-max_lines:]]
+            [
+                f"... truncated {len(lines) - max_lines} earlier lines ...",
+                *lines[-max_lines:],
+            ]
         )
     return "\n".join(lines)
 
@@ -306,7 +320,10 @@ def _module_labels(meta: dict[str, Any]) -> list[str]:
     labels: list[str] = []
     if meta.get("tool_refinement_enabled"):
         labels.append("Tool Refinement")
-    if meta.get("procedural_memory_mode") and meta.get("procedural_memory_mode") != "off":
+    if (
+        meta.get("procedural_memory_mode")
+        and meta.get("procedural_memory_mode") != "off"
+    ):
         labels.append("Procedural Memory")
     return labels or ["-"]
 
@@ -345,7 +362,10 @@ def _render_dashboard() -> None:
     selected_id: str | None = None
 
     if not sessions:
-        st.markdown('<div class="eyebrow">Network troubleshooting observatory</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="eyebrow">Network troubleshooting observatory</div>',
+            unsafe_allow_html=True,
+        )
         st.markdown(
             """
             <div class="nika-brand" style="margin-bottom: 2rem;">
@@ -409,7 +429,10 @@ def _render_dashboard() -> None:
                     default_session_index = s_idx
                     break
 
-    st.markdown('<div class="eyebrow">Network troubleshooting observatory</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="eyebrow">Network troubleshooting observatory</div>',
+        unsafe_allow_html=True,
+    )
     st.markdown(
         """
         <div class="nika-brand" style="margin-bottom: 2rem;">
@@ -423,7 +446,9 @@ def _render_dashboard() -> None:
         unsafe_allow_html=True,
     )
 
-    col1, col2, col3 = st.columns([1.0, 1.3, 0.4], gap="medium", vertical_alignment="bottom")
+    col1, col2, col3 = st.columns(
+        [1.0, 1.3, 0.4], gap="medium", vertical_alignment="bottom"
+    )
     with col1:
         selected_group = st.selectbox(
             "Experiment group",
@@ -438,9 +463,13 @@ def _render_dashboard() -> None:
         selected_id = st.selectbox(
             "Active session",
             session_ids,
-            index=default_session_index if selected_group == sorted_group_names[default_group_index] else 0,
+            index=default_session_index
+            if selected_group == sorted_group_names[default_group_index]
+            else 0,
             format_func=lambda session_id: _session_label(
-                next(item for item in group_sessions if item["session_id"] == session_id)
+                next(
+                    item for item in group_sessions if item["session_id"] == session_id
+                )
             ),
         )
 
@@ -461,8 +490,16 @@ def _render_dashboard() -> None:
     st.write("")
     metric_cols = st.columns(6)
     headline_metrics = [
-        ("Detection", _fmt_score(metrics.get("detection_score")), "Anomaly classification"),
-        ("Localization F1", _fmt_score(metrics.get("localization_f1")), "Faulty device accuracy"),
+        (
+            "Detection",
+            _fmt_score(metrics.get("detection_score")),
+            "Anomaly classification",
+        ),
+        (
+            "Localization F1",
+            _fmt_score(metrics.get("localization_f1")),
+            "Faulty device accuracy",
+        ),
         ("RCA F1", _fmt_score(metrics.get("rca_f1")), "Root-cause accuracy"),
         ("Tool calls", metrics.get("tool_calls", "—"), "MCP invocations"),
         ("Tool errors", metrics.get("tool_errors", "—"), "Failed invocations"),
@@ -478,7 +515,10 @@ def _render_dashboard() -> None:
     replay_tab = tabs["Replay"]
 
     with overview_tab:
-        st.markdown('<div class="section-label">Topology Configuration</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="section-label">Topology Configuration</div>',
+            unsafe_allow_html=True,
+        )
         _card(
             "Topology Configuration",
             [
@@ -491,7 +531,10 @@ def _render_dashboard() -> None:
         )
 
         st.write("")
-        st.markdown('<div class="section-label">Failure Injections</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="section-label">Failure Injections</div>',
+            unsafe_allow_html=True,
+        )
         if bundle.failure_injections:
             for idx, injection in enumerate(bundle.failure_injections):
                 _card(
@@ -500,20 +543,28 @@ def _render_dashboard() -> None:
                         ("Category", injection.get("root_cause_category")),
                         ("Status", injection.get("status")),
                         ("Started", _fmt_time(injection.get("created_at"))),
-                        ("Parameters", json.dumps(
-                            injection.get("injection_params") or {},
-                            ensure_ascii=False,
-                            default=str,
-                        )),
+                        (
+                            "Parameters",
+                            json.dumps(
+                                injection.get("injection_params") or {},
+                                ensure_ascii=False,
+                                default=str,
+                            ),
+                        ),
                     ],
                 )
         elif problems:
-            st.info("Detailed injection records are unavailable; problem names remain in the run metadata.")
+            st.info(
+                "Detailed injection records are unavailable; problem names remain in the run metadata."
+            )
         else:
             _render_empty()
 
         st.write("")
-        st.markdown('<div class="section-label">Agent Configuration</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="section-label">Agent Configuration</div>',
+            unsafe_allow_html=True,
+        )
         _card(
             "Agent Configuration",
             [
@@ -527,7 +578,9 @@ def _render_dashboard() -> None:
         )
 
         st.write("")
-        st.markdown('<div class="section-label">Final Diagnosis</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="section-label">Final Diagnosis</div>', unsafe_allow_html=True
+        )
         truth_col, prediction_col = st.columns(2, gap="medium")
         with truth_col:
             _diagnosis_card("Ground truth", bundle.ground_truth, "#ff647c")
@@ -555,15 +608,23 @@ def _render_dashboard() -> None:
                 fault_interfaces=fault_endpoints(bundle),
             )
             st.html(svg, width="stretch")
-            st.caption("Hover nodes and links for endpoint details. Colors compare truth with agent localization.")
+            st.caption(
+                "Hover nodes and links for endpoint details. Colors compare truth with agent localization."
+            )
 
         with topo_right:
-            st.markdown('<div class="section-label" style="margin-top:0;">Network Directory</div>', unsafe_allow_html=True)
-            st.markdown('<div style="font-weight:700; font-size:0.95rem; margin-bottom:0.6rem; color:var(--ink);">Devices</div>', unsafe_allow_html=True)
-            
+            st.markdown(
+                '<div class="section-label" style="margin-top:0;">Network Directory</div>',
+                unsafe_allow_html=True,
+            )
+            st.markdown(
+                '<div style="font-weight:700; font-size:0.95rem; margin-bottom:0.6rem; color:var(--ink);">Devices</div>',
+                unsafe_allow_html=True,
+            )
+
             actual_f = faulty_devices(bundle.ground_truth) or set()
             pred_f = faulty_devices(bundle.submission) or set()
-            
+
             def get_node_type(name: str) -> str:
                 n_lower = name.lower()
                 if "router" in n_lower or "rtr" in n_lower or n_lower.startswith("r"):
@@ -575,7 +636,7 @@ def _render_dashboard() -> None:
                 if "server" in n_lower or "srv" in n_lower or n_lower.startswith("d"):
                     return "Server"
                 return "Controller"
-                
+
             sorted_nodes = sorted(nodes)
             device_items = []
             for node in sorted_nodes:
@@ -583,10 +644,10 @@ def _render_dashboard() -> None:
                 status_color = "#10b981"
                 status_text = "Healthy"
                 badge_style = ""
-                
+
                 is_actual = node in actual_f
                 is_pred = node in pred_f
-                
+
                 if is_actual and is_pred:
                     status_color = "#a78bfa"
                     status_text = "Failed (Matched)"
@@ -601,9 +662,9 @@ def _render_dashboard() -> None:
                     badge_style = "background: rgba(255, 180, 84, 0.1); border: 1px solid rgba(255, 180, 84, 0.3);"
                 else:
                     badge_style = "background: rgba(16, 185, 129, 0.05); border: 1px solid rgba(16, 185, 129, 0.2);"
-                
+
                 symbol = kind[0]
-                
+
                 device_html = f"""
                 <div style="display: flex; align-items: center; justify-content: space-between; padding: 0.5rem 0.75rem; margin-bottom: 0.4rem; border-radius: 8px; {badge_style}">
                   <div style="display: flex; align-items: center; gap: 0.6rem;">
@@ -622,20 +683,33 @@ def _render_dashboard() -> None:
                 </div>
                 """
                 device_items.append(device_html)
-                
-            st.markdown(f'<div style="max-height: 250px; overflow-y: auto; padding-right: 0.2rem;">{"".join(device_items)}</div>', unsafe_allow_html=True)
+
+            st.markdown(
+                f'<div style="max-height: 250px; overflow-y: auto; padding-right: 0.2rem;">{"".join(device_items)}</div>',
+                unsafe_allow_html=True,
+            )
             st.write("")
-            st.markdown('<div style="font-weight:700; font-size:0.95rem; margin-bottom:0.6rem; color:var(--ink);">Network Links</div>', unsafe_allow_html=True)
-            
+            st.markdown(
+                '<div style="font-weight:700; font-size:0.95rem; margin-bottom:0.6rem; color:var(--ink);">Network Links</div>',
+                unsafe_allow_html=True,
+            )
+
             link_items = []
             f_interfaces = fault_endpoints(bundle) or set()
-            
+
             for left_ep, right_ep in pairs:
-                left, left_intf = left_ep.split(":", 1) if ":" in left_ep else (left_ep, "")
-                right, right_intf = right_ep.split(":", 1) if ":" in right_ep else (right_ep, "")
-                
-                is_fault = (left, left_intf) in f_interfaces or (right, right_intf) in f_interfaces
-                
+                left, left_intf = (
+                    left_ep.split(":", 1) if ":" in left_ep else (left_ep, "")
+                )
+                right, right_intf = (
+                    right_ep.split(":", 1) if ":" in right_ep else (right_ep, "")
+                )
+
+                is_fault = (left, left_intf) in f_interfaces or (
+                    right,
+                    right_intf,
+                ) in f_interfaces
+
                 link_style = ""
                 status_color = "#64748b"
                 status_text = "Active"
@@ -645,7 +719,7 @@ def _render_dashboard() -> None:
                     status_text = "Faulty"
                 else:
                     link_style = "background: rgba(15, 23, 42, 0.02); border: 1px solid var(--line);"
-                
+
                 link_html = f"""
                 <div style="display: flex; align-items: center; justify-content: space-between; padding: 0.5rem 0.75rem; margin-bottom: 0.4rem; border-radius: 8px; {link_style}">
                   <div style="display: flex; flex-direction: column;">
@@ -664,8 +738,11 @@ def _render_dashboard() -> None:
                 </div>
                 """
                 link_items.append(link_html)
-                
-            st.markdown(f'<div style="max-height: 220px; overflow-y: auto; padding-right: 0.2rem;">{"".join(link_items)}</div>', unsafe_allow_html=True)
+
+            st.markdown(
+                f'<div style="max-height: 220px; overflow-y: auto; padding-right: 0.2rem;">{"".join(link_items)}</div>',
+                unsafe_allow_html=True,
+            )
 
     with replay_tab:
         steps = replay_steps(bundle, pairs)
@@ -732,10 +809,13 @@ def _render_dashboard() -> None:
                 else '<span class="step-segment"></span>'
                 for index in range(len(steps))
             )
-            device_chips = "".join(
-                f'<span class="device-chip">{html.escape(device)}</span>'
-                for device in step.devices
-            ) or '<span class="device-chip" style="opacity:.6">No device referenced</span>'
+            device_chips = (
+                "".join(
+                    f'<span class="device-chip">{html.escape(device)}</span>'
+                    for device in step.devices
+                )
+                or '<span class="device-chip" style="opacity:.6">No device referenced</span>'
+            )
             st.markdown(
                 f"""
                 <div class="step-track">{segments}</div>
@@ -774,5 +854,6 @@ def _render_dashboard() -> None:
                     st.info("This trace step contains lifecycle metadata only.")
                 with st.expander("Raw event"):
                     st.json(step.raw, expanded=False)
+
 
 _render_dashboard()

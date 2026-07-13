@@ -9,7 +9,10 @@ from agent.extensions.config import (
     DEFAULT_MODEL,
 )
 import nika.visualization.experiment_runner as experiment_runner
+from nika.cli.commands import studio as studio_command_module
 from nika.visualization.experiment_runner import (
+    DEFAULT_STUDIO_BENCHMARK,
+    DEFAULT_STUDIO_MAX_STEPS,
     build_experiment_command,
     build_command_plan,
     parse_progress_events,
@@ -25,12 +28,19 @@ def _config(**overrides: object) -> dict[str, object]:
         "modules": [],
         "agent_type": "react",
         "llm_backend": "custom",
-        "model": "openai/gpt-oss-20b",
+        "model": "openai/gpt-oss-120b",
         "max_steps": 100,
         "tool_library_id": "tools-test",
         "tool_doc_chars": 640,
         "tool_convergence_threshold": 0.8,
+        "tool_exploration_similarity_threshold": 0.85,
+        "tool_explorer_reflection_limit": 4,
+        "tool_explorer_model": "explorer-model",
+        "tool_analyzer_model": "analyzer-model",
+        "tool_rewriter_model": "rewriter-model",
         "procedural_memory_bank": "procedural-memory-test",
+        "procedural_memory_mode": "evolve",
+        "procedural_memory_evolve_until": 12,
         "procedural_memory_k": 5,
         "procedural_memory_tokens": 1500,
         "procedural_memory_max_skill_age": 6,
@@ -38,6 +48,14 @@ def _config(**overrides: object) -> dict[str, object]:
         "procedural_memory_update_threshold": 2,
         "procedural_memory_best_of_n": 5,
         "procedural_memory_ppo_epsilon": 0.15,
+        "procedural_memory_selection_epsilon": 0.25,
+        "procedural_memory_experience_pool_size": 900,
+        "procedural_memory_golden_pool_size": 15,
+        "procedural_memory_baseline_ema_alpha": 0.2,
+        "procedural_memory_selection_epsilon_decay_cases": 300,
+        "procedural_memory_acceptance_margin": 0.005,
+        "procedural_memory_evolver_model": "evolver-model",
+        "procedural_memory_policy_scorer_model": "policy-model",
     }
     config.update(overrides)
     return config
@@ -52,6 +70,24 @@ def test_baseline_command_uses_default_sequential_execution() -> None:
     assert command[command.index("--max-steps") + 1] == "100"
     assert "-j" not in command
     assert "--parallel" not in command
+
+
+def test_studio_launcher_forces_light_theme(monkeypatch) -> None:
+    commands: list[list[str]] = []
+    monkeypatch.setattr(
+        studio_command_module.subprocess,
+        "run",
+        lambda command, **_kwargs: commands.append(command),
+    )
+
+    studio_command_module.studio_command(
+        host="127.0.0.1",
+        port=8502,
+        no_browser=True,
+    )
+
+    command = commands[0]
+    assert command[command.index("--theme.base") + 1] == "light"
 
 
 def test_result_summary_uses_selected_benchmark_metrics() -> None:
@@ -86,7 +122,10 @@ def test_clean_control_composite_requires_false_detection_and_empty_sets() -> No
 
 
 def test_studio_counts_benchmark_with_clean_controls(tmp_path: Path) -> None:
-    from nika.visualization.experiment_dashboard import _count_rows
+    from nika.visualization.experiment_dashboard import (
+        _count_rows,
+        _default_evolve_cases,
+    )
 
     benchmark = tmp_path / "clean-controls.yaml"
     benchmark.write_text(
@@ -95,19 +134,60 @@ def test_studio_counts_benchmark_with_clean_controls(tmp_path: Path) -> None:
     )
 
     assert _count_rows(benchmark) == 1
+    assert _default_evolve_cases(benchmark, row_count=1) == 1
 
 
-def test_command_fallbacks_match_extension_defaults(monkeypatch) -> None:
+def test_evaluate_benchmark_declares_curriculum_cutoff() -> None:
+    from nika.visualization.experiment_dashboard import (
+        DEFAULT_STUDIO_BENCHMARK,
+        _count_rows,
+        _default_evolve_cases,
+    )
+
+    benchmark = Path(DEFAULT_STUDIO_BENCHMARK)
+    row_count = _count_rows(benchmark)
+
+    assert row_count == 125
+    assert _default_evolve_cases(benchmark, row_count=row_count) == 54
+
+
+def test_command_fallbacks_match_studio_defaults(monkeypatch) -> None:
     monkeypatch.setenv("NIKA_MAX_STEPS", "20")
     config = _config()
-    for key in ("llm_backend", "model", "max_steps"):
+    for key in ("benchmark_file", "llm_backend", "model", "max_steps"):
         config.pop(key)
 
     command = build_experiment_command(config)
 
     assert command[command.index("--provider") + 1] == DEFAULT_LLM_BACKEND
     assert command[command.index("--model") + 1] == DEFAULT_MODEL
-    assert command[command.index("--max-steps") + 1] == "20"
+    assert command[command.index("--max-steps") + 1] == str(DEFAULT_STUDIO_MAX_STEPS)
+    assert command[command.index("--config") + 1] == DEFAULT_STUDIO_BENCHMARK
+
+
+def test_learning_role_models_default_to_agent_model() -> None:
+    config = _config(modules=["tool_refinement", "procedural_memory"])
+    config.pop("model")
+    for key in (
+        "tool_explorer_model",
+        "tool_analyzer_model",
+        "tool_rewriter_model",
+        "procedural_memory_evolver_model",
+        "procedural_memory_policy_scorer_model",
+    ):
+        config.pop(key)
+
+    command = build_experiment_command(config)
+
+    for flag in (
+        "--model",
+        "--tool-refinement-explorer-model",
+        "--tool-refinement-analyzer-model",
+        "--tool-refinement-rewriter-model",
+        "--procedural-memory-evolver-model",
+        "--procedural-memory-policy-scorer-model",
+    ):
+        assert command[command.index(flag) + 1] == DEFAULT_MODEL
 
 
 def test_tool_and_memory_modules_share_one_sequential_command() -> None:
@@ -124,12 +204,61 @@ def test_tool_and_memory_modules_share_one_sequential_command() -> None:
     assert (
         command[command.index("--tool-refinement-convergence-threshold") + 1] == "0.8"
     )
+    assert (
+        command[command.index("--tool-refinement-exploration-similarity-threshold") + 1]
+        == "0.85"
+    )
+    assert (
+        command[command.index("--tool-refinement-explorer-reflection-limit") + 1] == "4"
+    )
+    assert command[command.index("--tool-refinement-explorer-model") + 1] == (
+        "explorer-model"
+    )
+    assert command[command.index("--tool-refinement-analyzer-model") + 1] == (
+        "analyzer-model"
+    )
+    assert command[command.index("--tool-refinement-rewriter-model") + 1] == (
+        "rewriter-model"
+    )
     assert command[command.index("--procedural-memory") + 1] == "procedural-memory-test"
     assert command[command.index("--procedural-memory-max-skill-age") + 1] == "6"
     assert command[command.index("--procedural-memory-pool-size") + 1] == "24"
     assert command[command.index("--procedural-memory-update-threshold") + 1] == "2"
     assert command[command.index("--procedural-memory-best-of-n") + 1] == "5"
     assert command[command.index("--procedural-memory-ppo-epsilon") + 1] == "0.15"
+    assert command[command.index("--procedural-memory-selection-epsilon") + 1] == "0.25"
+    assert (
+        command[command.index("--procedural-memory-experience-pool-size") + 1] == "900"
+    )
+    assert command[command.index("--procedural-memory-golden-pool-size") + 1] == "15"
+    assert command[command.index("--procedural-memory-baseline-ema-alpha") + 1] == "0.2"
+    assert (
+        command[command.index("--procedural-memory-selection-epsilon-decay-cases") + 1]
+        == "300"
+    )
+    assert (
+        command[command.index("--procedural-memory-acceptance-margin") + 1] == "0.005"
+    )
+    assert command[command.index("--procedural-memory-evolver-model") + 1] == (
+        "evolver-model"
+    )
+    assert command[command.index("--procedural-memory-policy-scorer-model") + 1] == (
+        "policy-model"
+    )
+    assert command[command.index("--procedural-memory-evolve-until") + 1] == "12"
+
+
+def test_procedural_memory_read_mode_uses_read_only_flag() -> None:
+    command = build_experiment_command(
+        _config(
+            modules=["procedural_memory"],
+            procedural_memory_mode="read",
+        )
+    )
+
+    assert "--procedural-memory-read" in command
+    assert "--procedural-memory" not in command
+    assert "--procedural-memory-evolve-until" not in command
 
 
 def test_command_plan_for_memory_has_no_service_prerequisite() -> None:
@@ -142,6 +271,11 @@ def test_command_plan_for_memory_has_no_service_prerequisite() -> None:
     assert len(plan) == 1
     assert plan[0].variant == "benchmark"
     assert plan[0].name == "ReAct + Procedural Memory"
+    assert "--procedural-memory-evolve-until" in plan[0].command
+    assert (
+        plan[0].command[plan[0].command.index("--procedural-memory-evolve-until") + 1]
+        == "12"
+    )
 
 
 def test_prepare_experiment_config_uses_one_sequential_name_for_outputs(
@@ -327,7 +461,7 @@ def test_result_aggregation_excludes_clean_controls_from_localization_and_rca(
                     "session_id": name,
                     "status": "finished",
                     "agent_type": "byo.langgraph",
-                    "model": "openai/gpt-oss-20b",
+                    "model": "openai/gpt-oss-120b",
                     "problem_names": ["link_down" if is_anomaly else "no_fault"],
                 }
             ),

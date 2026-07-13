@@ -1073,6 +1073,8 @@ def rewrite_documentation(
     metrics: dict[str, Any],
     llm_backend: str | None = None,
     model: str | None = None,
+    analyzer_model: str | None = None,
+    rewriter_model: str | None = None,
     documented_tools_at_start: set[str] | None = None,
     convergence_threshold: float = DRAFT_CONVERGENCE_THRESHOLD,
     llm: Any | None = None,
@@ -1085,6 +1087,8 @@ def rewrite_documentation(
             metrics=metrics,
             llm_backend=llm_backend,
             model=model,
+            analyzer_model=analyzer_model,
+            rewriter_model=rewriter_model,
             documented_tools_at_start=documented_tools_at_start,
             convergence_threshold=convergence_threshold,
             llm=llm,
@@ -1099,25 +1103,55 @@ def _rewrite_documentation_unlocked(
     metrics: dict[str, Any],
     llm_backend: str | None = None,
     model: str | None = None,
+    analyzer_model: str | None = None,
+    rewriter_model: str | None = None,
     documented_tools_at_start: set[str] | None = None,
     convergence_threshold: float = DRAFT_CONVERGENCE_THRESHOLD,
     llm: Any | None = None,
 ) -> list[DocumentationRevision]:
     state = store.load()
-    learning_llm: Any | None = llm
-    learning_llm_error = ""
     selected_backend = learning_backend(llm_backend)
-    selected_model = learning_model(model)
-    if learning_llm is None and selected_backend and selected_model:
+    selected_analyzer_model = (
+        analyzer_model.strip()
+        if isinstance(analyzer_model, str) and analyzer_model.strip()
+        else learning_model(model)
+    )
+    selected_rewriter_model = (
+        rewriter_model.strip()
+        if isinstance(rewriter_model, str) and rewriter_model.strip()
+        else learning_model(model)
+    )
+    role_models: dict[str, tuple[Any | None, str]] = {}
+
+    def load_role_model(role_model: str | None) -> tuple[Any | None, str]:
+        if llm is not None:
+            return llm, ""
+        selected_model = (
+            role_model.strip()
+            if isinstance(role_model, str) and role_model.strip()
+            else learning_model(model)
+        )
+        if not selected_backend or not selected_model:
+            return None, ""
+        if selected_model in role_models:
+            return role_models[selected_model]
         try:
-            learning_llm = load_model(
-                selected_backend,
-                selected_model,
-                timeout=learning_timeout_seconds(),
-                max_retries=learning_max_retries(),
+            loaded = (
+                load_model(
+                    selected_backend,
+                    selected_model,
+                    timeout=learning_timeout_seconds(),
+                    max_retries=learning_max_retries(),
+                ),
+                "",
             )
         except Exception as exc:
-            learning_llm_error = format_learning_error(exc)
+            loaded = (None, format_learning_error(exc))
+        role_models[selected_model] = loaded
+        return loaded
+
+    analyzer_llm, analyzer_llm_error = load_role_model(analyzer_model)
+    rewriter_llm, rewriter_llm_error = load_role_model(rewriter_model)
     start_docs = (
         set(state.documents)
         if documented_tools_at_start is None
@@ -1231,9 +1265,9 @@ def _rewrite_documentation_unlocked(
             gaps=gaps,
             doc=doc,
             llm_backend=llm_backend,
-            model=model,
-            llm=learning_llm,
-            llm_error=learning_llm_error,
+            model=analyzer_model or model,
+            llm=analyzer_llm,
+            llm_error=analyzer_llm_error,
         )
         suggestion = llm_suggestion or fallback_suggestion
         tool_suggestions = [suggestion]
@@ -1278,9 +1312,9 @@ def _rewrite_documentation_unlocked(
             explorations=explorations,
             metrics=metrics,
             llm_backend=llm_backend,
-            model=model,
-            llm=learning_llm,
-            llm_error=learning_llm_error,
+            model=rewriter_model or model,
+            llm=rewriter_llm,
+            llm_error=rewriter_llm_error,
         )
         all_evidence_trials = [
             trial for trial in state.trials if trial.tool_name == tool_name
@@ -1439,7 +1473,12 @@ def _rewrite_documentation_unlocked(
                 "rca_accuracy": accuracy,
                 "tool_error_rate": sum(not item.success for item in tool_trials)
                 / max(len(tool_trials), 1),
-                "llm_attempted": (1.0 if selected_backend and selected_model else 0.0),
+                "llm_attempted": (
+                    1.0
+                    if selected_backend
+                    and (selected_analyzer_model or selected_rewriter_model)
+                    else 0.0
+                ),
                 "llm_rewrite": 1.0 if proposal is not None else 0.0,
                 "llm_failed": 1.0 if (analyzer_error or rewriter_error) else 0.0,
                 "llm_analyzer": 1.0 if llm_suggestion is not None else 0.0,
@@ -1514,6 +1553,8 @@ def finalize_tool_refinement_session(
         metrics=metrics,
         llm_backend=getattr(session, "llm_backend", None),
         model=getattr(session, "model", None),
+        analyzer_model=(getattr(session, "tool_analyzer_model", "") or None),
+        rewriter_model=(getattr(session, "tool_rewriter_model", "") or None),
         documented_tools_at_start=documented_tools_at_start,
         convergence_threshold=convergence_threshold,
     )
@@ -1565,6 +1606,19 @@ def finalize_tool_refinement_session(
         "draft_config": {
             "convergence_threshold": convergence_threshold,
             "tool_doc_chars": getattr(session, "tool_doc_chars", None),
+            "exploration_similarity_threshold": getattr(
+                session,
+                "tool_exploration_similarity_threshold",
+                DRAFT_EXPLORATION_SIMILARITY_THRESHOLD,
+            ),
+            "explorer_reflection_limit": getattr(
+                session,
+                "tool_explorer_reflection_limit",
+                3,
+            ),
+            "explorer_model": getattr(session, "tool_explorer_model", ""),
+            "analyzer_model": getattr(session, "tool_analyzer_model", ""),
+            "rewriter_model": getattr(session, "tool_rewriter_model", ""),
         },
     }
     (session_dir / "tool_refinement.json").write_text(

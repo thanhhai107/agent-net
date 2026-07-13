@@ -129,6 +129,11 @@ class ToolRefinementRuntime:
         llm_backend: str = "",
         model: str = "",
         convergence_threshold: float = 0.75,
+        exploration_similarity_threshold: float = 0.9,
+        explorer_reflection_limit: int = 3,
+        explorer_model: str = "",
+        analyzer_model: str = "",
+        rewriter_model: str = "",
     ) -> None:
         self.session = session
         self.primitive_tools = list(primitive_tools)
@@ -139,6 +144,11 @@ class ToolRefinementRuntime:
         self.llm_backend = llm_backend
         self.model = model
         self.convergence_threshold = float(convergence_threshold)
+        self.exploration_similarity_threshold = float(exploration_similarity_threshold)
+        self.explorer_reflection_limit = max(0, int(explorer_reflection_limit))
+        self.explorer_model = explorer_model.strip()
+        self.analyzer_model = analyzer_model.strip()
+        self.rewriter_model = rewriter_model.strip()
         self._explorer_report: dict[str, Any] = {}
         self._base_descriptions = {
             tool.name: _primitive_description(tool) for tool in self.primitive_tools
@@ -264,6 +274,12 @@ class ToolRefinementRuntime:
                 llm_backend=self.llm_backend,
                 model=self.model,
                 convergence_threshold=self.convergence_threshold,
+                exploration_similarity_threshold=(
+                    self.exploration_similarity_threshold
+                ),
+                explorer_reflection_limit=self.explorer_reflection_limit,
+                analyzer_model=self.analyzer_model,
+                rewriter_model=self.rewriter_model,
             )
         except Exception as exc:
             self._explorer_report = {
@@ -307,6 +323,13 @@ class ToolRefinementRuntime:
             "config": {
                 "tool_doc_chars": self.tool_doc_chars,
                 "convergence_threshold": self.convergence_threshold,
+                "exploration_similarity_threshold": (
+                    self.exploration_similarity_threshold
+                ),
+                "explorer_reflection_limit": self.explorer_reflection_limit,
+                "explorer_model": self.explorer_model or self.model,
+                "analyzer_model": self.analyzer_model or self.model,
+                "rewriter_model": self.rewriter_model or self.model,
             },
             "explorer": self._explorer_report,
             "analyzer_suggestions": len(state.analyzer_suggestions),

@@ -19,7 +19,7 @@ def _config(agent_type: str) -> AgentRunConfig:
     return AgentRunConfig(
         agent_type=agent_type,
         llm_provider="custom",
-        model="openai/gpt-oss-20b",
+        model="openai/gpt-oss-120b",
         max_steps=20,
         session_id="session-1",
     )

@@ -13,6 +13,7 @@ from langchain.agents.middleware import ModelRequest, dynamic_prompt
 from agent.byo.langgraph.phases.diagnosis import DiagnosisPhase
 from agent.byo.langgraph.react_agent import BasicReActAgent
 from agent.composition import AgentRunConfig
+from agent.extensions.llm import load_extension_model
 from agent.procedural_memory.runtime import SkillToolRuntime
 from agent.procedural_memory.service import ProceduralMemoryModule
 from agent.tool_refinement.integration import write_tool_refinement_session
@@ -73,15 +74,31 @@ class LearningDiagnosisPhase(DiagnosisPhase):
     async def load_tools(self) -> None:
         await super().load_tools()
         if self.config.tool_refinement.enabled:
+            explorer_model = self.config.tool_refinement.explorer_model.strip()
+            explorer_llm = self.llm
+            if explorer_model and explorer_model != self.config.model:
+                explorer_llm = load_extension_model(
+                    self.config.llm_provider,
+                    explorer_model,
+                )
             self.tool_refinement_runtime = ToolRefinementRuntime(
                 session=self.session,
                 primitive_tools=self.tools or [],
                 library_id=self.config.tool_refinement.library_id,
                 tool_doc_chars=self.config.tool_refinement.tool_doc_chars,
-                explorer_llm=self.llm,
+                explorer_llm=explorer_llm,
                 llm_backend=self.config.llm_provider,
                 model=self.config.model,
                 convergence_threshold=self.config.tool_refinement.convergence_threshold,
+                exploration_similarity_threshold=(
+                    self.config.tool_refinement.exploration_similarity_threshold
+                ),
+                explorer_reflection_limit=(
+                    self.config.tool_refinement.explorer_reflection_limit
+                ),
+                explorer_model=self.config.tool_refinement.explorer_model,
+                analyzer_model=self.config.tool_refinement.analyzer_model,
+                rewriter_model=self.config.tool_refinement.rewriter_model,
             )
             self.tools = self.tool_refinement_runtime.build_tools(
                 append_docs=not self.config.procedural_memory.enabled
@@ -102,6 +119,15 @@ class LearningDiagnosisPhase(DiagnosisPhase):
             evolution_threshold=procedural_memory_config.evolution_threshold,
             best_of_n=procedural_memory_config.best_of_n,
             ppo_epsilon=procedural_memory_config.ppo_epsilon,
+            experience_pool_size=procedural_memory_config.experience_pool_size,
+            golden_pool_size=procedural_memory_config.golden_pool_size,
+            baseline_ema_alpha=procedural_memory_config.baseline_ema_alpha,
+            selection_epsilon_decay_cases=(
+                procedural_memory_config.selection_epsilon_decay_cases
+            ),
+            acceptance_margin=procedural_memory_config.acceptance_margin,
+            evolver_model=procedural_memory_config.evolver_model,
+            policy_scorer_model=procedural_memory_config.policy_scorer_model,
         )
         self.skill_tool_runtime = SkillToolRuntime(
             procedural_memory=procedural_memory,
