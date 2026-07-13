@@ -8,6 +8,7 @@ works with typed extension config.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+
 LANGGRAPH_DIAGNOSIS_AGENT_TYPES = frozenset(
     {"react", "byo.langgraph", "plan-execute", "reflexion"}
 )
@@ -27,11 +28,12 @@ class ProceduralMemoryConfig:
     bank: str = "default"
     top_k: int = 5
     token_budget: int = 1500
-    max_skill_age: int = 4
+    max_skill_age: int = 8
     pool_size: int = 32
-    evolution_threshold: int = 3
+    evolution_threshold: int = 6
     best_of_n: int = 3
     ppo_epsilon: float = 0.2
+    selection_epsilon: float = 0.3
 
     @property
     def enabled(self) -> bool:
@@ -103,9 +105,14 @@ def validate_agent_extensions(config: AgentRunConfig) -> None:
         raise ValueError("Procedural Memory update threshold must be >= 1")
     if config.procedural_memory.best_of_n < 1:
         raise ValueError("Procedural Memory best-of-N must be >= 1")
-    if config.procedural_memory.ppo_epsilon < 0:
-        raise ValueError("Procedural Memory PPO epsilon must be >= 0")
-    if config.procedural_memory.enabled and agent_type not in LANGGRAPH_DIAGNOSIS_AGENT_TYPES:
+    if not 0 <= config.procedural_memory.ppo_epsilon <= 1:
+        raise ValueError("Procedural Memory PPO epsilon must be in [0, 1]")
+    if not 0 <= config.procedural_memory.selection_epsilon <= 1:
+        raise ValueError("Procedural Memory selection epsilon must be in [0, 1]")
+    if (
+        config.procedural_memory.enabled
+        and agent_type not in LANGGRAPH_DIAGNOSIS_AGENT_TYPES
+    ):
         supported = ", ".join(sorted(LANGGRAPH_DIAGNOSIS_AGENT_TYPES))
         raise ValueError(
             f"Procedural Memory is supported only for these workflows: {supported}"

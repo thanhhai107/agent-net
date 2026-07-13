@@ -16,17 +16,30 @@ def _write_extension_metadata(session: Session, config: AgentRunConfig) -> None:
     session.update_session("procedural_memory_mode", config.procedural_memory.mode)
     session.update_session("procedural_memory_bank", config.procedural_memory.bank)
     session.update_session("procedural_memory_top_k", config.procedural_memory.top_k)
-    session.update_session("procedural_memory_token_budget", config.procedural_memory.token_budget)
-    session.update_session("procedural_memory_max_skill_age", config.procedural_memory.max_skill_age)
-    session.update_session("procedural_memory_pool_size", config.procedural_memory.pool_size)
     session.update_session(
-        "procedural_memory_update_threshold", config.procedural_memory.evolution_threshold
+        "procedural_memory_token_budget", config.procedural_memory.token_budget
     )
-    session.update_session("procedural_memory_best_of_n", config.procedural_memory.best_of_n)
-    session.update_session("procedural_memory_ppo_epsilon", config.procedural_memory.ppo_epsilon)
     session.update_session(
-        "tool_refinement_enabled", config.tool_refinement.enabled
+        "procedural_memory_max_skill_age", config.procedural_memory.max_skill_age
     )
+    session.update_session(
+        "procedural_memory_pool_size", config.procedural_memory.pool_size
+    )
+    session.update_session(
+        "procedural_memory_update_threshold",
+        config.procedural_memory.evolution_threshold,
+    )
+    session.update_session(
+        "procedural_memory_best_of_n", config.procedural_memory.best_of_n
+    )
+    session.update_session(
+        "procedural_memory_ppo_epsilon", config.procedural_memory.ppo_epsilon
+    )
+    session.update_session(
+        "procedural_memory_selection_epsilon",
+        config.procedural_memory.selection_epsilon,
+    )
+    session.update_session("tool_refinement_enabled", config.tool_refinement.enabled)
     session.update_session("tool_library_id", config.tool_refinement.library_id)
     session.update_session("tool_doc_chars", config.tool_refinement.tool_doc_chars)
     session.update_session(

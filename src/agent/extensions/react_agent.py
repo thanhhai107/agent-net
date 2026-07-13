@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 
 from langchain.agents import create_agent
+from langchain.agents.middleware import ModelRequest, dynamic_prompt
 
 from agent.byo.langgraph.phases.diagnosis import DiagnosisPhase
 from agent.byo.langgraph.react_agent import BasicReActAgent
@@ -21,11 +22,33 @@ from agent.utils.template import OVERALL_DIAGNOSIS_PROMPT
 from nika.utils.session import Session
 
 
+def _decision_context(request: ModelRequest) -> str:
+    for message in reversed(request.messages):
+        if getattr(message, "type", "") == "human":
+            return str(getattr(message, "content", "") or "")
+    return ""
+
+
 def configure_custom_provider_environment() -> None:
     """Translate the local URL name to the variable expected by NIKA core."""
     custom_url = os.getenv("CUSTOM_API_URL", "").strip()
     if custom_url:
         os.environ["CUSTOM_API_BASE"] = custom_url.rstrip("/")
+
+
+class _ExploringDiagnosisRunner:
+    """Run DRAFT exploration after one complete ReAct diagnosis invocation."""
+
+    def __init__(self, runner, runtime: ToolRefinementRuntime) -> None:
+        self.runner = runner
+        self.runtime = runtime
+
+    async def ainvoke(self, inputs, *args, **kwargs):
+        result = await self.runner.ainvoke(inputs, *args, **kwargs)
+        messages = inputs.get("messages") or [] if isinstance(inputs, dict) else []
+        task_description = str(getattr(messages[0], "content", "")) if messages else ""
+        await self.runtime.explore(task_description)
+        return result
 
 
 class LearningDiagnosisPhase(DiagnosisPhase):
@@ -55,6 +78,10 @@ class LearningDiagnosisPhase(DiagnosisPhase):
                 primitive_tools=self.tools or [],
                 library_id=self.config.tool_refinement.library_id,
                 tool_doc_chars=self.config.tool_refinement.tool_doc_chars,
+                explorer_llm=self.llm,
+                llm_backend=self.config.llm_provider,
+                model=self.config.model,
+                convergence_threshold=self.config.tool_refinement.convergence_threshold,
             )
             self.tools = self.tool_refinement_runtime.build_tools(
                 append_docs=not self.config.procedural_memory.enabled
@@ -87,18 +114,31 @@ class LearningDiagnosisPhase(DiagnosisPhase):
             top_k=procedural_memory_config.top_k,
             token_budget=procedural_memory_config.token_budget,
             max_skill_age=procedural_memory_config.max_skill_age,
+            selection_epsilon=procedural_memory_config.selection_epsilon,
             meta_controller_llm=self.llm,
         )
         self.tools = self.skill_tool_runtime.wrap_tools(list(self._base_tools))
 
     def get_agent(self):
+        middleware = []
         system_prompt = OVERALL_DIAGNOSIS_PROMPT
         if self.skill_tool_runtime is not None:
-            system_prompt += self.skill_tool_runtime.prompt_suffix(activate_skill=True)
+            runtime = self.skill_tool_runtime
+
+            @dynamic_prompt
+            def skill_policy_prompt(request: ModelRequest) -> str:
+                return OVERALL_DIAGNOSIS_PROMPT + runtime.prompt_suffix(
+                    activate_skill=True,
+                    decision_context=_decision_context(request),
+                )
+
+            middleware.append(skill_policy_prompt)
+            system_prompt = None
         return create_agent(
             model=self.llm,
             system_prompt=system_prompt,
             tools=self.tools,
+            middleware=middleware,
             name=DIAGNOSIS,
         )
 
@@ -119,6 +159,7 @@ class LearningReActAgent(BasicReActAgent):
         asyncio.run(self._learning_phase.load_tools())
         if config.tool_refinement.enabled and not config.procedural_memory.enabled:
             self._diagnosis_runner = self._learning_phase.get_agent()
+            self._install_exploring_runner()
 
     async def run(self, task_description: str):
         if self.extension_config.procedural_memory.enabled:
@@ -126,10 +167,21 @@ class LearningReActAgent(BasicReActAgent):
                 task_description, self.session_dir
             )
             self._diagnosis_runner = self._learning_phase.get_agent()
+            self._install_exploring_runner()
         try:
             return await super().run(task_description)
         finally:
             self._write_extension_snapshots()
+
+    def _install_exploring_runner(self) -> None:
+        runtime = self._learning_phase.tool_refinement_runtime
+        if runtime is not None and not isinstance(
+            self._diagnosis_runner, _ExploringDiagnosisRunner
+        ):
+            self._diagnosis_runner = _ExploringDiagnosisRunner(
+                self._diagnosis_runner,
+                runtime,
+            )
 
     def _write_extension_snapshots(self) -> None:
         write_tool_refinement_session(

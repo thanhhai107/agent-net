@@ -17,6 +17,7 @@ dependencies = [
     "instructor",
     "kathara",
     "python-dotenv",
+    "requests>=2.32",
     "langchain-deepseek",
     "langgraph",
     "mcp[cli]==1.28.0",

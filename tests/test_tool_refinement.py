@@ -2,34 +2,627 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from types import SimpleNamespace
 
+from langchain_core.messages import ToolMessage
 from langchain_core.tools import StructuredTool
 from unittest.mock import patch
 
 from agent.tool_refinement.curator import (
+    _exploration_is_read_only,
+    _exploration_signature,
     extract_tool_trials,
     identify_comprehension_gaps,
     rewrite_documentation,
 )
+from agent.tool_refinement.explorer import _validate_parameters, run_active_exploration
+from agent.tool_refinement.generalization import generalize_tool_documentation
 from agent.tool_refinement.models import (
     DraftAnalyzerDraft,
     DraftExploration,
+    DraftExplorerDraft,
     DraftRewriteProposal,
     ToolDocumentation,
     ToolParameterDoc,
+    ToolTrial,
 )
 from agent.tool_refinement.runtime import ToolRefinementRuntime
 from agent.tool_refinement.store import ToolRefinementStore
+from agent.utils.loggers import AgentCallbackLogger
+from agent.utils.tool_output import classify_tool_outcome
 from nika.evaluator.result_log import build_eval_result_from_session_dir
 from nika.workflows.eval.session import run_eval_metrics
 
 
 class DraftToolRefinementTest(unittest.TestCase):
+    def test_store_serializes_concurrent_trial_updates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "library"
+
+            def record(index: int) -> None:
+                ToolRefinementStore("draft", root=root).record_trials(
+                    [
+                        ToolTrial(
+                            trial_id=f"trial-{index}",
+                            session_id=f"session-{index}",
+                            tool_name="inspect_state",
+                            status="success",
+                        )
+                    ]
+                )
+
+            with ThreadPoolExecutor(max_workers=8) as executor:
+                list(executor.map(record, range(40)))
+            state = ToolRefinementStore("draft", root=root).load()
+
+        self.assertEqual(len(state.trials), 40)
+        self.assertEqual(len({trial.trial_id for trial in state.trials}), 40)
+
+    def test_explorer_read_only_gate_blocks_network_mutation_commands(self) -> None:
+        for command in (
+            "ip link set eth0 down",
+            "ip route add default via 192.0.2.1",
+            "vtysh -c 'configure terminal'",
+            "service frr restart",
+            "tee /etc/network/interfaces",
+        ):
+            self.assertFalse(
+                _exploration_is_read_only(
+                    tool_name="run_command",
+                    parameters={"command": command},
+                    text="Inspect network state.",
+                ),
+                command,
+            )
+        self.assertTrue(
+            _exploration_is_read_only(
+                tool_name="run_command",
+                parameters={"command": "ip route show"},
+                text="Inspect routing state.",
+            )
+        )
+        self.assertTrue(
+            _exploration_is_read_only(
+                tool_name="frr_exec",
+                parameters={"router_name": "r1", "command": "show ip bgp summary"},
+                text="Inspect BGP state.",
+            )
+        )
+        self.assertFalse(
+            _exploration_is_read_only(
+                tool_name="exec_shell",
+                parameters={"host_name": "h1", "command": "echo changed"},
+                text="Inspect state.",
+            )
+        )
+        self.assertFalse(
+            _exploration_is_read_only(
+                tool_name="exec_shell",
+                parameters={
+                    "host_name": "h1",
+                    "command": "ip route show; touch /tmp/probe",
+                },
+                text="Inspect state.",
+            )
+        )
+        self.assertFalse(
+            _exploration_is_read_only(
+                tool_name="ethtool",
+                parameters={"host_name": "h1", "interface": "eth0", "args": "-s"},
+                text="Inspect link state.",
+            )
+        )
+
+    def test_exploration_diversity_ignores_runtime_identifier_changes(self) -> None:
+        first = _exploration_signature(
+            tool_name="show_route",
+            user_query="Inspect routes on router_a.",
+            parameters={"router_name": "router_a"},
+        )
+        second = _exploration_signature(
+            tool_name="show_route",
+            user_query="Inspect routes on router_b.",
+            parameters={"router_name": "router_b"},
+        )
+
+        self.assertEqual(first, second)
+
+    def test_explorer_rejects_unbounded_numeric_probe_values(self) -> None:
+        def ping_host(host_name: str, count: int = 4) -> str:
+            return f"{host_name}:{count}"
+
+        tool = StructuredTool.from_function(
+            ping_host,
+            name="ping_host",
+            description="Check reachability.",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            store = ToolRefinementStore("draft", root=Path(tmp) / "library")
+            ToolRefinementRuntime(
+                session=object(),
+                primitive_tools=[tool],
+                library_id="draft",
+                store=store,
+            )
+            doc = store.get_document("ping_host")
+        assert doc is not None
+        observed = [
+            ToolTrial(
+                trial_id="trial",
+                session_id="s1",
+                tool_name="ping_host",
+                arguments={"host_name": "host_a"},
+                status="success",
+            )
+        ]
+
+        rejected, error = _validate_parameters(
+            tool,
+            doc,
+            {"host_name": "host_a", "count": 999999},
+            grounded_identifiers={"host_name": {"host_a"}},
+            observed_trials=observed,
+        )
+        accepted, accepted_error = _validate_parameters(
+            tool,
+            doc,
+            {"host_name": "host_a", "count": 4},
+            grounded_identifiers={"host_name": {"host_a"}},
+            observed_trials=observed,
+        )
+
+        self.assertIsNone(rejected)
+        self.assertIn("source default", error)
+        self.assertEqual(accepted, {"host_name": "host_a", "count": 4})
+        self.assertEqual(accepted_error, "")
+
+    def test_self_driven_explorer_executes_grounded_probe_and_rewrites(self) -> None:
+        calls: list[str] = []
+        explorer_prompts: list[str] = []
+
+        def ping_host(host_name: str) -> str:
+            calls.append(host_name)
+            return f"{host_name} reachable"
+
+        class FakeModel:
+            schema: type | None = None
+
+            def with_structured_output(self, schema):
+                self.schema = schema
+                return self
+
+            async def ainvoke(self, prompt):
+                explorer_prompts.append(prompt)
+                return DraftExplorerDraft(
+                    user_query="Check current reachability for the observed endpoint.",
+                    parameters={"host_name": "host_a"},
+                )
+
+            def invoke(self, _prompt):
+                if self.schema is DraftAnalyzerDraft:
+                    return DraftAnalyzerDraft(
+                        suggestion="Clarify successful reachability output."
+                    )
+                return DraftRewriteProposal(
+                    tool_name="ping_host",
+                    tool_usage_description="Check reachability for an observed host.",
+                    next_exploration_direction="Explore another valid observed endpoint.",
+                )
+
+        tool = StructuredTool.from_function(
+            ping_host,
+            name="ping_host",
+            description="Check whether one host is reachable.",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            session = SimpleNamespace(session_id="s1", session_dir=tmp)
+            store = ToolRefinementStore("draft", root=Path(tmp) / "library")
+            ToolRefinementRuntime(
+                session=session,
+                primitive_tools=[tool],
+                library_id="draft",
+                store=store,
+            )
+            trace = self._trace(
+                tmp,
+                [
+                    ("tool_start", "1", "ping_host", "{'host_name': 'host_a'}", ""),
+                    ("tool_end", "1", "ping_host", "", "host_a reachable"),
+                ],
+            )
+            before_trace = trace.read_text(encoding="utf-8")
+            report = asyncio.run(
+                run_active_exploration(
+                    session_id="s1",
+                    session_dir=tmp,
+                    task_description="Inspect network health.",
+                    tools=[tool],
+                    store=store,
+                    llm=FakeModel(),
+                    llm_backend="custom",
+                    model="test-model",
+                    convergence_threshold=0.75,
+                )
+            )
+            state = store.load()
+            doc = state.documents["ping_host"]
+            after_trace = trace.read_text(encoding="utf-8")
+
+        self.assertEqual(report["active_explorations"], 1)
+        self.assertEqual(calls, ["host_a"])
+        self.assertEqual(len(state.explorations), 1)
+        self.assertTrue(state.explorations[0].trial_id.startswith("active_trial_"))
+        self.assertEqual(
+            doc.next_exploration_direction,
+            "Explore another valid observed endpoint.",
+        )
+        self.assertIn("Grounded identifier values", explorer_prompts[0])
+        self.assertEqual(before_trace, after_trace)
+
+    def test_self_driven_explorer_rejects_ungrounded_identifier(self) -> None:
+        calls: list[str] = []
+        prompts: list[str] = []
+
+        def ping_host(host_name: str) -> str:
+            calls.append(host_name)
+            return "reachable"
+
+        class FakeModel:
+            def with_structured_output(self, _schema):
+                return self
+
+            async def ainvoke(self, prompt):
+                prompts.append(prompt)
+                return DraftExplorerDraft(
+                    user_query="Check a different endpoint.",
+                    parameters={"host_name": "invented_host"},
+                )
+
+        tool = StructuredTool.from_function(
+            ping_host,
+            name="ping_host",
+            description="Check whether one host is reachable.",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            store = ToolRefinementStore("draft", root=Path(tmp) / "library")
+            ToolRefinementRuntime(
+                session=SimpleNamespace(session_id="s1", session_dir=tmp),
+                primitive_tools=[tool],
+                library_id="draft",
+                store=store,
+            )
+            state = store.load()
+            state.trials.append(
+                ToolTrial(
+                    trial_id="old-trial",
+                    session_id="old-session",
+                    tool_name="ping_host",
+                    arguments={"host_name": "invented_host"},
+                    status="success",
+                    output_summary="reachable",
+                )
+            )
+            state.explorations.append(
+                DraftExploration(
+                    exploration_id="old-exploration",
+                    session_id="old-session",
+                    trial_id="old-trial",
+                    tool_name="ping_host",
+                    user_query="Check invented_host.",
+                    parameters={"host_name": "invented_host"},
+                    observation="reachable",
+                    status="success",
+                )
+            )
+            store.save(state)
+            self._trace(
+                tmp,
+                [
+                    ("tool_start", "1", "ping_host", "{'host_name': 'host_a'}", ""),
+                    ("tool_end", "1", "ping_host", "", "host_a reachable"),
+                ],
+            )
+            report = asyncio.run(
+                run_active_exploration(
+                    session_id="s1",
+                    session_dir=tmp,
+                    task_description="Inspect network health.",
+                    tools=[tool],
+                    store=store,
+                    llm=FakeModel(),
+                    llm_backend="custom",
+                    model="test-model",
+                    convergence_threshold=0.75,
+                )
+            )
+
+        self.assertEqual(calls, [])
+        self.assertEqual(report["active_explorations"], 0)
+        self.assertIn("must reuse values", report["skipped"]["ping_host"])
+        self.assertTrue(prompts)
+        self.assertNotIn("invented_host", "\n".join(prompts))
+        self.assertIn("<host_name>", prompts[0])
+
+    def test_self_driven_explorer_schedules_one_underexplored_tool(self) -> None:
+        calls: list[str] = []
+
+        def ping_host(host_name: str) -> str:
+            calls.append(f"ping:{host_name}")
+            return "reachable"
+
+        def inspect_state() -> str:
+            calls.append("inspect")
+            return "healthy"
+
+        class FakeModel:
+            schema: type | None = None
+
+            def with_structured_output(self, schema):
+                self.schema = schema
+                return self
+
+            async def ainvoke(self, prompt):
+                if "`inspect_state`" in prompt:
+                    return DraftExplorerDraft(
+                        user_query="Inspect the current state format.",
+                        parameters={},
+                    )
+                return DraftExplorerDraft(
+                    user_query="Check the observed endpoint from another angle.",
+                    parameters={"host_name": "host_a"},
+                )
+
+            def invoke(self, prompt):
+                if self.schema is DraftAnalyzerDraft:
+                    return DraftAnalyzerDraft(suggestion="Clarify observed output.")
+                return DraftRewriteProposal(
+                    tool_name=(
+                        "inspect_state"
+                        if "Tool: inspect_state" in prompt
+                        else "ping_host"
+                    )
+                )
+
+        tools = [
+            StructuredTool.from_function(
+                ping_host,
+                name="ping_host",
+                description="Check whether one host is reachable.",
+            ),
+            StructuredTool.from_function(
+                inspect_state,
+                name="inspect_state",
+                description="Inspect the current network state.",
+            ),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            store = ToolRefinementStore("draft", root=Path(tmp) / "library")
+            ToolRefinementRuntime(
+                session=SimpleNamespace(session_id="s1", session_dir=tmp),
+                primitive_tools=tools,
+                library_id="draft",
+                store=store,
+            )
+            self._trace(
+                tmp,
+                [
+                    ("tool_start", "1", "ping_host", "{'host_name': 'host_a'}", ""),
+                    ("tool_end", "1", "ping_host", "", "host_a reachable"),
+                ],
+            )
+            report = asyncio.run(
+                run_active_exploration(
+                    session_id="s1",
+                    session_dir=tmp,
+                    task_description="Inspect network health.",
+                    tools=tools,
+                    store=store,
+                    llm=FakeModel(),
+                    llm_backend="custom",
+                    model="test-model",
+                    convergence_threshold=0.75,
+                )
+            )
+
+        self.assertEqual(report["scheduled_tools"], ["ping_host", "inspect_state"])
+        self.assertEqual(report["active_explorations"], 2)
+        self.assertEqual(calls, ["ping:host_a", "inspect"])
+
+    def test_self_driven_explorer_enforces_query_diversity(self) -> None:
+        calls: list[str] = []
+
+        def ping_host(host_name: str) -> str:
+            calls.append(host_name)
+            return "reachable"
+
+        class FakeModel:
+            def with_structured_output(self, _schema):
+                return self
+
+            async def ainvoke(self, _prompt):
+                return DraftExplorerDraft(
+                    user_query="Check reachability for host_a.",
+                    parameters={"host_name": "host_a"},
+                )
+
+        tool = StructuredTool.from_function(
+            ping_host,
+            name="ping_host",
+            description="Check whether one host is reachable.",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            store = ToolRefinementStore("draft", root=Path(tmp) / "library")
+            ToolRefinementRuntime(
+                session=SimpleNamespace(session_id="s2", session_dir=tmp),
+                primitive_tools=[tool],
+                library_id="draft",
+                store=store,
+            )
+            prior_trial = ToolTrial(
+                trial_id="prior-trial",
+                session_id="s1",
+                tool_name="ping_host",
+                task_description="Check reachability for host_a.",
+                arguments={"host_name": "host_a"},
+                status="success",
+                output_summary="reachable",
+            )
+            state = store.load()
+            state.trials.append(prior_trial)
+            state.explorations.append(
+                DraftExploration(
+                    exploration_id="prior-exploration",
+                    session_id="s1",
+                    trial_id="prior-trial",
+                    tool_name="ping_host",
+                    user_query="Check reachability for host_a.",
+                    parameters={"host_name": "host_a"},
+                    observation="reachable",
+                    status="success",
+                )
+            )
+            store.save(state)
+            self._trace(
+                tmp,
+                [
+                    ("tool_start", "1", "ping_host", "{'host_name': 'host_a'}", ""),
+                    ("tool_end", "1", "ping_host", "", "host_a reachable"),
+                ],
+            )
+            report = asyncio.run(
+                run_active_exploration(
+                    session_id="s2",
+                    session_dir=tmp,
+                    task_description="Inspect network health.",
+                    tools=[tool],
+                    store=store,
+                    llm=FakeModel(),
+                    llm_backend="custom",
+                    model="test-model",
+                    convergence_threshold=0.75,
+                )
+            )
+
+        self.assertEqual(calls, [])
+        self.assertEqual(report["active_explorations"], 0)
+        self.assertIn("similarity", report["skipped"]["ping_host"])
+
+    def test_structured_tool_output_distinguishes_execution_failure_from_evidence(
+        self,
+    ) -> None:
+        timeout = ToolMessage(
+            content=[
+                {
+                    "type": "text",
+                    "text": "[TIMEOUT] Command 'ping' exceeded 10s.",
+                }
+            ],
+            tool_call_id="timeout-call",
+            status="success",
+        )
+        unreachable = ToolMessage(
+            content="Destination Host Unreachable; 100% packet loss",
+            tool_call_id="evidence-call",
+            status="success",
+        )
+        unknown = ToolMessage(
+            content={"status": "unknown", "result": []},
+            tool_call_id="unknown-call",
+            status="success",
+        )
+        partial_unknown = ToolMessage(
+            content=[
+                {
+                    "type": "text",
+                    "text": json.dumps(
+                        {
+                            "hosts": {"host_a": None, "host_b": "192.0.2.2"},
+                            "results": [
+                                {"src": "host_a", "status": "unknown"},
+                                {"src": "host_b", "status": "ok"},
+                            ],
+                        }
+                    ),
+                }
+            ],
+            tool_call_id="partial-call",
+            status="success",
+        )
+
+        self.assertEqual(classify_tool_outcome(timeout), "error")
+        self.assertEqual(classify_tool_outcome(unreachable), "success")
+        self.assertEqual(classify_tool_outcome(unknown), "unknown")
+        self.assertEqual(classify_tool_outcome(partial_unknown), "success")
+        self.assertEqual(
+            classify_tool_outcome({"content": {"status": "unknown"}}),
+            "unknown",
+        )
+        self.assertEqual(
+            classify_tool_outcome(
+                "content=[{'type': 'text', 'text': 'Cannot get IP address of host pc1.'}]"
+            ),
+            "error",
+        )
+
+    def test_callback_logger_preserves_structured_tool_message(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            logger = AgentCallbackLogger(agent="diagnosis", session_dir=tmp)
+            logger.on_tool_end(
+                ToolMessage(
+                    content=[{"type": "text", "text": "eth0 up"}],
+                    artifact={"structured_content": {"status": "ok"}},
+                    tool_call_id="call-1",
+                    name="show_iface",
+                    status="success",
+                )
+            )
+            event = json.loads(
+                (Path(tmp) / "messages.jsonl").read_text(encoding="utf-8")
+            )
+
+        self.assertEqual(event["event"], "tool_end")
+        self.assertEqual(event["outcome"], "success")
+        self.assertIsInstance(event["output"], dict)
+        self.assertEqual(event["output"]["content"][0]["text"], "eth0 up")
+
+    def test_documentation_replaces_runtime_identifiers_with_placeholders(
+        self,
+    ) -> None:
+        doc = ToolDocumentation(
+            name="show_iface",
+            tool_usage_description="Inspect eth9 on router_dist_2_1.",
+            parameters={
+                "router_name": ToolParameterDoc(
+                    name="router_name",
+                    examples=["router_dist_2_1"],
+                ),
+                "interface": ToolParameterDoc(name="interface", examples=["eth9"]),
+            },
+            positive_examples=[
+                {
+                    "arguments": {
+                        "router_name": "router_dist_2_1",
+                        "interface": "eth9",
+                    }
+                }
+            ],
+        )
+
+        changed = generalize_tool_documentation(doc)
+
+        self.assertTrue(changed)
+        self.assertNotIn("router_dist_2_1", doc.model_dump_json())
+        self.assertNotIn("eth9", doc.model_dump_json())
+        self.assertIn("<router_name>", doc.tool_usage_description)
+        self.assertIn("<interface>", doc.tool_usage_description)
+
     def test_primitive_contract_change_reopens_frozen_documentation(self) -> None:
         def ping(host: str) -> str:
             return host
@@ -152,7 +745,7 @@ class DraftToolRefinementTest(unittest.TestCase):
                     ],
                 ),
                 session_id="s1",
-                task_description="Investigate route failure.",
+                task_description="Determine whether a service restart caused route failure.",
             )
             rewrite_documentation(
                 store,
@@ -176,6 +769,10 @@ class DraftToolRefinementTest(unittest.TestCase):
         self.assertTrue(all(item.status == "success" for item in state.explorations))
         self.assertTrue(
             all(item.observation == "route missing" for item in state.explorations)
+        )
+        self.assertTrue(all(item.read_only for item in state.explorations))
+        self.assertTrue(
+            all("restart" not in item.user_query for item in state.explorations)
         )
         self.assertEqual(state.explorations[0].diversity_score, 1.0)
         self.assertEqual(state.explorations[1].diversity_score, 0.0)
@@ -911,6 +1508,69 @@ class DraftToolRefinementTest(unittest.TestCase):
         self.assertTrue(doc.frozen)
         self.assertIn("adaptive termination", doc.frozen_reason)
 
+    def test_identifier_changes_do_not_satisfy_termination_diversity(self) -> None:
+        class FakeModel:
+            schema: type | None = None
+
+            def with_structured_output(self, schema):
+                self.schema = schema
+                return self
+
+            def invoke(self, _prompt):
+                if self.schema is DraftAnalyzerDraft:
+                    return DraftAnalyzerDraft(suggestion="Clarify route output.")
+                return DraftRewriteProposal(
+                    tool_name="show_route",
+                    tool_usage_description="Inspect routes on an observed router.",
+                )
+
+        def show_route(router_name: str) -> str:
+            return router_name
+
+        tool = StructuredTool.from_function(
+            show_route,
+            name="show_route",
+            description="Inspect one routing table.",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            store = ToolRefinementStore("draft", root=tmp)
+            ToolRefinementRuntime(
+                session=object(),
+                primitive_tools=[tool],
+                library_id="draft",
+                store=store,
+            )
+            with patch(
+                "agent.tool_refinement.curator.load_model", return_value=FakeModel()
+            ):
+                revisions = []
+                for session_id, router_name in (("s1", "router_a"), ("s2", "router_b")):
+                    revisions = rewrite_documentation(
+                        store,
+                        trials=[
+                            ToolTrial(
+                                trial_id=f"trial-{session_id}",
+                                session_id=session_id,
+                                tool_name="show_route",
+                                arguments={"router_name": router_name},
+                                status="success",
+                                output_summary="route present",
+                            )
+                        ],
+                        tool_descriptions={"show_route": "Inspect one routing table."},
+                        metrics={},
+                        llm_backend="custom",
+                        model="test-model",
+                    )
+            doc = store.get_document("show_route")
+
+        assert doc is not None
+        self.assertFalse(doc.frozen)
+        self.assertEqual(
+            revisions[0].metrics["exploration_diversity_support"],
+            0.5,
+        )
+
     def test_llm_rewrite_cannot_expand_primitive_parameter_schema(self) -> None:
         class FakeModel:
             schema: type | None = None
@@ -997,6 +1657,82 @@ class DraftToolRefinementTest(unittest.TestCase):
         self.assertEqual(state.explorations[0].status, "success")
         self.assertEqual(state.explorations[0].parameters, {})
 
+    def test_llm_rewrite_cannot_invent_numeric_contract_constraints(self) -> None:
+        class FakeModel:
+            schema: type | None = None
+
+            def with_structured_output(self, schema):
+                self.schema = schema
+                return self
+
+            def invoke(self, _prompt):
+                if self.schema is DraftAnalyzerDraft:
+                    return DraftAnalyzerDraft(suggestion="Clarify the retry count.")
+                return DraftRewriteProposal(
+                    tool_name="ping_host",
+                    tool_usage_description="Ping a host exactly 99 times.",
+                    parameters={
+                        "count": ToolParameterDoc(
+                            name="count",
+                            type_hint="int",
+                            description="Use a count from 1 to 99.",
+                        )
+                    },
+                )
+
+        def ping_host(host_name: str, count: int = 4) -> str:
+            return host_name * count
+
+        tool = StructuredTool.from_function(
+            ping_host,
+            name="ping_host",
+            description="Ping a host a configurable number of times.",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            store = ToolRefinementStore("draft", root=tmp)
+            ToolRefinementRuntime(
+                session=object(),
+                primitive_tools=[tool],
+                library_id="draft",
+                store=store,
+            )
+            trials, _ = extract_tool_trials(
+                self._trace(
+                    tmp,
+                    [
+                        (
+                            "tool_start",
+                            "1",
+                            "ping_host",
+                            "{'host_name': 'pc1', 'count': 4}",
+                            "",
+                        ),
+                        ("tool_end", "1", "ping_host", "", "host reachable"),
+                    ],
+                ),
+                session_id="s1",
+            )
+            with patch(
+                "agent.tool_refinement.curator.load_model",
+                return_value=FakeModel(),
+            ):
+                revisions = rewrite_documentation(
+                    store,
+                    trials=trials,
+                    tool_descriptions={
+                        "ping_host": "Ping a host a configurable number of times."
+                    },
+                    metrics={},
+                    llm_backend="custom",
+                    model="test-model",
+                )
+            doc = store.get_document("ping_host")
+
+        assert doc is not None
+        self.assertNotIn("99", doc.refined_description(max_chars=4000))
+        self.assertEqual(revisions[0].metrics["llm_contract_rejected"], 1.0)
+        self.assertIn("numeric constraints", revisions[0].llm_error)
+
     def test_llm_rewrite_failure_is_reported(self) -> None:
         class FailingModel:
             def with_structured_output(self, _schema):
@@ -1047,6 +1783,43 @@ class DraftToolRefinementTest(unittest.TestCase):
         self.assertEqual(revisions[0].metrics["llm_failed"], 1.0)
         self.assertEqual(revisions[0].metrics["llm_rewrite"], 0.0)
         self.assertIn("TimeoutError", revisions[0].llm_error)
+
+    def test_failed_rewriter_never_freezes_documentation(self) -> None:
+        class FailingModel:
+            def with_structured_output(self, _schema):
+                return self
+
+            def invoke(self, _prompt):
+                raise TimeoutError("draft timeout")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = ToolRefinementStore("draft", root=tmp)
+            with patch(
+                "agent.tool_refinement.curator.load_model",
+                return_value=FailingModel(),
+            ):
+                for session_id in ("s1", "s2"):
+                    rewrite_documentation(
+                        store,
+                        trials=[
+                            ToolTrial(
+                                trial_id=f"trial-{session_id}",
+                                session_id=session_id,
+                                tool_name="inspect_state",
+                                status="success",
+                                output_summary="healthy",
+                            )
+                        ],
+                        tool_descriptions={"inspect_state": "Inspect state."},
+                        metrics={},
+                        llm_backend="custom",
+                        model="test-model",
+                    )
+            doc = store.get_document("inspect_state")
+
+        assert doc is not None
+        self.assertFalse(doc.frozen)
+        self.assertEqual(doc.frozen_reason, "")
 
     def test_draft_rewrite_prompt_compacts_large_outputs(self) -> None:
         prompts: list[str] = []

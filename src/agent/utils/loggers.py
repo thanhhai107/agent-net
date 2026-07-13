@@ -25,6 +25,8 @@ from langchain_core.callbacks.base import BaseCallbackHandler
 from langchain_core.messages import BaseMessage, ToolMessage
 from langchain_core.outputs.generation import Generation
 
+from agent.utils.tool_output import classify_tool_outcome, serialize_tool_output
+
 MESSAGES_FILENAME = "messages.jsonl"
 
 
@@ -113,11 +115,18 @@ class AgentCallbackLogger(BaseCallbackHandler):
         self._logger.log("tool_start", {"tool": serialized, "input": input_str})
 
     def on_tool_end(self, output: ToolMessage, **kwargs) -> None:
-        if output.status == "error":
-            self._logger.log("tool_error", {"output": output})
+        serialized_output = serialize_tool_output(output)
+        outcome = classify_tool_outcome(output)
+        if outcome == "error":
+            self._logger.log("tool_error", {"output": serialized_output})
             return
         self._logger.log(
-            "tool_end", {"output": output, "output_type": type(output).__name__}
+            "tool_end",
+            {
+                "output": serialized_output,
+                "output_type": type(output).__name__,
+                "outcome": outcome,
+            },
         )
 
     def on_tool_error(self, error, **kwargs) -> None:

@@ -8,6 +8,7 @@ from typing import Any
 
 from langchain_core.tools import BaseTool
 
+from agent.tool_refinement.generalization import generalize_tool_documentation
 from agent.tool_refinement.models import ToolDocumentation, ToolParameterDoc, utc_now
 from agent.tool_refinement.store import ToolRefinementStore
 
@@ -124,82 +125,98 @@ class ToolRefinementRuntime:
         library_id: str,
         store: ToolRefinementStore | None = None,
         tool_doc_chars: int = 500,
+        explorer_llm: Any | None = None,
+        llm_backend: str = "",
+        model: str = "",
+        convergence_threshold: float = 0.75,
     ) -> None:
         self.session = session
         self.primitive_tools = list(primitive_tools)
         self.library_id = library_id
         self.store = store or ToolRefinementStore(library_id)
         self.tool_doc_chars = max(100, int(tool_doc_chars))
+        self.explorer_llm = explorer_llm
+        self.llm_backend = llm_backend
+        self.model = model
+        self.convergence_threshold = float(convergence_threshold)
+        self._explorer_report: dict[str, Any] = {}
         self._base_descriptions = {
             tool.name: _primitive_description(tool) for tool in self.primitive_tools
         }
         self._docs = self._ensure_primitive_documents()
 
     def _ensure_primitive_documents(self) -> dict[str, ToolDocumentation]:
-        state = self.store.load()
-        changed = False
-        for tool in self.primitive_tools:
-            source_signature = _tool_source_signature(tool)
-            source_schema = _tool_args_schema(tool)
-            existing = state.documents.get(tool.name)
-            if existing is None:
-                state.documents[tool.name] = make_document_from_tool(tool)
-                changed = True
-                continue
-            contract_changed = bool(
-                existing.source_signature
-                and existing.source_signature != source_signature
-            )
-            legacy_contract = existing.source_contract_version < SOURCE_CONTRACT_VERSION
-            if contract_changed or legacy_contract:
-                replacement = make_document_from_tool(tool)
-                replacement.version = existing.version + 1
-                replacement.trial_count = existing.trial_count
-                replacement.success_count = existing.success_count
-                replacement.error_count = existing.error_count
-                reason = (
-                    "Primitive tool contract changed; DRAFT documentation reset and reopened."
-                    if contract_changed
-                    else "Legacy DRAFT documentation reset against the immutable primitive contract."
+        with self.store.exclusive():
+            state = self.store.load()
+            changed = False
+            for tool in self.primitive_tools:
+                source_signature = _tool_source_signature(tool)
+                source_schema = _tool_args_schema(tool)
+                existing = state.documents.get(tool.name)
+                if existing is None:
+                    state.documents[tool.name] = make_document_from_tool(tool)
+                    changed = True
+                    continue
+                contract_changed = bool(
+                    existing.source_signature
+                    and existing.source_signature != source_signature
                 )
-                # Old revisions remain in state.revisions for audit, but must
-                # not feed Analyzer/Rewriter under a different source contract.
-                replacement.rewrite_history = [reason]
-                state.documents[tool.name] = replacement
-                for exploration in state.explorations:
-                    if exploration.tool_name == tool.name:
-                        exploration.status = "invalidated"
-                changed = True
-                continue
+                legacy_contract = (
+                    existing.source_contract_version < SOURCE_CONTRACT_VERSION
+                )
+                if contract_changed or legacy_contract:
+                    replacement = make_document_from_tool(tool)
+                    replacement.version = existing.version + 1
+                    replacement.trial_count = existing.trial_count
+                    replacement.success_count = existing.success_count
+                    replacement.error_count = existing.error_count
+                    reason = (
+                        "Primitive tool contract changed; DRAFT documentation reset and reopened."
+                        if contract_changed
+                        else "Legacy DRAFT documentation reset against the immutable primitive contract."
+                    )
+                    # Old revisions remain in state.revisions for audit, but must
+                    # not feed Analyzer/Rewriter under a different source contract.
+                    replacement.rewrite_history = [reason]
+                    state.documents[tool.name] = replacement
+                    for exploration in state.explorations:
+                        if exploration.tool_name == tool.name:
+                            exploration.status = "invalidated"
+                    changed = True
+                    continue
 
-            source_parameters = _source_parameter_docs(tool)
-            repaired_parameters: dict[str, ToolParameterDoc] = {}
-            for name, source_parameter in source_parameters.items():
-                learned_parameter = existing.parameters.get(name)
-                if learned_parameter is not None:
-                    if not source_parameter.description:
-                        source_parameter.description = learned_parameter.description
-                    for constraint in learned_parameter.constraints:
-                        if constraint not in source_parameter.constraints:
-                            source_parameter.constraints.append(constraint)
-                    source_parameter.examples = learned_parameter.examples[-5:]
-                repaired_parameters[name] = source_parameter
-            if (
-                existing.description != self._base_descriptions.get(tool.name, "")
-                or existing.source_signature != source_signature
-                or existing.source_schema != source_schema
-                or existing.parameters != repaired_parameters
-            ):
-                existing.description = self._base_descriptions.get(tool.name, "")
-                existing.source_signature = source_signature
-                existing.source_schema = source_schema
-                existing.parameters = repaired_parameters
-                existing.updated_at = utc_now()
+                source_parameters = _source_parameter_docs(tool)
+                repaired_parameters: dict[str, ToolParameterDoc] = {}
+                for name, source_parameter in source_parameters.items():
+                    learned_parameter = existing.parameters.get(name)
+                    if learned_parameter is not None:
+                        if not source_parameter.description:
+                            source_parameter.description = learned_parameter.description
+                        source_parameter.examples = learned_parameter.examples[-5:]
+                    repaired_parameters[name] = source_parameter
+                needs_repair = (
+                    existing.description != self._base_descriptions.get(tool.name, "")
+                    or existing.source_signature != source_signature
+                    or existing.source_schema != source_schema
+                    or existing.parameters != repaired_parameters
+                )
+                if needs_repair:
+                    existing.description = self._base_descriptions.get(tool.name, "")
+                    existing.source_signature = source_signature
+                    existing.source_schema = source_schema
+                    existing.parameters = repaired_parameters
+                    existing.updated_at = utc_now()
+                    changed = True
+                historical_trials = [
+                    trial for trial in state.trials if trial.tool_name == tool.name
+                ]
+                if generalize_tool_documentation(existing, trials=historical_trials):
+                    existing.updated_at = utc_now()
+                    changed = True
                 state.documents[tool.name] = existing
-                changed = True
-        if changed:
-            self.store.save(state)
-        return state.documents
+            if changed:
+                self.store.save(state)
+            return state.documents
 
     def build_tools(self, *, append_docs: bool = True) -> list[BaseTool]:
         """Return the same primitive tools with DRAFT docs appended to descriptions."""
@@ -224,6 +241,37 @@ class ToolRefinementRuntime:
                     f"{base_description}\n\nDRAFT refined guidance:\n{refined}"
                 )
         return self.primitive_tools
+
+    async def explore(self, task_description: str) -> dict[str, Any]:
+        """Run the self-driven DRAFT Explorer before the submission phase."""
+
+        if self.explorer_llm is None:
+            self._explorer_report = {
+                "status": "skipped",
+                "reason": "explorer model unavailable",
+            }
+            return self._explorer_report
+        from agent.tool_refinement.explorer import run_active_exploration
+
+        try:
+            self._explorer_report = await run_active_exploration(
+                session_id=str(getattr(self.session, "session_id", "") or ""),
+                session_dir=str(getattr(self.session, "session_dir", "") or ""),
+                task_description=task_description,
+                tools=self.primitive_tools,
+                store=self.store,
+                llm=self.explorer_llm,
+                llm_backend=self.llm_backend,
+                model=self.model,
+                convergence_threshold=self.convergence_threshold,
+            )
+        except Exception as exc:
+            self._explorer_report = {
+                "status": "failed",
+                "reason": f"{type(exc).__name__}: {exc}",
+            }
+        self._docs = self.store.load().documents
+        return self._explorer_report
 
     def tool_runtime_guidance(self, tool_name: str, *, max_chars: int = 500) -> str:
         """Return only learned contract deltas for one primitive tool."""
@@ -258,7 +306,9 @@ class ToolRefinementRuntime:
             "explorations": len(state.explorations),
             "config": {
                 "tool_doc_chars": self.tool_doc_chars,
+                "convergence_threshold": self.convergence_threshold,
             },
+            "explorer": self._explorer_report,
             "analyzer_suggestions": len(state.analyzer_suggestions),
             "primitive_tools": [tool.name for tool in self.primitive_tools],
         }

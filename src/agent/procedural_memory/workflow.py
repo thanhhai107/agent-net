@@ -149,6 +149,10 @@ def _extract_runtime_skill_steps(entries: list[dict[str, Any]]) -> list[SkillSte
                 if entry.get("status") in {"success", "error", "unknown"}
                 else "unknown",
                 rationale="Observed Skill-Pro online runtime transition.",
+                # PPO replay requires byte-equivalent pre-action context.
+                policy_state=str(entry.get("policy_state") or ""),
+                policy_context=str(entry.get("policy_context") or ""),
+                activation_id=str(entry.get("activation_id") or ""),
             )
         )
     return steps
@@ -173,7 +177,9 @@ def _runtime_overhead_metrics(runtime_snapshot: dict[str, Any]) -> dict[str, int
     metrics: dict[str, int] = {}
     for field in fields:
         try:
-            metrics[f"procedural_memory_{field}"] = int(runtime_snapshot.get(field) or 0)
+            metrics[f"procedural_memory_{field}"] = int(
+                runtime_snapshot.get(field) or 0
+            )
         except (TypeError, ValueError):
             metrics[f"procedural_memory_{field}"] = 0
     return metrics
@@ -215,7 +221,9 @@ async def update_procedural_memory_from_session(
     session_path = Path(session_dir)
     bank_id = str(run_meta.get("procedural_memory_bank") or "default")
     gt = _load_json(session_path / "ground_truth.json")
-    runtime_snapshot = _load_json(session_path / "procedural_memory_runtime_session.json")
+    runtime_snapshot = _load_json(
+        session_path / "procedural_memory_runtime_session.json"
+    )
     metrics_with_runtime = dict(metrics)
     metrics_with_runtime.update(_runtime_overhead_metrics(runtime_snapshot))
     module = ProceduralMemoryModule(
@@ -223,7 +231,9 @@ async def update_procedural_memory_from_session(
         llm_backend=run_meta.get("llm_backend"),
         model=run_meta.get("model"),
         pool_size=_int_meta(run_meta, "procedural_memory_pool_size", 32),
-        evolution_threshold=_int_meta(run_meta, "procedural_memory_update_threshold", 3),
+        evolution_threshold=_int_meta(
+            run_meta, "procedural_memory_update_threshold", 6
+        ),
         best_of_n=_int_meta(run_meta, "procedural_memory_best_of_n", 3),
         ppo_epsilon=_float_meta(run_meta, "procedural_memory_ppo_epsilon", 0.2),
     )
@@ -240,7 +250,10 @@ async def update_procedural_memory_from_session(
         metrics=metrics_with_runtime,
         steps=int(metrics_with_runtime.get("steps") or 0),
         tool_calls=int(metrics_with_runtime.get("tool_calls") or 0),
-        success=_metric_success(metrics_with_runtime),
+        success=_metric_success(
+            metrics_with_runtime,
+            bool(gt.get("is_anomaly")) if "is_anomaly" in gt else None,
+        ),
     )
     report = module.learn_from_episode(
         evidence=evidence,
@@ -252,10 +265,17 @@ async def update_procedural_memory_from_session(
             "bank_id": bank_id,
             "procedural_memory_config": {
                 "top_k": _int_meta(run_meta, "procedural_memory_top_k", 5),
-                "token_budget": _int_meta(run_meta, "procedural_memory_token_budget", 1500),
-                "selection_policy": "similarity_top_k_then_online_value",
+                "token_budget": _int_meta(
+                    run_meta, "procedural_memory_token_budget", 1500
+                ),
+                "selection_policy": "epsilon_then_similarity_top_k_online_value",
+                "selection_epsilon": _float_meta(
+                    run_meta, "procedural_memory_selection_epsilon", 0.3
+                ),
                 "meta_controller": "llm_with_deterministic_fallback",
-                "max_skill_age": _int_meta(run_meta, "procedural_memory_max_skill_age", 4),
+                "max_skill_age": _int_meta(
+                    run_meta, "procedural_memory_max_skill_age", 8
+                ),
                 "pool_size": module.pool_size,
                 "evolution_threshold": module.evolution_threshold,
                 "best_of_n": module.best_of_n,

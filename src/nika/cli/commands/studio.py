@@ -9,7 +9,10 @@ import typer
 
 from nika.config import pkg_path
 
+studio_app = typer.Typer(help="Launch the Streamlit experiment studio.")
 
+
+@studio_app.command("studio")
 def studio_command(
     host: str = typer.Option("127.0.0.1", "--host", help="Studio bind address."),
     port: int = typer.Option(8502, "--port", min=1, max=65535, help="Studio port."),
@@ -46,4 +49,4 @@ def studio_command(
 
 
 if __name__ == "__main__":
-    typer.run(studio_command)
+    studio_app()

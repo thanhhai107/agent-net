@@ -44,6 +44,9 @@ class SkillStep(BaseModel):
     observation_summary: str = ""
     status: Literal["success", "error", "unknown"] = "unknown"
     rationale: str = ""
+    policy_state: str = ""
+    policy_context: str = ""
+    activation_id: str = ""
 
 
 class SkillComponentGradient(BaseModel):
@@ -57,7 +60,9 @@ class SemanticGradient(BaseModel):
     source_session_id: str
     critique: str
     proposed_update: str
-    component_update: SkillComponentGradient = Field(default_factory=SkillComponentGradient)
+    component_update: SkillComponentGradient = Field(
+        default_factory=SkillComponentGradient
+    )
     gradient_source: Literal["llm", "deterministic"] = "deterministic"
     llm_error: str = ""
     created_at: str = Field(default_factory=utc_now)
@@ -107,6 +112,8 @@ class SkillTransition(BaseModel):
     observation_summary: str = ""
     status: Literal["success", "error", "unknown"] = "unknown"
     done: bool = False
+    policy_context: str = ""
+    activation_id: str = ""
 
 
 class SkillExperience(BaseModel):
@@ -164,17 +171,12 @@ class ProceduralSkill(BaseModel):
 
     def content_hash(self) -> str:
         payload = {
-            "title": self.title,
             "activation_condition": self.activation_condition,
             "execution_steps": [
-                step.model_dump(mode="json") for step in self.execution_steps
+                {"action": step.action, "tool_name": step.tool_name}
+                for step in self.execution_steps
             ],
             "termination_condition": self.termination_condition,
-            "scenarios": self.scenarios,
-            "protocols": self.protocols,
-            "services": self.services,
-            "symptoms": self.symptoms,
-            "tools": self.tools,
         }
         encoded = json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str)
         return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
@@ -186,22 +188,16 @@ class ProceduralSkill(BaseModel):
         baseline: float,
         total_skill_calls: int,
         skill_call_count: int = 1,
-        outcome_success: bool | None = None,
     ) -> None:
         advantage = reward - baseline
-        successful_outcome = (
-            outcome_success if outcome_success is not None else advantage > 0
-        )
-        policy_gain = advantage if successful_outcome else min(advantage, reward - 1.0)
-        per_call_gain = policy_gain / max(total_skill_calls, 1)
+        per_call_gain = advantage / max(total_skill_calls, 1)
         self.total_gain += skill_call_count * per_call_gain
         self.frequency += skill_call_count
         self.avg_gain = self.total_gain / max(self.frequency, 1)
-        if successful_outcome:
+        if advantage > 0:
             self.success_count += 1
         else:
             self.failure_count += 1
-        self.maturity += 1
         self.updated_at = utc_now()
 
     def increment_maturity(self) -> None:
@@ -216,7 +212,6 @@ class ProceduralSkill(BaseModel):
         steps = "\n".join(f"- {step.action}" for step in self.execution_steps)
         return (
             f"Skill Name: {self.skill_id}\n"
-            f"Scenarios: {', '.join(self.scenarios) or 'general'}\n"
             f"Initiation (When to use): {self.activation_condition}\n"
             f"Strategy Steps:\n{steps}\n"
             f"Termination (When to stop): {self.termination_condition}"

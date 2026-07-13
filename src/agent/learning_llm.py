@@ -32,7 +32,9 @@ def learning_max_retries() -> int:
     except ValueError as exc:
         raise ValueError("NIKA_LEARNING_LLM_MAX_RETRIES must be an integer") from exc
     if parsed < 0:
-        raise ValueError("NIKA_LEARNING_LLM_MAX_RETRIES must be greater than or equal to 0")
+        raise ValueError(
+            "NIKA_LEARNING_LLM_MAX_RETRIES must be greater than or equal to 0"
+        )
     return parsed
 
 

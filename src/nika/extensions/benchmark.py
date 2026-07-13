@@ -11,7 +11,11 @@ from typing import Any
 
 import yaml
 
-from agent.composition import AgentRunConfig, ProceduralMemoryConfig, ToolRefinementConfig
+from agent.composition import (
+    AgentRunConfig,
+    ProceduralMemoryConfig,
+    ToolRefinementConfig,
+)
 from agent.extensions.config import default_llm_provider, default_model
 from agent.extensions.react_agent import configure_custom_provider_environment
 from agent.extensions.run import start_agent
@@ -52,7 +56,11 @@ def load_custom_benchmark(path: str | Path) -> list[dict[str, Any]]:
         raise ValueError(f"Invalid benchmark YAML (missing list 'cases'): {path}")
     rows: list[dict[str, Any]] = []
     for index, raw in enumerate(cases):
-        if not isinstance(raw, dict) or not raw.get("scenario") or not raw.get("problem"):
+        if (
+            not isinstance(raw, dict)
+            or not raw.get("scenario")
+            or not raw.get("problem")
+        ):
             raise ValueError(f"Benchmark case {index} requires scenario and problem")
         inject = raw.get("inject") or {}
         if not isinstance(inject, dict):
@@ -161,16 +169,49 @@ def _update_learning(session_id: str, config: AgentRunConfig) -> None:
     session_dir = Path(session.session_dir)
     metrics = _read_json(session_dir / EVAL_METRICS_FILENAME)
     run_meta = _read_json(session_dir / "run.json")
+    errors: list[dict[str, str]] = []
+    error_path = session_dir / "learning_errors.json"
     if config.tool_refinement.enabled:
-        finalize_tool_refinement_session(session_id=session_id, metrics=metrics)
-    if config.procedural_memory.mode == "evolve":
-        asyncio.run(
-            update_procedural_memory_from_session(
-                run_meta=run_meta,
-                metrics=metrics,
-                session_dir=session_dir,
+        try:
+            finalize_tool_refinement_session(session_id=session_id, metrics=metrics)
+        except Exception as exc:
+            errors.append(
+                {
+                    "module": "tool_refinement",
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
             )
+    if config.procedural_memory.mode == "evolve":
+        try:
+            asyncio.run(
+                update_procedural_memory_from_session(
+                    run_meta=run_meta,
+                    metrics=metrics,
+                    session_dir=session_dir,
+                )
+            )
+        except Exception as exc:
+            errors.append(
+                {
+                    "module": "procedural_memory",
+                    "error": f"{type(exc).__name__}: {exc}",
+                }
+            )
+    if errors:
+        error_path.write_text(
+            json.dumps(errors, ensure_ascii=False, indent=2),
+            encoding="utf-8",
         )
+        for error in errors:
+            log_event(
+                "learning_update_failed",
+                f"{error['module']} update failed: {error['error']}",
+                session_id=session_id,
+                module=error["module"],
+                error=error["error"],
+            )
+    else:
+        error_path.unlink(missing_ok=True)
 
 
 def run_extended_case(
@@ -209,9 +250,7 @@ def run_extended_case(
                 param_overrides=row["inject"],
             )
             session = Session().load_running_session(session_id=session_id)
-        session.update_session(
-            "benchmark_fingerprint", benchmark_row_fingerprint(row)
-        )
+        session.update_session("benchmark_fingerprint", benchmark_row_fingerprint(row))
         start_agent(config, session_id=session_id)
         eval_results(
             session_id=session_id,
@@ -256,6 +295,7 @@ def run_batch(args: argparse.Namespace) -> int:
             evolution_threshold=args.procedural_memory_update_threshold,
             best_of_n=args.procedural_memory_best_of_n,
             ppo_epsilon=args.procedural_memory_ppo_epsilon,
+            selection_epsilon=getattr(args, "procedural_memory_selection_epsilon", 0.3),
         ),
         tool_refinement=ToolRefinementConfig(
             enabled=bool(args.tool_refinement),
@@ -341,7 +381,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-steps", type=int, default=20)
     parser.add_argument("--max-attempts", type=int, default=3)
     parser.add_argument("--result-dir")
-    parser.add_argument("--resume", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument(
+        "--resume", action=argparse.BooleanOptionalAction, default=False
+    )
     parser.add_argument("--judge", action="store_true")
     parser.add_argument("--judge-provider")
     parser.add_argument("--judge-model")
@@ -382,7 +424,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--procedural-memory-max-skill-age",
         dest="procedural_memory_max_skill_age",
         type=int,
-        default=4,
+        default=8,
         metavar="MAX_SKILL_AGE",
     )
     parser.add_argument(
@@ -396,7 +438,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--procedural-memory-update-threshold",
         dest="procedural_memory_update_threshold",
         type=int,
-        default=3,
+        default=6,
         metavar="UPDATE_THRESHOLD",
     )
     parser.add_argument(
@@ -412,6 +454,13 @@ def build_parser() -> argparse.ArgumentParser:
         type=float,
         default=0.2,
         metavar="PPO_EPSILON",
+    )
+    parser.add_argument(
+        "--procedural-memory-selection-epsilon",
+        dest="procedural_memory_selection_epsilon",
+        type=float,
+        default=0.3,
+        metavar="SELECTION_EPSILON",
     )
     return parser
 

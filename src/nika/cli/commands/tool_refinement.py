@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import shutil
 
 import typer
 
@@ -50,11 +49,11 @@ def reset_library(
 ) -> None:
     """Delete one persistent tool library."""
     store = ToolRefinementStore(library_id)
-    if not store.library_dir.exists():
+    if not store.state_path.exists():
         raise typer.BadParameter(f"Tool library does not exist: {store.library_id}")
     if not yes and not typer.confirm(f"Delete tool library '{store.library_id}'?"):
         raise typer.Abort()
-    shutil.rmtree(store.library_dir)
+    store.clear()
     typer.echo(json.dumps({"deleted": store.library_id}))
 
 

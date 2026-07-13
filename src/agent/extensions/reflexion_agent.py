@@ -49,7 +49,9 @@ class ReflexionAgent(ExtensionWorkflowBase):
                     {
                         "task": task_description,
                         "attempt": attempt,
-                        "prior_reflections": [item.model_dump() for item in reflections],
+                        "prior_reflections": [
+                            item.model_dump() for item in reflections
+                        ],
                         "instruction": (
                             "Investigate with the available tools and return a complete "
                             "evidence-based diagnosis report. Do not submit results."
@@ -125,7 +127,8 @@ class ReflexionAgent(ExtensionWorkflowBase):
                                             "report": report,
                                             "evaluation": evaluation.model_dump(),
                                             "prior_reflections": [
-                                                item.model_dump() for item in reflections
+                                                item.model_dump()
+                                                for item in reflections
                                             ],
                                         },
                                         ensure_ascii=False,
@@ -137,6 +140,7 @@ class ReflexionAgent(ExtensionWorkflowBase):
                         reflections.append(ReflexionLesson.model_validate(raw_lesson))
                     except Exception as exc:
                         self.log_error(f"reflect_{attempt}", exc)
+            await self.explore_tools(task_description)
             return await self.submit(best_report)
         finally:
             self.write_extension_snapshots()

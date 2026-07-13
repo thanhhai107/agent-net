@@ -1,20 +1,23 @@
 """Policy scorers for Skill-Pro trust-region verification.
 
-NIKA tool traces do not expose token log probabilities, so the scorer replays
-saved decisions against the frozen LLM and falls back to a deterministic,
-structure-first comparison.
+When the model API exposes echoed prompt log-probabilities, historical actions
+are teacher-forced against candidate and baseline skills. Other providers use
+behavioral or deterministic replay and are reported as such.
 """
 
 from __future__ import annotations
 
 import json
+import math
 import re
 from collections.abc import Callable, Sequence
 from typing import Any, Literal, Protocol
 
+import requests
 from pydantic import BaseModel, Field
 
 from agent.procedural_memory.models import ProceduralSkill, SkillExperience
+from agent.procedural_memory.policy_context import build_skill_policy_prefix
 
 
 class PolicyReplayItem(BaseModel):
@@ -27,10 +30,18 @@ class PolicyReplayDraft(BaseModel):
     scores: list[PolicyReplayItem] = Field(default_factory=list)
 
 
+class PolicyStepLogprob(BaseModel):
+    experience_id: str
+    transition_index: int
+    candidate_logprob: float
+    baseline_logprob: float
+
+
 class PolicyReplayResult(BaseModel):
     scores: list[PolicyReplayItem]
-    method: Literal["behavioral_replay", "structured_replay"]
+    method: Literal["policy_logprob", "behavioral_replay", "structured_replay"]
     error: str = ""
+    step_logprobs: list[PolicyStepLogprob] = Field(default_factory=list)
 
 
 class PolicyScorer(Protocol):
@@ -43,10 +54,163 @@ class PolicyScorer(Protocol):
     ) -> PolicyReplayResult: ...
 
 
+class PolicyLogprobScorer:
+    """Teacher-force historical actions through an OpenAI-compatible API."""
+
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        api_key: str,
+        model: str,
+        timeout: float = 60.0,
+        fallback: PolicyScorer | None = None,
+    ) -> None:
+        self.base_url = base_url.rstrip("/")
+        self.api_key = api_key
+        self.model = model
+        self.timeout = timeout
+        self.fallback = fallback or StructuredReplayPolicyScorer()
+
+    @staticmethod
+    def _prefix(state: str, skill: ProceduralSkill | None) -> str:
+        return build_skill_policy_prefix(state, skill)
+
+    def _score_targets(
+        self,
+        rows: Sequence[tuple[str, str]],
+    ) -> list[float]:
+        if not rows:
+            return []
+        prompts = [prefix + target for prefix, target in rows]
+        response = requests.post(
+            self.base_url + "/completions",
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": self.model,
+                "prompt": prompts,
+                "max_tokens": 0,
+                "echo": True,
+                "logprobs": 1,
+                "temperature": 0,
+            },
+            timeout=self.timeout,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        choices = payload.get("choices") if isinstance(payload, dict) else None
+        if not isinstance(choices, list) or len(choices) != len(rows):
+            raise ValueError("logprob API returned an incomplete prompt batch")
+        by_index = {int(choice.get("index", -1)): choice for choice in choices}
+        scores: list[float] = []
+        for index, (prefix, _) in enumerate(rows):
+            choice = by_index.get(index)
+            if not isinstance(choice, dict):
+                raise ValueError(f"logprob API omitted prompt index {index}")
+            logprobs = choice.get("logprobs")
+            offsets = (
+                logprobs.get("text_offset") if isinstance(logprobs, dict) else None
+            )
+            token_logprobs = (
+                logprobs.get("token_logprobs") if isinstance(logprobs, dict) else None
+            )
+            if not isinstance(offsets, list) or not isinstance(token_logprobs, list):
+                raise ValueError("logprob API omitted echoed token scores")
+            target_scores = [
+                float(logprob)
+                for offset, logprob in zip(offsets, token_logprobs, strict=True)
+                if int(offset) >= len(prefix) and logprob is not None
+            ]
+            if not target_scores or not all(
+                math.isfinite(item) for item in target_scores
+            ):
+                raise ValueError(
+                    f"logprob API could not align target at prompt index {index}"
+                )
+            scores.append(sum(target_scores))
+        return scores
+
+    def score_batch(
+        self,
+        *,
+        candidate: ProceduralSkill,
+        baseline: ProceduralSkill | None,
+        experiences: Sequence[SkillExperience],
+    ) -> PolicyReplayResult:
+        try:
+            return self._score_batch(
+                candidate=candidate,
+                baseline=baseline,
+                experiences=experiences,
+            )
+        except Exception as exc:
+            fallback = self.fallback.score_batch(
+                candidate=candidate,
+                baseline=baseline,
+                experiences=experiences,
+            )
+            fallback.error = f"{type(exc).__name__}: {exc}"
+            return fallback
+
+    def _score_batch(
+        self,
+        *,
+        candidate: ProceduralSkill,
+        baseline: ProceduralSkill | None,
+        experiences: Sequence[SkillExperience],
+    ) -> PolicyReplayResult:
+        indexed = [
+            (experience, index, transition)
+            for experience in experiences
+            for index, transition in enumerate(experience.transitions)
+        ]
+        for _, _, transition in indexed:
+            expected_behavior_context = self._prefix(transition.state, baseline)
+            if not transition.policy_context:
+                raise ValueError(
+                    "historical transition has no pre-action policy context"
+                )
+            if transition.policy_context != expected_behavior_context:
+                raise ValueError(
+                    "historical transition policy context does not match behavior skill"
+                )
+        candidate_rows = [
+            (self._prefix(transition.state, candidate), transition.action)
+            for _, _, transition in indexed
+        ]
+        baseline_rows = [
+            (self._prefix(transition.state, baseline), transition.action)
+            for _, _, transition in indexed
+        ]
+        candidate_scores = self._score_targets(candidate_rows)
+        baseline_scores = self._score_targets(baseline_rows)
+        step_scores = [
+            PolicyStepLogprob(
+                experience_id=experience.experience_id,
+                transition_index=index,
+                candidate_logprob=candidate_score,
+                baseline_logprob=baseline_score,
+            )
+            for (experience, index, _), candidate_score, baseline_score in zip(
+                indexed,
+                candidate_scores,
+                baseline_scores,
+                strict=True,
+            )
+        ]
+        return PolicyReplayResult(
+            scores=[],
+            method="policy_logprob",
+            step_logprobs=step_scores,
+        )
+
+
 def _tokens(value: Any) -> set[str]:
     return {
-        token
-        for token in re.findall(r"[a-zA-Z0-9_]{3,}", str(value or "").lower())
+        token for token in re.findall(r"[a-zA-Z0-9_]{3,}", str(value or "").lower())
     }
 
 
@@ -107,9 +271,9 @@ class StructuredReplayPolicyScorer:
         transition_text = " ".join(
             " ".join(
                 (
+                    transition.state,
                     transition.action,
                     transition.tool_name,
-                    transition.observation_summary,
                 )
             )
             for transition in experience.transitions
@@ -126,12 +290,7 @@ class StructuredReplayPolicyScorer:
             ),
             " ".join((experience.trajectory, transition_text)),
         )
-        score = (
-            0.5 * covered
-            + 0.25 * ordering
-            + 0.15 * semantic_fit
-            + 0.10 * state_fit
-        )
+        score = 0.5 * covered + 0.25 * ordering + 0.15 * semantic_fit + 0.10 * state_fit
         return max(0.0, min(1.0, score))
 
     def score_batch(
@@ -185,9 +344,10 @@ class BehavioralReplayPolicyScorer:
                     "state": item.trajectory[:900],
                     "actions": [
                         {
+                            "state": transition.state[:1200],
+                            "action": transition.action[:500],
                             "tool": transition.tool_name,
                             "arguments": transition.arguments_hint,
-                            "observation": transition.observation_summary[:400],
                             "done": transition.done,
                         }
                         for transition in item.transitions[:10]

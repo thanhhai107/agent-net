@@ -40,14 +40,19 @@ from agent.tool_refinement.models import (
     ToolTrial,
     utc_now,
 )
+from agent.tool_refinement.generalization import (
+    generalize_tool_documentation,
+    is_runtime_identifier_parameter,
+)
 from agent.tool_refinement.store import ToolRefinementStore
+from agent.utils.tool_output import classify_tool_outcome, compact_tool_output
 from agent.utils.phases import DIAGNOSIS
 from nika.evaluator.result_log import MESSAGES_FILENAME
 from nika.utils.session import Session
 
 
 DRAFT_CONVERGENCE_THRESHOLD = 0.75
-DRAFT_EXPLORATION_SIMILARITY_THRESHOLD = 0.82
+DRAFT_EXPLORATION_SIMILARITY_THRESHOLD = 0.9
 DIAGNOSIS_AGENT_NAMES = frozenset({DIAGNOSIS, "diagnosis_agent"})
 DRAFT_PROMPT_TEXT_LIMIT = 360
 INTEGRATED_GUIDANCE_MARKER = "[Integrated learning guidance - not evidence]"
@@ -81,32 +86,7 @@ def _stable_id(*parts: Any, prefix: str) -> str:
 
 def _tool_outcome(event: str, output: Any) -> str:
     """Classify semantic tool outcomes without treating observations as failures."""
-    if event == "tool_error":
-        return "error"
-    if output in (None, "", [], {}):
-        return "unknown"
-    if isinstance(output, dict):
-        status = str(output.get("status") or "").strip().lower()
-        if status in {"error", "failed", "failure", "timeout"}:
-            return "error"
-        if output.get("error") not in (None, "", False, [], {}):
-            return "error"
-        return "success"
-    text = str(output).strip()
-    try:
-        structured = json.loads(text)
-    except (TypeError, ValueError):
-        structured = None
-    if isinstance(structured, dict):
-        if not structured:
-            return "success"
-        return _tool_outcome(event, structured)
-    lowered = text.lower()
-    explicit_error = re.match(
-        r"^(?:error|exception|traceback|fatal|command failed|tool failed)\b",
-        lowered,
-    ) or re.search(r"\bexit (?:code|status)\s*[=:]?\s*[1-9]\d*\b", lowered)
-    return "error" if explicit_error else "success"
+    return classify_tool_outcome(output, event=event)
 
 
 def _text_similarity(left: str, right: str) -> float:
@@ -254,14 +234,40 @@ def _proposal_contract_errors(
     proposal: DraftRewriteProposal,
     *,
     allowed_parameter_names: set[str],
+    doc: ToolDocumentation,
 ) -> list[str]:
+    errors: list[str] = []
     unknown = sorted(set(proposal.parameters) - allowed_parameter_names)
-    if not unknown:
-        return []
-    return [
-        "proposed parameters are absent from the primitive schema: "
-        + ", ".join(unknown)
-    ]
+    if unknown:
+        errors.append(
+            "proposed parameters are absent from the primitive schema: "
+            + ", ".join(unknown)
+        )
+    allowed_numbers = _numeric_tokens(
+        json.dumps(doc.source_schema, ensure_ascii=False, default=str)
+        + " "
+        + doc.description
+    )
+    proposed_numbers = _numeric_tokens(_proposal_contract_text(proposal))
+    unsupported_numbers = sorted(proposed_numbers - allowed_numbers)
+    if doc.source_contract_version > 0 and unsupported_numbers:
+        errors.append(
+            "proposed numeric constraints are absent from the primitive schema: "
+            + ", ".join(unsupported_numbers)
+        )
+    return errors
+
+
+def _numeric_tokens(text: str) -> set[str]:
+    return set(re.findall(r"(?<![A-Za-z0-9_])-?\d+(?:\.\d+)?", str(text)))
+
+
+def _proposal_contract_text(proposal: DraftRewriteProposal) -> str:
+    payload = proposal.model_dump(
+        mode="json",
+        exclude={"confidence", "rationale", "positive_examples", "negative_examples"},
+    )
+    return json.dumps(payload, ensure_ascii=False, default=str)
 
 
 def extract_tool_trials(
@@ -323,8 +329,12 @@ def extract_tool_trials(
                 task_description=task_description,
                 arguments=start["arguments"],
                 status=status,
-                output_summary=_short_text(output) if status != "error" else "",
-                error_summary=_short_text(output) if status == "error" else "",
+                output_summary=(
+                    compact_tool_output(output) if status != "error" else ""
+                ),
+                error_summary=(
+                    compact_tool_output(output) if status == "error" else ""
+                ),
                 timestamp=start["timestamp"],
             )
             trials.append(trial)
@@ -411,14 +421,12 @@ def _exploration_from_trial(
     prior_explorations: list[DraftExploration] | None = None,
 ) -> DraftExploration:
     observation = trial.output_summary if trial.success else trial.error_summary
+    parameter_names = ", ".join(sorted(trial.arguments)) or "no parameters"
+    user_query = f"Explore `{trial.tool_name}` using its documented {parameter_names}."
     read_only = _exploration_is_read_only(
         tool_name=trial.tool_name,
         parameters=trial.arguments,
-        text=trial.task_description,
-    )
-    user_query = trial.task_description or (
-        f"Explore `{trial.tool_name}` with arguments "
-        f"{json.dumps(trial.arguments, ensure_ascii=False, default=str)}."
+        text=user_query,
     )
     signature = _exploration_signature(
         tool_name=trial.tool_name,
@@ -467,13 +475,44 @@ def _exploration_signature(
     user_query: str,
     parameters: dict[str, Any],
 ) -> str:
+    normalized_query = str(user_query)
+    normalized_parameters: dict[str, Any] = {}
+    for name, value in parameters.items():
+        if not is_runtime_identifier_parameter(str(name)):
+            normalized_parameters[name] = value
+            continue
+        placeholder = f"<{name}>"
+        normalized_parameters[name] = placeholder
+        for identifier in _nested_string_values(value):
+            normalized_query = normalized_query.replace(identifier, placeholder)
     return " ".join(
         (
             tool_name,
-            user_query,
-            json.dumps(parameters, sort_keys=True, ensure_ascii=False, default=str),
+            normalized_query,
+            json.dumps(
+                normalized_parameters,
+                sort_keys=True,
+                ensure_ascii=False,
+                default=str,
+            ),
         )
     )
+
+
+def _nested_string_values(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value] if value else []
+    if isinstance(value, (list, tuple, set)):
+        return [
+            item for value_item in value for item in _nested_string_values(value_item)
+        ]
+    if isinstance(value, dict):
+        return [
+            item
+            for value_item in value.values()
+            for item in _nested_string_values(value_item)
+        ]
+    return []
 
 
 _MUTATING_OPERATION_VALUES = {
@@ -505,10 +544,33 @@ _MUTATING_TEXT_RE = re.compile(
     r"(?:\b(?:restart|start|stop|reload|enable|disable|kill|delete|remove|"
     r"flush|apply|inject|shutdown|reboot)\b|"
     r"\brm\s|\bmv\s|\btouch\s|\btruncate\s|\bsed\s+-i\b|"
+    r"\b(?:chmod|chown|mkdir|rmdir|mkfs|mount|umount|reboot|poweroff)\b|"
+    r"\b(?:cp|install|tee)\s|"
+    r"\bip\s+(?:link\s+set|(?:addr|address|route)\s+(?:add|del|delete|replace|flush))\b|"
+    r"\broute\s+(?:add|del|delete)\b|\bvtysh\b.*\bconfigure\b|"
     r"\bsystemctl\s+(?:restart|start|stop|reload|enable|disable)\b|"
+    r"\bservice\s+\S+\s+(?:restart|start|stop|reload|enable|disable)\b|"
     r"\btc\s+qdisc\s+(?:add|change|replace|del)\b|"
     r"\b(?:iptables|nft)\s+(?:-[AIXDF]|add|insert|delete|flush)\b|"
     r"(?:^|\s)(?:>|>>)(?:\s|$))",
+    re.IGNORECASE,
+)
+_COMMAND_PARAMETER_RE = re.compile(r"^(?:command|cmd\d*)$", re.IGNORECASE)
+_SHELL_CONTROL_RE = re.compile(r"(?:[;&|`]|\$\(|\r|\n)")
+_READ_ONLY_COMMAND_RE = re.compile(
+    r"^(?:"
+    r"show\b|info\b|display\b|"
+    r"ip\s+(?:addr(?:ess)?|route|link|neigh(?:bour)?)\b|"
+    r"systemctl\s+status\b|"
+    r"vtysh\s+-c\s+['\"]?show\b|"
+    r"(?:cat|head|tail|grep)\b|"
+    r"(?:ss|netstat|ifconfig|route|arp|hostname|uname|uptime|ps|df|free|dig|nslookup|traceroute|tracepath)\b|"
+    r"ethtool\b"
+    r")",
+    re.IGNORECASE,
+)
+_UNSAFE_FIXED_ARGUMENT_RE = re.compile(
+    r"(?:^|\s)(?:-s|--change|-f|-D|--daemon)(?:\s|$)",
     re.IGNORECASE,
 )
 
@@ -527,10 +589,32 @@ def _exploration_is_read_only(
         if normalized_key in {"operation", "action", "verb", "mode"}:
             if normalized_value in _MUTATING_OPERATION_VALUES:
                 return False
-    command = " ".join(
-        str(parameters.get(key) or "") for key in ("command", "cmd", "args")
+        if _COMMAND_PARAMETER_RE.fullmatch(normalized_key):
+            for command in _nested_string_values(value):
+                stripped = command.strip()
+                if (
+                    not stripped
+                    or _SHELL_CONTROL_RE.search(stripped)
+                    or not _READ_ONLY_COMMAND_RE.match(stripped)
+                ):
+                    return False
+        if normalized_key in {
+            "args",
+            "client_args",
+            "server_args",
+        } and _UNSAFE_FIXED_ARGUMENT_RE.search(normalized_value):
+            return False
+    serialized_parameters = json.dumps(
+        parameters,
+        ensure_ascii=False,
+        default=str,
     )
-    combined = " ".join((str(tool_name or ""), command, str(text or "")))
+    normalized_tool_tokens = " ".join(
+        token for token in re.split(r"[^a-z0-9]+", tool_name.lower()) if token
+    )
+    combined = " ".join(
+        (normalized_tool_tokens, serialized_parameters, str(text or ""))
+    )
     return _MUTATING_TEXT_RE.search(combined) is None
 
 
@@ -809,7 +893,7 @@ def _draft_rewrite_prompt(
         "add, remove, or rename parameters. MCP content-block wrappers in traces "
         "are transport envelopes, not evidence that the primitive return contract "
         "changed. Learn only usage guidance supported by trials.\n\n"
-        "DRAFT loop mapping: Explorer = observed read-only tool trials; "
+        "DRAFT loop mapping: Explorer = self-driven and observed read-only tool trials; "
         "Analyzer = suggestions from output/error feedback; Rewriter = update "
         "the documentation.\n\n"
         f"Tool: {tool_name}\n"
@@ -824,6 +908,10 @@ def _draft_rewrite_prompt(
         "failure modes, safe usage examples, return semantics, and how to tell "
         "a valid result from a tool error. Do not write answer-pattern rules such "
         "as mapping one symptom directly to a faulty device or root-cause label. "
+        "Represent runtime host, router, switch, node, source, target, and interface "
+        "values with parameter placeholders such as `<host_name>`; never preserve "
+        "a concrete topology identifier. Numeric ranges, defaults, and allowed "
+        "values must come from the immutable source schema. "
         "Only document preconditions, constraints, failure modes, and negative "
         "examples when they are directly supported by the primitive source "
         "contract or an observed error in this batch. For successful-only batches, "
@@ -831,7 +919,9 @@ def _draft_rewrite_prompt(
         "unobserved output fields. "
         "Also return `tool_usage_description` as a concise selection-time tool "
         "summary. For `parameters`, return a mapping from parameter name to a "
-        "short description."
+        "short description. Return `next_exploration_direction` as one concise "
+        "aspect that a future Explorer should test; do not provide concrete "
+        "runtime identifiers or a complete query."
     )
 
 
@@ -858,6 +948,7 @@ def _proposal_from_draft(
         usage_notes=draft.usage_notes,
         confidence=draft.confidence,
         rationale=draft.rationale,
+        next_exploration_direction=draft.next_exploration_direction,
     )
 
 
@@ -928,6 +1019,8 @@ def _apply_draft_proposal(
 ) -> None:
     if proposal.tool_usage_description.strip():
         doc.tool_usage_description = proposal.tool_usage_description.strip()
+    if proposal.next_exploration_direction.strip():
+        doc.next_exploration_direction = proposal.next_exploration_direction.strip()
     observed_errors = [
         trial.error_summary for trial in trials if trial.status == "error"
     ]
@@ -967,7 +1060,8 @@ def _apply_draft_proposal(
             current.type_hint = param.type_hint
         if param.description:
             current.description = param.description
-        _append_unique(current.constraints, param.constraints, limit=8)
+        if doc.source_contract_version <= 0:
+            _append_unique(current.constraints, param.constraints, limit=8)
         _append_unique(current.examples, param.examples, limit=5)
 
 
@@ -981,13 +1075,40 @@ def rewrite_documentation(
     model: str | None = None,
     documented_tools_at_start: set[str] | None = None,
     convergence_threshold: float = DRAFT_CONVERGENCE_THRESHOLD,
+    llm: Any | None = None,
+) -> list[DocumentationRevision]:
+    with store.exclusive():
+        return _rewrite_documentation_unlocked(
+            store,
+            trials=trials,
+            tool_descriptions=tool_descriptions,
+            metrics=metrics,
+            llm_backend=llm_backend,
+            model=model,
+            documented_tools_at_start=documented_tools_at_start,
+            convergence_threshold=convergence_threshold,
+            llm=llm,
+        )
+
+
+def _rewrite_documentation_unlocked(
+    store: ToolRefinementStore,
+    *,
+    trials: list[ToolTrial],
+    tool_descriptions: dict[str, str],
+    metrics: dict[str, Any],
+    llm_backend: str | None = None,
+    model: str | None = None,
+    documented_tools_at_start: set[str] | None = None,
+    convergence_threshold: float = DRAFT_CONVERGENCE_THRESHOLD,
+    llm: Any | None = None,
 ) -> list[DocumentationRevision]:
     state = store.load()
-    learning_llm: Any | None = None
+    learning_llm: Any | None = llm
     learning_llm_error = ""
     selected_backend = learning_backend(llm_backend)
     selected_model = learning_model(model)
-    if selected_backend and selected_model:
+    if learning_llm is None and selected_backend and selected_model:
         try:
             learning_llm = load_model(
                 selected_backend,
@@ -1170,6 +1291,7 @@ def rewrite_documentation(
             contract_errors = _proposal_contract_errors(
                 proposal,
                 allowed_parameter_names=allowed_parameter_names,
+                doc=doc,
             )
             if contract_errors:
                 contract_rejected = True
@@ -1197,6 +1319,7 @@ def rewrite_documentation(
             doc.usage_notes = []
         if not doc.tool_usage_description:
             doc.tool_usage_description = _tool_usage_description(doc)
+        generalize_tool_documentation(doc, trials=all_evidence_trials)
 
         after_hash = doc.content_hash()
         after_description = doc.refined_description(max_chars=4000)
@@ -1234,7 +1357,11 @@ def rewrite_documentation(
                 {
                     json.dumps(
                         {
-                            "arguments": trial.arguments,
+                            "signature": _exploration_signature(
+                                tool_name=trial.tool_name,
+                                user_query="",
+                                parameters=trial.arguments,
+                            ),
                             "status": trial.status,
                         },
                         sort_keys=True,
@@ -1260,14 +1387,22 @@ def rewrite_documentation(
             tool_name,
             source_signature=doc.source_signature,
         )
+        valid_rewrite = (
+            proposal is not None
+            and not contract_rejected
+            and not analyzer_error
+            and not rewriter_error
+        )
         unchanged_streak = (
-            len(recent_hashes) >= 1
+            valid_rewrite
+            and len(recent_hashes) >= 1
             and len(set(recent_hashes + [after_hash])) == 1
             and diversity_support >= 1.0
             and documentation_coverage >= 0.5
         )
         converged = (
-            convergence_score >= convergence_threshold
+            valid_rewrite
+            and convergence_score >= convergence_threshold
             and len(doc.rewrite_history) >= 1
             and diversity_support >= 1.0
             and doc.contract_mastery_score >= convergence_threshold * 0.5
@@ -1402,6 +1537,10 @@ def finalize_tool_refinement_session(
         "draft_documented_tools": len(state.documents),
         "draft_unique_trial_tools": len({trial.tool_name for trial in trials}),
         "draft_explorations": len(state.explorations),
+        "draft_active_explorations": sum(
+            item.session_id == session_id and item.trial_id.startswith("active_trial_")
+            for item in state.explorations
+        ),
         "draft_analyzer_suggestions": len(state.analyzer_suggestions),
         "draft_mastered_tools": sum(
             stat.mastered for stat in state.tool_stats.values()

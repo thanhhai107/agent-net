@@ -31,6 +31,21 @@ LAZY_COMMANDS.update(
         "benchmark": LazyCommandSpec(
             "nika.cli.commands.benchmark", "benchmark_app", "Batch benchmark runs."
         ),
+        "studio": LazyCommandSpec(
+            "nika.cli.commands.studio",
+            "studio_app",
+            "Launch the Streamlit experiment studio.",
+        ),
+        "tool-refinement": LazyCommandSpec(
+            "nika.cli.commands.tool_refinement",
+            "tools_app",
+            "Inspect and manage DRAFT Tool Refinement libraries.",
+        ),
+        "procedural-memory": LazyCommandSpec(
+            "nika.cli.commands.procedural_memory",
+            "procedural_memory_app",
+            "Run and manage Skill-Pro Procedural Memory banks.",
+        ),
         "traffic": LazyCommandSpec(
             "nika.cli.commands.traffic",
             "traffic_app",

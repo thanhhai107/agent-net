@@ -85,6 +85,18 @@ def test_clean_control_composite_requires_false_detection_and_empty_sets() -> No
     assert _metric_total(inconsistent, is_anomaly=False) < 1.0
 
 
+def test_studio_counts_benchmark_with_clean_controls(tmp_path: Path) -> None:
+    from nika.visualization.experiment_dashboard import _count_rows
+
+    benchmark = tmp_path / "clean-controls.yaml"
+    benchmark.write_text(
+        "cases:\n  - scenario: simple_bgp\n    problem: no_fault\n    inject: {}\n",
+        encoding="utf-8",
+    )
+
+    assert _count_rows(benchmark) == 1
+
+
 def test_command_fallbacks_match_extension_defaults(monkeypatch) -> None:
     monkeypatch.setenv("NIKA_MAX_STEPS", "20")
     config = _config()
@@ -110,20 +122,15 @@ def test_tool_and_memory_modules_share_one_sequential_command() -> None:
     assert command[command.index("--tool-refinement") + 1] == "tools-test"
     assert command[command.index("--tool-refinement-doc-chars") + 1] == "640"
     assert (
-        command[command.index("--tool-refinement-convergence-threshold") + 1]
-        == "0.8"
+        command[command.index("--tool-refinement-convergence-threshold") + 1] == "0.8"
     )
-    assert (
-        command[command.index("--procedural-memory") + 1]
-        == "procedural-memory-test"
-    )
+    assert command[command.index("--procedural-memory") + 1] == "procedural-memory-test"
     assert command[command.index("--procedural-memory-max-skill-age") + 1] == "6"
     assert command[command.index("--procedural-memory-pool-size") + 1] == "24"
-    assert (
-        command[command.index("--procedural-memory-update-threshold") + 1] == "2"
-    )
+    assert command[command.index("--procedural-memory-update-threshold") + 1] == "2"
     assert command[command.index("--procedural-memory-best-of-n") + 1] == "5"
     assert command[command.index("--procedural-memory-ppo-epsilon") + 1] == "0.15"
+
 
 def test_command_plan_for_memory_has_no_service_prerequisite() -> None:
     plan = build_command_plan(
@@ -161,9 +168,7 @@ def test_prepare_experiment_config_uses_one_sequential_name_for_outputs(
     assert prepared["result_root"] == str(tmp_path / "results" / "benchmark_test-0007")
     assert command[command.index("--result-dir") + 1].endswith("benchmark_test-0007")
     assert command[command.index("--tool-refinement") + 1] == "benchmark_test-0007"
-    assert (
-        command[command.index("--procedural-memory") + 1] == "benchmark_test-0007"
-    )
+    assert command[command.index("--procedural-memory") + 1] == "benchmark_test-0007"
 
 
 def test_resume_command_uses_existing_result_root() -> None:
@@ -175,7 +180,10 @@ def test_resume_command_uses_existing_result_root() -> None:
         )
     )
 
-    assert command[command.index("--result-dir") + 1] == "/tmp/results/benchmark_evaluate-0001"
+    assert (
+        command[command.index("--result-dir") + 1]
+        == "/tmp/results/benchmark_evaluate-0001"
+    )
     assert "--resume" in command
 
 
@@ -193,9 +201,13 @@ def test_resume_run_reuses_selected_run_directory(monkeypatch, tmp_path) -> None
         ),
         "commands": [],
     }
-    (run_dir / "spec.json").write_text(experiment_runner.json.dumps(spec), encoding="utf-8")
+    (run_dir / "spec.json").write_text(
+        experiment_runner.json.dumps(spec), encoding="utf-8"
+    )
     (run_dir / "meta.json").write_text(
-        experiment_runner.json.dumps({"run_id": "benchmark_evaluate-0001", "status": "running", "pid": 1}),
+        experiment_runner.json.dumps(
+            {"run_id": "benchmark_evaluate-0001", "status": "running", "pid": 1}
+        ),
         encoding="utf-8",
     )
     (run_dir / "run.log").write_text(
@@ -246,7 +258,9 @@ def test_run_status_ignores_old_done_after_resume_marker(monkeypatch, tmp_path) 
     run_dir = tmp_path / "runs" / "benchmark_evaluate-0001"
     run_dir.mkdir(parents=True)
     (run_dir / "meta.json").write_text(
-        experiment_runner.json.dumps({"run_id": "benchmark_evaluate-0001", "status": "running", "pid": 4242}),
+        experiment_runner.json.dumps(
+            {"run_id": "benchmark_evaluate-0001", "status": "running", "pid": 4242}
+        ),
         encoding="utf-8",
     )
     (run_dir / "run.log").write_text(
@@ -268,7 +282,7 @@ def test_run_status_ignores_old_done_after_resume_marker(monkeypatch, tmp_path) 
 
 def test_parse_progress_events_reads_benchmark_and_ui_events() -> None:
     rows = parse_progress_events(
-        '\n'.join(
+        "\n".join(
             [
                 'ui_step_start {"index": 1, "name": "Baseline"}',
                 'ui_run_resumed {"run_id": "benchmark_test-0001"}',

@@ -29,6 +29,9 @@ CLI_COMMAND_MODULES = [
     "nika.cli.commands.exec",
     "nika.cli.commands.failure",
     "nika.cli.commands.session",
+    "nika.cli.commands.studio",
+    "nika.cli.commands.procedural_memory",
+    "nika.cli.commands.tool_refinement",
     "nika.cli.commands.traffic",
 ]
 
@@ -77,6 +80,17 @@ CLI_HELP_ARGS = [
     ["session", "containers", "--help"],
     ["session", "close", "--help"],
     ["session", "wipe", "--help"],
+    ["studio", "--help"],
+    ["tool-refinement", "--help"],
+    ["tool-refinement", "libraries", "--help"],
+    ["tool-refinement", "show", "--help"],
+    ["tool-refinement", "reset", "--help"],
+    ["procedural-memory", "--help"],
+    ["procedural-memory", "run", "--help"],
+    ["procedural-memory", "inspect", "--help"],
+    ["procedural-memory", "health", "--help"],
+    ["procedural-memory", "snapshot", "--help"],
+    ["procedural-memory", "clear", "--help"],
     ["traffic", "--help"],
     ["traffic", "list", "--help"],
     ["traffic", "run", "--help"],
@@ -89,6 +103,7 @@ CLI_READ_ONLY_ARGS = [
     ["failure", "list"],
     ["traffic", "list"],
     ["session", "ps"],
+    ["tool-refinement", "libraries"],
 ]
 
 

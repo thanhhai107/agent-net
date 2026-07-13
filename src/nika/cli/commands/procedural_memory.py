@@ -105,6 +105,44 @@ def procedural_memory_run(
         min=100,
         help="Estimated token budget for retrieved skills.",
     ),
+    max_skill_age: int = typer.Option(
+        8,
+        "--max-skill-age",
+        min=1,
+        help="Maximum primitive actions controlled by one active skill.",
+    ),
+    pool_size: int = typer.Option(
+        32,
+        "--pool-size",
+        min=1,
+        help="Maximum active skill-pool size.",
+    ),
+    update_threshold: int = typer.Option(
+        6,
+        "--update-threshold",
+        min=1,
+        help="Parent trajectories required for one semantic-gradient update.",
+    ),
+    best_of_n: int = typer.Option(
+        3,
+        "--best-of-n",
+        min=1,
+        help="Independent candidates evaluated by the PPO gate.",
+    ),
+    ppo_epsilon: float = typer.Option(
+        0.2,
+        "--ppo-epsilon",
+        min=0.0,
+        max=1.0,
+        help="PPO-style importance-ratio clipping epsilon.",
+    ),
+    selection_epsilon: float = typer.Option(
+        0.3,
+        "--selection-epsilon",
+        min=0.0,
+        max=1.0,
+        help="Initial deterministic epsilon-greedy skill-selection rate.",
+    ),
 ) -> None:
     """Run a Skill-Pro Procedural Memory benchmark with concise defaults."""
     mode = "read" if read else "evolve"
@@ -124,7 +162,9 @@ def procedural_memory_run(
         f"yaml={selected_yaml} bank={bank} mode={mode} "
         f"backend={llm_backend} model={model}"
     )
-    procedural_memory_flag = "--procedural-memory-read" if read else "--procedural-memory"
+    procedural_memory_flag = (
+        "--procedural-memory-read" if read else "--procedural-memory"
+    )
     command = [
         sys.executable,
         "-m",
@@ -143,6 +183,18 @@ def procedural_memory_run(
         str(k),
         "--procedural-memory-tokens",
         str(tokens),
+        "--procedural-memory-max-skill-age",
+        str(max_skill_age),
+        "--procedural-memory-pool-size",
+        str(pool_size),
+        "--procedural-memory-update-threshold",
+        str(update_threshold),
+        "--procedural-memory-best-of-n",
+        str(best_of_n),
+        "--procedural-memory-ppo-epsilon",
+        str(ppo_epsilon),
+        "--procedural-memory-selection-epsilon",
+        str(selection_epsilon),
     ]
     try:
         subprocess.run(command, check=True)
@@ -152,9 +204,7 @@ def procedural_memory_run(
 
 @procedural_memory_app.command("inspect")
 def procedural_memory_inspect(
-    bank: str = typer.Option(
-        "default", "--bank", help="Procedural Memory bank id."
-    ),
+    bank: str = typer.Option("default", "--bank", help="Procedural Memory bank id."),
 ) -> None:
     """Print skill, episode, and PPO decision counts for one bank."""
     typer.echo(
@@ -168,9 +218,7 @@ def procedural_memory_inspect(
 
 @procedural_memory_app.command("health")
 def procedural_memory_health(
-    bank: str = typer.Option(
-        "default", "--bank", help="Procedural Memory bank id."
-    ),
+    bank: str = typer.Option("default", "--bank", help="Procedural Memory bank id."),
 ) -> None:
     """Check local JSON skill store readiness."""
     report = {
@@ -194,9 +242,7 @@ def procedural_memory_health(
 
 @procedural_memory_app.command("snapshot")
 def procedural_memory_snapshot(
-    bank: str = typer.Option(
-        "default", "--bank", help="Procedural Memory bank id."
-    ),
+    bank: str = typer.Option("default", "--bank", help="Procedural Memory bank id."),
     output: Path | None = typer.Option(
         None,
         "-o",
@@ -212,9 +258,7 @@ def procedural_memory_snapshot(
 
 @procedural_memory_app.command("clear")
 def procedural_memory_clear(
-    bank: str = typer.Option(
-        "default", "--bank", help="Procedural Memory bank id."
-    ),
+    bank: str = typer.Option("default", "--bank", help="Procedural Memory bank id."),
     yes: bool = typer.Option(False, "-y", "--yes", help="Skip confirmation."),
 ) -> None:
     """Delete one experiment bank from the local JSON skill store."""
@@ -223,9 +267,7 @@ def procedural_memory_clear(
     ):
         raise typer.Abort()
     _module(bank).clear()
-    typer.echo(
-        f"Reset Procedural Memory bank and rebuilt Skill-Pro seed pool: {bank}"
-    )
+    typer.echo(f"Reset Procedural Memory bank and rebuilt Skill-Pro seed pool: {bank}")
 
 
 if __name__ == "__main__":

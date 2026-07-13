@@ -107,6 +107,19 @@ class DraftAnalyzerDraft(BaseModel):
     rationale: str = ""
 
 
+class DraftExplorerDraft(BaseModel):
+    """One self-driven, single-call DRAFT exploration proposal."""
+
+    user_query: str
+    parameters: dict[str, Any] = Field(default_factory=dict)
+    intent: Literal[
+        "tool_validation",
+        "boundary_case",
+        "argument_schema_probe",
+    ] = "tool_validation"
+    rationale: str = ""
+
+
 class DocumentationRevision(BaseModel):
     revision_id: str
     tool_name: str
@@ -136,6 +149,7 @@ class DraftRewriteProposal(BaseModel):
     negative_examples: list[dict[str, Any]] = Field(default_factory=list)
     confidence: float = 0.0
     rationale: str = ""
+    next_exploration_direction: str = ""
 
 
 class DraftRewriteDraft(BaseModel):
@@ -151,6 +165,7 @@ class DraftRewriteDraft(BaseModel):
     usage_notes: list[str] = Field(default_factory=list)
     confidence: float = 0.0
     rationale: str = ""
+    next_exploration_direction: str = ""
 
 
 class ToolDocumentation(BaseModel):
@@ -169,6 +184,7 @@ class ToolDocumentation(BaseModel):
     negative_examples: list[dict[str, Any]] = Field(default_factory=list)
     rewrite_history: list[str] = Field(default_factory=list)
     analyzer_suggestions: list[str] = Field(default_factory=list)
+    next_exploration_direction: str = ""
     trial_count: int = 0
     success_count: int = 0
     error_count: int = 0

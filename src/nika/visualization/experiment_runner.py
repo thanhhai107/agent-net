@@ -182,15 +182,17 @@ def build_experiment_command(config: dict[str, Any]) -> list[str]:
                 "--procedural-memory-tokens",
                 str(_int(config.get("procedural_memory_tokens"), 1500)),
                 "--procedural-memory-max-skill-age",
-                str(_int(config.get("procedural_memory_max_skill_age"), 4)),
+                str(_int(config.get("procedural_memory_max_skill_age"), 8)),
                 "--procedural-memory-pool-size",
                 str(_int(config.get("procedural_memory_pool_size"), 32)),
                 "--procedural-memory-update-threshold",
-                str(_int(config.get("procedural_memory_update_threshold"), 3)),
+                str(_int(config.get("procedural_memory_update_threshold"), 6)),
                 "--procedural-memory-best-of-n",
                 str(_int(config.get("procedural_memory_best_of_n"), 3)),
                 "--procedural-memory-ppo-epsilon",
                 _str(config.get("procedural_memory_ppo_epsilon"), "0.2"),
+                "--procedural-memory-selection-epsilon",
+                _str(config.get("procedural_memory_selection_epsilon"), "0.3"),
             ]
         )
     return command
@@ -218,9 +220,15 @@ def prepare_experiment_config(config: dict[str, Any]) -> dict[str, Any]:
     if not str(prepared.get("result_root") or "").strip():
         prepared["result_root"] = str(RESULTS_DIR / run_id)
     modules = selected_modules(prepared)
-    if "tool_refinement" in modules and not str(prepared.get("tool_library_id") or "").strip():
+    if (
+        "tool_refinement" in modules
+        and not str(prepared.get("tool_library_id") or "").strip()
+    ):
         prepared["tool_library_id"] = run_id
-    if "procedural_memory" in modules and not str(prepared.get("procedural_memory_bank") or "").strip():
+    if (
+        "procedural_memory" in modules
+        and not str(prepared.get("procedural_memory_bank") or "").strip()
+    ):
         prepared["procedural_memory_bank"] = run_id
     return prepared
 
@@ -233,16 +241,24 @@ def prepare_resume_config(
     config = dict(source_spec.get("config") or {})
     if not config:
         raise ValueError("Selected run does not have a resumable config.")
-    source_run_id = str(source_spec.get("run_id") or config.get("experiment_id") or "").strip()
+    source_run_id = str(
+        source_spec.get("run_id") or config.get("experiment_id") or ""
+    ).strip()
     if not source_run_id:
         raise ValueError("Selected run does not have a source run id.")
 
     if not str(config.get("result_root") or "").strip():
         config["result_root"] = str(RESULTS_DIR / source_run_id)
     modules = selected_modules(config)
-    if "tool_refinement" in modules and not str(config.get("tool_library_id") or "").strip():
+    if (
+        "tool_refinement" in modules
+        and not str(config.get("tool_library_id") or "").strip()
+    ):
         config["tool_library_id"] = source_run_id
-    if "procedural_memory" in modules and not str(config.get("procedural_memory_bank") or "").strip():
+    if (
+        "procedural_memory" in modules
+        and not str(config.get("procedural_memory_bank") or "").strip()
+    ):
         config["procedural_memory_bank"] = source_run_id
 
     config["experiment_id"] = resume_run_id or source_run_id
@@ -282,11 +298,19 @@ def create_run(config: dict[str, Any]) -> Path:
             "log_path": str(log_path),
             "spec_path": str(run_dir / SPEC_FILENAME),
         }
-        (run_dir / META_FILENAME).write_text(json.dumps(meta, indent=2), encoding="utf-8")
+        (run_dir / META_FILENAME).write_text(
+            json.dumps(meta, indent=2), encoding="utf-8"
+        )
     else:
         log_handle = log_path.open("a", encoding="utf-8")
         proc = subprocess.Popen(
-            [sys.executable, "-u", "-m", "nika.visualization.experiment_runner", str(run_dir / SPEC_FILENAME)],
+            [
+                sys.executable,
+                "-u",
+                "-m",
+                "nika.visualization.experiment_runner",
+                str(run_dir / SPEC_FILENAME),
+            ],
             cwd=_REPO_ROOT,
             stdout=log_handle,
             stderr=subprocess.STDOUT,
@@ -302,7 +326,9 @@ def create_run(config: dict[str, Any]) -> Path:
             "log_path": str(log_path),
             "spec_path": str(run_dir / SPEC_FILENAME),
         }
-        (run_dir / META_FILENAME).write_text(json.dumps(meta, indent=2), encoding="utf-8")
+        (run_dir / META_FILENAME).write_text(
+            json.dumps(meta, indent=2), encoding="utf-8"
+        )
 
     return run_dir
 
@@ -327,7 +353,9 @@ def resume_run(run_dir: Path) -> Path:
         "config": config,
         "commands": [asdict(item) for item in plan],
     }
-    (run_dir / SPEC_FILENAME).write_text(json.dumps(updated_spec, indent=2), encoding="utf-8")
+    (run_dir / SPEC_FILENAME).write_text(
+        json.dumps(updated_spec, indent=2), encoding="utf-8"
+    )
     log_path = run_dir / LOG_FILENAME
     resume_payload = {
         "run_id": source_run_id,
@@ -363,7 +391,13 @@ def resume_run(run_dir: Path) -> Path:
     )
     log_handle = log_path.open("a", encoding="utf-8")
     proc = subprocess.Popen(
-        [sys.executable, "-u", "-m", "nika.visualization.experiment_runner", str(run_dir / SPEC_FILENAME)],
+        [
+            sys.executable,
+            "-u",
+            "-m",
+            "nika.visualization.experiment_runner",
+            str(run_dir / SPEC_FILENAME),
+        ],
         cwd=_REPO_ROOT,
         stdout=log_handle,
         stderr=subprocess.STDOUT,
@@ -438,9 +472,12 @@ def _pid_running(pid: int | None) -> bool:
     # Check /proc/<pid>/status as a fallback for zombie state on Linux
     try:
         from pathlib import Path
+
         status_path = Path(f"/proc/{pid}/status")
         if status_path.exists():
-            for line in status_path.read_text(encoding="utf-8", errors="replace").splitlines():
+            for line in status_path.read_text(
+                encoding="utf-8", errors="replace"
+            ).splitlines():
                 if line.startswith("State:"):
                     if "zombie" in line.lower() or "defunct" in line.lower():
                         return False
@@ -466,7 +503,11 @@ def run_status(run_dir: Path) -> dict[str, Any]:
     if done:
         payload = _parse_json_suffix(done[-1], "ui_run_done ")
         code = _int(payload.get("exit_code"), 1)
-        return {**meta, "status": "finished" if code == 0 else "failed", "exit_code": code}
+        return {
+            **meta,
+            "status": "finished" if code == 0 else "failed",
+            "exit_code": code,
+        }
     pid = _int(meta.get("pid"), 0)
     if _pid_running(pid):
         return {**meta, "status": "running", "exit_code": None}
@@ -486,7 +527,13 @@ def check_and_start_next_queued() -> None:
             log_handle = log_path.open("a", encoding="utf-8")
             try:
                 proc = subprocess.Popen(
-                    [sys.executable, "-u", "-m", "nika.visualization.experiment_runner", str(spec_file)],
+                    [
+                        sys.executable,
+                        "-u",
+                        "-m",
+                        "nika.visualization.experiment_runner",
+                        str(spec_file),
+                    ],
                     cwd=_REPO_ROOT,
                     stdout=log_handle,
                     stderr=subprocess.STDOUT,
@@ -497,7 +544,9 @@ def check_and_start_next_queued() -> None:
                 meta["pid"] = proc.pid
                 meta["status"] = "running"
                 meta["started_at"] = datetime.now(timezone.utc).isoformat()
-                (r / META_FILENAME).write_text(json.dumps(meta, indent=2), encoding="utf-8")
+                (r / META_FILENAME).write_text(
+                    json.dumps(meta, indent=2), encoding="utf-8"
+                )
                 break
             except Exception as e:
                 log_handle.close()
@@ -541,8 +590,7 @@ def stop_run(run_dir: Path) -> None:
     _write_run_meta(run_dir, meta)
     _append_run_log(
         run_dir,
-        "ui_run_stopped "
-        + json.dumps({"reason": "user_stop"}, ensure_ascii=False),
+        "ui_run_stopped " + json.dumps({"reason": "user_stop"}, ensure_ascii=False),
     )
     try:
         os.killpg(pid, signal.SIGTERM)
@@ -563,7 +611,7 @@ def stop_run(run_dir: Path) -> None:
             os.killpg(pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
-    
+
     check_and_start_next_queued()
 
 
@@ -598,7 +646,12 @@ def parse_progress_events(log_text: str) -> list[dict[str, str]]:
         rest = line[len(prefix) :]
         row: dict[str, str] = {"event": event, "raw": line}
         if prefix.startswith("ui_"):
-            row.update({key: str(value) for key, value in _parse_json_suffix(line, prefix).items()})
+            row.update(
+                {
+                    key: str(value)
+                    for key, value in _parse_json_suffix(line, prefix).items()
+                }
+            )
         else:
             for part in rest.split():
                 if "=" not in part:
@@ -627,6 +680,7 @@ def run_spec_file(spec_path: str | Path) -> int:
         )
         try:
             import os
+
             sub_env = os.environ.copy()
             sub_env["PYTHONUNBUFFERED"] = "1"
             proc = subprocess.Popen(
@@ -648,7 +702,12 @@ def run_spec_file(spec_path: str | Path) -> int:
         print(
             "ui_step_done "
             + json.dumps(
-                {"index": index, "total": total, "name": name, "returncode": return_code},
+                {
+                    "index": index,
+                    "total": total,
+                    "name": name,
+                    "returncode": return_code,
+                },
                 ensure_ascii=False,
             ),
             flush=True,

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import fcntl
 import re
 import shutil
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterable
 
@@ -38,6 +40,19 @@ class ToolRefinementStore:
         self.root = Path(root) if root is not None else TOOL_REFINEMENT_DIR
         self.library_dir = self.root / self.library_id
         self.state_path = self.library_dir / "state.json"
+        self.lock_path = self.library_dir / ".lock"
+
+    @contextmanager
+    def exclusive(self):
+        """Serialize read-modify-write learning cycles for one library."""
+
+        self.library_dir.mkdir(parents=True, exist_ok=True)
+        with self.lock_path.open("a+", encoding="utf-8") as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
     def load(self) -> DraftToolState:
         if not self.state_path.exists():
@@ -84,7 +99,6 @@ class ToolRefinementStore:
             seen_trial_ids.add(trial_id)
         if changed:
             state.explorations = normalized
-            self.save(state)
         return state
 
     def save(self, state: DraftToolState) -> DraftToolState:
@@ -94,13 +108,20 @@ class ToolRefinementStore:
         return state
 
     def clear(self) -> None:
-        if self.library_dir.exists():
-            shutil.rmtree(self.library_dir)
+        with self.exclusive():
+            for path in self.library_dir.iterdir():
+                if path == self.lock_path:
+                    continue
+                if path.is_dir():
+                    shutil.rmtree(path)
+                else:
+                    path.unlink(missing_ok=True)
 
     def upsert_document(self, doc: ToolDocumentation) -> ToolDocumentation:
-        state = self.load()
-        state.documents[doc.name] = doc
-        self.save(state)
+        with self.exclusive():
+            state = self.load()
+            state.documents[doc.name] = doc
+            self.save(state)
         return doc
 
     def get_document(self, tool_name: str) -> ToolDocumentation | None:
@@ -110,32 +131,35 @@ class ToolRefinementStore:
         incoming = list(trials)
         if not incoming:
             return 0
-        state = self.load()
-        seen = {trial.trial_id for trial in state.trials}
-        added = 0
-        for trial in incoming:
-            if trial.trial_id in seen:
-                continue
-            state.trials.append(trial)
-            seen.add(trial.trial_id)
-            added += 1
-        if added:
-            self.save(state)
+        with self.exclusive():
+            state = self.load()
+            seen = {trial.trial_id for trial in state.trials}
+            added = 0
+            for trial in incoming:
+                if trial.trial_id in seen:
+                    continue
+                state.trials.append(trial)
+                seen.add(trial.trial_id)
+                added += 1
+            if added:
+                self.save(state)
         return added
 
     def record_gap(self, gap: ComprehensionGap) -> None:
-        state = self.load()
-        if not any(item.gap_id == gap.gap_id for item in state.gaps):
-            state.gaps.append(gap)
-            self.save(state)
+        with self.exclusive():
+            state = self.load()
+            if not any(item.gap_id == gap.gap_id for item in state.gaps):
+                state.gaps.append(gap)
+                self.save(state)
 
     def record_revision(self, revision: DocumentationRevision) -> None:
-        state = self.load()
-        if not any(
-            item.revision_id == revision.revision_id for item in state.revisions
-        ):
-            state.revisions.append(revision)
-            self.save(state)
+        with self.exclusive():
+            state = self.load()
+            if not any(
+                item.revision_id == revision.revision_id for item in state.revisions
+            ):
+                state.revisions.append(revision)
+                self.save(state)
 
     def stats(self) -> dict:
         state = self.load()

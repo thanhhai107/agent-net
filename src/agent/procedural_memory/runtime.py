@@ -20,12 +20,20 @@ from pydantic import ConfigDict, Field
 
 from agent.procedural_memory.attributes import infer_procedural_memory_attributes
 from agent.procedural_memory.models import ProceduralMemoryQuery, SkillRetrieval
+from agent.procedural_memory.policy_context import (
+    build_skill_policy_prefix,
+    build_skill_policy_suffix,
+)
 from agent.procedural_memory.safety import redact_oracle_markers
 from agent.procedural_memory.service import ProceduralMemoryModule
 from agent.tool_refinement.runtime import ToolRefinementRuntime
 from agent.utils.loggers import MessageLogger
+from agent.utils.tool_output import (
+    INTEGRATED_GUIDANCE_MARKER,
+    classify_tool_outcome,
+    tool_output_content,
+)
 
-INTEGRATED_GUIDANCE_MARKER = "[Integrated learning guidance - not evidence]"
 INTERNAL_TOOL_CALL_ID = "skill-runtime-internal"
 
 
@@ -67,9 +75,7 @@ def _tool_input_from_call(args: tuple[Any, ...], kwargs: dict[str, Any]) -> Any:
 
 
 def _tool_result_content(result: Any) -> Any:
-    if isinstance(result, tuple) and len(result) == 2:
-        return result[0]
-    return getattr(result, "content", result)
+    return tool_output_content(result)
 
 
 def _append_followup_guidance(result: Any, guidance: str) -> Any:
@@ -104,7 +110,8 @@ class SkillToolRuntime:
         tool_refinement_runtime: ToolRefinementRuntime | None = None,
         top_k: int = 5,
         token_budget: int = 1500,
-        max_skill_age: int = 4,
+        max_skill_age: int = 8,
+        selection_epsilon: float = 0.3,
         meta_controller_llm: Any | None = None,
     ) -> None:
         self.procedural_memory = procedural_memory
@@ -119,6 +126,9 @@ class SkillToolRuntime:
         self.top_k = top_k
         self.token_budget = token_budget
         self.max_skill_age = max(1, max_skill_age)
+        self.selection_epsilon = max(0.0, min(1.0, selection_epsilon))
+        self.selection_count = 0
+        self.active_activation_id = ""
         self.meta_controller_llm = meta_controller_llm
         self.active_skill: SkillRetrieval | None = None
         self.skill_age = 0
@@ -131,6 +141,8 @@ class SkillToolRuntime:
         self.inflight_tool_calls = 0
         self._last_meta_controller_signature = ""
         self._last_meta_controller_reason = ""
+        self._decision_policy_state = ""
+        self._decision_policy_context = ""
         self._lock = Lock()
         self._metrics_lock = Lock()
         self.prompt_added_tokens = 0
@@ -156,25 +168,22 @@ class SkillToolRuntime:
     def topology_class(self) -> str:
         return str(getattr(self.session, "scenario_topo_size", "") or "")
 
-    def prompt_suffix(self, *, activate_skill: bool = True) -> str:
+    def prompt_suffix(
+        self,
+        *,
+        activate_skill: bool = True,
+        decision_context: str = "",
+    ) -> str:
         active_skill, _ = self._prepare_prompt_context(
-            activate_skill=activate_skill
+            activate_skill=activate_skill,
+            decision_context=decision_context,
         )
-        if active_skill is None:
+        if not activate_skill and active_skill is None:
             return ""
-        tool_candidates = sorted(self._contextual_tool_candidates(active_skill))
-        active_block = self._active_skill_prompt_block(
-            active_skill,
-            tool_candidates=tool_candidates,
-        )
-        suffix = _short_text(
-            "\n\nActive Skill-Pro procedure (guidance, not evidence):\n"
-            + active_block
-            + "\nApply this procedure only while its initiation matches current "
-            "observations. Tool descriptions provide contract details only. Switch "
-            "or terminate the skill when observations diverge. Final claims must be "
-            "supported by current-run tool outputs.",
-            limit=min(2400, max(800, self.token_budget * 4)),
+        self._capture_decision_policy_context(decision_context=decision_context)
+        suffix = build_skill_policy_suffix(
+            self._decision_policy_state,
+            active_skill.skill if active_skill else None,
         )
         added_tokens = self._record_added_tokens("prompt", suffix)
         self._log(
@@ -182,10 +191,10 @@ class SkillToolRuntime:
             {
                 "activate_skill": activate_skill,
                 "added_tokens": added_tokens,
-                "active_skill_id": active_skill.skill.skill_id
+                "active_skill_id": active_skill.skill.skill_id if active_skill else "",
+                "retrieved_skills": [active_skill.skill.skill_id]
                 if active_skill
-                else "",
-                "retrieved_skills": [active_skill.skill.skill_id],
+                else [],
             },
         )
         return suffix
@@ -210,15 +219,16 @@ class SkillToolRuntime:
         self._record_added_tokens("tool_description", guidance)
         return (description + "\n\n" + guidance).strip()
 
-    def before_tool(self, *, tool_name: str, tool_input: Any) -> SkillRetrieval | None:
+    def before_tool(self, *, tool_name: str, tool_input: Any) -> dict[str, str]:
         with self._lock:
-            query = self._query(
-                extra_text=f"next tool:{tool_name} input:{_compact_json(tool_input, limit=500)}",
-                tools=[tool_name],
-                top_k=max(3, self.top_k),
-            )
-            if self.active_skill is None:
-                self._select_active_skill(query=query, source="tool_fallback")
+            snapshot = {
+                "active_skill_id": self.active_skill.skill.skill_id
+                if self.active_skill
+                else "",
+                "policy_state": self._decision_policy_state,
+                "policy_context": self._decision_policy_context,
+                "activation_id": self.active_activation_id,
+            }
             self.inflight_tool_calls += 1
             if self.active_skill is not None:
                 self.skill_age += 1
@@ -252,7 +262,7 @@ class SkillToolRuntime:
                     "skill_age": self.skill_age,
                 },
             )
-            return self.active_skill
+            return snapshot
 
     def after_tool(
         self,
@@ -261,21 +271,28 @@ class SkillToolRuntime:
         tool_input: Any,
         result: Any,
         status: str = "success",
+        decision_snapshot: dict[str, str] | None = None,
     ) -> Any:
+        if status != "error":
+            status = classify_tool_outcome(result)
         text = _short_text(_tool_result_content(result), limit=1600)
         with self._lock:
-            observation = f"{tool_name}({_compact_json(tool_input, limit=300)}) -> {text}"
+            observation = (
+                f"{tool_name}({_compact_json(tool_input, limit=300)}) -> {text}"
+            )
             self.recent_observations.append(observation)
             self.recent_observations = self.recent_observations[-12:]
-            active_skill_id = (
-                self.active_skill.skill.skill_id if self.active_skill else ""
-            )
+            decision_snapshot = decision_snapshot or {}
+            active_skill_id = str(decision_snapshot.get("active_skill_id") or "")
             transition = {
                 "active_skill_id": active_skill_id,
                 "tool": tool_name,
                 "tool_input": tool_input,
                 "status": status,
                 "observation_summary": text,
+                "policy_state": str(decision_snapshot.get("policy_state") or ""),
+                "policy_context": str(decision_snapshot.get("policy_context") or ""),
+                "activation_id": str(decision_snapshot.get("activation_id") or ""),
             }
             self.recent_transitions.append(transition)
             self.recent_transitions = self.recent_transitions[-16:]
@@ -288,6 +305,9 @@ class SkillToolRuntime:
                     "tool_input": tool_input,
                     "status": status,
                     "observation_summary": text,
+                    "policy_state": transition["policy_state"],
+                    "policy_context": transition["policy_context"],
+                    "activation_id": transition["activation_id"],
                 },
             )
             emit_followup_guidance = self.inflight_tool_calls == 0
@@ -298,6 +318,7 @@ class SkillToolRuntime:
                     observation_summary=text,
                     status=status,
                 )
+                self._capture_decision_policy_context()
                 guidance = self._followup_guidance(
                     tool_name,
                 )
@@ -307,6 +328,37 @@ class SkillToolRuntime:
             return result
         self._record_added_tokens("followup", guidance)
         return _append_followup_guidance(result, guidance)
+
+    def _capture_decision_policy_context(self, *, decision_context: str = "") -> None:
+        state = self.task_description
+        if decision_context.strip():
+            state += "\nCurrent decision context:\n" + _short_text(
+                decision_context,
+                limit=4000,
+            )
+        if self.recent_observations:
+            state += "\nRecent observations:\n" + "\n".join(
+                self.recent_observations[-4:]
+            )
+        tool_contract_context = self._tool_refinement_policy_context()
+        if tool_contract_context:
+            state += "\nTool Refinement contract deltas:\n" + tool_contract_context
+        skill = self.active_skill.skill if self.active_skill else None
+        self._decision_policy_state = state
+        self._decision_policy_context = build_skill_policy_prefix(state, skill)
+
+    def _tool_refinement_policy_context(self) -> str:
+        if self.tool_refinement_runtime is None:
+            return ""
+        lines: list[str] = []
+        for tool_name in sorted(self.tool_names):
+            guidance = self.tool_refinement_runtime.tool_runtime_guidance(
+                tool_name,
+                max_chars=min(240, self.tool_refinement_runtime.tool_doc_chars),
+            )
+            if guidance:
+                lines.append(f"- {tool_name}: {guidance}")
+        return _short_text("\n".join(lines), limit=1600)
 
     def snapshot(self) -> dict[str, Any]:
         attributed_transitions = sum(
@@ -319,11 +371,13 @@ class SkillToolRuntime:
             "active_skill_id": self.active_skill.skill.skill_id
             if self.active_skill
             else "",
+            "active_activation_id": self.active_activation_id,
             "skill_age": self.skill_age,
             "prompt_selection_count": self.prompt_selection_count,
             "post_tool_selection_count": self.post_tool_selection_count,
             "meta_controller_cache_hits": self.meta_controller_cache_hits,
-            "selection_policy": "similarity_top_k_then_online_value",
+            "selection_policy": "epsilon_then_similarity_top_k_online_value",
+            "selection_epsilon_initial": self.selection_epsilon,
             "meta_controller_available": self.meta_controller_llm is not None,
             "config": {
                 "top_k": self.top_k,
@@ -346,9 +400,7 @@ class SkillToolRuntime:
             "followup_added_tokens": self.followup_added_tokens,
             "total_added_tokens": self.total_added_tokens,
             "prompt_injection_count": self.prompt_injection_count,
-            "tool_description_injection_count": (
-                self.tool_description_injection_count
-            ),
+            "tool_description_injection_count": (self.tool_description_injection_count),
             "followup_guidance_count": self.followup_guidance_count,
         }
 
@@ -378,9 +430,19 @@ class SkillToolRuntime:
         self,
         *,
         activate_skill: bool = True,
+        decision_context: str = "",
     ) -> tuple[SkillRetrieval | None, list[SkillRetrieval]]:
         with self._lock:
-            query = self._query(extra_text="decision prompt before next action")
+            query = self._query(
+                extra_text=" ".join(
+                    item
+                    for item in (
+                        "decision prompt before next action",
+                        _short_text(decision_context, limit=4000),
+                    )
+                    if item
+                )
+            )
             if not activate_skill:
                 retrieved = self.procedural_memory.retrieve(query=query, session_id="")
                 return self.active_skill, self._merge_active_with_retrieved(retrieved)
@@ -396,9 +458,7 @@ class SkillToolRuntime:
             if self.active_skill is None or termination_reason:
                 if termination_reason:
                     previous_skill_id = (
-                        self.active_skill.skill.skill_id
-                        if self.active_skill
-                        else ""
+                        self.active_skill.skill.skill_id if self.active_skill else ""
                     )
                     self._cool_down_skill(previous_skill_id)
                     self._log(
@@ -617,8 +677,21 @@ class SkillToolRuntime:
             query=query,
             session_id=session_id,
             top_k=max(1, self.top_k),
+            record_reuse=self.procedural_memory_mode == "evolve",
             exclude_skill_ids=self.skill_cooldowns,
             allow_excluded_fallback=False,
+            exploration_epsilon=(
+                self.procedural_memory.decayed_selection_epsilon(self.selection_epsilon)
+                if self.procedural_memory_mode == "evolve"
+                else 0.0
+            ),
+            exploration_key=f"{session_id}:{self.selection_count}",
+        )
+        self.selection_count += 1
+        self.active_activation_id = (
+            f"{session_id}:{self.selection_count}"
+            if self.active_skill is not None
+            else ""
         )
         self.skill_age = 0
         if source == "prompt" and self.active_skill is not None:
@@ -635,9 +708,10 @@ class SkillToolRuntime:
                 "active_skill_score": round(self.active_skill.score, 6)
                 if self.active_skill
                 else 0.0,
+                "activation_id": self.active_activation_id,
                 "skill_age": self.skill_age,
                 "cooldown_exclusions": sorted(self.skill_cooldowns),
-                "selection_policy": "similarity_top_k_then_online_value",
+                "selection_policy": "epsilon_then_similarity_top_k_online_value",
             },
         )
         selected_id = self.active_skill.skill.skill_id if self.active_skill else ""
@@ -771,9 +845,7 @@ class SkillToolRuntime:
             ]
         ).lower()
         context_tokens = {
-            token
-            for token in re.findall(r"[a-z0-9]+", context)
-            if len(token) >= 3
+            token for token in re.findall(r"[a-z0-9]+", context) if len(token) >= 3
         }
         recent_tools = {
             str(transition.get("tool") or "")
@@ -808,7 +880,9 @@ class SkillToolRuntime:
             return set()
         skill = retrieval.skill
         candidates = {tool for tool in skill.tools if tool}
-        candidates.update(step.tool_name for step in skill.execution_steps if step.tool_name)
+        candidates.update(
+            step.tool_name for step in skill.execution_steps if step.tool_name
+        )
         known = set(self.tool_names)
         skill_text = " ".join(
             [
@@ -882,8 +956,7 @@ class SkillToolRuntime:
                 next_index = min(self.skill_age, len(skill.execution_steps) - 1)
                 next_step = skill.execution_steps[next_index].action
                 lines.append(
-                    "Next active policy step: "
-                    + redact_oracle_markers(next_step)
+                    "Next active policy step: " + redact_oracle_markers(next_step)
                 )
         if self.active_skill is None:
             return ""
@@ -926,7 +999,9 @@ class SkillAwareTool(BaseTool):
 
     def _run(self, *args: Any, **kwargs: Any) -> Any:
         tool_input = _tool_input_from_call(args, kwargs)
-        self.runtime.before_tool(tool_name=self.name, tool_input=tool_input)
+        decision_snapshot = self.runtime.before_tool(
+            tool_name=self.name, tool_input=tool_input
+        )
         raw_result: Any = None
         try:
             raw_result = self._invoke_wrapped_tool(tool_input)
@@ -936,18 +1011,22 @@ class SkillAwareTool(BaseTool):
                 tool_input=tool_input,
                 result=str(exc),
                 status="error",
+                decision_snapshot=decision_snapshot,
             )
             raise
         result = self.runtime.after_tool(
             tool_name=self.name,
             tool_input=tool_input,
             result=raw_result,
+            decision_snapshot=decision_snapshot,
         )
         return self._coerce_response_format(result, raw_result)
 
     async def _arun(self, *args: Any, **kwargs: Any) -> Any:
         tool_input = _tool_input_from_call(args, kwargs)
-        self.runtime.before_tool(tool_name=self.name, tool_input=tool_input)
+        decision_snapshot = self.runtime.before_tool(
+            tool_name=self.name, tool_input=tool_input
+        )
         raw_result: Any = None
         try:
             raw_result = await self._ainvoke_wrapped_tool(tool_input)
@@ -957,12 +1036,14 @@ class SkillAwareTool(BaseTool):
                 tool_input=tool_input,
                 result=str(exc),
                 status="error",
+                decision_snapshot=decision_snapshot,
             )
             raise
         result = self.runtime.after_tool(
             tool_name=self.name,
             tool_input=tool_input,
             result=raw_result,
+            decision_snapshot=decision_snapshot,
         )
         return self._coerce_response_format(result, raw_result)
 
@@ -999,9 +1080,10 @@ class SkillAwareTool(BaseTool):
         return output
 
     def _coerce_response_format(self, result: Any, raw_result: Any) -> Any:
-        if (
-            getattr(self, "response_format", "content") == "content_and_artifact"
-            and not (isinstance(result, tuple) and len(result) == 2)
+        if getattr(
+            self, "response_format", "content"
+        ) == "content_and_artifact" and not (
+            isinstance(result, tuple) and len(result) == 2
         ):
             return result, raw_result
         return result

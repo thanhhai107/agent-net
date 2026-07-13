@@ -17,6 +17,7 @@ from agent.extensions.config import (
     DEFAULT_MODEL,
 )
 from nika.config import BENCHMARK_DIR, RESULTS_DIR
+from nika.extensions.benchmark import load_custom_benchmark
 from nika.utils.agent_config import resolve_max_steps
 from nika.visualization.experiment_runner import (
     build_command_plan,
@@ -30,7 +31,6 @@ from nika.visualization.experiment_runner import (
     run_status,
     stop_run,
 )
-from nika.workflows.benchmark.load_config import load_benchmark_yaml
 from nika.workflows.benchmark.run import default_benchmark_yaml_path
 
 
@@ -287,13 +287,8 @@ def _benchmark_path_from_name(value: str) -> Path:
     return BENCHMARK_DIR / f"{name}.yaml"
 
 
-def _count_rows(path: Path) -> int | None:
-    if not path.exists():
-        return None
-    try:
-        return len(load_benchmark_yaml(path))
-    except (OSError, ValueError):
-        return None
+def _count_rows(path: Path) -> int:
+    return len(load_custom_benchmark(path))
 
 
 def _status_html(status: str) -> str:
@@ -491,10 +486,7 @@ def _results_dataframe(rows: list[dict[str, object]], columns: list[str]):
     import pandas as pd
 
     display_rows = [
-        {
-            column: _result_display_value(column, row.get(column))
-            for column in columns
-        }
+        {column: _result_display_value(column, row.get(column)) for column in columns}
         for row in rows
     ]
     return pd.DataFrame(display_rows, columns=columns)
@@ -529,12 +521,8 @@ def _result_column_config() -> dict[str, object]:
         "finished": st.column_config.NumberColumn("Finished", format="%d"),
         "failed": st.column_config.NumberColumn("Failed", format="%d"),
         "submitted": st.column_config.NumberColumn("Submitted", format="%d"),
-        "detection_score": st.column_config.NumberColumn(
-            "Detection", format="%.2f"
-        ),
-        "localization_f1": st.column_config.NumberColumn(
-            "Loc F1", format="%.2f"
-        ),
+        "detection_score": st.column_config.NumberColumn("Detection", format="%.2f"),
+        "localization_f1": st.column_config.NumberColumn("Loc F1", format="%.2f"),
         "rca_f1": st.column_config.NumberColumn("RCA F1", format="%.2f"),
         "localization_precision": st.column_config.NumberColumn(
             "Loc Prec", format="%.2f"
@@ -599,6 +587,7 @@ def _parse_duration(meta: dict) -> float | None:
         return None
     try:
         from datetime import datetime
+
         t1 = datetime.fromisoformat(str(st).replace("Z", "+00:00"))
         t2 = datetime.fromisoformat(str(et).replace("Z", "+00:00"))
         return (t2 - t1).total_seconds()
@@ -746,8 +735,7 @@ def _result_rows(*, benchmark_name: str | None = None) -> list[dict[str, object]
         grouped.setdefault(group_key, []).append(run_path)
 
     root_cases = {
-        root: _root_case_map(run_paths)
-        for root, run_paths in grouped.items()
+        root: _root_case_map(run_paths) for root, run_paths in grouped.items()
     }
     baseline_roots = [
         root
@@ -854,7 +842,10 @@ def _result_rows(*, benchmark_name: str | None = None) -> list[dict[str, object]
 
             if meta.get("tool_refinement_enabled"):
                 result_modules.add("Tool Refinement")
-            if meta.get("procedural_memory_mode") and meta.get("procedural_memory_mode") != "off":
+            if (
+                meta.get("procedural_memory_mode")
+                and meta.get("procedural_memory_mode") != "off"
+            ):
                 result_modules.add("Procedural Memory")
             if meta.get("agent_type"):
                 agent_name = str(meta["agent_type"])
@@ -876,8 +867,7 @@ def _result_rows(*, benchmark_name: str | None = None) -> list[dict[str, object]
             "detection_recall": _ratio(detection_tp, detection_tp + detection_fn),
             "detection_f1": (
                 "-"
-                if detection_tp + detection_fp <= 0
-                or detection_tp + detection_fn <= 0
+                if detection_tp + detection_fp <= 0 or detection_tp + detection_fn <= 0
                 else _ratio(
                     2 * detection_tp,
                     2 * detection_tp + detection_fp + detection_fn,
@@ -931,7 +921,9 @@ def _index_progress(value: object) -> tuple[int | None, int | None]:
     return _event_int(left), _event_int(right)
 
 
-def _benchmark_progress_state(events: list[dict[str, str]]) -> tuple[int, int, str] | None:
+def _benchmark_progress_state(
+    events: list[dict[str, str]],
+) -> tuple[int, int, str] | None:
     completed: int | None = None
     total: int | None = None
     failed = 0
@@ -959,7 +951,9 @@ def _benchmark_progress_state(events: list[dict[str, str]]) -> tuple[int, int, s
         event_completed = _event_int(event.get("completed"))
         if event_completed is not None:
             completed = event_completed
-        elif kind == "benchmark_start" and completed is None and index_value is not None:
+        elif (
+            kind == "benchmark_start" and completed is None and index_value is not None
+        ):
             completed = max(0, index_value - 1)
 
         event_failed = _event_int(event.get("failed"))
@@ -980,7 +974,9 @@ def _benchmark_progress_state(events: list[dict[str, str]]) -> tuple[int, int, s
     return completed, total, suffix
 
 
-def _progress_fraction(events: list[dict[str, str]], command_count: int) -> tuple[float, str]:
+def _progress_fraction(
+    events: list[dict[str, str]], command_count: int
+) -> tuple[float, str]:
     if not events:
         return 0.0, "Waiting"
 
@@ -1027,8 +1023,7 @@ def _event_inject_summary(ev: dict) -> str:
     for key, value in sorted(ev.items()):
         if key.startswith("inject_"):
             items.append(
-                f"{html.escape(key.removeprefix('inject_'))}="
-                f"{html.escape(str(value))}"
+                f"{html.escape(key.removeprefix('inject_'))}={html.escape(str(value))}"
             )
     return ", ".join(items) if items else "none"
 
@@ -1054,7 +1049,10 @@ def _case_event_html(
     )
 
 
-st.markdown('<div class="eyebrow">Experimentation & Benchmarking Suite</div>', unsafe_allow_html=True)
+st.markdown(
+    '<div class="eyebrow">Experimentation & Benchmarking Suite</div>',
+    unsafe_allow_html=True,
+)
 st.markdown(
     """
     <div class="nika-brand" style="margin-bottom: 2rem;">
@@ -1093,7 +1091,18 @@ with st.expander("Baseline Settings", expanded=True):
             value=Path(default_benchmark_yaml_path()).stem,
         )
         benchmark_path = _benchmark_path_from_name(benchmark_name)
-        row_count = _count_rows(benchmark_path)
+        benchmark_error: str | None = None
+        try:
+            row_count = _count_rows(benchmark_path)
+        except FileNotFoundError:
+            row_count = None
+            benchmark_error = f"Benchmark YAML not found: {benchmark_path}"
+        except OSError as exc:
+            row_count = None
+            benchmark_error = f"Cannot read benchmark YAML: {exc}"
+        except ValueError as exc:
+            row_count = None
+            benchmark_error = f"Invalid benchmark YAML: {exc}"
     with b_col5:
         default_max_steps = resolve_max_steps(None)
         max_steps_str = st.text_input("Steps", value=str(default_max_steps))
@@ -1106,7 +1115,7 @@ with st.expander("Baseline Settings", expanded=True):
             value=3,
             disabled=agent_type != "reflexion",
         )
- 
+
 st.markdown("<div style='margin-top: 0.5rem;'></div>", unsafe_allow_html=True)
 col_modules = st.columns(2, gap="medium")
 
@@ -1114,7 +1123,7 @@ with col_modules[0]:
     with st.expander("Tool Refinement Settings", expanded=False):
         tool_selected = st.checkbox("Enable Tool Refinement", value=False)
         st.markdown("<div style='margin-top: 0.5rem;'></div>", unsafe_allow_html=True)
-        
+
         t_col1, t_col2 = st.columns([1.5, 1], gap="small")
         with t_col1:
             tool_library_id = st.text_input(
@@ -1132,7 +1141,7 @@ with col_modules[0]:
                 step=50,
                 disabled=not tool_selected,
             )
-            
+
         tool_convergence_threshold = st.number_input(
             "Convergence",
             min_value=0.0,
@@ -1144,45 +1153,47 @@ with col_modules[0]:
 
 with col_modules[1]:
     with st.expander("Procedural Memory Settings", expanded=False):
-        procedural_memory_selected = st.checkbox("Enable Procedural Memory", value=False)
+        procedural_memory_selected = st.checkbox(
+            "Enable Procedural Memory", value=False
+        )
         st.markdown("<div style='margin-top: 0.5rem;'></div>", unsafe_allow_html=True)
-        
+
         m_col1, m_col2, m_col3 = st.columns([1.5, 1, 1.2], gap="small")
         with m_col1:
             procedural_memory_bank = st.text_input(
                 "Procedural Memory bank",
                 value="",
                 placeholder="auto",
-                disabled=not procedural_memory_selected
+                disabled=not procedural_memory_selected,
             )
         with m_col2:
             procedural_memory_k = st.number_input(
                 "Procedural Memory top-k",
-                min_value=1, 
-                max_value=20, 
-                value=5, 
-                disabled=not procedural_memory_selected
+                min_value=1,
+                max_value=20,
+                value=5,
+                disabled=not procedural_memory_selected,
             )
         with m_col3:
             procedural_memory_tokens = st.number_input(
                 "Procedural Memory tokens",
-                min_value=100, 
-                max_value=8000, 
-                value=1500, 
-                step=100, 
-                disabled=not procedural_memory_selected
+                min_value=100,
+                max_value=8000,
+                value=1500,
+                step=100,
+                disabled=not procedural_memory_selected,
             )
-            
+
         m_col4, m_col5 = st.columns(2, gap="small")
         with m_col4:
             procedural_memory_max_skill_age = st.number_input(
                 "Skill max age",
                 min_value=1,
                 max_value=20,
-                value=4,
+                value=8,
                 disabled=not procedural_memory_selected,
             )
-            
+
         with m_col5:
             procedural_memory_pool_size = st.number_input(
                 "Skill pool",
@@ -1191,14 +1202,14 @@ with col_modules[1]:
                 value=32,
                 disabled=not procedural_memory_selected,
             )
-            
-        m_col10, m_col11, m_col12 = st.columns(3, gap="small")
+
+        m_col10, m_col11, m_col12, m_col13 = st.columns(4, gap="small")
         with m_col10:
             procedural_memory_update_threshold = st.number_input(
                 "Update samples",
                 min_value=1,
                 max_value=50,
-                value=3,
+                value=6,
                 disabled=not procedural_memory_selected,
             )
         with m_col11:
@@ -1217,6 +1228,15 @@ with col_modules[1]:
                 step=0.05,
                 disabled=not procedural_memory_selected,
             )
+        with m_col13:
+            procedural_memory_selection_epsilon = st.number_input(
+                "Selection epsilon",
+                min_value=0.0,
+                max_value=1.0,
+                value=0.3,
+                step=0.05,
+                disabled=not procedural_memory_selected,
+            )
 
 modules = []
 if tool_selected:
@@ -1230,7 +1250,9 @@ with st.expander("Evaluation Settings", expanded=False):
     run_judge = st.checkbox("Run LLM judge", value=False)
     e_col1, e_col2 = st.columns(2, gap="small")
     with e_col1:
-        judge_backend = st.text_input("Judge backend", value=llm_backend, disabled=not run_judge)
+        judge_backend = st.text_input(
+            "Judge backend", value=llm_backend, disabled=not run_judge
+        )
     with e_col2:
         judge_model = st.text_input("Judge model", value=model, disabled=not run_judge)
 
@@ -1254,6 +1276,7 @@ config = {
     "procedural_memory_update_threshold": int(procedural_memory_update_threshold),
     "procedural_memory_best_of_n": int(procedural_memory_best_of_n),
     "procedural_memory_ppo_epsilon": float(procedural_memory_ppo_epsilon),
+    "procedural_memory_selection_epsilon": float(procedural_memory_selection_epsilon),
     "run_judge": bool(run_judge),
     "judge_backend": judge_backend,
     "judge_model": judge_model,
@@ -1264,6 +1287,7 @@ plan = build_command_plan(prepared_config)
 # Renders the commands directly under the Current Config grid with a top spacing
 st.markdown('<div style="margin-top: 1rem;"></div>', unsafe_allow_html=True)
 for item in plan:
+
     def format_command_multiline(cmd_parts: list[str]) -> str:
         if not cmd_parts:
             return ""
@@ -1315,8 +1339,8 @@ else:
         run_dir = create_run(prepared_config)
         st.session_state["active_run_dir"] = str(run_dir)
         st.rerun()
-if row_count is None:
-    st.error("Benchmark YAML not found.")
+if benchmark_error is not None:
+    st.error(benchmark_error)
 
 runs = list_runs()
 run_statuses = {path: run_status(path) for path in runs}
@@ -1338,7 +1362,9 @@ if runs:
 
     selected_label = None
     if selected is not None:
-        selected_status = run_statuses.get(selected, run_status(selected)).get("status") or "unknown"
+        selected_status = (
+            run_statuses.get(selected, run_status(selected)).get("status") or "unknown"
+        )
         selected_label = f"{selected.name} ({selected_status})"
 
     history_col, resume_col, stop_col = st.columns(
@@ -1350,7 +1376,9 @@ if runs:
         selected_label = st.selectbox(
             "Run history",
             options=run_labels,
-            index=run_labels.index(selected_label) if selected_label in run_labels else 0,
+            index=run_labels.index(selected_label)
+            if selected_label in run_labels
+            else 0,
         )
     selected = run_map[selected_label]
     st.session_state["active_run_dir"] = str(selected)
@@ -1362,7 +1390,9 @@ if selected is not None:
     log_text = read_run_log(selected)
     spec = read_run_spec(selected)
     events = parse_progress_events(log_text)
-    fraction, progress_label = _progress_fraction(events, len(spec.get("commands") or []))
+    fraction, progress_label = _progress_fraction(
+        events, len(spec.get("commands") or [])
+    )
     log_key = f"log-{selected.name}"
 else:
     status = {}
@@ -1407,21 +1437,22 @@ if selected is not None:
             st.rerun()
 
 
-
 def format_event_message_html(ev: dict) -> str | None:
     event = ev.get("event")
     style = "font-size: 0.8rem; padding: 6px 0; border-bottom: 1px solid rgba(15, 23, 42, 0.05); color: #334155; line-height: 1.4;"
-    
+
     if event == "ui_step_start":
         cmd = ev.get("command") or ""
         if isinstance(cmd, str) and cmd.startswith("[") and cmd.endswith("]"):
             try:
                 import ast
+
                 cmd = ast.literal_eval(cmd)
             except Exception:
                 pass
         if isinstance(cmd, list):
             import shlex
+
             cmd_str = shlex.join(cmd)
         else:
             cmd_str = str(cmd)
@@ -1456,10 +1487,14 @@ def format_event_message_html(ev: dict) -> str | None:
     elif event == "benchmark_failed":
         return _case_event_html(ev, style=style, verb="Failed", color="#dc2626")
     return None
- 
-st.markdown('<div class="section-title" style="margin-top: 1.5rem;">Tracking</div>', unsafe_allow_html=True)
+
+
+st.markdown(
+    '<div class="section-title" style="margin-top: 1.5rem;">Tracking</div>',
+    unsafe_allow_html=True,
+)
 tab_progress, tab_logs = st.tabs(["Progress", "Logs"])
- 
+
 with tab_progress:
     # Render a professional custom HTML/CSS progress bar with text inside
     pct = int(fraction * 100)
@@ -1472,29 +1507,32 @@ with tab_progress:
           </div>
         </div>
         """,
-        unsafe_allow_html=True
+        unsafe_allow_html=True,
     )
-    
+
     formatted_msgs = []
     for ev in events:
         msg = format_event_message_html(ev)
         if msg:
             formatted_msgs.append(msg)
-    
+
     if formatted_msgs:
         st.markdown('<div style="margin-top: 0.8rem;"></div>', unsafe_allow_html=True)
         # Render HTML block with all events inside to snapping them perfectly
         st.markdown(
             f"<div style='border: 1px solid rgba(15, 23, 42, 0.08); border-radius: 10px; padding: 0.2rem 0.8rem; background: #ffffff;'>{''.join(formatted_msgs[-12:])}</div>",
-            unsafe_allow_html=True
+            unsafe_allow_html=True,
         )
-        
+
 with tab_logs:
     # Keep only the last 1000 lines to avoid UI freezes with large logs
     log_lines = log_text.splitlines() if log_text else []
     truncated_log = "\n".join(log_lines[-1000:])
     if len(log_lines) > 1000:
-        truncated_log = f"... [Truncated {len(log_lines) - 1000} lines from start] ...\n" + truncated_log
+        truncated_log = (
+            f"... [Truncated {len(log_lines) - 1000} lines from start] ...\n"
+            + truncated_log
+        )
 
     st.text_area(
         "Full log",
@@ -1504,7 +1542,10 @@ with tab_logs:
         key=log_key,
     )
 
-st.markdown('<div class="section-title" style="margin-top: 1.5rem;">Results</div>', unsafe_allow_html=True)
+st.markdown(
+    '<div class="section-title" style="margin-top: 1.5rem;">Results</div>',
+    unsafe_allow_html=True,
+)
 
 result_rows = _result_rows(benchmark_name=None)
 summary_tab, detail_tab = st.tabs(["Summary", "Details"])

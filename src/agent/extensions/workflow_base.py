@@ -119,6 +119,13 @@ class ExtensionWorkflowBase:
             }
         return {"messages": result["messages"], "diagnosis_report": diagnosis_report}
 
+    async def explore_tools(self, task_description: str) -> dict[str, Any]:
+        diagnosis_phase = getattr(self, "diagnosis_phase", None)
+        runtime = getattr(diagnosis_phase, "tool_refinement_runtime", None)
+        if runtime is None:
+            return {}
+        return await runtime.explore(task_description)
+
     def write_extension_snapshots(self) -> None:
         write_tool_refinement_session(
             self.diagnosis_phase.tool_refinement_runtime,
@@ -127,9 +134,7 @@ class ExtensionWorkflowBase:
         runtime = self.diagnosis_phase.skill_tool_runtime
         if runtime is None:
             return
-        (
-            Path(self.session_dir) / "procedural_memory_runtime_session.json"
-        ).write_text(
+        (Path(self.session_dir) / "procedural_memory_runtime_session.json").write_text(
             json.dumps(runtime.snapshot(), ensure_ascii=False, indent=2),
             encoding="utf-8",
         )

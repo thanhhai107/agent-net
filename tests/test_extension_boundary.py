@@ -1,12 +1,21 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from argparse import Namespace
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
+from langchain.agents.middleware import ModelRequest
+from langchain_core.messages import HumanMessage
 
 from agent.byo.langgraph.react_agent import BasicReActAgent
-from agent.composition import AgentRunConfig, ProceduralMemoryConfig
+from agent.composition import (
+    AgentRunConfig,
+    ProceduralMemoryConfig,
+    ToolRefinementConfig,
+)
 from agent.extensions import react_agent as react_extension
 from agent.extensions import run as extension_run
 from agent.extensions.react_agent import LearningReActAgent
@@ -28,6 +37,110 @@ def _config(*, procedural_memory_mode: str = "off") -> AgentRunConfig:
 def test_learning_agent_inherits_original_execution_and_submission_methods() -> None:
     assert LearningReActAgent._run_diagnosis is BasicReActAgent._run_diagnosis
     assert LearningReActAgent._run_submission is BasicReActAgent._run_submission
+
+
+def test_learning_phase_rebuilds_skill_prompt_for_every_model_call() -> None:
+    class Runtime:
+        calls = 0
+
+        def prompt_suffix(
+            self,
+            *,
+            activate_skill: bool = True,
+            decision_context: str = "",
+        ) -> str:
+            assert activate_skill
+            assert decision_context == "Assigned diagnostic step"
+            self.calls += 1
+            return f"\nDynamic skill context {self.calls}"
+
+    phase = react_extension.LearningDiagnosisPhase.__new__(
+        react_extension.LearningDiagnosisPhase
+    )
+    phase.llm = object()
+    phase.tools = []
+    phase.skill_tool_runtime = Runtime()
+
+    with patch.object(
+        react_extension,
+        "create_agent",
+        side_effect=lambda **kwargs: SimpleNamespace(config=kwargs),
+    ):
+        agent = phase.get_agent()
+
+    middleware = agent.config["middleware"][0]
+    prompts: list[str] = []
+    request = ModelRequest(
+        model=phase.llm,
+        messages=[HumanMessage(content="Assigned diagnostic step")],
+    )
+
+    def handler(current):
+        prompts.append(current.system_prompt)
+        return object()
+
+    middleware.wrap_model_call(request, handler)
+    middleware.wrap_model_call(request, handler)
+
+    assert agent.config["system_prompt"] is None
+    assert prompts[0].endswith("Dynamic skill context 1")
+    assert prompts[1].endswith("Dynamic skill context 2")
+
+
+def test_learning_module_failure_does_not_block_other_update(
+    tmp_path, monkeypatch
+) -> None:
+    (tmp_path / "eval_metrics.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "run.json").write_text("{}", encoding="utf-8")
+    session = SimpleNamespace(session_dir=str(tmp_path))
+    session_loader = SimpleNamespace(
+        load_closed_session=lambda **_kwargs: session,
+    )
+    memory_updates: list[str] = []
+
+    async def update_memory(**_kwargs):
+        memory_updates.append("updated")
+
+    def fail_refinement(**_kwargs):
+        raise RuntimeError("refinement unavailable")
+
+    monkeypatch.setattr(benchmark_extension, "Session", lambda: session_loader)
+    monkeypatch.setattr(
+        benchmark_extension,
+        "finalize_tool_refinement_session",
+        fail_refinement,
+    )
+    monkeypatch.setattr(
+        benchmark_extension,
+        "update_procedural_memory_from_session",
+        update_memory,
+    )
+    monkeypatch.setattr(benchmark_extension, "log_event", lambda *_a, **_k: None)
+    config = AgentRunConfig(
+        agent_type="react",
+        llm_provider="custom",
+        model="openai/gpt-oss-20b",
+        max_steps=20,
+        tool_refinement=ToolRefinementConfig(enabled=True),
+        procedural_memory=ProceduralMemoryConfig(mode="evolve"),
+    )
+
+    benchmark_extension._update_learning("session-1", config)
+
+    errors = json.loads((tmp_path / "learning_errors.json").read_text(encoding="utf-8"))
+    assert memory_updates == ["updated"]
+    assert errors[0]["module"] == "tool_refinement"
+    assert "refinement unavailable" in errors[0]["error"]
+
+    monkeypatch.setattr(
+        benchmark_extension,
+        "finalize_tool_refinement_session",
+        lambda **_kwargs: {},
+    )
+    benchmark_extension._update_learning("session-1", config)
+
+    assert memory_updates == ["updated", "updated"]
+    assert not (tmp_path / "learning_errors.json").exists()
 
 
 def test_baseline_factory_constructs_original_agent(monkeypatch) -> None:
@@ -92,20 +205,14 @@ def test_custom_benchmark_allows_empty_inject_only_for_clean_control(
 ) -> None:
     valid = tmp_path / "valid.yaml"
     valid.write_text(
-        "cases:\n"
-        "  - scenario: simple_bgp\n"
-        "    problem: no_fault\n"
-        "    inject: {}\n",
+        "cases:\n  - scenario: simple_bgp\n    problem: no_fault\n    inject: {}\n",
         encoding="utf-8",
     )
     assert load_custom_benchmark(valid)[0]["inject"] == {}
 
     invalid = tmp_path / "invalid.yaml"
     invalid.write_text(
-        "cases:\n"
-        "  - scenario: simple_bgp\n"
-        "    problem: link_down\n"
-        "    inject: {}\n",
+        "cases:\n  - scenario: simple_bgp\n    problem: link_down\n    inject: {}\n",
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="non-empty inject"):
@@ -129,6 +236,9 @@ def test_extension_parser_uses_canonical_feature_terms() -> None:
         "refinement-bank",
         "procedural-bank",
     )
+    assert canonical.procedural_memory_max_skill_age == 8
+    assert canonical.procedural_memory_update_threshold == 6
+    assert canonical.procedural_memory_selection_epsilon == 0.3
     help_text = parser.format_help()
     assert "--tool-refinement" in help_text
     assert "--procedural-memory" in help_text
@@ -230,11 +340,11 @@ def test_clean_control_normalization_updates_artifact_before_learning(
             persisted.append(value)
 
     monkeypatch.setattr(benchmark_extension, "Session", FakeSession)
-    monkeypatch.setattr(benchmark_extension, "log_event", lambda *_args, **_kwargs: None)
-
-    benchmark_extension._normalize_clean_control_metrics(
-        "clean-session", tmp_path
+    monkeypatch.setattr(
+        benchmark_extension, "log_event", lambda *_args, **_kwargs: None
     )
+
+    benchmark_extension._normalize_clean_control_metrics("clean-session", tmp_path)
 
     normalized = benchmark_extension._read_json(tmp_path / "eval_metrics.json")
     assert normalized["tool_calls"] == 4
@@ -253,9 +363,7 @@ def test_clean_control_without_submission_keeps_upstream_missing_scores(
         "rca_f1": -1.0,
     }
     metrics_path = tmp_path / "eval_metrics.json"
-    metrics_path.write_text(
-        benchmark_extension.json.dumps(metrics), encoding="utf-8"
-    )
+    metrics_path.write_text(benchmark_extension.json.dumps(metrics), encoding="utf-8")
     monkeypatch.setattr(
         benchmark_extension,
         "Session",
@@ -377,12 +485,24 @@ def test_procedural_memory_command_routes_through_extension_benchmark(
         max_steps=20,
         k=4,
         tokens=1200,
+        max_skill_age=6,
+        pool_size=24,
+        update_threshold=2,
+        best_of_n=5,
+        ppo_epsilon=0.15,
+        selection_epsilon=0.25,
     )
 
     command = calls[0]
     assert command[1:3] == ["-m", "nika.extensions.benchmark"]
     assert command[command.index("--procedural-memory") + 1] == "test-bank"
     assert command[command.index("--provider") + 1] == "custom"
+    assert command[command.index("--procedural-memory-max-skill-age") + 1] == "6"
+    assert command[command.index("--procedural-memory-pool-size") + 1] == "24"
+    assert command[command.index("--procedural-memory-update-threshold") + 1] == "2"
+    assert command[command.index("--procedural-memory-best-of-n") + 1] == "5"
+    assert command[command.index("--procedural-memory-ppo-epsilon") + 1] == "0.15"
+    assert command[command.index("--procedural-memory-selection-epsilon") + 1] == "0.25"
 
 
 def test_baseline_fault_row_routes_to_upstream_single_case(
@@ -407,7 +527,7 @@ def test_baseline_fault_row_routes_to_upstream_single_case(
     monkeypatch.setattr(
         benchmark_extension,
         "run_single_case",
-        lambda **kwargs: (calls.append(kwargs) or ("session-1", tmp_path / "session-1")),
+        lambda **kwargs: calls.append(kwargs) or ("session-1", tmp_path / "session-1"),
     )
 
     result = benchmark_extension.run_batch(

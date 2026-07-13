@@ -116,7 +116,8 @@ class PlanExecuteAgent(ExtensionWorkflowBase):
                                         "objective": plan.objective,
                                         "completed_results": observations,
                                         "remaining_plan": [
-                                            item.model_dump() for item in remaining_steps
+                                            item.model_dump()
+                                            for item in remaining_steps
                                         ],
                                     },
                                     ensure_ascii=False,
@@ -156,6 +157,7 @@ class PlanExecuteAgent(ExtensionWorkflowBase):
                 except Exception as exc:
                     self.log_error("synthesis", exc)
                     report = synthesis_payload
+            await self.explore_tools(task_description)
             return await self.submit(report)
         finally:
             self.write_extension_snapshots()
