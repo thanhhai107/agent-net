@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from agent.extensions.config import PROCEDURAL_MEMORY_DIR
+from agent.module_config import module_defaults
 from agent.utils.atomic import atomic_write_text
 
 from agent.procedural_memory.models import (
@@ -98,8 +99,8 @@ class ProceduralMemoryStore:
         self,
         experience: SkillExperience,
         *,
-        max_experiences: int = 1000,
-        golden_size: int = 20,
+        max_experiences: int = module_defaults().procedural_memory.experience_pool_size,
+        golden_size: int = module_defaults().procedural_memory.golden_pool_size,
     ) -> None:
         with self.exclusive():
             state = self.load()
@@ -137,6 +138,9 @@ class ProceduralMemoryStore:
             "skills": len(skills),
             "validated_skills": sum(skill.status == "validated" for skill in skills),
             "candidate_skills": sum(skill.status == "candidate" for skill in skills),
+            "probationary_skills": sum(
+                skill.status == "probationary" for skill in skills
+            ),
             "retired_skills": sum(skill.status == "retired" for skill in skills),
             "episodes": len(state.episodes),
             "experiences": len(state.experiences),

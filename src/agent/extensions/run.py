@@ -60,6 +60,16 @@ def _write_extension_metadata(session: Session, config: AgentRunConfig) -> None:
         config.procedural_memory.acceptance_margin,
     )
     session.update_session(
+        "procedural_memory_verifier", config.procedural_memory.verifier
+    )
+    session.update_session(
+        "procedural_memory_holdout_size", config.procedural_memory.holdout_size
+    )
+    session.update_session(
+        "procedural_memory_min_positive_advantage",
+        config.procedural_memory.min_positive_advantage,
+    )
+    session.update_session(
         "procedural_memory_evolver_model",
         config.procedural_memory.evolver_model,
     )
@@ -68,6 +78,12 @@ def _write_extension_metadata(session: Session, config: AgentRunConfig) -> None:
         config.procedural_memory.policy_scorer_model,
     )
     session.update_session("tool_refinement_enabled", config.tool_refinement.enabled)
+    session.update_session(
+        "tool_refinement_learning_mode", config.tool_refinement.learning_mode
+    )
+    session.update_session(
+        "tool_refinement_update_due", config.tool_refinement.update_due
+    )
     session.update_session("tool_library_id", config.tool_refinement.library_id)
     session.update_session("tool_doc_chars", config.tool_refinement.tool_doc_chars)
     session.update_session(
@@ -82,6 +98,20 @@ def _write_extension_metadata(session: Session, config: AgentRunConfig) -> None:
         "tool_explorer_reflection_limit",
         config.tool_refinement.explorer_reflection_limit,
     )
+    session.update_session(
+        "tool_refinement_update_interval", config.tool_refinement.update_interval
+    )
+    session.update_session(
+        "tool_refinement_min_new_trials", config.tool_refinement.min_new_trials
+    )
+    session.update_session(
+        "tool_refinement_max_tools_per_update",
+        config.tool_refinement.max_tools_per_update,
+    )
+    session.update_session(
+        "tool_refinement_publish_min_utility",
+        config.tool_refinement.publish_min_utility,
+    )
     session.update_session("tool_explorer_model", config.tool_refinement.explorer_model)
     session.update_session("tool_analyzer_model", config.tool_refinement.analyzer_model)
     session.update_session("tool_rewriter_model", config.tool_refinement.rewriter_model)
@@ -89,12 +119,9 @@ def _write_extension_metadata(session: Session, config: AgentRunConfig) -> None:
 
 def start_agent(config: AgentRunConfig, *, session_id: str | None = None) -> None:
     """Use upstream execution unchanged unless a learning module is enabled."""
-    if (
-        config.normalized_agent_type in {"react", "byo.langgraph"}
-        and not config.extensions_enabled
-    ):
+    if config.normalized_agent_type == "react" and not config.extensions_enabled:
         start_nika_agent(
-            agent_type="byo.langgraph",
+            agent_type="react",
             llm_provider=config.llm_provider,
             model=config.model,
             max_steps=config.max_steps,

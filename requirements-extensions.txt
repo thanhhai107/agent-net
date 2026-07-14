@@ -1,2 +1,0 @@
-# Optional local UI dependency. NIKA core dependencies remain upstream-exact.
-streamlit>=1.40

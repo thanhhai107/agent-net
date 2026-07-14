@@ -82,19 +82,14 @@ class KatharaRuntime(LabRuntime):
         time.sleep(5)
 
     def destroy(self) -> None:
-        try:
-            self._instance.undeploy_lab(lab_name=self.lab_name)
-        except Exception as exc:
-            print(f"Error undeploying lab {self.lab_name}: {exc}")
+        self._instance.undeploy_lab(lab_name=self.lab_name)
 
     def exists(self) -> bool:
         tmp_lab = self._instance.get_lab_from_api(lab_name=self.lab_name)
         if tmp_lab is None:
             return False
         tmp_machines = tmp_lab.machines
-        if tmp_machines is None or len(tmp_machines) == 0:
-            return False
-        return True
+        return tmp_machines is not None and len(tmp_machines) > 0
 
     def inspect(self) -> list[dict[str, Any]]:
         return list_lab_containers(lab_name=self.lab_name)

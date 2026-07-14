@@ -18,6 +18,7 @@ from langchain_core.messages import ToolMessage
 from langchain_core.tools import BaseTool
 from pydantic import ConfigDict, Field
 
+from agent.module_config import module_defaults
 from agent.procedural_memory.attributes import infer_procedural_memory_attributes
 from agent.procedural_memory.models import ProceduralMemoryQuery, SkillRetrieval
 from agent.procedural_memory.policy_context import (
@@ -25,7 +26,10 @@ from agent.procedural_memory.policy_context import (
     build_skill_policy_suffix,
 )
 from agent.procedural_memory.safety import redact_oracle_markers
-from agent.procedural_memory.service import ProceduralMemoryModule
+from agent.procedural_memory.service import (
+    GENERIC_SEED_SKILL_IDS,
+    ProceduralMemoryModule,
+)
 from agent.tool_refinement.runtime import ToolRefinementRuntime
 from agent.utils.loggers import MessageLogger
 from agent.utils.tool_output import (
@@ -35,6 +39,7 @@ from agent.utils.tool_output import (
 )
 
 INTERNAL_TOOL_CALL_ID = "skill-runtime-internal"
+_DEFAULTS = module_defaults().procedural_memory
 
 
 def _short_text(value: Any, *, limit: int = 900) -> str:
@@ -108,10 +113,10 @@ class SkillToolRuntime:
         tools: list[BaseTool],
         session_dir: str | Path = "",
         tool_refinement_runtime: ToolRefinementRuntime | None = None,
-        top_k: int = 5,
-        token_budget: int = 1500,
-        max_skill_age: int = 8,
-        selection_epsilon: float = 0.3,
+        top_k: int = _DEFAULTS.top_k,
+        token_budget: int = _DEFAULTS.token_budget,
+        max_skill_age: int = _DEFAULTS.max_skill_age,
+        selection_epsilon: float = _DEFAULTS.selection_epsilon,
         meta_controller_llm: Any | None = None,
     ) -> None:
         self.procedural_memory = procedural_memory
@@ -125,6 +130,14 @@ class SkillToolRuntime:
         self.tool_refinement_runtime = tool_refinement_runtime
         self.top_k = top_k
         self.token_budget = token_budget
+        self.policy_token_budget = min(
+            _DEFAULTS.policy_token_budget_max,
+            max(
+                _DEFAULTS.policy_token_budget_min,
+                self.token_budget // _DEFAULTS.policy_token_budget_divisor,
+            ),
+        )
+        self.followup_token_budget = _DEFAULTS.followup_token_budget
         self.max_skill_age = max(1, max_skill_age)
         self.selection_epsilon = max(0.0, min(1.0, selection_epsilon))
         self.selection_count = 0
@@ -151,6 +164,7 @@ class SkillToolRuntime:
         self.prompt_injection_count = 0
         self.tool_description_injection_count = 0
         self.followup_guidance_count = 0
+        self._last_followup_signature = ""
         self._logger = (
             MessageLogger(
                 agent="procedural_memory_agent",
@@ -178,12 +192,14 @@ class SkillToolRuntime:
             activate_skill=activate_skill,
             decision_context=decision_context,
         )
-        if not activate_skill and active_skill is None:
+        if active_skill is None:
             return ""
         self._capture_decision_policy_context(decision_context=decision_context)
         suffix = build_skill_policy_suffix(
             self._decision_policy_state,
-            active_skill.skill if active_skill else None,
+            active_skill.skill,
+            max_tokens=self.policy_token_budget,
+            include_state=False,
         )
         added_tokens = self._record_added_tokens("prompt", suffix)
         self._log(
@@ -211,13 +227,17 @@ class SkillToolRuntime:
         if self.tool_refinement_runtime is not None:
             tool_guidance = self.tool_refinement_runtime.tool_runtime_guidance(
                 tool.name,
-                max_chars=min(320, self.tool_refinement_runtime.tool_doc_chars),
+                max_chars=min(
+                    _DEFAULTS.tool_guidance_char_budget,
+                    self.tool_refinement_runtime.tool_doc_chars,
+                ),
             )
         if not tool_guidance:
             return description
         guidance = "DRAFT contract notes (not evidence):\n" + tool_guidance
-        self._record_added_tokens("tool_description", guidance)
-        return (description + "\n\n" + guidance).strip()
+        capped_guidance = _short_text(guidance, limit=480)
+        self._record_added_tokens("tool_description", capped_guidance)
+        return (description + "\n\n" + capped_guidance).strip()
 
     def before_tool(self, *, tool_name: str, tool_input: Any) -> dict[str, str]:
         with self._lock:
@@ -326,8 +346,12 @@ class SkillToolRuntime:
                 guidance = ""
         if not guidance:
             return result
-        self._record_added_tokens("followup", guidance)
-        return _append_followup_guidance(result, guidance)
+        capped_guidance = _short_text(
+            guidance,
+            limit=self.followup_token_budget * 4,
+        )
+        self._record_added_tokens("followup", capped_guidance)
+        return _append_followup_guidance(result, capped_guidance)
 
     def _capture_decision_policy_context(self, *, decision_context: str = "") -> None:
         state = self.task_description
@@ -340,25 +364,14 @@ class SkillToolRuntime:
             state += "\nRecent observations:\n" + "\n".join(
                 self.recent_observations[-4:]
             )
-        tool_contract_context = self._tool_refinement_policy_context()
-        if tool_contract_context:
-            state += "\nTool Refinement contract deltas:\n" + tool_contract_context
         skill = self.active_skill.skill if self.active_skill else None
         self._decision_policy_state = state
         self._decision_policy_context = build_skill_policy_prefix(state, skill)
 
     def _tool_refinement_policy_context(self) -> str:
-        if self.tool_refinement_runtime is None:
-            return ""
-        lines: list[str] = []
-        for tool_name in sorted(self.tool_names):
-            guidance = self.tool_refinement_runtime.tool_runtime_guidance(
-                tool_name,
-                max_chars=min(240, self.tool_refinement_runtime.tool_doc_chars),
-            )
-            if guidance:
-                lines.append(f"- {tool_name}: {guidance}")
-        return _short_text("\n".join(lines), limit=1600)
+        # DRAFT guidance is attached to the corresponding tool once. Repeating
+        # the whole catalog in every policy prompt crowds out live evidence.
+        return ""
 
     def snapshot(self) -> dict[str, Any]:
         attributed_transitions = sum(
@@ -444,7 +457,7 @@ class SkillToolRuntime:
                 )
             )
             if not activate_skill:
-                retrieved = self.procedural_memory.retrieve(query=query, session_id="")
+                retrieved = self._retrieve(query)
                 return self.active_skill, self._merge_active_with_retrieved(retrieved)
             termination_reason = (
                 ""
@@ -470,8 +483,15 @@ class SkillToolRuntime:
                         },
                     )
                 self._select_active_skill(query=query, source="prompt")
-            retrieved = self.procedural_memory.retrieve(query=query, session_id="")
+            retrieved = self._retrieve(query)
             return self.active_skill, self._merge_active_with_retrieved(retrieved)
+
+    def _retrieve(self, query: ProceduralMemoryQuery) -> list[SkillRetrieval]:
+        return self.procedural_memory.retrieve(
+            query=query,
+            session_id="",
+            include_probationary=self.procedural_memory_mode == "evolve",
+        )
 
     def _query(
         self,
@@ -541,7 +561,7 @@ class SkillToolRuntime:
         if not allow_context_mismatch:
             return ""
         active_id = self.active_skill.skill.skill_id
-        for item in self.procedural_memory.retrieve(query=query, session_id=""):
+        for item in self._retrieve(query):
             if item.skill.skill_id == active_id and item.score > 0.05:
                 return ""
         return "context_mismatch"
@@ -686,6 +706,7 @@ class SkillToolRuntime:
                 else 0.0
             ),
             exploration_key=f"{session_id}:{self.selection_count}",
+            include_probationary=self.procedural_memory_mode == "evolve",
         )
         self.selection_count += 1
         self.active_activation_id = (
@@ -944,22 +965,30 @@ class SkillToolRuntime:
         tool_name: str,
     ) -> str:
         del tool_name
-        lines = [INTEGRATED_GUIDANCE_MARKER]
-        if self.active_skill is not None:
-            skill = self.active_skill.skill
-            lines.append(
-                "Active Skill-MDP option: "
-                f"{redact_oracle_markers(skill.skill_id)} "
-                f"({redact_oracle_markers(skill.title)})."
-            )
-            if skill.execution_steps:
-                next_index = min(self.skill_age, len(skill.execution_steps) - 1)
-                next_step = skill.execution_steps[next_index].action
-                lines.append(
-                    "Next active policy step: " + redact_oracle_markers(next_step)
-                )
         if self.active_skill is None:
             return ""
+        skill = self.active_skill.skill
+        base_skill_id = skill.skill_id.split("__", 1)[0]
+        if base_skill_id in GENERIC_SEED_SKILL_IDS:
+            return ""
+        next_index = (
+            min(self.skill_age, len(skill.execution_steps) - 1)
+            if skill.execution_steps
+            else -1
+        )
+        signature = f"{skill.skill_id}:{next_index}"
+        if signature == self._last_followup_signature:
+            return ""
+        self._last_followup_signature = signature
+        lines = [
+            INTEGRATED_GUIDANCE_MARKER,
+            "Active Skill-MDP option: "
+            f"{redact_oracle_markers(skill.skill_id)} "
+            f"({redact_oracle_markers(skill.title)}).",
+        ]
+        if skill.execution_steps:
+            next_step = skill.execution_steps[next_index].action
+            lines.append("Next active policy step: " + redact_oracle_markers(next_step))
         lines.append(
             "Use the current tool output as evidence; the skill and DRAFT contract notes are guidance only."
         )

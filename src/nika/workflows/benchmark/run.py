@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import re
-import subprocess
-import sys
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from pydantic import ValidationError
 
 from nika.config import BENCHMARK_DIR
+from nika.utils.agent_config import (
+    resolve_agent_model,
+    resolve_agent_type,
+    resolve_llm_provider,
+    resolve_max_steps,
+)
 from nika.utils.session import Session
 from nika.utils.session_store import SessionStore
 from nika.net_env.net_env_pool import scenario_requires_topo_size
@@ -25,11 +28,53 @@ from nika.workflows.benchmark.resume import (
 from nika.workflows.env.start import start_net_env
 from nika.workflows.eval.session import eval_results
 from nika.workflows.failure.inject import inject_failure
+from nika.workflows.session.close import (
+    clean_emulation_environment,
+    close_session_after_failure,
+)
 
 _BENCHMARK_DONE_PREFIX = "benchmark_done "
 _BENCHMARK_DONE_RE = re.compile(
     r"benchmark_done session_id=(\S+) scenario=(\S+) problem=(\S+) session_dir=(\S+)"
 )
+
+
+def _run_benchmark_agent(
+    *,
+    agent_type: str | None,
+    llm_provider: str | None,
+    model: str | None,
+    max_steps: int | None,
+    session_id: str,
+) -> None:
+    """Dispatch the three public workflows through their appropriate runners."""
+    resolved_agent_type = resolve_agent_type(agent_type)
+    if resolved_agent_type in {"plan-execute", "reflexion"}:
+        from agent.composition import AgentRunConfig
+        from agent.extensions.run import start_agent as start_extension_agent
+
+        start_extension_agent(
+            AgentRunConfig(
+                agent_type=resolved_agent_type,
+                llm_provider=resolve_llm_provider(
+                    llm_provider, agent_type=resolved_agent_type
+                )
+                or "",
+                model=resolve_agent_model(resolved_agent_type, model),
+                max_steps=resolve_max_steps(max_steps),
+            ),
+            session_id=session_id,
+        )
+        return
+
+    start_agent(
+        agent_type=resolved_agent_type,
+        llm_provider=llm_provider,
+        model=model,
+        max_steps=max_steps,
+        session_id=session_id,
+        stream_output=False,
+    )
 
 
 def default_benchmark_yaml_path() -> str:
@@ -72,132 +117,6 @@ def validate_inject_params(
         ) from exc
 
 
-def _benchmark_row_cli_args(
-    row: dict,
-    *,
-    agent_type: str,
-    llm_provider: str | None,
-    model: str | None,
-    max_steps: int | None,
-    run_judge: bool,
-    judge_llm_provider: str | None,
-    judge_model: str | None,
-    result_dir: str | None = None,
-    session_tag: str | None = None,
-) -> list[str]:
-    args = [
-        row["scenario"],
-        "--problem",
-        row["problem"],
-        "-a",
-        agent_type,
-    ]
-    if llm_provider:
-        args += ["-p", llm_provider]
-    if model:
-        args += ["-m", model]
-    if max_steps is not None:
-        args += ["-n", str(max_steps)]
-    topo = row.get("topo_size") or ""
-    if topo:
-        args += ["-s", topo]
-    inject = row.get("inject") or {}
-    for key, value in inject.items():
-        args += ["--set", f"{key}={value}"]
-    if run_judge:
-        args += [
-            "--judge",
-            "--judge-provider",
-            judge_llm_provider,
-            "--judge-model",
-            judge_model,
-        ]
-    if result_dir:
-        args += ["--result_dir", result_dir]
-    if session_tag:
-        args += ["--session-tag", session_tag]
-    return args
-
-
-def _run_benchmark_row_subprocess(
-    row: dict,
-    *,
-    agent_type: str,
-    llm_provider: str | None,
-    model: str | None,
-    max_steps: int | None,
-    run_judge: bool,
-    judge_llm_provider: str | None,
-    judge_model: str | None,
-    result_dir: str | None = None,
-    session_tag: str | None = None,
-) -> None:
-    """Run one YAML row via a subprocess for thread-safe parallel batch execution."""
-    cli_args = _benchmark_row_cli_args(
-        row,
-        agent_type=agent_type,
-        llm_provider=llm_provider,
-        model=model,
-        max_steps=max_steps,
-        run_judge=run_judge,
-        judge_llm_provider=judge_llm_provider,
-        judge_model=judge_model,
-        result_dir=result_dir,
-        session_tag=session_tag,
-    )
-    proc = subprocess.run(
-        [sys.executable, "-m", "nika.cli.main", "benchmark", "run", *cli_args],
-        capture_output=True,
-        text=True,
-    )
-    output = proc.stdout
-    if proc.stderr:
-        output += proc.stderr
-    if proc.returncode != 0:
-        scenario = row.get("scenario", "?")
-        problem = row.get("problem", "?")
-        raise RuntimeError(
-            f"[{scenario}/{problem}] `nika benchmark run {' '.join(cli_args)}` "
-            f"exited {proc.returncode}:\n{output}"
-        )
-    if output:
-        print(output, end="" if output.endswith("\n") else "\n")
-
-
-def _run_benchmark_batch_parallel(
-    indexed_rows: list[tuple[int, dict]],
-    *,
-    agent_type: str,
-    llm_provider: str | None,
-    model: str | None,
-    max_steps: int | None,
-    run_judge: bool,
-    judge_llm_provider: str | None,
-    judge_model: str | None,
-    result_dir: str | None = None,
-    session_tag: str | None = None,
-) -> None:
-    """Run indexed rows simultaneously (one subprocess each), then return."""
-    shared_kwargs = dict(
-        agent_type=agent_type,
-        llm_provider=llm_provider,
-        model=model,
-        max_steps=max_steps,
-        run_judge=run_judge,
-        judge_llm_provider=judge_llm_provider,
-        judge_model=judge_model,
-        result_dir=result_dir,
-        session_tag=session_tag,
-    )
-    with ThreadPoolExecutor(max_workers=len(indexed_rows)) as pool:
-        futures = [
-            pool.submit(_run_benchmark_row_subprocess, row, **shared_kwargs)
-            for _index, row in indexed_rows
-        ]
-        for future in as_completed(futures):
-            future.result()
-
-
 def run_single_case(
     problem: str,
     scenario: str,
@@ -213,6 +132,7 @@ def run_single_case(
     judge_model: str | None = None,
     result_dir: str | None = None,
     session_tag: str | None = None,
+    emit_completion_event: bool = True,
 ) -> tuple[str, Path]:
     """Run one benchmark case (env → inject → agent → eval).
 
@@ -234,46 +154,60 @@ def run_single_case(
     validate_inject_params(problem, scenario, topo_size or "", inject_params)
     params = dict(inject_params)
 
-    session_id = start_net_env(
-        scenario, size, redeploy=True, result_dir=result_dir, session_tag=session_tag
-    )
-    session_dir = Path(SessionStore().get_session(session_id)["session_dir"])
+    clean_emulation_environment()
+    session_id: str | None = None
+    try:
+        session_id = start_net_env(
+            scenario,
+            size,
+            redeploy=True,
+            result_dir=result_dir,
+            session_tag=session_tag,
+        )
+        session_dir = Path(SessionStore().get_session(session_id)["session_dir"])
+        inject_failure(
+            problem_names=[problem], session_id=session_id, param_overrides=params
+        )
 
-    inject_failure(
-        problem_names=[problem], session_id=session_id, param_overrides=params
-    )
+        row = benchmark_row_from_case(
+            scenario=scenario,
+            problem=problem,
+            topo_size=topo_size,
+            inject_params=params,
+        )
+        Session().load_running_session(session_id=session_id).update_session(
+            "benchmark_fingerprint",
+            benchmark_row_fingerprint(row),
+        )
 
-    row = benchmark_row_from_case(
-        scenario=scenario,
-        problem=problem,
-        topo_size=topo_size,
-        inject_params=params,
-    )
-    Session().load_running_session(session_id=session_id).update_session(
-        "benchmark_fingerprint",
-        benchmark_row_fingerprint(row),
-    )
+        _run_benchmark_agent(
+            agent_type=agent_type,
+            llm_provider=llm_provider,
+            model=model,
+            max_steps=max_steps,
+            session_id=session_id,
+        )
 
-    start_agent(
-        agent_type=agent_type,
-        llm_provider=llm_provider,
-        model=model,
-        max_steps=max_steps,
-        session_id=session_id,
-        stream_output=False,
-    )
+        eval_results(
+            session_id=session_id,
+            run_judge=run_judge,
+            judge_llm_provider=judge_llm_provider,
+            judge_model=judge_model,
+        )
+    except BaseException as exc:
+        if session_id is not None:
+            cleanup_error = close_session_after_failure(session_id, exc)
+            if cleanup_error is not None:
+                raise cleanup_error from exc
+        raise
+    finally:
+        clean_emulation_environment()
 
-    eval_results(
-        session_id=session_id,
-        run_judge=run_judge,
-        judge_llm_provider=judge_llm_provider,
-        judge_model=judge_model,
-    )
-
-    print(
-        f"{_BENCHMARK_DONE_PREFIX}session_id={session_id} scenario={scenario} "
-        f"problem={problem} session_dir={session_dir}"
-    )
+    if emit_completion_event:
+        print(
+            f"{_BENCHMARK_DONE_PREFIX}session_id={session_id} scenario={scenario} "
+            f"problem={problem} session_dir={session_dir}"
+        )
     return session_id, session_dir
 
 
@@ -299,11 +233,13 @@ def run_benchmark_from_yaml(
 
     All rows are scanned first against existing session dirs under ``--result_dir``:
     completed cases are skipped and incomplete ones are cleaned. Remaining cases run
-    sequentially when ``batch_size == 1`` (default), or in parallel chunks when
-    ``batch_size > 1``. Re-run the same command to resume after an interruption.
+    sequentially. Re-run the same command to resume after an interruption.
     """
-    if batch_size < 1:
-        raise ValueError("batch_size must be >= 1")
+    if batch_size != 1:
+        raise ValueError(
+            "batch_size must be 1 because each case exclusively owns and cleans "
+            "the emulation environment"
+        )
 
     rows = load_benchmark_yaml(benchmark_file)
 
@@ -331,27 +267,14 @@ def run_benchmark_from_yaml(
     if not pending:
         return
 
-    if batch_size == 1:
-        for index in pending:
-            row = rows[index]
-            label = f"[{index + 1}/{len(rows)}] {row['scenario']}/{row['problem']}"
-            print(f"{label} running")
-            run_single_case(
-                problem=row["problem"],
-                scenario=row["scenario"],
-                topo_size=row.get("topo_size") or "",
-                inject_params=row["inject"],
-                **_shared_kwargs,
-            )
-        return
-
-    for chunk_start in range(0, len(pending), batch_size):
-        chunk_indices = pending[chunk_start : chunk_start + batch_size]
-        indexed_rows = [(index, rows[index]) for index in chunk_indices]
-        first = chunk_indices[0] + 1
-        last = chunk_indices[-1] + 1
-        print(
-            f"[batch {chunk_start // batch_size + 1}] running {len(chunk_indices)} session(s) in parallel "
-            f"(rows {first}–{last} of {len(rows)})"
+    for index in pending:
+        row = rows[index]
+        label = f"[{index + 1}/{len(rows)}] {row['scenario']}/{row['problem']}"
+        print(f"{label} running")
+        run_single_case(
+            problem=row["problem"],
+            scenario=row["scenario"],
+            topo_size=row.get("topo_size") or "",
+            inject_params=row["inject"],
+            **_shared_kwargs,
         )
-        _run_benchmark_batch_parallel(indexed_rows, **_shared_kwargs)

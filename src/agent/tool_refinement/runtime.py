@@ -4,16 +4,19 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 from typing import Any
 
 from langchain_core.tools import BaseTool
 
+from agent.module_config import module_defaults
 from agent.tool_refinement.generalization import generalize_tool_documentation
 from agent.tool_refinement.models import ToolDocumentation, ToolParameterDoc, utc_now
 from agent.tool_refinement.store import ToolRefinementStore
 
 
 SOURCE_CONTRACT_VERSION = 1
+_DEFAULTS = module_defaults().tool_refinement
 
 
 def _primitive_description(tool: BaseTool) -> str:
@@ -124,13 +127,14 @@ class ToolRefinementRuntime:
         primitive_tools: list[BaseTool],
         library_id: str,
         store: ToolRefinementStore | None = None,
-        tool_doc_chars: int = 500,
+        tool_doc_chars: int = _DEFAULTS.tool_doc_chars,
         explorer_llm: Any | None = None,
         llm_backend: str = "",
         model: str = "",
-        convergence_threshold: float = 0.75,
-        exploration_similarity_threshold: float = 0.9,
-        explorer_reflection_limit: int = 3,
+        convergence_threshold: float = _DEFAULTS.convergence_threshold,
+        exploration_similarity_threshold: float = _DEFAULTS.exploration_similarity_threshold,
+        explorer_reflection_limit: int = _DEFAULTS.explorer_reflection_limit,
+        max_tools_per_update: int = _DEFAULTS.max_tools_per_update,
         explorer_model: str = "",
         analyzer_model: str = "",
         rewriter_model: str = "",
@@ -146,14 +150,48 @@ class ToolRefinementRuntime:
         self.convergence_threshold = float(convergence_threshold)
         self.exploration_similarity_threshold = float(exploration_similarity_threshold)
         self.explorer_reflection_limit = max(0, int(explorer_reflection_limit))
+        self.max_tools_per_update = max(1, int(max_tools_per_update))
         self.explorer_model = explorer_model.strip()
         self.analyzer_model = analyzer_model.strip()
         self.rewriter_model = rewriter_model.strip()
         self._explorer_report: dict[str, Any] = {}
+        self._explorer_duration = 0.0
         self._base_descriptions = {
             tool.name: _primitive_description(tool) for tool in self.primitive_tools
         }
         self._docs = self._ensure_primitive_documents()
+        self._guidance_limits = self._allocate_guidance_limits()
+
+    def _allocate_guidance_limits(self) -> dict[str, int]:
+        """Bound DRAFT additions across the whole tool catalog.
+
+        Primitive descriptions remain available for every tool. Refined notes are
+        reserved for the best-supported tools so they cannot crowd out runtime
+        evidence when both learning modules are enabled.
+        """
+
+        budget = min(
+            _DEFAULTS.guidance_total_token_budget,
+            max(_DEFAULTS.guidance_min_token_budget, self.tool_doc_chars * 4),
+        )
+        ranked = sorted(
+            (doc for doc in self._docs.values() if doc.published),
+            key=lambda doc: (
+                doc.diagnostic_utility_score,
+                doc.trial_count,
+                doc.contract_mastery_score,
+                doc.name,
+            ),
+            reverse=True,
+        )
+        limits: dict[str, int] = {}
+        for doc in ranked:
+            if budget < 60:
+                break
+            limit = min(_DEFAULTS.guidance_per_tool_token_budget, budget)
+            limits[doc.name] = limit
+            budget -= limit
+        return limits
 
     def _ensure_primitive_documents(self) -> dict[str, ToolDocumentation]:
         with self.store.exclusive():
@@ -263,6 +301,7 @@ class ToolRefinementRuntime:
             return self._explorer_report
         from agent.tool_refinement.explorer import run_active_exploration
 
+        started = time.perf_counter()
         try:
             self._explorer_report = await run_active_exploration(
                 session_id=str(getattr(self.session, "session_id", "") or ""),
@@ -278,6 +317,7 @@ class ToolRefinementRuntime:
                     self.exploration_similarity_threshold
                 ),
                 explorer_reflection_limit=self.explorer_reflection_limit,
+                max_tools=self.max_tools_per_update,
                 analyzer_model=self.analyzer_model,
                 rewriter_model=self.rewriter_model,
             )
@@ -286,15 +326,27 @@ class ToolRefinementRuntime:
                 "status": "failed",
                 "reason": f"{type(exc).__name__}: {exc}",
             }
+        finally:
+            self._explorer_duration += time.perf_counter() - started
         self._docs = self.store.load().documents
+        self._guidance_limits = self._allocate_guidance_limits()
         return self._explorer_report
 
-    def tool_runtime_guidance(self, tool_name: str, *, max_chars: int = 500) -> str:
+    def tool_runtime_guidance(
+        self,
+        tool_name: str,
+        *,
+        max_chars: int = _DEFAULTS.guidance_total_token_budget,
+    ) -> str:
         """Return only learned contract deltas for one primitive tool."""
 
         doc = self._docs.get(tool_name)
-        if doc is None:
+        if doc is None or not doc.published:
             return ""
+        allocated_tokens = self._guidance_limits.get(tool_name, 0)
+        if allocated_tokens <= 0:
+            return ""
+        max_chars = min(max_chars, allocated_tokens * 4)
         parts: list[str] = []
         usage = doc.tool_usage_description.strip()
         if usage and usage != doc.description.strip():
@@ -327,12 +379,17 @@ class ToolRefinementRuntime:
                     self.exploration_similarity_threshold
                 ),
                 "explorer_reflection_limit": self.explorer_reflection_limit,
+                "max_tools_per_update": self.max_tools_per_update,
                 "explorer_model": self.explorer_model or self.model,
                 "analyzer_model": self.analyzer_model or self.model,
                 "rewriter_model": self.rewriter_model or self.model,
             },
             "explorer": self._explorer_report,
+            "explorer_duration": round(self._explorer_duration, 6),
             "analyzer_suggestions": len(state.analyzer_suggestions),
+            "published_documents": sorted(
+                name for name, doc in state.documents.items() if doc.published
+            ),
             "primitive_tools": [tool.name for tool in self.primitive_tools],
         }
 

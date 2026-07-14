@@ -9,7 +9,7 @@ src/agent/
 ├── protocols.py          # Shared Protocol interface
 ├── registry.py           # Type registry and factory for `nika agent run`
 ├── byo/                  # Bring-your-own LLM / agent framework backends
-│   ├── langgraph/        # -a byo.langgraph (LangChain ReAct workers)
+│   ├── langgraph/        # -a react (LangChain ReAct workers)
 │   │   ├── react_agent.py
 │   │   └── phases/
 │   ├── mcp_agent/        # -a byo.mcp_agent
@@ -34,14 +34,9 @@ src/agent/
 
 | CLI name | Orchestration | LLM access | Status |
 |----------|---------------|------------|--------|
-| `byo.langgraph` | LangGraph `StateGraph` | LangChain ReAct + `load_model()` | Implemented |
-| `local_cli.codex_cli` | LangGraph `StateGraph` | `codex exec` subprocess + shared `.agents/skills/` | Implemented |
-| `local_cli.claude_cli` | LangGraph `StateGraph` | `claude -p` subprocess + shared `.claude/skills/` | Implemented |
-| `byo.mcp_agent` | mcp-agent `Workflow` | mcp-agent + OpenAI | Implemented |
-| `byo.autogen` | AutoGen `GraphFlow` | AutoGen AgentChat + OpenAI | Implemented |
-| `community.sade` | Single Claude Code session + 15-skill library | `claude-agent-sdk` (optional extra `sade`) | Implemented |
-| `sdk.claude_sdk` | Native two-phase `ClaudeSDKClient` sessions | `claude-agent-sdk` + shared skills (optional extra `sdk`) | Implemented |
-| `sdk.codex_sdk` | Native two-phase `AsyncCodex` threads | `openai-codex` + shared skills (optional extra `sdk`) | Implemented |
+| `react` | LangGraph `StateGraph` | LangChain ReAct + `load_model()` | Implemented |
+| `plan-execute` | LangGraph `StateGraph` | Plan, execute, and replan workflow | Implemented |
+| `reflexion` | LangGraph `StateGraph` | ReAct with bounded self-reflection | Implemented |
 
 ## Community Agents
 
@@ -71,9 +66,9 @@ Every agent runs **diagnosis** (Kathara MCP, `if_submit=False`) then **submissio
 
 | Flag | Env | Required | Notes |
 |------|-----|----------|-------|
-| `-a` / `--agent` | `NIKA_AGENT_TYPE` | Yes | `byo.langgraph`, `byo.mcp_agent`, `byo.autogen`, `local_cli.codex_cli`, `local_cli.claude_cli`, `community.sade`, `sdk.claude_sdk`, `sdk.codex_sdk` |
-| `-p` / `--provider` | `NIKA_LLM_PROVIDER` | byo.langgraph only | `openai`, `ollama`, `deepseek`, `custom` |
-| `-n` / `--max-steps` | `NIKA_MAX_STEPS` | Yes | Limits steps per phase in `byo.langgraph`, `byo.mcp_agent`, `byo.autogen`, `community.sade`, and `sdk.claude_sdk` |
+| `-a` / `--agent` | `NIKA_AGENT_TYPE` | Yes | `react`, `plan-execute`, `reflexion` |
+| `-p` / `--provider` | `NIKA_LLM_PROVIDER` | Yes | `openai`, `ollama`, `deepseek`, `custom` |
+| `-n` / `--max-steps` | `NIKA_MAX_STEPS` | Yes | Limits steps per phase in all workflows |
 | `-m` / `--model` | `NIKA_MODEL` | No | Overrides agent-specific model env when set |
 | `--session_id` | — | No | Target session (default: current running session) |
 
@@ -100,7 +95,7 @@ uv run nika agent run --sandbox -a local_cli.codex_cli -m gpt-5.4-mini -n 20
 
 Model resolution order: `-m` → `NIKA_MODEL` → agent-specific env (below).
 
-### Observability (byo.langgraph)
+### Observability (react)
 
 Langfuse is optional and imported only when `NIKA_LANGFUSE_ENABLED=true`.
 
@@ -108,7 +103,7 @@ Install with `uv sync --extra observability`, then configure `LANGFUSE_SECRET_KE
 
 ---
 
-## byo.langgraph
+## react
 
 LangGraph orchestration + LangChain ReAct workers per phase.
 
@@ -129,14 +124,14 @@ LangGraph orchestration + LangChain ReAct workers per phase.
 
 ```bash
 # .env
-NIKA_AGENT_TYPE=byo.langgraph
+NIKA_AGENT_TYPE=react
 NIKA_LLM_PROVIDER=openai
 NIKA_MAX_STEPS=20
 NIKA_LANGGRAPH_MODEL=gpt-5-mini
 OPENAI_API_KEY=sk-...
 
 nika agent run                              # all from .env
-nika agent run -a byo.langgraph -p deepseek -m deepseek-chat -n 20
+nika agent run -a react -p deepseek -m deepseek-chat -n 20
 ```
 
 ### Local deployment (Ollama)
@@ -147,13 +142,13 @@ Common small models: `qwen2.5:7b`, `llama3.2:3b`, `llama3.1:8b`.
 
 ```bash
 # .env
-NIKA_AGENT_TYPE=byo.langgraph
+NIKA_AGENT_TYPE=react
 NIKA_LLM_PROVIDER=ollama
 NIKA_MAX_STEPS=20
 NIKA_LANGGRAPH_MODEL=qwen2.5:7b
 OLLAMA_API_URL=http://localhost:11434
 
-nika agent run -a byo.langgraph -p ollama -m qwen2.5:7b -n 20
+nika agent run -a react -p ollama -m qwen2.5:7b -n 20
 ```
 
 No API key. `load_model()` validates the model at init — run `ollama pull` first. For a remote host, set `OLLAMA_API_URL` to the server base URL.

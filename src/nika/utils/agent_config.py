@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 
+from agent.module_config import module_defaults
 from agent.local_cli.claude_cli.config import resolve_claude_model
 
 # Shared CLI options (nika agent run / nika benchmark run)
@@ -16,7 +17,7 @@ ENV_LLM_PROVIDER = "NIKA_LLM_PROVIDER"
 ENV_MAX_STEPS = "NIKA_MAX_STEPS"
 ENV_MODEL = "NIKA_MODEL"
 
-# LangGraph agent (byo/langgraph)
+# ReAct agent (implemented with LangGraph)
 ENV_LANGGRAPH_MODEL = "NIKA_LANGGRAPH_MODEL"
 
 # mcp-agent agent
@@ -40,6 +41,8 @@ ENV_CODEX_REASONING_EFFORT = "NIKA_CODEX_REASONING_EFFORT"
 ENV_JUDGE_PROVIDER = "NIKA_JUDGE_PROVIDER"
 ENV_JUDGE_MODEL = "NIKA_JUDGE_MODEL"
 
+SUPPORTED_AGENT_TYPES = ("react", "plan-execute", "reflexion")
+
 
 def _env_str(key: str) -> str | None:
     value = os.environ.get(key, "").strip()
@@ -62,18 +65,40 @@ def _require_int(*, value: int | None, env_key: str, cli_flag: str) -> int:
     raise ValueError(f"Missing {env_key}: set it in .env or pass {cli_flag}.")
 
 
+def canonical_agent_type(agent_type: str) -> str:
+    """Return the public agent identifier used in session artifacts.
+
+    ``byo.langgraph`` was the original implementation-facing identifier.  Keep
+    accepting it for existing commands, but persist the product-facing ReAct
+    identifier everywhere else.
+    """
+    normalized = agent_type.strip().lower()
+    if normalized == "byo.langgraph":
+        return "react"
+    if normalized in {"plan_execute", "plan-and-execute"}:
+        return "plan-execute"
+    return normalized
+
+
 def resolve_agent_type(value: str | None = None) -> str:
-    return _require_str(value=value, env_key=ENV_AGENT_TYPE, cli_flag="-a/--agent")
+    configured = value or module_defaults().baseline.agent_type
+    agent_type = canonical_agent_type(configured)
+    if agent_type not in SUPPORTED_AGENT_TYPES:
+        supported = ", ".join(SUPPORTED_AGENT_TYPES)
+        raise ValueError(
+            f"Unsupported agent type {configured!r}; choose one of: {supported}"
+        )
+    return agent_type
 
 
 def resolve_llm_provider(value: str | None = None, *, agent_type: str) -> str | None:
-    if agent_type.lower() != "byo.langgraph":
+    if canonical_agent_type(agent_type) not in SUPPORTED_AGENT_TYPES:
         return value
-    return _require_str(value=value, env_key=ENV_LLM_PROVIDER, cli_flag="-p/--provider")
+    return value or module_defaults().baseline.llm_provider
 
 
 def resolve_max_steps(value: int | None = None) -> int:
-    return _require_int(value=value, env_key=ENV_MAX_STEPS, cli_flag="-n/--max-steps")
+    return value if value is not None else module_defaults().baseline.max_steps
 
 
 def resolve_reasoning_effort(value: str | None = None) -> str | None:
@@ -86,10 +111,10 @@ def resolve_agent_model(agent_type: str, model: str | None = None) -> str:
     """Resolve model id for *agent_type*; explicit *model* wins over env."""
     if model:
         return model
-    if generic := _env_str(ENV_MODEL):
-        return generic
+    if canonical_agent_type(agent_type) in SUPPORTED_AGENT_TYPES:
+        return module_defaults().baseline.model
 
-    match agent_type.lower():
+    match canonical_agent_type(agent_type):
         case "local_cli.claude_cli":
             return resolve_claude_model(None)
         case "community.sade":
@@ -120,7 +145,7 @@ def resolve_agent_model(agent_type: str, model: str | None = None) -> str:
             return _require_str(
                 value=None, env_key=ENV_AUTOGEN_MODEL, cli_flag="-m/--model"
             )
-        case "byo.langgraph":
+        case "react" | "plan-execute" | "reflexion":
             return _require_str(
                 value=None, env_key=ENV_LANGGRAPH_MODEL, cli_flag="-m/--model"
             )
@@ -131,12 +156,8 @@ def resolve_agent_model(agent_type: str, model: str | None = None) -> str:
 
 
 def resolve_judge_provider(value: str | None = None) -> str:
-    return _require_str(
-        value=value, env_key=ENV_JUDGE_PROVIDER, cli_flag="-p/--provider (judge)"
-    )
+    return value or module_defaults().baseline.judge_provider
 
 
 def resolve_judge_model(value: str | None = None) -> str:
-    return _require_str(
-        value=value, env_key=ENV_JUDGE_MODEL, cli_flag="-m/--model (judge)"
-    )
+    return value or module_defaults().baseline.judge_model

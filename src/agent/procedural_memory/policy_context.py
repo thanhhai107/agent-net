@@ -25,17 +25,47 @@ def serialize_primitive_action(tool_name: str, arguments: dict[str, Any]) -> str
 def build_skill_policy_suffix(
     state: str,
     skill: ProceduralSkill | None,
+    *,
+    max_tokens: int | None = None,
+    include_state: bool = True,
 ) -> str:
-    skill_text = skill.format_for_llm() if skill else "No active procedural skill."
-    return (
-        "\n\n[CURRENT OBSERVABLE STATE]\n"
-        f"{state}\n\n"
-        "[ACTIVE SKILL-MDP OPTION]\n"
-        f"{skill_text}\n\n"
-        "Use the option as procedural guidance, not as evidence. Generate the "
+    budget_chars = max(0, int(max_tokens or 0)) * 4
+    state_section = "\n\n[CURRENT OBSERVABLE STATE]\n" if include_state else ""
+    skill_header = "\n\n[ACTIVE SKILL-MDP OPTION]\n"
+    guidance = (
+        "\n\nUse the option as procedural guidance, not as evidence. Option "
+        "termination only returns control to the skill selector; it never means "
+        "the diagnosis is complete and never justifies submission. Generate the "
         "next primitive diagnostic action from current-run observations only.\n\n"
         "Return the next primitive action or tool call only.\nAction:\n"
     )
+    # Reserve a small truncation margin so the rendered suffix never exceeds
+    # the caller's context allowance.
+    fixed_chars = len(state_section) + len(skill_header) + len(guidance) + 12
+    variable_chars = max(0, budget_chars - fixed_chars) if budget_chars else 0
+    state_limit = variable_chars // 2 if include_state and variable_chars else 0
+    # Runtime messages already carry the observable state. Keep the same half-
+    # budget previously available to the Skill while dropping that duplicate.
+    skill_limit = (
+        variable_chars - state_limit
+        if include_state
+        else variable_chars // 2
+        if variable_chars
+        else 0
+    )
+    state_text = state
+    if state_limit and len(state_text) > state_limit:
+        state_text = state_text[:state_limit] + "..."
+    skill_text = skill.format_for_llm() if skill else "No active procedural skill."
+    if skill_limit and len(skill_text) > skill_limit:
+        skill_text = skill_text[:skill_limit] + "..."
+    rendered_state = state_section + f"{state_text}\n" if include_state else ""
+    suffix = rendered_state + skill_header + f"{skill_text}\n" + guidance
+    if budget_chars and len(suffix) > budget_chars:
+        # The budget is deliberately conservative; this fallback only covers
+        # unusual short budgets where static instructions dominate.
+        return suffix[:budget_chars]
+    return suffix
 
 
 def build_skill_policy_prefix(

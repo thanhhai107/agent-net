@@ -13,6 +13,7 @@ from agent.extensions.reflexion_agent import ReflexionAgent
 from agent.extensions.workflow_base import ExtensionWorkflowBase
 from agent.extensions.workflow_models import ReflexionEvaluation
 from nika.visualization.experiment_runner import build_experiment_command
+from nika.workflows.benchmark import run as benchmark_run
 
 
 def _config(agent_type: str) -> AgentRunConfig:
@@ -29,6 +30,7 @@ def _config(agent_type: str) -> AgentRunConfig:
     ("configured", "normalized"),
     [
         ("react", "react"),
+        ("byo.langgraph", "react"),
         ("plan_execute", "plan-execute"),
         ("plan-and-execute", "plan-execute"),
         ("reflexion", "reflexion"),
@@ -81,6 +83,50 @@ def test_studio_command_carries_workflow_and_attempt_budget() -> None:
 
     assert command[command.index("--agent") + 1] == "reflexion"
     assert command[command.index("--max-attempts") + 1] == "4"
+
+
+def test_benchmark_dispatches_plan_execute_to_extension_runner(monkeypatch) -> None:
+    calls: list[tuple[AgentRunConfig, str | None]] = []
+    monkeypatch.setattr(
+        benchmark_run, "resolve_agent_type", lambda _value: "plan-execute"
+    )
+    monkeypatch.setattr(
+        benchmark_run,
+        "resolve_llm_provider",
+        lambda provider, **_kwargs: provider,
+    )
+    monkeypatch.setattr(
+        benchmark_run, "resolve_agent_model", lambda _agent, model: model
+    )
+    monkeypatch.setattr(benchmark_run, "resolve_max_steps", lambda steps: steps)
+
+    from agent.extensions import run as extension_run
+
+    monkeypatch.setattr(
+        extension_run,
+        "start_agent",
+        lambda config, *, session_id: calls.append((config, session_id)),
+    )
+
+    benchmark_run._run_benchmark_agent(
+        agent_type="plan-execute",
+        llm_provider="custom",
+        model="openai/gpt-oss-120b",
+        max_steps=20,
+        session_id="session-1",
+    )
+
+    assert calls == [
+        (
+            AgentRunConfig(
+                agent_type="plan-execute",
+                llm_provider="custom",
+                model="openai/gpt-oss-120b",
+                max_steps=20,
+            ),
+            "session-1",
+        )
+    ]
 
 
 def test_workflow_callback_preserves_diagnosis_agent_and_phase(tmp_path) -> None:

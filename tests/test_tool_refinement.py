@@ -16,9 +16,11 @@ from langchain_core.tools import StructuredTool
 from unittest.mock import patch
 
 from agent.tool_refinement.curator import (
+    _diagnostic_utility_lcb,
     _exploration_is_read_only,
     _exploration_signature,
     extract_tool_trials,
+    finalize_tool_refinement_session,
     identify_comprehension_gaps,
     rewrite_documentation,
 )
@@ -183,7 +185,7 @@ class DraftToolRefinementTest(unittest.TestCase):
         self.assertEqual(accepted, {"host_name": "host_a", "count": 4})
         self.assertEqual(accepted_error, "")
 
-    def test_self_driven_explorer_executes_grounded_probe_and_rewrites(self) -> None:
+    def test_self_driven_explorer_collects_grounded_probe_for_checkpoint(self) -> None:
         calls: list[str] = []
         explorer_prompts: list[str] = []
 
@@ -259,10 +261,8 @@ class DraftToolRefinementTest(unittest.TestCase):
         self.assertEqual(calls, ["host_a"])
         self.assertEqual(len(state.explorations), 1)
         self.assertTrue(state.explorations[0].trial_id.startswith("active_trial_"))
-        self.assertEqual(
-            doc.next_exploration_direction,
-            "Explore another valid observed endpoint.",
-        )
+        self.assertEqual(doc.next_exploration_direction, "")
+        self.assertEqual(len(state.revisions), 0)
         self.assertIn("Grounded identifier values", explorer_prompts[0])
         self.assertEqual(before_trace, after_trace)
 
@@ -810,6 +810,78 @@ class DraftToolRefinementTest(unittest.TestCase):
 
         self.assertEqual(low_rca, high_rca)
 
+    def test_diagnostic_utility_updates_independently_of_frozen_docs(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            patch.dict(
+                os.environ,
+                {
+                    "NIKA_LEARNING_LLM_BACKEND": "",
+                    "NIKA_LEARNING_LLM_MODEL": "",
+                },
+            ),
+        ):
+            store = ToolRefinementStore("draft", root=tmp)
+            first = ToolTrial(
+                trial_id="first",
+                session_id="s1",
+                tool_name="show_route",
+                status="success",
+            )
+            rewrite_documentation(
+                store,
+                trials=[first],
+                tool_descriptions={"show_route": "Show routes."},
+                metrics={
+                    "detection_score": 1.0,
+                    "localization_f1": 1.0,
+                    "rca_f1": 1.0,
+                },
+            )
+            state = store.load()
+            state.documents["show_route"].frozen = True
+            store.save(state)
+
+            second = ToolTrial(
+                trial_id="second",
+                session_id="s2",
+                tool_name="show_route",
+                status="success",
+            )
+            rewrite_documentation(
+                store,
+                trials=[second],
+                tool_descriptions={"show_route": "Show routes."},
+                metrics={
+                    "detection_score": 1.0,
+                    "localization_f1": 0.0,
+                    "rca_f1": 0.0,
+                },
+            )
+            doc = store.get_document("show_route")
+            assert doc is not None
+
+        self.assertEqual(doc.contract_mastery_score, doc.mastery_score)
+        self.assertEqual(doc.diagnostic_utility_count, 2)
+        self.assertAlmostEqual(doc.diagnostic_utility_score, 0.55)
+        self.assertFalse(doc.frozen)
+        self.assertEqual(doc.frozen_reason, "")
+
+    def test_diagnostic_utility_requires_confident_support(self) -> None:
+        weak = ToolDocumentation(
+            name="weak",
+            diagnostic_utility_score=0.55,
+            diagnostic_utility_count=2,
+        )
+        strong = ToolDocumentation(
+            name="strong",
+            diagnostic_utility_score=1.0,
+            diagnostic_utility_count=2,
+        )
+
+        self.assertLess(_diagnostic_utility_lcb(weak), 0.3)
+        self.assertGreater(_diagnostic_utility_lcb(strong), 0.3)
+
     def test_extracts_trials_and_argument_gaps_from_messages(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             trace = Path(tmp) / "messages.jsonl"
@@ -1267,6 +1339,7 @@ class DraftToolRefinementTest(unittest.TestCase):
             doc = store.get_document("ping_pair")
             assert doc is not None
             doc.usage_notes.append("Use exact host names from the active topology.")
+            doc.published = True
             store.upsert_document(doc)
             runtime = ToolRefinementRuntime(
                 session=object(),
@@ -1899,6 +1972,139 @@ class DraftToolRefinementTest(unittest.TestCase):
         by_tool = {revision.tool_name: revision for revision in revisions}
         self.assertEqual(by_tool["show_iface"].metrics["documented_path_rate"], 0.5)
         self.assertEqual(by_tool["show_iface"].metrics["success_path_rate"], 0.5)
+
+    def test_session_trials_are_collected_until_checkpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            session_dirs = {
+                "s1": root / "s1",
+                "s2": root / "s2",
+            }
+            for session_id, session_dir in session_dirs.items():
+                session_dir.mkdir()
+                self._trace(
+                    str(session_dir),
+                    [
+                        (
+                            "tool_start",
+                            session_id,
+                            "show_route",
+                            f"{{'router': '{session_id}'}}",
+                            "",
+                        ),
+                        (
+                            "tool_end",
+                            session_id,
+                            "show_route",
+                            "",
+                            "route present",
+                        ),
+                    ],
+                )
+            store = ToolRefinementStore("checkpoint", root=root / "library")
+
+            class FakeSession:
+                def load_closed_session(self, *, session_id):
+                    self.session_id = session_id
+                    self.session_dir = str(session_dirs[session_id])
+                    self.tool_library_id = "checkpoint"
+                    self.task_description = "Inspect route state."
+                    self.llm_backend = ""
+                    self.model = ""
+                    return self
+
+            with (
+                patch("agent.tool_refinement.curator.Session", FakeSession),
+                patch(
+                    "agent.tool_refinement.curator.ToolRefinementStore",
+                    return_value=store,
+                ),
+            ):
+                collected = finalize_tool_refinement_session(
+                    session_id="s1",
+                    metrics={"rca_f1": 1.0},
+                    rewrite=False,
+                    min_new_trials=2,
+                )
+                updated = finalize_tool_refinement_session(
+                    session_id="s2",
+                    metrics={"rca_f1": 1.0},
+                    rewrite=True,
+                    min_new_trials=2,
+                )
+
+            state = store.load()
+
+        self.assertEqual(collected["status"], "collected")
+        self.assertEqual(collected["draft_pending_trials"], 1)
+        self.assertEqual(updated["draft_selected_tools"], ["show_route"])
+        self.assertEqual(updated["draft_pending_trials"], 0)
+        self.assertEqual(len(state.processed_trial_ids), 2)
+
+    def test_stable_published_document_skips_redundant_success_rewrite(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            session_dir = root / "s1"
+            session_dir.mkdir()
+            self._trace(
+                str(session_dir),
+                [
+                    (
+                        "tool_start",
+                        "1",
+                        "show_route",
+                        "{'router': 'r1'}",
+                        "",
+                    ),
+                    ("tool_end", "1", "show_route", "", "route present"),
+                ],
+            )
+            store = ToolRefinementStore("stable", root=root / "library")
+            state = store.load()
+            state.documents["show_route"] = ToolDocumentation(
+                name="show_route",
+                description="Show routes.",
+                published=True,
+                diagnostic_utility_score=1.0,
+                diagnostic_utility_count=2,
+                diagnostic_utility_sessions=["old-1", "old-2"],
+            )
+            store.save(state)
+
+            class FakeSession:
+                def load_closed_session(self, *, session_id):
+                    self.session_id = session_id
+                    self.session_dir = str(session_dir)
+                    self.tool_library_id = "stable"
+                    self.task_description = "Inspect route state."
+                    self.llm_backend = ""
+                    self.model = ""
+                    return self
+
+            with (
+                patch("agent.tool_refinement.curator.Session", FakeSession),
+                patch(
+                    "agent.tool_refinement.curator.ToolRefinementStore",
+                    return_value=store,
+                ),
+            ):
+                report = finalize_tool_refinement_session(
+                    session_id="s1",
+                    metrics={
+                        "detection_score": 1.0,
+                        "localization_f1": 1.0,
+                        "rca_f1": 1.0,
+                    },
+                    rewrite=True,
+                    min_new_trials=1,
+                )
+
+            state = store.load()
+
+        self.assertEqual(report["draft_selected_tools"], [])
+        self.assertEqual(report["draft_pending_trials"], 0)
+        self.assertEqual(len(state.processed_trial_ids), 1)
+        self.assertEqual(state.revisions, [])
 
     @staticmethod
     def _trace(tmp: str, rows: list[tuple[str, str, str, str, str]]) -> Path:

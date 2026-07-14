@@ -19,6 +19,7 @@ from nika.utils.agent_config import (
     ENV_MAX_STEPS,
     ENV_MCP_AGENT_MODEL,
     ENV_MODEL,
+    SUPPORTED_AGENT_TYPES,
     ENV_SADE_MODEL,
     resolve_agent_model,
     resolve_agent_type,
@@ -34,6 +35,14 @@ load_test_env()
 
 
 class AgentConfigTest(unittest.TestCase):
+    def test_only_three_public_agent_types_are_supported(self) -> None:
+        self.assertEqual(
+            SUPPORTED_AGENT_TYPES,
+            ("react", "plan-execute", "reflexion"),
+        )
+        with self.assertRaisesRegex(ValueError, "Unsupported agent type"):
+            resolve_agent_type("byo.autogen")
+
     def test_cli_values_override_env(self) -> None:
         with unittest.mock.patch.dict(
             os.environ,
@@ -45,24 +54,18 @@ class AgentConfigTest(unittest.TestCase):
             },
             clear=True,
         ):
-            self.assertEqual(resolve_agent_type("byo.langgraph"), "byo.langgraph")
+            self.assertEqual(resolve_agent_type("byo.langgraph"), "react")
             self.assertEqual(
-                resolve_llm_provider("openai", agent_type="byo.langgraph"), "openai"
+                resolve_llm_provider("openai", agent_type="react"), "openai"
             )
             self.assertEqual(resolve_max_steps(20), 20)
-            self.assertEqual(
-                resolve_agent_model("byo.langgraph", "override"), "override"
-            )
+            self.assertEqual(resolve_agent_model("react", "override"), "override")
 
     def test_required_shared_values_raise_when_missing(self) -> None:
         with unittest.mock.patch.dict(os.environ, {}, clear=True):
-            for resolver in (resolve_agent_type, resolve_max_steps, resolve_judge_provider):
-                with self.subTest(resolver=resolver.__name__):
-                    with self.assertRaises(ValueError):
-                        resolver(None)
-
-            with self.assertRaises(ValueError):
-                resolve_llm_provider(None, agent_type="byo.langgraph")
+            self.assertEqual(resolve_agent_type(None), "react")
+            self.assertEqual(resolve_max_steps(None), 50)
+            self.assertEqual(resolve_llm_provider(None, agent_type="react"), "custom")
 
     def test_non_langgraph_agents_do_not_require_llm_provider(self) -> None:
         with unittest.mock.patch.dict(os.environ, {}, clear=True):
@@ -71,14 +74,14 @@ class AgentConfigTest(unittest.TestCase):
                 resolve_llm_provider(None, agent_type="local_cli.codex_cli")
             )
 
-    def test_judge_values_from_env(self) -> None:
+    def test_judge_values_from_baseline(self) -> None:
         with unittest.mock.patch.dict(
             os.environ,
             {ENV_JUDGE_PROVIDER: "deepseek", ENV_JUDGE_MODEL: "deepseek-chat"},
             clear=True,
         ):
-            self.assertEqual(resolve_judge_provider(None), "deepseek")
-            self.assertEqual(resolve_judge_model(None), "deepseek-chat")
+            self.assertEqual(resolve_judge_provider(None), "custom")
+            self.assertEqual(resolve_judge_model(None), "openai/gpt-oss-120b")
 
     def test_reasoning_effort_from_env(self) -> None:
         with unittest.mock.patch.dict(
@@ -90,7 +93,6 @@ class AgentConfigTest(unittest.TestCase):
     def test_agent_specific_model_envs(self) -> None:
         cases = [
             ("mock", ENV_MODEL, "mock-v1"),
-            ("byo.langgraph", ENV_LANGGRAPH_MODEL, "deepseek-chat"),
             ("byo.mcp_agent", ENV_MCP_AGENT_MODEL, "gpt-4.1-mini"),
             ("byo.autogen", ENV_AUTOGEN_MODEL, "deepseek-chat"),
             ("local_cli.codex_cli", ENV_CODEX_MODEL, "gpt-5.4-mini"),
@@ -101,10 +103,13 @@ class AgentConfigTest(unittest.TestCase):
         ]
         for agent_type, env_key, model in cases:
             with self.subTest(agent_type=agent_type, env_key=env_key):
-                with unittest.mock.patch.dict(
-                    os.environ, {env_key: model}, clear=True
-                ):
+                with unittest.mock.patch.dict(os.environ, {env_key: model}, clear=True):
                     self.assertEqual(resolve_agent_model(agent_type, None), model)
+
+        with unittest.mock.patch.dict(
+            os.environ, {ENV_LANGGRAPH_MODEL: "deepseek-chat"}, clear=True
+        ):
+            self.assertEqual(resolve_agent_model("react", None), "openai/gpt-oss-120b")
 
     def test_claude_family_falls_back_to_anthropic_model(self) -> None:
         for agent_type in (

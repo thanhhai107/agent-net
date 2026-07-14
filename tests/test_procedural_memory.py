@@ -10,7 +10,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from langchain_core.tools import StructuredTool
 
@@ -21,6 +21,7 @@ from agent.procedural_memory.models import (
     ProceduralSkill,
     SemanticGradient,
     SemanticGradientDraft,
+    SkillCandidateBatchDraft,
     SkillCandidateDraft,
     SkillComponentGradient,
     SkillExperience,
@@ -28,6 +29,7 @@ from agent.procedural_memory.models import (
     SkillTransition,
 )
 from agent.procedural_memory.runtime import SkillToolRuntime
+from agent.procedural_memory.policy_context import build_skill_policy_suffix
 from agent.procedural_memory.policy_scorer import (
     BehavioralReplayPolicyScorer,
     PolicyReplayDraft,
@@ -97,6 +99,15 @@ class SkillProProceduralMemoryTest(unittest.TestCase):
         self.assertIsNotNone(selected)
         self.assertEqual(selected.skill_id, "seed_self_consistency_check")
 
+    def test_policy_suffix_respects_hard_context_budget(self) -> None:
+        suffix = build_skill_policy_suffix(
+            "state " * 1000,
+            None,
+            max_tokens=120,
+        )
+
+        self.assertLessEqual(len(suffix), 120 * 4)
+
     def test_epsilon_exploration_is_reproducible(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             module = ProceduralMemoryModule(
@@ -139,27 +150,22 @@ class SkillProProceduralMemoryTest(unittest.TestCase):
 
         self.assertAlmostEqual(epsilon, 0.25)
 
-    def test_epsilon_exploration_runs_when_retrieval_is_empty(self) -> None:
+    def test_epsilon_exploration_falls_back_when_retrieval_is_empty(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             module = ProceduralMemoryModule(
                 bank_id="empty-retrieval-exploration",
                 store_path=Path(tmp) / "skills.json",
             )
             query = ProceduralMemoryQuery(text="unseen state", top_k=1)
-            selected = None
             with patch.object(module, "retrieve", return_value=[]):
-                for index in range(20):
-                    selected = module.select_skill(
-                        query=query,
-                        record_reuse=False,
-                        exploration_epsilon=1.0,
-                        exploration_key=f"empty:{index}",
-                    )
-                    if selected is not None:
-                        break
+                selected = module.select_skill(
+                    query=query,
+                    record_reuse=False,
+                    exploration_epsilon=1.0,
+                    exploration_key="empty",
+                )
 
-        self.assertIsNotNone(selected)
-        self.assertIn("epsilon_exploration", selected.reasons)
+        self.assertIsNone(selected)
 
     def test_epsilon_exploration_respects_cooldown_exclusions(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -231,7 +237,7 @@ class SkillProProceduralMemoryTest(unittest.TestCase):
             any(item["stage"] == "semantic duplicate" for item in state.maintenance_log)
         )
 
-    def test_custom_api_uses_teacher_forced_logprob_scorer(self) -> None:
+    def test_custom_api_uses_behavioral_replay_without_logprob_endpoint(self) -> None:
         with (
             tempfile.TemporaryDirectory() as tmp,
             patch.dict(
@@ -249,7 +255,78 @@ class SkillProProceduralMemoryTest(unittest.TestCase):
                 store_path=Path(tmp) / "skills.json",
             )
 
+        self.assertIsInstance(module.policy_scorer, BehavioralReplayPolicyScorer)
+
+    def test_explicit_logprob_endpoint_enables_teacher_forced_scorer(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            patch.dict(
+                os.environ,
+                {
+                    "NIKA_SKILL_LOGPROB_URL": "https://logprob.example.test/v1",
+                    "NIKA_SKILL_LOGPROB_API_KEY": "test-password",
+                },
+            ),
+        ):
+            module = ProceduralMemoryModule(
+                bank_id="api-logprob",
+                llm_backend="custom",
+                model="provider/model",
+                verifier="policy_logprob",
+                store_path=Path(tmp) / "skills.json",
+            )
+
         self.assertIsInstance(module.policy_scorer, PolicyLogprobScorer)
+
+    def test_logprob_replay_uses_recorded_behavior_policy_context(self) -> None:
+        scorer = PolicyLogprobScorer(
+            base_url="https://example.test/v1",
+            api_key="test-password",
+            model="provider/model",
+        )
+        scorer._score_targets = MagicMock(side_effect=[[-1.0, -1.5], [-2.0, -2.5]])
+        candidate = ProceduralSkill(
+            skill_id="candidate",
+            title="Candidate",
+            activation_condition="When evidence is incomplete.",
+            execution_steps=[SkillStep(order=1, action="Inspect evidence.")],
+            termination_condition="Stop after sufficient evidence.",
+        )
+        experiences = [
+            SkillExperience(
+                experience_id="mixed-behavior",
+                session_id="s1",
+                reward=1.0,
+                transitions=[
+                    SkillTransition(
+                        state="state one",
+                        action="first_action",
+                        policy_context="recorded policy one",
+                    ),
+                    SkillTransition(
+                        state="state two",
+                        action="second_action",
+                        policy_context="recorded policy two",
+                    ),
+                ],
+            )
+        ]
+
+        result = scorer._score_batch(
+            candidate=candidate,
+            baseline=None,
+            experiences=experiences,
+        )
+
+        self.assertEqual(result.method, "policy_logprob")
+        baseline_rows = scorer._score_targets.call_args_list[1].args[0]
+        self.assertEqual(
+            baseline_rows,
+            [
+                ("recorded policy one", "first_action"),
+                ("recorded policy two", "second_action"),
+            ],
+        )
 
     def test_ppo_gate_uses_target_action_logprob_ratio(self) -> None:
         class LogprobScorer:
@@ -399,7 +476,7 @@ class SkillProProceduralMemoryTest(unittest.TestCase):
             )
 
         self.assertFalse(decision.accepted)
-        self.assertIn("verification unavailable", decision.reason)
+        self.assertIn("verification deferred", decision.reason)
         self.assertIn("TimeoutError", decision.verification_error)
 
     def test_no_fault_success_requires_detection_only(self) -> None:
@@ -557,7 +634,55 @@ class SkillProProceduralMemoryTest(unittest.TestCase):
         self.assertEqual(state.skills["harmful"].status, "retired")
         self.assertTrue(
             any(
-                item.get("stage") == "non-positive online score"
+                item.get("stage") == "validated online rollback"
+                and item.get("skill_id") == "harmful"
+                for item in state.maintenance_log
+            )
+        )
+
+    def test_probation_promotes_positive_gain_and_rolls_back_negative_gain(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            module = ProceduralMemoryModule(
+                bank_id="probation-lifecycle",
+                store_path=Path(tmp) / "skills.json",
+                evolution_threshold=3,
+                acceptance_margin=0.01,
+            )
+            state = module.store.load()
+
+            def probationary(skill_id: str, gain: float) -> ProceduralSkill:
+                return ProceduralSkill(
+                    skill_id=skill_id,
+                    title=skill_id,
+                    activation_condition=f"Use for {skill_id} evidence.",
+                    execution_steps=[
+                        SkillStep(order=1, action=f"Inspect {skill_id} evidence.")
+                    ],
+                    termination_condition="Return control after inspection.",
+                    status="probationary",
+                    frequency=3,
+                    total_gain=3 * gain,
+                    avg_gain=gain,
+                )
+
+            state.skills["helpful"] = probationary("helpful", 0.05)
+            state.skills["harmful"] = probationary("harmful", -0.05)
+            module._maintain(state)
+
+        self.assertEqual(state.skills["helpful"].status, "validated")
+        self.assertEqual(state.skills["harmful"].status, "retired")
+        self.assertTrue(
+            any(
+                item.get("stage") == "promote probationary skill"
+                and item.get("skill_id") == "helpful"
+                for item in state.maintenance_log
+            )
+        )
+        self.assertTrue(
+            any(
+                item.get("stage") == "probationary online rollback"
                 and item.get("skill_id") == "harmful"
                 for item in state.maintenance_log
             )
@@ -641,7 +766,7 @@ class SkillProProceduralMemoryTest(unittest.TestCase):
             'show_route({"device":"router"})',
         )
 
-    def test_segment_replay_preserves_observations_from_other_skills(self) -> None:
+    def test_generic_seed_segments_form_one_episode_replay(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             module = ProceduralMemoryModule(
                 bank_id="segment-state",
@@ -685,14 +810,132 @@ class SkillProProceduralMemoryTest(unittest.TestCase):
                 },
             )
 
-        react = segments["seed_react_decision"]
-        elimination = segments["seed_hypothesis_elimination"]
-        self.assertEqual(react.step_count, 2)
-        self.assertEqual(elimination.step_count, 1)
-        self.assertIn("Route is absent", react.transitions[1].state)
-        self.assertIn("Neighbor is inactive", react.transitions[1].state)
-        self.assertTrue(react.transitions[-1].done)
-        self.assertTrue(elimination.transitions[-1].done)
+        self.assertEqual(list(segments), [""])
+        episode = segments[""]
+        self.assertEqual(episode.step_count, 3)
+        self.assertEqual(episode.skill_ids, [])
+        self.assertIn("Route is absent", episode.transitions[1].state)
+        self.assertIn("Neighbor is inactive", episode.transitions[2].state)
+        self.assertTrue(episode.transitions[-1].done)
+
+    def test_experience_signature_uses_network_context_without_oracle_labels(
+        self,
+    ) -> None:
+        def experience(exp_id: str, task: str, observation: str) -> SkillExperience:
+            return SkillExperience(
+                experience_id=exp_id,
+                session_id=exp_id,
+                reward=0.1,
+                trajectory=task,
+                transitions=[
+                    SkillTransition(
+                        action="inspect",
+                        tool_name="get_reachability",
+                        observation_summary=observation,
+                        done=True,
+                    )
+                ],
+            )
+
+        enterprise_task = (
+            "Network Description: Enterprise OSPF network with DHCP and DNS "
+            "services. Your goal is to diagnose its current state."
+        )
+        dns_latency = experience(
+            "dns-latency",
+            enterprise_task,
+            "dns_server is reachable with high latency.",
+        )
+        dns_timeout = experience(
+            "dns-timeout",
+            enterprise_task,
+            "DNS lookup did not return while ICMP remained reachable.",
+        )
+        p4 = experience(
+            "p4",
+            "Network Description: A P4 BMV2 forwarding fabric. Your goal is to diagnose it.",
+            "All endpoints are reachable.",
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            module = ProceduralMemoryModule(
+                bank_id="context-family",
+                store_path=Path(tmp) / "skills.json",
+                evolution_threshold=2,
+            )
+            state = module.store.load()
+            state.experiences.extend([dns_latency, dns_timeout, p4])
+            batch = module._evolution_batch(state, None, current=dns_timeout)
+
+        self.assertEqual(
+            {item.experience_id for item in batch},
+            {"dns-latency", "dns-timeout"},
+        )
+
+    def test_normalization_merges_legacy_generic_seed_segments(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            module = ProceduralMemoryModule(
+                bank_id="legacy-segments",
+                store_path=Path(tmp) / "skills.json",
+            )
+            state = module.store.load()
+            state.experiences.extend(
+                [
+                    SkillExperience(
+                        experience_id="segment-2",
+                        session_id="legacy-session",
+                        reward=0.1,
+                        skill_ids=["seed_structured_cot"],
+                        trajectory="Network Description: OSPF with DNS.",
+                        transitions=[
+                            SkillTransition(
+                                action="show_route",
+                                tool_name="show_route",
+                                observation_summary="Routes are present.",
+                                skill_id="seed_structured_cot",
+                                activation_id="legacy-session:2",
+                                done=True,
+                            )
+                        ],
+                    ),
+                    SkillExperience(
+                        experience_id="segment-1",
+                        session_id="legacy-session",
+                        reward=0.1,
+                        skill_ids=["seed_react_decision"],
+                        trajectory="Network Description: OSPF with DNS.",
+                        transitions=[
+                            SkillTransition(
+                                action="ping",
+                                tool_name="ping",
+                                observation_summary="DNS endpoint has high latency.",
+                                skill_id="seed_react_decision",
+                                activation_id="legacy-session:1",
+                                done=True,
+                            )
+                        ],
+                    ),
+                ]
+            )
+
+            logs = module._normalize_experience_pools(state)
+
+        self.assertEqual(len(state.experiences), 1)
+        merged = state.experiences[0]
+        self.assertEqual(merged.skill_ids, [])
+        self.assertEqual(merged.step_count, 2)
+        self.assertEqual(
+            [transition.action for transition in merged.transitions],
+            ["ping", "show_route"],
+        )
+        self.assertEqual(
+            [transition.skill_id for transition in merged.transitions],
+            ["seed_react_decision", "seed_structured_cot"],
+        )
+        self.assertTrue(merged.transitions[-1].done)
+        self.assertTrue(
+            any(item["stage"] == "merge generic seed episode" for item in logs)
+        )
 
     def test_skill_representation_excludes_scenario_and_episode_payload(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -787,7 +1030,11 @@ class SkillProProceduralMemoryTest(unittest.TestCase):
                 component_update=SkillComponentGradient(is_related=False),
             )
             with (
-                patch.object(module, "semantic_gradient", return_value=unrelated),
+                patch.object(
+                    module,
+                    "_deterministic_semantic_gradient",
+                    return_value=unrelated,
+                ),
                 patch.object(
                     module,
                     "aggregate_semantic_gradients",
@@ -847,6 +1094,7 @@ class SkillProProceduralMemoryTest(unittest.TestCase):
             state.documents["inspect_host"].usage_notes = [
                 "Use observed identifiers only."
             ]
+            state.documents["inspect_host"].published = True
             refinement_store.save(state)
             refinement = ToolRefinementRuntime(
                 session=SimpleNamespace(),
@@ -874,8 +1122,8 @@ class SkillProProceduralMemoryTest(unittest.TestCase):
         self.assertEqual(description.count("Use observed identifiers only."), 1)
         self.assertNotIn("DRAFT refined guidance", description)
         self.assertIn("DRAFT contract notes", description)
-        self.assertIn("Tool Refinement contract deltas", prompt)
-        self.assertIn("Use observed identifiers only.", prompt)
+        self.assertNotIn("Tool Refinement contract deltas", prompt)
+        self.assertNotIn("Use observed identifiers only.", prompt)
 
     def test_atomic_store_failure_preserves_previous_skill_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -905,7 +1153,6 @@ class SkillProProceduralMemoryTest(unittest.TestCase):
     def test_batch_gradient_and_best_of_n_use_independent_llm_calls(self) -> None:
         schemas: list[type] = []
         prompts: list[str] = []
-        candidate_index = 0
 
         class FakeModel:
             schema: type | None = None
@@ -916,19 +1163,27 @@ class SkillProProceduralMemoryTest(unittest.TestCase):
                 return self
 
             def invoke(self, prompt):
-                nonlocal candidate_index
                 prompts.append(prompt)
-                if self.schema is SkillCandidateDraft:
-                    index = candidate_index
-                    candidate_index += 1
-                    return SkillCandidateDraft(
-                        title=f"Candidate {index}",
-                        initiation="When current route evidence is incomplete.",
-                        policy=[
-                            f"Inspect route evidence with independent strategy {index}.",
-                            "Cross-check the observation before termination.",
-                        ],
-                        termination="Stop after route evidence is independently confirmed.",
+                if self.schema is SkillCandidateBatchDraft:
+                    return SkillCandidateBatchDraft(
+                        candidates=[
+                            SkillCandidateDraft(
+                                title=f"Candidate {index}",
+                                initiation=(
+                                    "When current route evidence is incomplete."
+                                ),
+                                policy=[
+                                    "Inspect route evidence with independent "
+                                    f"strategy {index}.",
+                                    "Cross-check the observation before termination.",
+                                ],
+                                termination=(
+                                    "Stop after route evidence is independently "
+                                    "confirmed."
+                                ),
+                            )
+                            for index in range(3)
+                        ]
                     )
                 if self.schema is PolicyReplayDraft:
                     return PolicyReplayDraft(
@@ -1004,11 +1259,11 @@ class SkillProProceduralMemoryTest(unittest.TestCase):
         self.assertEqual(first["status"], "deferred")
         self.assertEqual(second["status"], "accepted")
         self.assertEqual(third["status"], "deferred")
-        self.assertEqual(second["semantic_gradient_count"], 2)
+        self.assertEqual(second["semantic_gradient_count"], 1)
         self.assertEqual(second["decision"]["best_of_n"], 3)
         self.assertEqual(second["verification_method"], "behavioral_replay")
-        self.assertEqual(schemas.count(SkillCandidateDraft), 3)
-        self.assertEqual(sum("Skill Evolver" in prompt for prompt in prompts), 3)
+        self.assertEqual(schemas.count(SkillCandidateBatchDraft), 1)
+        self.assertEqual(sum("Skill Evolver" in prompt for prompt in prompts), 1)
         self.assertTrue(
             all(
                 "Tool Refinement owns parameter schemas" in prompt
@@ -1017,11 +1272,7 @@ class SkillProProceduralMemoryTest(unittest.TestCase):
             )
         )
         self.assertTrue(
-            any(
-                "Keep tool parameter schemas" in prompt
-                for prompt in prompts
-                if "semantic-gradient critic" in prompt
-            )
+            any("batch semantic-gradient aggregator" in prompt for prompt in prompts)
         )
         self.assertTrue(any("batch semantic-gradient aggregator" in p for p in prompts))
         load_model.assert_called_once()
@@ -1042,7 +1293,7 @@ class SkillProProceduralMemoryTest(unittest.TestCase):
         self.assertNotIn("dhcp", attrs.protocols)
         self.assertNotIn("addressing", attrs.services)
 
-    def test_learning_reward_is_macro_average_of_published_quality_metrics(
+    def test_learning_reward_prioritizes_localization_and_rca(
         self,
     ) -> None:
         detection_only = EvaluationEvidence(
@@ -1082,8 +1333,8 @@ class SkillProProceduralMemoryTest(unittest.TestCase):
             }
         )
 
-        self.assertAlmostEqual(_evidence_score(detection_only), 1 / 3)
-        self.assertAlmostEqual(_evidence_score(partial), 2 / 3)
+        self.assertAlmostEqual(_evidence_score(detection_only), 0.10)
+        self.assertAlmostEqual(_evidence_score(partial), 0.45)
         self.assertAlmostEqual(_evidence_score(complete), 1.0)
         expensive = complete.model_copy(update={"steps": 100, "tool_calls": 50})
         self.assertEqual(_evidence_score(expensive), _evidence_score(complete))
@@ -1214,7 +1465,7 @@ class SkillProProceduralMemoryTest(unittest.TestCase):
         self.assertEqual(steps[0].policy_state, policy_state)
         self.assertEqual(steps[0].policy_context, policy_context)
 
-    def test_ppo_gate_accepts_successful_skill_and_retrieves_it(self) -> None:
+    def test_ppo_gate_accepts_successful_skill_into_probation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             module = ProceduralMemoryModule(
                 bank_id="skill",
@@ -1278,6 +1529,17 @@ class SkillProProceduralMemoryTest(unittest.TestCase):
                     top_k=3,
                 )
             )
+            probationary = module.retrieve(
+                query=ProceduralMemoryQuery(
+                    text="BGP route is not advertised",
+                    scenario="dc_clos_bgp",
+                    protocols=["bgp"],
+                    symptoms=["missing_route"],
+                    tools=["frr_show_bgp_summary"],
+                    top_k=10,
+                ),
+                include_probationary=True,
+            )
             context = module.format_context(retrieved)
             last_evolution = module.store.load().evolution_log[-1]
 
@@ -1294,7 +1556,13 @@ class SkillProProceduralMemoryTest(unittest.TestCase):
             report["episode_reward"] - report["episode_baseline"],
         )
         self.assertTrue(report["episode_success"])
-        self.assertIn(report["skill_id"], [item.skill.skill_id for item in retrieved])
+        self.assertNotIn(
+            report["skill_id"], [item.skill.skill_id for item in retrieved]
+        )
+        self.assertIn(
+            report["skill_id"], [item.skill.skill_id for item in probationary]
+        )
+        self.assertEqual(report["skill_status"], "probationary")
         self.assertIn("Activation", context)
         self.assertNotIn("bgp_missing_route_advertisement", context)
 
@@ -1874,7 +2142,7 @@ class SkillProProceduralMemoryTest(unittest.TestCase):
 
         self.assertNotIn("unverified", {item.skill.skill_id for item in retrieved})
 
-    def test_loading_bank_restores_seed_without_metric_specific_quarantine(
+    def test_loading_bank_preserves_online_seed_quarantine(
         self,
     ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1907,7 +2175,7 @@ class SkillProProceduralMemoryTest(unittest.TestCase):
             reloaded = ProceduralMemoryModule(bank_id="skill", store_path=path)
             repaired = reloaded.store.load()
 
-        self.assertEqual(repaired.skills["seed_react_decision"].status, "validated")
+        self.assertEqual(repaired.skills["seed_react_decision"].status, "retired")
         self.assertEqual(repaired.skills["unsafe-learned"].status, "validated")
 
     def test_runtime_context_redacts_known_root_cause_ids_from_dirty_skills(
@@ -1986,6 +2254,9 @@ class SkillProProceduralMemoryTest(unittest.TestCase):
         self.assertEqual(report["required_sample_count"], 6)
         self.assertEqual(report["decision"], None)
         self.assertEqual(len(state.experiences), 1)
+        self.assertIsNotNone(state.experiences[0].semantic_gradient)
+        self.assertNotEqual(report["semantic_gradient_source"], "deferred")
+        self.assertTrue(state.experiences[0].evidence_family)
         self.assertEqual(stats["ppo_decisions"], 0)
         self.assertEqual(state.evolution_log[-1]["action"], "deferred")
 
@@ -2095,7 +2366,7 @@ class SkillProProceduralMemoryTest(unittest.TestCase):
             {"exp-1", "exp-4", "exp-5"},
         )
 
-    def test_generic_seed_evolution_batch_uses_parent_buffer_across_domains(
+    def test_generic_seed_evolution_batch_groups_compatible_evidence(
         self,
     ) -> None:
         def experience(
@@ -2134,7 +2405,6 @@ class SkillProProceduralMemoryTest(unittest.TestCase):
                 evolution_threshold=3,
             )
             state = module.store.load()
-            parent = state.skills["seed_explore_exploit"]
             current = experience(
                 "bgp-current",
                 0.9,
@@ -2176,15 +2446,15 @@ class SkillProProceduralMemoryTest(unittest.TestCase):
                 ]
             )
 
-            batch = module._evolution_batch(state, parent, current=current)
+            batch = module._evolution_batch(state, None, current=current)
 
         self.assertEqual(len(batch), 3)
         self.assertEqual(
             {item.experience_id for item in batch},
-            {"bgp-low", "bgp-current", "ospf-high"},
+            {"bgp-low", "bgp-current", "bgp-mid"},
         )
 
-    def test_parent_buffer_is_not_partitioned_by_evidence_family(self) -> None:
+    def test_generic_seed_batch_excludes_incompatible_evidence_family(self) -> None:
         def experience(exp_id: str, text: str) -> SkillExperience:
             return SkillExperience(
                 experience_id=exp_id,
@@ -2212,7 +2482,6 @@ class SkillProProceduralMemoryTest(unittest.TestCase):
                 evolution_threshold=3,
             )
             state = module.store.load()
-            parent = state.skills["seed_react_decision"]
             current = experience(
                 "service-current",
                 "DNS resolver and DHCP server are reachable over ICMP.",
@@ -2230,10 +2499,10 @@ class SkillProProceduralMemoryTest(unittest.TestCase):
                 ]
             )
 
-            batch = module._evolution_batch(state, parent, current=current)
+            batch = module._evolution_batch(state, None, current=current)
 
         self.assertEqual(len(batch), 3)
-        self.assertIn("p4-no-fault", {item.experience_id for item in batch})
+        self.assertNotIn("p4-no-fault", {item.experience_id for item in batch})
 
     def test_refining_generic_seed_preserves_seed_and_resets_candidate_stats(
         self,
@@ -2907,10 +3176,10 @@ class SkillProProceduralMemoryTest(unittest.TestCase):
             "epsilon_then_similarity_top_k_online_value",
         )
         self.assertEqual(snapshot["tool_description_added_tokens"], 0)
-        self.assertGreater(snapshot["followup_added_tokens"], 0)
+        self.assertEqual(snapshot["followup_added_tokens"], 0)
         self.assertEqual(snapshot["prompt_injection_count"], 1)
         self.assertEqual(snapshot["tool_description_injection_count"], 0)
-        self.assertEqual(snapshot["followup_guidance_count"], 1)
+        self.assertEqual(snapshot["followup_guidance_count"], 0)
         self.assertEqual(
             snapshot["total_added_tokens"],
             snapshot["prompt_added_tokens"]
@@ -3322,7 +3591,9 @@ class SkillProProceduralMemoryTest(unittest.TestCase):
         self.assertIn("[ACTIVE SKILL-MDP OPTION]", prompt)
         self.assertIn("procedural guidance, not as evidence", prompt)
         self.assertIn("prompt_ping", prompt)
-        self.assertIn(decision_context, prompt)
+        self.assertNotIn(decision_context, prompt)
+        self.assertIn(decision_context, policy_state)
+        self.assertIn("never means the diagnosis is complete", prompt)
         self.assertIn(decision_context, policy_state)
         self.assertEqual(snapshot["active_skill_id"], "prompt_ping")
         self.assertEqual(snapshot["prompt_selection_count"], 1)
@@ -3607,7 +3878,7 @@ class SkillProProceduralMemoryTest(unittest.TestCase):
         self.assertEqual(mid_snapshot["post_tool_selection_count"], 0)
         self.assertEqual(mid_snapshot["followup_guidance_count"], 0)
         self.assertEqual(snapshot["inflight_tool_calls"], 0)
-        self.assertEqual(snapshot["followup_guidance_count"], 1)
+        self.assertEqual(snapshot["followup_guidance_count"], 0)
         self.assertEqual(len(post_tool_terms), 1)
         self.assertEqual(terminations, post_tool_terms)
         self.assertFalse(batch_reselects)
@@ -3854,7 +4125,7 @@ class SkillProProceduralMemoryTest(unittest.TestCase):
 
         self.assertEqual(output.artifact, {"raw": "pc1 unreachable"})
         self.assertIn("pc1 unreachable", str(output.content))
-        self.assertIn(
+        self.assertNotIn(
             "Integrated learning guidance - not evidence",
             str(output.content),
         )
@@ -3979,7 +4250,7 @@ class SkillProProceduralMemoryTest(unittest.TestCase):
         self.assertEqual(refined_report["status"], "accepted")
         self.assertEqual(refined.parent_id, bootstrap["skill_id"])
         self.assertGreaterEqual(refined.version, 1)
-        self.assertEqual(state.skills[bootstrap["skill_id"]].status, "validated")
+        self.assertEqual(state.skills[bootstrap["skill_id"]].status, "probationary")
         self.assertIsNone(refined_report["decision"]["replaced_skill_id"])
 
     def test_llm_semantic_gradient_updates_candidate_skill(self) -> None:
@@ -4092,11 +4363,11 @@ class SkillProProceduralMemoryTest(unittest.TestCase):
         self.assertNotIn("bgp_missing_route_advertisement", skill.termination_condition)
         self.assertNotIn("leaf_router_0_1", skill.termination_condition)
         self.assertEqual(stats["llm_semantic_gradients"], 1)
-        self.assertGreaterEqual(len(prompts), 2 + module.best_of_n)
+        self.assertEqual(len(prompts), 3)
         self.assertTrue(any("batch semantic-gradient aggregator" in p for p in prompts))
         self.assertEqual(
             sum("Skill Evolver" in prompt for prompt in prompts),
-            module.best_of_n,
+            1,
         )
         self.assertNotIn("bgp_missing_route_advertisement", "\n".join(prompts))
         self.assertNotIn("leaf_router_0_1", "\n".join(prompts))

@@ -245,14 +245,14 @@ class Session:
                 {"session_id": self.session_id, **extract_gt_fields(gt)},
             )
 
-    def clear_session(self):
+    def clear_session(self, *, status: str = "finished"):
         if not hasattr(self, "session_id"):
             raise ValueError("Session ID is not set.")
         payload = {k: v for k, v in self.__dict__.items() if k != "store"}
-        payload["status"] = "finished"
+        payload["status"] = status
         if getattr(self, "session_dir", None):
             self._write_run_json(payload)
-        self.store.delete_session(self.session_id)
+        self.store.delete_session(self.session_id, final_status=status)
 
     def start_session(self):
         self.start_time = datetime.now().isoformat()

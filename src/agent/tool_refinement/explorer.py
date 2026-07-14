@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 from pathlib import Path
 from typing import Any
@@ -16,8 +15,8 @@ from agent.tool_refinement.curator import (
     _stable_id,
     _text_similarity,
     extract_tool_trials,
-    rewrite_documentation,
 )
+from agent.module_config import module_defaults
 from agent.tool_refinement.generalization import is_runtime_identifier_parameter
 from agent.tool_refinement.models import (
     DraftExploration,
@@ -30,7 +29,9 @@ from agent.tool_refinement.store import ToolRefinementStore
 from agent.utils.tool_output import classify_tool_outcome, compact_tool_output
 from nika.evaluator.result_log import MESSAGES_FILENAME
 
-DRAFT_EXPLORER_REFLECTION_LIMIT = 3
+DRAFT_EXPLORER_REFLECTION_LIMIT = (
+    module_defaults().tool_refinement.explorer_reflection_limit
+)
 
 
 def _flatten_strings(value: Any) -> set[str]:
@@ -312,6 +313,7 @@ async def run_active_exploration(
     convergence_threshold: float,
     exploration_similarity_threshold: float = DRAFT_EXPLORATION_SIMILARITY_THRESHOLD,
     explorer_reflection_limit: int = DRAFT_EXPLORER_REFLECTION_LIMIT,
+    max_tools: int = 4,
     analyzer_model: str | None = None,
     rewriter_model: str | None = None,
 ) -> dict[str, Any]:
@@ -353,7 +355,7 @@ async def run_active_exploration(
         if all(grounded.get(parameter) for parameter in required_identifiers):
             discovery_candidates.append(name)
     discovery_candidates.sort(key=lambda name: (exploration_counts.get(name, 0), name))
-    scheduled_tools = [*used_tools, *discovery_candidates[:1]]
+    scheduled_tools = [*used_tools, *discovery_candidates[:1]][: max(1, max_tools)]
     executed = 0
     skipped: dict[str, str] = {}
 
@@ -470,19 +472,6 @@ async def run_active_exploration(
             ):
                 latest_state.explorations.append(exploration)
             store.save(latest_state)
-        await asyncio.to_thread(
-            rewrite_documentation,
-            store,
-            trials=[trial],
-            tool_descriptions={tool_name: doc.description},
-            metrics={},
-            llm_backend=llm_backend,
-            model=model,
-            analyzer_model=analyzer_model,
-            rewriter_model=rewriter_model,
-            convergence_threshold=convergence_threshold,
-            llm=llm,
-        )
         executed += 1
 
     return {

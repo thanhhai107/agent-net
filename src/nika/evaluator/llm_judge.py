@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 
 # from agent.llm.langchain_deepseek import DeepSeekLLM
 from agent.llm.model_factory import load_model
+from agent.module_config import module_defaults
 from agent.utils.template import LLM_JUDGE_PROMPT_TEMPLATE
 
 load_dotenv()
@@ -53,8 +54,13 @@ class JudgeResponse(BaseModel):
 
 class LLMJudge:
     def __init__(
-        self, judge_llm_provider: str = "openai", judge_model: str = "gpt-5-mini"
+        self,
+        judge_llm_provider: str | None = None,
+        judge_model: str | None = None,
     ):
+        defaults = module_defaults().baseline
+        judge_llm_provider = judge_llm_provider or defaults.judge_provider
+        judge_model = judge_model or defaults.judge_model
         self.llm = load_model(llm_provider=judge_llm_provider, model=judge_model)
         self.llm = self.llm.with_structured_output(JudgeResponse)
         self.prompt = LLM_JUDGE_PROMPT_TEMPLATE

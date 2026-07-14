@@ -15,12 +15,12 @@ def create_agent(
 ) -> Any:
     """Instantiate an agent for ``agent_type``."""
     match agent_type.lower():
-        case "byo.langgraph":
+        case "react" | "byo.langgraph":
             from agent.byo.langgraph.react_agent import BasicReActAgent
 
             if not llm_provider:
                 raise ValueError(
-                    "byo.langgraph agent requires an LLM provider: set NIKA_LLM_PROVIDER in .env or pass -p/--provider."
+                    "react agent requires an LLM provider: set NIKA_LLM_PROVIDER in .env or pass -p/--provider."
                 )
             return BasicReActAgent(
                 session_id=session_id,

@@ -64,6 +64,18 @@ class SessionIndexTestCase(unittest.TestCase):
         self.index.truncate()
         self.assertEqual(len(self.index.list_sessions(running_only=False)), 0)
 
+    def test_delete_session_preserves_failed_terminal_status(self) -> None:
+        session_id = "20260101-120000-abc123"
+        self._create_session(session_id)
+
+        self.store.delete_session(session_id, final_status="failed")
+
+        self.assertFalse((self.sessions_dir / f"{session_id}.json").exists())
+        row = self.index.get_row(session_id)
+        assert row is not None
+        self.assertEqual(row["status"], "failed")
+        self.assertEqual(self.store.list_running_sessions(), [])
+
     def test_rebuild_from_results(self) -> None:
         session_id = "20260103-120000-fff999"
         session_dir = self.results_dir / session_id

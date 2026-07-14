@@ -26,7 +26,7 @@ from nika.cli.commands import procedural_memory as procedural_memory_command
 
 def _config(*, procedural_memory_mode: str = "off") -> AgentRunConfig:
     return AgentRunConfig(
-        agent_type="byo.langgraph",
+        agent_type="react",
         llm_provider="custom",
         model="openai/gpt-oss-120b",
         max_steps=20,
@@ -176,7 +176,7 @@ def test_modules_off_delegates_to_original_nika_runner(monkeypatch) -> None:
 
     assert calls == [
         {
-            "agent_type": "byo.langgraph",
+            "agent_type": "react",
             "llm_provider": "custom",
             "model": "openai/gpt-oss-120b",
             "max_steps": 20,
@@ -184,6 +184,27 @@ def test_modules_off_delegates_to_original_nika_runner(monkeypatch) -> None:
             "stream_output": False,
         }
     ]
+
+
+def test_legacy_langgraph_alias_persists_react_metadata(monkeypatch) -> None:
+    calls: list[dict] = []
+    monkeypatch.setattr(
+        extension_run,
+        "start_nika_agent",
+        lambda **kwargs: calls.append(kwargs),
+    )
+
+    extension_run.start_agent(
+        AgentRunConfig(
+            agent_type="byo.langgraph",
+            llm_provider="custom",
+            model="openai/gpt-oss-120b",
+            max_steps=20,
+        ),
+        session_id="session-1",
+    )
+
+    assert calls[0]["agent_type"] == "react"
 
 
 def test_custom_url_is_mapped_without_changing_core_factory(monkeypatch) -> None:
@@ -569,11 +590,11 @@ def test_baseline_fault_row_routes_to_upstream_single_case(
     )
 
     assert result == 0
-    assert calls[0]["agent_type"] == "byo.langgraph"
+    assert calls[0]["agent_type"] == "react"
     assert calls[0]["llm_provider"] == "custom"
 
 
-def test_benchmark_switches_memory_to_read_after_evolve_cutoff(
+def test_benchmark_switches_both_modules_to_read_after_evolve_cutoff(
     monkeypatch, tmp_path: Path
 ) -> None:
     benchmark = tmp_path / "benchmark.yaml"
@@ -584,7 +605,7 @@ def test_benchmark_switches_memory_to_read_after_evolve_cutoff(
         "  - {scenario: simple_bgp, problem: no_fault, inject: {}}\n",
         encoding="utf-8",
     )
-    modes: list[str] = []
+    modes: list[tuple[str, str, bool]] = []
     monkeypatch.setattr(
         benchmark_extension,
         "scan_benchmark_cases",
@@ -592,7 +613,13 @@ def test_benchmark_switches_memory_to_read_after_evolve_cutoff(
     )
 
     def run_case(_row, *, config, **_kwargs):
-        modes.append(config.procedural_memory.mode)
+        modes.append(
+            (
+                config.procedural_memory.mode,
+                config.tool_refinement.learning_mode,
+                config.tool_refinement.update_due,
+            )
+        )
         index = len(modes)
         return f"session-{index}", tmp_path / f"session-{index}"
 
@@ -611,7 +638,7 @@ def test_benchmark_switches_memory_to_read_after_evolve_cutoff(
             judge=False,
             judge_provider=None,
             judge_model=None,
-            tool_refinement=None,
+            tool_refinement="shared-tools",
             tool_refinement_doc_chars=500,
             tool_refinement_convergence_threshold=0.75,
             procedural_memory="shared-bank",
@@ -629,4 +656,7 @@ def test_benchmark_switches_memory_to_read_after_evolve_cutoff(
     )
 
     assert result == 0
-    assert modes == ["evolve", "read"]
+    assert modes == [
+        ("evolve", "evolve", True),
+        ("read", "read", False),
+    ]

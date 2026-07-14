@@ -34,6 +34,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Streamlit-based experiment and result dashboards.
+studio = ["streamlit>=1.40"]
 # SADE community agent (src/agent/community/sade) drives Claude Code via the SDK.
 sade = ["claude-agent-sdk"]
 # SDK agents (src/agent/sdk/claude_sdk, src/agent/sdk/codex_sdk).

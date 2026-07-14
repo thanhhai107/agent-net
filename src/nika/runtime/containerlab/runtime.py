@@ -10,7 +10,7 @@ from typing import Any
 
 import docker
 
-from nika.runtime.base import LabRuntime
+from nika.runtime.base import LabCleanupError, LabRuntime
 from nika.runtime.containerlab.parse import parse_clab_topology
 from nika.runtime.docker_ops import pause_container, unpause_container
 from nika.runtime.exec_utils import exec_with_timeout
@@ -131,8 +131,9 @@ class ContainerlabRuntime(LabRuntime):
             "--cleanup",
         )
         if result.returncode != 0:
-            print(
-                f"Error destroying containerlab lab {self._lab_name}: {result.stderr or result.stdout}"
+            raise LabCleanupError(
+                f"Error destroying containerlab lab {self._lab_name}: "
+                f"{result.stderr or result.stdout}"
             )
         self._node_containers = {}
 

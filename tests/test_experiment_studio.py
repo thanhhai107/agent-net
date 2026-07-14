@@ -3,7 +3,9 @@ from __future__ import annotations
 import sys
 import json
 from pathlib import Path
+from unittest.mock import Mock
 
+from agent.module_config import load_module_defaults
 from agent.extensions.config import (
     DEFAULT_LLM_PROVIDER as DEFAULT_LLM_BACKEND,
     DEFAULT_MODEL,
@@ -72,6 +74,55 @@ def test_baseline_command_uses_default_sequential_execution() -> None:
     assert "--parallel" not in command
 
 
+def test_empty_studio_config_uses_yaml_defaults() -> None:
+    command = build_experiment_command(
+        {
+            "modules": ["tool_refinement", "procedural_memory"],
+            "procedural_memory_evolve_until": 75,
+        }
+    )
+
+    assert command[command.index("--config") + 1] == DEFAULT_STUDIO_BENCHMARK
+    assert command[command.index("--max-steps") + 1] == "50"
+    assert command[command.index("--tool-refinement-explorer-model") + 1] == (
+        "openai/gpt-oss-120b"
+    )
+    assert command[command.index("--procedural-memory-evolver-model") + 1] == (
+        "openai/gpt-oss-120b"
+    )
+    assert command[command.index("--evolve-until") + 1] == "75"
+    assert command[command.index("--tool-refinement-update-interval") + 1] == "6"
+    assert command[command.index("--procedural-memory-verifier") + 1] == (
+        "behavioral_replay"
+    )
+
+
+def test_create_run_snapshots_module_config(monkeypatch, tmp_path: Path) -> None:
+    class Process:
+        pid = 123
+
+    monkeypatch.setattr(experiment_runner, "RUNS_DIR", tmp_path / "runs")
+    monkeypatch.setattr(experiment_runner, "RESULTS_DIR", tmp_path / "results")
+    monkeypatch.setattr(experiment_runner, "list_runs", lambda: [])
+    monkeypatch.setattr(
+        experiment_runner.subprocess, "Popen", lambda *_a, **_k: Process()
+    )
+    monkeypatch.setattr(
+        experiment_runner,
+        "next_experiment_id",
+        lambda _benchmark: "experiment-01",
+    )
+
+    run_dir = experiment_runner.create_run(
+        {"benchmark_file": DEFAULT_STUDIO_BENCHMARK, "modules": []}
+    )
+    spec = json.loads((run_dir / "spec.json").read_text(encoding="utf-8"))
+    snapshot = Path(spec["config"]["module_config_snapshot"])
+
+    assert snapshot == run_dir / "modules.yaml"
+    assert load_module_defaults(snapshot) == experiment_runner.RESOLVED_MODULE_DEFAULTS
+
+
 def test_studio_launcher_forces_light_theme(monkeypatch) -> None:
     commands: list[list[str]] = []
     monkeypatch.setattr(
@@ -88,23 +139,133 @@ def test_studio_launcher_forces_light_theme(monkeypatch) -> None:
 
     command = commands[0]
     assert command[command.index("--theme.base") + 1] == "light"
+    assert command[command.index("--server.fileWatcherType") + 1] == "none"
+
+
+def test_stop_run_sends_one_sigterm_and_waits_for_cleanup(
+    monkeypatch, tmp_path: Path
+) -> None:
+    run_dir = tmp_path / "experiment-01"
+    run_dir.mkdir()
+    signals: list[int] = []
+    states = iter((True, False, False))
+
+    monkeypatch.setattr(
+        experiment_runner,
+        "_read_json",
+        lambda _path: {"pid": 123, "status": "running"},
+    )
+    monkeypatch.setattr(experiment_runner, "_write_run_meta", lambda *_a: None)
+    monkeypatch.setattr(experiment_runner, "_append_run_log", lambda *_a: None)
+    monkeypatch.setattr(
+        experiment_runner.os,
+        "killpg",
+        lambda _pid, sig: signals.append(sig),
+    )
+    monkeypatch.setattr(
+        experiment_runner,
+        "_process_group_running",
+        lambda _pid: next(states),
+    )
+    monkeypatch.setattr(experiment_runner.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(experiment_runner, "clean_emulation_environment", lambda: None)
+    monkeypatch.setattr(experiment_runner, "check_and_start_next_queued", lambda: None)
+
+    experiment_runner.stop_run(run_dir)
+
+    assert signals == [experiment_runner.signal.SIGTERM]
+
+
+def test_stop_run_does_not_start_queue_when_cleanup_fails(
+    monkeypatch, tmp_path: Path
+) -> None:
+    run_dir = tmp_path / "experiment-01"
+    run_dir.mkdir()
+    written: list[dict] = []
+    start_next = Mock()
+
+    monkeypatch.setattr(
+        experiment_runner,
+        "_read_json",
+        lambda _path: {"pid": 123, "status": "running"},
+    )
+    monkeypatch.setattr(
+        experiment_runner,
+        "_write_run_meta",
+        lambda _path, meta: written.append(dict(meta)),
+    )
+    monkeypatch.setattr(experiment_runner, "_append_run_log", lambda *_a: None)
+    monkeypatch.setattr(experiment_runner.os, "killpg", lambda *_a: None)
+    monkeypatch.setattr(
+        experiment_runner, "_process_group_running", lambda _pid: False
+    )
+    monkeypatch.setattr(experiment_runner, "_pid_running", lambda _pid: False)
+    monkeypatch.setattr(
+        experiment_runner,
+        "clean_emulation_environment",
+        Mock(side_effect=RuntimeError("cleanup failed")),
+    )
+    monkeypatch.setattr(experiment_runner, "check_and_start_next_queued", start_next)
+
+    experiment_runner.stop_run(run_dir)
+
+    assert written[-1]["status"] == "failed"
+    assert "cleanup failed" in written[-1]["cleanup_error"]
+    start_next.assert_not_called()
 
 
 def test_result_summary_uses_selected_benchmark_metrics() -> None:
     from nika.visualization.experiment_dashboard import RESULT_SUMMARY_COLUMNS
 
     metrics = [
+        "incident_success",
         "detection_score",
         "localization_f1",
         "rca_f1",
-        "localization_precision",
-        "rca_precision",
         "tool_calls",
         "tool_errors",
     ]
     assert [column for column in RESULT_SUMMARY_COLUMNS if column in metrics] == metrics
     assert "progress" not in RESULT_SUMMARY_COLUMNS
+    assert "localization_precision" not in RESULT_SUMMARY_COLUMNS
+    assert "rca_precision" not in RESULT_SUMMARY_COLUMNS
     assert "total_tokens" not in RESULT_SUMMARY_COLUMNS
+
+
+def test_result_table_uses_explicit_arrow_column_types() -> None:
+    import pyarrow as pa
+
+    from nika.visualization.experiment_dashboard import _results_dataframe
+
+    table = _results_dataframe(
+        [
+            {
+                "result_root": "results/experiment-01",
+                "modules": "Tool Refinement, Procedural Memory",
+                "duration": "2435s",
+                "detection_score": 0.9,
+            }
+        ],
+        ["result_root", "modules", "duration", "detection_score"],
+    )
+
+    assert table.schema.field("result_root").type == pa.string()
+    assert table.schema.field("modules").type == pa.string()
+    assert table.schema.field("duration").type == pa.string()
+    assert table.schema.field("detection_score").type == pa.float64()
+
+
+def test_result_html_table_escapes_result_values() -> None:
+    from nika.visualization.experiment_dashboard import _results_table_html
+
+    rendered = _results_table_html(
+        [{"result_root": "<unsafe>", "detection_score": 0.9}],
+        ["result_root", "detection_score"],
+    )
+
+    assert "<table" in rendered
+    assert "&lt;unsafe&gt;" in rendered
+    assert ">0.90<" in rendered
 
 
 def test_clean_control_composite_requires_false_detection_and_empty_sets() -> None:
@@ -137,7 +298,7 @@ def test_studio_counts_benchmark_with_clean_controls(tmp_path: Path) -> None:
     assert _default_evolve_cases(benchmark, row_count=1) == 1
 
 
-def test_evaluate_benchmark_declares_curriculum_cutoff() -> None:
+def test_evolve_benchmark_declares_curriculum_cutoff() -> None:
     from nika.visualization.experiment_dashboard import (
         DEFAULT_STUDIO_BENCHMARK,
         _count_rows,
@@ -148,7 +309,8 @@ def test_evaluate_benchmark_declares_curriculum_cutoff() -> None:
     row_count = _count_rows(benchmark)
 
     assert row_count == 125
-    assert _default_evolve_cases(benchmark, row_count=row_count) == 54
+    assert benchmark.name == "benchmark_evolve.yaml"
+    assert _default_evolve_cases(benchmark, row_count=row_count) == 75
 
 
 def test_command_fallbacks_match_studio_defaults(monkeypatch) -> None:
@@ -245,7 +407,7 @@ def test_tool_and_memory_modules_share_one_sequential_command() -> None:
     assert command[command.index("--procedural-memory-policy-scorer-model") + 1] == (
         "policy-model"
     )
-    assert command[command.index("--procedural-memory-evolve-until") + 1] == "12"
+    assert command[command.index("--evolve-until") + 1] == "12"
 
 
 def test_procedural_memory_read_mode_uses_read_only_flag() -> None:
@@ -258,7 +420,7 @@ def test_procedural_memory_read_mode_uses_read_only_flag() -> None:
 
     assert "--procedural-memory-read" in command
     assert "--procedural-memory" not in command
-    assert "--procedural-memory-evolve-until" not in command
+    assert "--evolve-until" not in command
 
 
 def test_command_plan_for_memory_has_no_service_prerequisite() -> None:
@@ -271,11 +433,8 @@ def test_command_plan_for_memory_has_no_service_prerequisite() -> None:
     assert len(plan) == 1
     assert plan[0].variant == "benchmark"
     assert plan[0].name == "ReAct + Procedural Memory"
-    assert "--procedural-memory-evolve-until" in plan[0].command
-    assert (
-        plan[0].command[plan[0].command.index("--procedural-memory-evolve-until") + 1]
-        == "12"
-    )
+    assert "--evolve-until" in plan[0].command
+    assert plan[0].command[plan[0].command.index("--evolve-until") + 1] == "12"
 
 
 def test_prepare_experiment_config_uses_one_sequential_name_for_outputs(
@@ -285,7 +444,7 @@ def test_prepare_experiment_config_uses_one_sequential_name_for_outputs(
     monkeypatch.setattr(
         experiment_runner,
         "next_experiment_id",
-        lambda _benchmark: "benchmark_test-0007",
+        lambda _benchmark: "experiment-07",
     )
     monkeypatch.setattr(experiment_runner, "RESULTS_DIR", tmp_path / "results")
 
@@ -298,11 +457,11 @@ def test_prepare_experiment_config_uses_one_sequential_name_for_outputs(
     )
     command = build_experiment_command(prepared)
 
-    assert prepared["experiment_id"] == "benchmark_test-0007"
-    assert prepared["result_root"] == str(tmp_path / "results" / "benchmark_test-0007")
-    assert command[command.index("--result-dir") + 1].endswith("benchmark_test-0007")
-    assert command[command.index("--tool-refinement") + 1] == "benchmark_test-0007"
-    assert command[command.index("--procedural-memory") + 1] == "benchmark_test-0007"
+    assert prepared["experiment_id"] == "experiment-07"
+    assert prepared["result_root"] == str(tmp_path / "results" / "experiment-07")
+    assert command[command.index("--result-dir") + 1].endswith("experiment-07")
+    assert command[command.index("--tool-refinement") + 1] == "experiment-07"
+    assert command[command.index("--procedural-memory") + 1] == "experiment-07"
 
 
 def test_resume_command_uses_existing_result_root() -> None:
@@ -422,6 +581,8 @@ def test_parse_progress_events_reads_benchmark_and_ui_events() -> None:
                 'ui_run_resumed {"run_id": "benchmark_test-0001"}',
                 "benchmark_progress index=1/30 completed=1 failed=0 session_id=s1",
                 "benchmark_skip index=2/30 completed=2 failed=0 skipped=1",
+                "benchmark_done session_id=s3 scenario=ospf_enterprise_dhcp problem=dns_record_error session_dir=/tmp/s3",
+                "benchmark_done index=3/30 scenario=ospf_enterprise_dhcp topo_size=m problem=dns_record_error session_id=s3 session_dir=/tmp/s3",
                 'ui_run_stopped {"reason": "user_stop"}',
                 'ui_run_done {"exit_code": 0}',
             ]
@@ -433,13 +594,16 @@ def test_parse_progress_events_reads_benchmark_and_ui_events() -> None:
         "ui_run_resumed",
         "benchmark_progress",
         "benchmark_skip",
+        "benchmark_done",
         "ui_run_stopped",
         "ui_run_done",
     ]
     assert rows[2]["completed"] == "1"
     assert rows[3]["skipped"] == "1"
-    assert rows[4]["reason"] == "user_stop"
-    assert rows[5]["exit_code"] == "0"
+    assert rows[4]["index"] == "3/30"
+    assert rows[4]["topo_size"] == "m"
+    assert rows[5]["reason"] == "user_stop"
+    assert rows[6]["exit_code"] == "0"
 
 
 def test_result_aggregation_excludes_clean_controls_from_localization_and_rca(
@@ -460,7 +624,7 @@ def test_result_aggregation_excludes_clean_controls_from_localization_and_rca(
                 {
                     "session_id": name,
                     "status": "finished",
-                    "agent_type": "byo.langgraph",
+                    "agent_type": "react",
                     "model": "openai/gpt-oss-120b",
                     "problem_names": ["link_down" if is_anomaly else "no_fault"],
                 }

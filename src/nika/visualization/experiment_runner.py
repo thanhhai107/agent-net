@@ -7,12 +7,19 @@ import os
 import signal
 import subprocess
 import sys
+import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from agent.composition import ProceduralMemoryConfig, ToolRefinementConfig
+from agent.module_config import (
+    ENV_MODULE_CONFIG_PATH,
+    module_defaults,
+)
 from agent.extensions.config import (
     DEFAULT_LLM_PROVIDER as DEFAULT_LLM_BACKEND,
     DEFAULT_MODEL,
@@ -20,13 +27,19 @@ from agent.extensions.config import (
 from nika.config import RESULTS_DIR, RUNTIME_DIR, _REPO_ROOT
 from nika.config import BENCHMARK_DIR
 from nika.utils.experiment_naming import next_experiment_id
+from nika.workflows.session.close import clean_emulation_environment
 
 RUNS_DIR = RUNTIME_DIR / "streamlit_runs"
 LOG_FILENAME = "run.log"
 SPEC_FILENAME = "spec.json"
 META_FILENAME = "meta.json"
-DEFAULT_STUDIO_BENCHMARK = str(BENCHMARK_DIR / "benchmark_evaluate.yaml")
-DEFAULT_STUDIO_MAX_STEPS = 50
+MODULE_CONFIG_SNAPSHOT_FILENAME = "modules.yaml"
+RESOLVED_MODULE_DEFAULTS = module_defaults()
+BASELINE_DEFAULTS = RESOLVED_MODULE_DEFAULTS.baseline
+TOOL_MODULE_DEFAULTS = RESOLVED_MODULE_DEFAULTS.tool_refinement
+MEMORY_MODULE_DEFAULTS = RESOLVED_MODULE_DEFAULTS.procedural_memory
+DEFAULT_STUDIO_BENCHMARK = str(BENCHMARK_DIR / BASELINE_DEFAULTS.benchmark)
+DEFAULT_STUDIO_MAX_STEPS = BASELINE_DEFAULTS.max_steps
 TOOL_REFINEMENT_DEFAULTS = ToolRefinementConfig()
 PROCEDURAL_MEMORY_DEFAULTS = ProceduralMemoryConfig()
 
@@ -68,7 +81,7 @@ def _int(value: Any, default: int) -> int:
 def _common_agent_args(
     config: dict[str, Any],
     *,
-    default_agent: str = "react",
+    default_agent: str = BASELINE_DEFAULTS.agent_type,
 ) -> list[str]:
     return [
         "--agent",
@@ -80,24 +93,24 @@ def _common_agent_args(
         "--max-steps",
         str(_int(config.get("max_steps"), DEFAULT_STUDIO_MAX_STEPS)),
         "--max-attempts",
-        str(_int(config.get("max_attempts"), 3)),
+        str(_int(config.get("max_attempts"), BASELINE_DEFAULTS.max_attempts)),
     ]
 
 
 def _judge_args(config: dict[str, Any]) -> list[str]:
-    if not config.get("run_judge"):
+    if not config.get("run_judge", BASELINE_DEFAULTS.judge_evaluation):
         return []
     return [
         "--judge",
         "--judge-provider",
         _str(
             config.get("judge_backend"),
-            _str(config.get("llm_backend"), DEFAULT_LLM_BACKEND),
+            BASELINE_DEFAULTS.judge_provider,
         ),
         "--judge-model",
         _str(
             config.get("judge_model"),
-            _str(config.get("model"), DEFAULT_MODEL),
+            BASELINE_DEFAULTS.judge_model,
         ),
     ]
 
@@ -127,7 +140,8 @@ def selected_modules(config: dict[str, Any]) -> set[str]:
 
 
 def agent_type(config: dict[str, Any]) -> str:
-    return str(config.get("agent_type") or "react").lower()
+    configured = str(config.get("agent_type") or BASELINE_DEFAULTS.agent_type).lower()
+    return "react" if configured == "byo.langgraph" else configured
 
 
 def _command_experiment_id(config: dict[str, Any]) -> str:
@@ -197,17 +211,43 @@ def build_experiment_command(config: dict[str, Any]) -> list[str]:
                 "--tool-refinement-explorer-model",
                 _str(
                     config.get("tool_explorer_model"),
-                    _str(config.get("model"), DEFAULT_MODEL),
+                    TOOL_MODULE_DEFAULTS.llm_model,
                 ),
                 "--tool-refinement-analyzer-model",
                 _str(
                     config.get("tool_analyzer_model"),
-                    _str(config.get("model"), DEFAULT_MODEL),
+                    TOOL_MODULE_DEFAULTS.llm_model,
                 ),
                 "--tool-refinement-rewriter-model",
                 _str(
                     config.get("tool_rewriter_model"),
-                    _str(config.get("model"), DEFAULT_MODEL),
+                    TOOL_MODULE_DEFAULTS.llm_model,
+                ),
+                "--tool-refinement-update-interval",
+                str(
+                    _int(
+                        config.get("tool_update_interval"),
+                        TOOL_REFINEMENT_DEFAULTS.update_interval,
+                    )
+                ),
+                "--tool-refinement-min-new-trials",
+                str(
+                    _int(
+                        config.get("tool_min_new_trials"),
+                        TOOL_REFINEMENT_DEFAULTS.min_new_trials,
+                    )
+                ),
+                "--tool-refinement-max-tools-per-update",
+                str(
+                    _int(
+                        config.get("tool_max_tools_per_update"),
+                        TOOL_REFINEMENT_DEFAULTS.max_tools_per_update,
+                    )
+                ),
+                "--tool-refinement-publish-min-utility",
+                _str(
+                    config.get("tool_publish_min_utility"),
+                    str(TOOL_REFINEMENT_DEFAULTS.publish_min_utility),
                 ),
             ]
         )
@@ -307,20 +347,44 @@ def build_experiment_command(config: dict[str, Any]) -> list[str]:
                 "--procedural-memory-evolver-model",
                 _str(
                     config.get("procedural_memory_evolver_model"),
-                    _str(config.get("model"), DEFAULT_MODEL),
+                    MEMORY_MODULE_DEFAULTS.llm_model,
                 ),
                 "--procedural-memory-policy-scorer-model",
                 _str(
                     config.get("procedural_memory_policy_scorer_model"),
-                    _str(config.get("model"), DEFAULT_MODEL),
+                    MEMORY_MODULE_DEFAULTS.skill_logprob_model,
+                ),
+                "--procedural-memory-verifier",
+                _str(
+                    config.get("procedural_memory_verifier"),
+                    PROCEDURAL_MEMORY_DEFAULTS.verifier,
+                ),
+                "--procedural-memory-holdout-size",
+                str(
+                    _int(
+                        config.get("procedural_memory_holdout_size"),
+                        PROCEDURAL_MEMORY_DEFAULTS.holdout_size,
+                    )
+                ),
+                "--procedural-memory-min-positive-advantage",
+                str(
+                    _int(
+                        config.get("procedural_memory_min_positive_advantage"),
+                        PROCEDURAL_MEMORY_DEFAULTS.min_positive_advantage,
+                    )
                 ),
             ]
         )
-        evolve_until = config.get("procedural_memory_evolve_until")
-        if procedural_memory_mode != "read" and evolve_until is not None:
-            command.extend(
-                ["--procedural-memory-evolve-until", str(_int(evolve_until, 0))]
-            )
+    evolve_until = config.get(
+        "learning_evolve_until",
+        config.get("procedural_memory_evolve_until"),
+    )
+    if (
+        evolve_until is not None
+        and (tool_enabled or procedural_memory_mode != "read")
+        and (tool_enabled or procedural_memory_enabled)
+    ):
+        command.extend(["--evolve-until", str(_int(evolve_until, 0))])
     return command
 
 
@@ -338,6 +402,7 @@ def build_command_plan(config: dict[str, Any]) -> list[CommandPlan]:
 
 def prepare_experiment_config(config: dict[str, Any]) -> dict[str, Any]:
     prepared = dict(config)
+    prepared["agent_type"] = agent_type(prepared)
     benchmark_file = _str(prepared.get("benchmark_file"), DEFAULT_STUDIO_BENCHMARK)
     run_id = _str(prepared.get("experiment_id"), "")
     if not run_id:
@@ -398,6 +463,16 @@ def create_run(config: dict[str, Any]) -> Path:
     run_id = str(config["experiment_id"])
     run_dir = RUNS_DIR / run_id
     run_dir.mkdir(parents=True, exist_ok=False)
+    module_snapshot = run_dir / MODULE_CONFIG_SNAPSHOT_FILENAME
+    module_snapshot.write_text(
+        yaml.safe_dump(
+            asdict(RESOLVED_MODULE_DEFAULTS),
+            sort_keys=False,
+            allow_unicode=True,
+        ),
+        encoding="utf-8",
+    )
+    config["module_config_snapshot"] = str(module_snapshot)
     plan = build_command_plan(config)
     spec = {
         "run_id": run_id,
@@ -470,6 +545,20 @@ def resume_run(run_dir: Path) -> Path:
         raise ValueError(f"Run {source_run_id} is already {current_status}.")
 
     config = prepare_resume_config(spec, resume_run_id=source_run_id)
+    module_snapshot = Path(
+        str(config.get("module_config_snapshot") or "").strip()
+        or run_dir / MODULE_CONFIG_SNAPSHOT_FILENAME
+    )
+    if not module_snapshot.exists():
+        module_snapshot.write_text(
+            yaml.safe_dump(
+                asdict(RESOLVED_MODULE_DEFAULTS),
+                sort_keys=False,
+                allow_unicode=True,
+            ),
+            encoding="utf-8",
+        )
+    config["module_config_snapshot"] = str(module_snapshot)
     plan = build_command_plan(config)
     updated_spec = {
         **spec,
@@ -613,12 +702,26 @@ def _pid_running(pid: int | None) -> bool:
     return True
 
 
+def _process_group_running(pgid: int | None) -> bool:
+    if not pgid:
+        return False
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
 def run_status(run_dir: Path) -> dict[str, Any]:
     meta = _read_json(run_dir / META_FILENAME)
     if meta.get("status") == "queued":
         return {**meta, "status": "queued", "exit_code": None}
     if meta.get("status") == "stopped":
         return {**meta, "status": "stopped", "exit_code": None}
+    if meta.get("status") == "failed":
+        return {**meta, "status": "failed", "exit_code": 1}
     log_lines = read_run_log(run_dir).splitlines()
     last_resume = -1
     for index, line in enumerate(log_lines):
@@ -722,21 +825,33 @@ def stop_run(run_dir: Path) -> None:
         os.killpg(pid, signal.SIGTERM)
     except ProcessLookupError:
         pass
-    for _ in range(20):
-        if not _pid_running(pid):
+    for _ in range(150):
+        _pid_running(pid)
+        if not _process_group_running(pid):
             break
-        try:
-            os.killpg(pid, signal.SIGTERM)
-        except ProcessLookupError:
-            break
-        import time
-
         time.sleep(0.2)
-    if _pid_running(pid):
+    _pid_running(pid)
+    if _process_group_running(pid):
         try:
             os.killpg(pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
+
+    try:
+        clean_emulation_environment()
+    except Exception as exc:
+        meta["status"] = "failed"
+        meta["cleanup_error"] = f"{type(exc).__name__}: {exc}"
+        _write_run_meta(run_dir, meta)
+        _append_run_log(
+            run_dir,
+            "ui_cleanup_failed "
+            + json.dumps(
+                {"error_type": type(exc).__name__, "error": str(exc)},
+                ensure_ascii=False,
+            ),
+        )
+        return
 
     check_and_start_next_queued()
 
@@ -784,6 +899,12 @@ def parse_progress_events(log_text: str) -> list[dict[str, str]]:
                     continue
                 key, value = part.split("=", 1)
                 row[key] = value
+            # The upstream single-case runner historically emitted a second,
+            # context-free completion line inside Studio's enriched batch event.
+            # It has no case index, topology size, or inject parameters and must
+            # not be rendered as a separate case.
+            if event == "benchmark_done" and "index" not in row:
+                continue
         rows.append(row)
     return rows
 
@@ -791,56 +912,69 @@ def parse_progress_events(log_text: str) -> list[dict[str, str]]:
 def run_spec_file(spec_path: str | Path) -> int:
     spec = _read_json(Path(spec_path))
     commands = spec.get("commands") or []
+    config = spec.get("config") or {}
     exit_code = 0
     total = len(commands)
-    for index, item in enumerate(commands, start=1):
-        name = str(item.get("name") or f"step-{index}")
-        command = [str(part) for part in item.get("command") or []]
-        print(
-            "ui_step_start "
-            + json.dumps(
-                {"index": index, "total": total, "name": name, "command": command},
-                ensure_ascii=False,
-            ),
-            flush=True,
-        )
-        try:
-            import os
-
-            sub_env = os.environ.copy()
-            sub_env["PYTHONUNBUFFERED"] = "1"
-            proc = subprocess.Popen(
-                command,
-                cwd=_REPO_ROOT,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,
-                env=sub_env,
+    previous_sigterm = signal.signal(signal.SIGTERM, lambda _signum, _frame: None)
+    try:
+        for index, item in enumerate(commands, start=1):
+            name = str(item.get("name") or f"step-{index}")
+            command = [str(part) for part in item.get("command") or []]
+            print(
+                "ui_step_start "
+                + json.dumps(
+                    {
+                        "index": index,
+                        "total": total,
+                        "name": name,
+                        "command": command,
+                    },
+                    ensure_ascii=False,
+                ),
+                flush=True,
             )
-            assert proc.stdout is not None
-            for line in proc.stdout:
-                print(line, end="", flush=True)
-            return_code = proc.wait()
-        except OSError as exc:
-            return_code = 127
-            print(f"Failed to start command: {exc}", flush=True)
-        print(
-            "ui_step_done "
-            + json.dumps(
-                {
-                    "index": index,
-                    "total": total,
-                    "name": name,
-                    "returncode": return_code,
-                },
-                ensure_ascii=False,
-            ),
-            flush=True,
-        )
-        if return_code != 0:
-            exit_code = return_code
-            break
+            try:
+                sub_env = os.environ.copy()
+                sub_env["PYTHONUNBUFFERED"] = "1"
+                module_snapshot = str(
+                    config.get("module_config_snapshot") or ""
+                ).strip()
+                if module_snapshot:
+                    sub_env[ENV_MODULE_CONFIG_PATH] = module_snapshot
+                proc = subprocess.Popen(
+                    command,
+                    cwd=_REPO_ROOT,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    bufsize=1,
+                    env=sub_env,
+                )
+                assert proc.stdout is not None
+                for line in proc.stdout:
+                    print(line, end="", flush=True)
+                return_code = proc.wait()
+            except OSError as exc:
+                return_code = 127
+                print(f"Failed to start command: {exc}", flush=True)
+            print(
+                "ui_step_done "
+                + json.dumps(
+                    {
+                        "index": index,
+                        "total": total,
+                        "name": name,
+                        "returncode": return_code,
+                    },
+                    ensure_ascii=False,
+                ),
+                flush=True,
+            )
+            if return_code != 0:
+                exit_code = return_code
+                break
+    finally:
+        signal.signal(signal.SIGTERM, previous_sigterm)
     print(
         "ui_run_done " + json.dumps({"exit_code": exit_code}, ensure_ascii=False),
         flush=True,

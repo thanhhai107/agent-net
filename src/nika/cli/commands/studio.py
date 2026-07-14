@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 
@@ -38,12 +39,16 @@ def studio_command(
         "true" if no_browser else "false",
         "--browser.gatherUsageStats",
         "false",
+        "--server.fileWatcherType",
+        "none",
         "--theme.base",
         "light",
     ]
     typer.echo(f"Opening NIKA Experiment Studio at http://{host}:{port}")
+    environment = os.environ.copy()
+    environment.setdefault("PYTHONFAULTHANDLER", "1")
     try:
-        subprocess.run(command, check=True)
+        subprocess.run(command, check=True, env=environment)
     except KeyboardInterrupt:
         typer.echo("\nStudio stopped.")
     except subprocess.CalledProcessError as exc:

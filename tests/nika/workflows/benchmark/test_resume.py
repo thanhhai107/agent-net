@@ -9,7 +9,9 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import Mock, patch
 
+from nika.workflows.benchmark import run as benchmark_run
 from nika.utils.session_artifacts import RUN_FILENAME
 from nika.workflows.benchmark.resume import (
     benchmark_row_fingerprint,
@@ -77,6 +79,18 @@ class BenchmarkResumeTestCase(unittest.TestCase):
         (session_dir / RUN_FILENAME).write_text(json.dumps(run_meta), encoding="utf-8")
         self.assertFalse(is_benchmark_case_complete(session_dir, ROW_A))
 
+    def test_failed_session_with_agent_end_time_is_not_complete(self) -> None:
+        session_dir = self.results_root / "20260101-120000-failed"
+        session_dir.mkdir(parents=True)
+        run_meta = {
+            "session_id": "20260101-120000-failed",
+            "status": "failed",
+            "benchmark_fingerprint": benchmark_row_fingerprint(ROW_A),
+            "end_time": "2026-01-01T12:05:00",
+        }
+        (session_dir / RUN_FILENAME).write_text(json.dumps(run_meta), encoding="utf-8")
+        self.assertFalse(is_benchmark_case_complete(session_dir, ROW_A))
+
     def test_scan_benchmark_cases_skips_completed_and_returns_pending(self) -> None:
         completed_dir = self.results_root / "20260101-120000-done111"
         _write_finished_session(completed_dir, ROW_A, "20260101-120000-done111")
@@ -115,6 +129,46 @@ class BenchmarkResumeTestCase(unittest.TestCase):
         (session_dir / RUN_FILENAME).write_text("{}", encoding="utf-8")
         cleanup_benchmark_session("20260101-120000-bad111", session_dir)
         self.assertFalse(session_dir.exists())
+
+    def test_case_cleans_environment_before_and_after_failure(self) -> None:
+        clean = Mock()
+        store = Mock()
+        store.get_session.return_value = {"session_dir": str(self.results_root)}
+
+        with (
+            patch.object(
+                benchmark_run,
+                "scenario_requires_topo_size",
+                return_value=False,
+            ),
+            patch.object(benchmark_run, "validate_inject_params"),
+            patch.object(benchmark_run, "clean_emulation_environment", clean),
+            patch.object(benchmark_run, "start_net_env", return_value="session-1"),
+            patch.object(benchmark_run, "SessionStore", return_value=store),
+            patch.object(
+                benchmark_run,
+                "inject_failure",
+                side_effect=RuntimeError("inject failed"),
+            ),
+            patch.object(
+                benchmark_run,
+                "close_session_after_failure",
+                return_value=None,
+            ),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "inject failed"):
+                benchmark_run.run_single_case(
+                    problem="link_down",
+                    scenario="simple_bgp",
+                    topo_size="",
+                    agent_type="react",
+                    llm_provider="custom",
+                    model="model",
+                    max_steps=1,
+                    inject_params={"host_name": "pc1", "intf_name": "eth0"},
+                )
+
+        self.assertEqual(clean.call_count, 2)
 
 
 if __name__ == "__main__":

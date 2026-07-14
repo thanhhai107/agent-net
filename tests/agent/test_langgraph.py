@@ -29,7 +29,7 @@ LANGGRAPH_CLAB_MAX_STEPS = 60
 
 
 @unittest.skipUnless(
-    deepseek_api_key_available(), "DEEPSEEK_API_KEY required for byo.langgraph agent"
+    deepseek_api_key_available(), "DEEPSEEK_API_KEY required for react agent"
 )
 class LangGraphAgentPipelineTest(CommonPipelineSteps, OrderedPipelineTestCase):
     """Full pipeline with the LangGraph agent."""
@@ -43,13 +43,13 @@ class LangGraphAgentPipelineTest(CommonPipelineSteps, OrderedPipelineTestCase):
     def test_step_03_run_langgraph_agent(self) -> None:
         self.assertIsNotNone(self.session_id)
         self._run_agent(
-            agent_type="byo.langgraph",
+            agent_type="react",
             llm_provider=LANGGRAPH_PROVIDER,
             model=LANGGRAPH_MODEL,
             max_steps=LANGGRAPH_MAX_STEPS,
         )
         row = SessionStore().get_session(self.session_id)
-        self.assertEqual(row.get("agent_type"), "byo.langgraph")
+        self.assertEqual(row.get("agent_type"), "react")
 
     def test_step_04_check_messages(self) -> None:
         self.assertIsNotNone(self.session_dir)
@@ -60,7 +60,7 @@ class LangGraphAgentPipelineTest(CommonPipelineSteps, OrderedPipelineTestCase):
         assert_submission_fields(self, self.session_dir)
 
     def test_step_06_session_close(self) -> None:
-        self._step_close_and_verify("byo.langgraph")
+        self._step_close_and_verify("react")
 
     def test_step_07_eval_metrics(self) -> None:
         self._step_eval_metrics()
@@ -82,13 +82,13 @@ class LangGraphClabPipelineTest(ClabCommonPipelineSteps, OrderedPipelineTestCase
     def test_step_03_run_langgraph_agent(self) -> None:
         self.assertIsNotNone(self.session_id)
         self._run_agent(
-            agent_type="byo.langgraph",
+            agent_type="react",
             llm_provider=LANGGRAPH_PROVIDER,
             model=LANGGRAPH_MODEL,
             max_steps=LANGGRAPH_CLAB_MAX_STEPS,
         )
         row = SessionStore().get_session(self.session_id)
-        self.assertEqual(row.get("agent_type"), "byo.langgraph")
+        self.assertEqual(row.get("agent_type"), "react")
 
     def test_step_04_check_messages(self) -> None:
         self.assertIsNotNone(self.session_dir)
@@ -99,7 +99,7 @@ class LangGraphClabPipelineTest(ClabCommonPipelineSteps, OrderedPipelineTestCase
         assert_submission_fields(self, self.session_dir)
 
     def test_step_06_session_close(self) -> None:
-        self._step_close_and_verify("byo.langgraph")
+        self._step_close_and_verify("react")
 
     def test_step_07_eval_metrics(self) -> None:
         self._step_eval_metrics()

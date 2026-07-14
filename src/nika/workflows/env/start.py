@@ -9,6 +9,7 @@ from nika.net_env.net_env_pool import (
     scenario_backend,
     scenario_requires_topo_size,
 )
+from nika.runtime.base import LabCleanupError
 from nika.net_env.verify import verify_lab_with_retry
 from nika.utils.logger import (
     bind_session_dir,
@@ -27,6 +28,45 @@ def _normalize_topo_size(raw: str | None) -> Literal["s", "m", "l"] | None:
     if raw not in ("s", "m", "l"):
         raise ValueError("Topology size must be one of: s, m, l.")
     return raw  # type: ignore[return-value]
+
+
+def _record_failed_start(
+    session: Session,
+    net_env,
+    *,
+    error: BaseException,
+) -> Exception | None:
+    """Best-effort rollback for a session whose lab did not start cleanly."""
+    try:
+        net_env.undeploy()
+    except Exception as cleanup_error:
+        try:
+            session.update_session("startup_error", f"{type(error).__name__}: {error}")
+            session.update_session(
+                "cleanup_error",
+                f"{type(cleanup_error).__name__}: {cleanup_error}",
+            )
+        except Exception:
+            pass
+        log_error_event(
+            "env_start_cleanup_failed",
+            f"Failed to clean partially started lab {net_env.name}: {cleanup_error}",
+            session_id=getattr(session, "session_id", None),
+            lab_name=net_env.name,
+            error=str(cleanup_error),
+            error_type=type(cleanup_error).__name__,
+        )
+        return cleanup_error
+
+    session.update_session("startup_error", f"{type(error).__name__}: {error}")
+    session.clear_session(status="failed")
+    log_event(
+        "env_start_cleanup",
+        f"Cleaned partially started lab {net_env.name}.",
+        session_id=getattr(session, "session_id", None),
+        lab_name=net_env.name,
+    )
+    return None
 
 
 def start_net_env(
@@ -85,6 +125,7 @@ def start_net_env(
     )
     bind_session_dir(session.session_dir)
 
+    phase = "deploy"
     try:
         if net_env.lab_exists() and redeploy:
             net_env.undeploy()
@@ -92,6 +133,7 @@ def start_net_env(
         elif not net_env.lab_exists():
             net_env.deploy()
 
+        phase = "verify"
         verify_result = verify_lab_with_retry(net_env)
         if verify_result is not None:
             log_event(
@@ -101,8 +143,8 @@ def start_net_env(
                 lab_name=net_env.name,
                 checks=verify_result.get("checks"),
             )
-    except Exception as exc:
-        event_type = "env_verify_failed" if net_env.lab_exists() else "env_start_failed"
+    except BaseException as exc:
+        event_type = "env_verify_failed" if phase == "verify" else "env_start_failed"
         log_error_event(
             event_type,
             f"Failed to start network environment: {scenario} ({session_id}): {exc}",
@@ -114,6 +156,11 @@ def start_net_env(
             error=str(exc),
             error_type=type(exc).__name__,
         )
+        cleanup_error = _record_failed_start(session, net_env, error=exc)
+        if cleanup_error is not None:
+            raise LabCleanupError(
+                f"Failed to clean partially started lab {net_env.name!r}"
+            ) from exc
         raise
 
     log_event(

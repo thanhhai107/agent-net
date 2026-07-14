@@ -54,10 +54,10 @@ def _limited_yaml_path(source: Path, *, limit: int | None, bank: str) -> Path:
 @procedural_memory_app.command("run")
 def procedural_memory_run(
     file: Path = typer.Option(
-        BENCHMARK_DIR / "benchmark_test.yaml",
+        BENCHMARK_DIR / "benchmark_evolve.yaml",
         "-f",
         "--file",
-        help="Shared Procedural Memory/Tool Refinement benchmark YAML. Defaults to benchmark/benchmark_test.yaml.",
+        help="Shared Procedural Memory/Tool Refinement benchmark YAML. Defaults to benchmark/benchmark_evolve.yaml.",
     ),
     limit: int | None = typer.Option(
         None,

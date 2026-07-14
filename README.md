@@ -84,6 +84,9 @@ cd nika
 # Install dependencies
 uv sync
 
+# Install the Experiment Studio UI as well
+uv sync --extra studio
+
 # Activate the environment
 source .venv/bin/activate
 ```

@@ -18,6 +18,7 @@ Runtime paths (`runtime/`, `results/`, `benchmark/`) resolve from the repository
 | `nika eval` | Metrics, LLM judge, and offline summary CSV for closed sessions |
 | `nika benchmark` | Full pipeline for benchmark YAML rows or a single `(scenario, problem)` case |
 | `nika traffic` | Synthetic traffic (`od`, `web`) against the running lab |
+| `nika studio` | Streamlit Experiment Studio (`uv sync --extra studio`) |
 
 Use `nika <group> --help` and `nika <group> <command> --help` for generated option text.
 
@@ -63,11 +64,10 @@ NIKA_RESULT_DIR=results/gpt4-bgp nika benchmark run --config benchmark/benchmark
 
 Aligned with `nika agent run`:
 
-- **`-a` / `--agent`**: `byo.langgraph`, `byo.mcp_agent`, `byo.autogen`, `local_cli.codex_cli`, `local_cli.claude_cli`, `community.sade`, `sdk.claude_sdk`, or `sdk.codex_sdk`.
-- **`-p` / `--provider`**: LLM provider for `byo.langgraph` only (`openai`, `ollama`, `deepseek`, `custom`).
+- **`-a` / `--agent`**: `react`, `plan-execute`, or `reflexion`.
+- **`-p` / `--provider`**: LLM provider for all workflows (`openai`, `ollama`, `deepseek`, `custom`).
 - **`-m` / `--model`**: model id.
-- **`-n` / `--max-steps`**: max steps per phase (`byo.langgraph`, `byo.mcp_agent`, `byo.autogen`, `community.sade`, `sdk.claude_sdk`).
-- **`-e` / `--reasoning-effort`**: Codex `model_reasoning_effort` (`local_cli.codex_cli`, `sdk.codex_sdk`): `none`, `minimal`, `low`, `medium`, `high`, `xhigh`.
+- **`-n` / `--max-steps`**: max steps per phase.
 
 `nika eval judge` uses **`-p`** and **`-m`** for the judge only (no agent in that command).
 
@@ -128,23 +128,22 @@ Example: `nika exec pc1 ping -c 3 10.0.0.2 --timeout 30`
 
 ## `nika agent`
 
-- **`nika agent list`**: supported agent types (`byo.langgraph`, `byo.mcp_agent`, `byo.autogen`, `local_cli.codex_cli`, `local_cli.claude_cli`, `community.sade`, `sdk.claude_sdk`, `sdk.codex_sdk`), LLM providers, and Codex reasoning-effort levels.
+- **`nika agent list`**: supported workflows (`react`, `plan-execute`, `reflexion`) and LLM providers.
 - **`nika agent run`**: run the agent on one selected session.
 
   | Flag | Applies to | Meaning |
   |------|------------|---------|
-  | `-a` / `--agent` | all | `byo.langgraph`, `byo.mcp_agent`, `byo.autogen`, `local_cli.codex_cli`, `local_cli.claude_cli`, `community.sade`, `sdk.claude_sdk`, or `sdk.codex_sdk` |
-  | `-p` / `--provider` | `byo.langgraph` | `openai`, `ollama`, `deepseek`, or `custom` |
+  | `-a` / `--agent` | all | `react`, `plan-execute`, or `reflexion` |
+  | `-p` / `--provider` | all | `openai`, `ollama`, `deepseek`, or `custom` |
   | `-m` / `--model` | all | model id |
-  | `-n` / `--max-steps` | `byo.langgraph`, `byo.mcp_agent`, `byo.autogen`, `community.sade`, `sdk.claude_sdk` | step cap per phase |
-  | `-e` / `--reasoning-effort` | `local_cli.codex_cli`, `sdk.codex_sdk` | Codex reasoning effort level |
+  | `-n` / `--max-steps` | all | step cap per phase |
   | `--session_id` | all | target session |
 
   Examples:
 
   ```shell
-  nika agent run -a byo.langgraph -p openai -m gpt-5-mini -n 20
-  nika agent run -a local_cli.codex_cli -m gpt-5.4-mini -e medium
+  nika agent run -a react -p openai -m gpt-5-mini -n 20
+  nika agent run -a plan-execute -p openai -m gpt-5-mini -n 20
   ```
 
 ---
@@ -210,7 +209,7 @@ nika benchmark run --result_dir results/list1 --batch-size 4   # resume skips co
 | `topo_size` | Size `s`, `m`, or `l`; **null/empty** for scenarios without sizes |
 | `inject` | Map of `--set key=value` pairs passed to `nika failure inject` |
 
-Agent and judge options use the same flags as below (including `-a local_cli.codex_cli` and `-e` for Codex runs; `-n` applies to `byo.langgraph`, `byo.mcp_agent`, `byo.autogen`, and `community.sade`).
+Agent and judge options use the same flags as below; choose `react`, `plan-execute`, or `reflexion` with `-a`.
 
 ### Single-case mode
 
@@ -218,7 +217,7 @@ Pass **`SCENARIO`** as the first positional argument (like `nika env run NAME`),
 
 ```shell
 nika benchmark run dc_clos_bgp --problem bgp_asn_misconfig -s s \
-  -a byo.langgraph -p openai -m gpt-5-mini -n 20 \
+  -a react -p openai -m gpt-5-mini -n 20 \
   --judge --judge-provider openai --judge-model gpt-5-mini
 ```
 

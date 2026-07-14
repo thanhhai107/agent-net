@@ -168,21 +168,16 @@ class PolicyLogprobScorer:
             for index, transition in enumerate(experience.transitions)
         ]
         for _, _, transition in indexed:
-            expected_behavior_context = self._prefix(transition.state, baseline)
             if not transition.policy_context:
                 raise ValueError(
                     "historical transition has no pre-action policy context"
-                )
-            if transition.policy_context != expected_behavior_context:
-                raise ValueError(
-                    "historical transition policy context does not match behavior skill"
                 )
         candidate_rows = [
             (self._prefix(transition.state, candidate), transition.action)
             for _, _, transition in indexed
         ]
         baseline_rows = [
-            (self._prefix(transition.state, baseline), transition.action)
+            (transition.policy_context, transition.action)
             for _, _, transition in indexed
         ]
         candidate_scores = self._score_targets(candidate_rows)

@@ -77,11 +77,13 @@ def infer_procedural_memory_attributes(
     topology_class: str = "",
     task_stage: str = "diagnosis",
     tools: list[str] | None = None,
+    include_network_context: bool = False,
 ) -> ProceduralMemoryAttributes:
     # Scenario/topology names are stored separately and should not leak broad,
     # always-present design facts (for example OSPF/DHCP in every enterprise
     # task) into the transfer signature.
-    haystack = " ".join([_attribute_text(text), " ".join(tools or [])]).lower()
+    evidence_text = str(text or "") if include_network_context else _attribute_text(text)
+    haystack = " ".join([evidence_text, " ".join(tools or [])]).lower()
     return ProceduralMemoryAttributes(
         protocols=_matches(haystack, PROTOCOL_KEYWORDS),
         services=_matches(haystack, SERVICE_KEYWORDS),

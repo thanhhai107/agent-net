@@ -191,8 +191,11 @@ class ToolDocumentation(BaseModel):
     mastery_score: float = 0.0
     contract_mastery_score: float = 0.0
     diagnostic_utility_score: float = 0.0
+    diagnostic_utility_count: int = 0
+    diagnostic_utility_sessions: list[str] = Field(default_factory=list)
     last_convergence_score: float = 0.0
     version: int = 1
+    published: bool = False
     frozen: bool = False
     frozen_reason: str = ""
     updated_at: str = Field(default_factory=utc_now)
@@ -202,6 +205,7 @@ class ToolDocumentation(BaseModel):
             exclude={
                 "updated_at",
                 "version",
+                "published",
                 "frozen",
                 "frozen_reason",
                 "rewrite_history",
@@ -212,6 +216,8 @@ class ToolDocumentation(BaseModel):
                 "mastery_score",
                 "contract_mastery_score",
                 "diagnostic_utility_score",
+                "diagnostic_utility_count",
+                "diagnostic_utility_sessions",
                 "last_convergence_score",
                 "source_signature",
             }
@@ -279,6 +285,7 @@ class DraftToolState(BaseModel):
     analyzer_suggestions: list[DraftAnalyzerSuggestion] = Field(default_factory=list)
     gaps: list[ComprehensionGap] = Field(default_factory=list)
     revisions: list[DocumentationRevision] = Field(default_factory=list)
+    processed_trial_ids: list[str] = Field(default_factory=list)
     tool_stats: dict[str, DraftToolStats] = Field(default_factory=dict)
     library_usage_description: str = ""
     created_at: str = Field(default_factory=utc_now)

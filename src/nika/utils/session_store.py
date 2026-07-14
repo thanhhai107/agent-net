@@ -73,18 +73,30 @@ class SessionStore:
     def get_session(self, session_id: str) -> dict[str, Any]:
         return self._read(session_id)
 
-    def delete_session(self, session_id: str) -> None:
-        """Remove the runtime session document after results have been persisted."""
+    def delete_session(
+        self,
+        session_id: str,
+        *,
+        final_status: str = "finished",
+    ) -> None:
+        """Remove a runtime session document and preserve its terminal status."""
         doc: dict[str, Any] | None = None
         path = self._path(session_id)
         if path.exists():
             doc = json.loads(path.read_text(encoding="utf-8"))
             path.unlink()
         if doc is not None:
-            doc["status"] = "finished"
-            self.index.mark_finished(session_id, doc=doc)
+            doc["status"] = final_status
+            doc["updated_at"] = _now_iso()
+            self.index.upsert_from_doc(doc)
         else:
-            self.index.mark_finished(session_id)
+            self.index.upsert(
+                {
+                    "session_id": session_id,
+                    "status": final_status,
+                    "updated_at": _now_iso(),
+                }
+            )
 
     def list_running_sessions(self) -> list[dict[str, Any]]:
         return self.index.list_sessions(running_only=True)

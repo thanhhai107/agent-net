@@ -1,4 +1,4 @@
-"""Shared sequential names for benchmark experiments and learning libraries."""
+"""Shared sequential names for experiments and learning libraries."""
 
 from __future__ import annotations
 
@@ -9,17 +9,22 @@ from agent.extensions.config import PROCEDURAL_MEMORY_DIR, TOOL_REFINEMENT_DIR
 from nika.config import RESULTS_DIR, RUNTIME_DIR
 
 STREAMLIT_RUNS_DIR = RUNTIME_DIR / "streamlit_runs"
-SEQUENCE_WIDTH = 4
+SEQUENCE_WIDTH = 2
 
 
 def slugify_experiment_name(raw: str) -> str:
     slug = re.sub(r"[^A-Za-z0-9_.-]+", "-", raw).strip(".-")
-    return slug or "benchmark"
+    return slug or "experiment"
 
 
-def benchmark_stem(benchmark: str | Path) -> str:
-    value = Path(str(benchmark)).stem if str(benchmark) else "benchmark"
-    return slugify_experiment_name(value)
+def experiment_stem(benchmark: str | Path) -> str:
+    del benchmark
+    return "experiment"
+
+
+# Compatibility for callers that imported the old helper. New IDs are always
+# generated through the experiment-prefixed stem above.
+benchmark_stem = experiment_stem
 
 
 def experiment_id(name: str, index: int) -> str:
@@ -48,7 +53,7 @@ def next_experiment_id(
     *,
     roots: list[Path] | None = None,
 ) -> str:
-    stem = benchmark_stem(benchmark)
+    stem = experiment_stem(benchmark)
     roots = roots or [
         Path(RESULTS_DIR),
         STREAMLIT_RUNS_DIR,

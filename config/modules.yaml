@@ -18,6 +18,10 @@ tool_refinement:
   convergence_threshold: 0.75
   exploration_similarity_threshold: 0.9
   explorer_reflection_limit: 3
+  update_interval: 6
+  min_new_trials: 2
+  max_tools_per_update: 8
+  publish_min_utility: 0.3
   guidance_total_token_budget: 480
   guidance_min_token_budget: 120
   guidance_per_tool_token_budget: 120
@@ -41,6 +45,9 @@ procedural_memory:
   baseline_ema_alpha: 0.1
   selection_epsilon_decay_cases: 500
   acceptance_margin: 0.001
+  verifier: behavioral_replay
+  holdout_size: 2
+  min_positive_advantage: 1
   policy_token_budget_min: 120
   policy_token_budget_max: 350
   policy_token_budget_divisor: 2

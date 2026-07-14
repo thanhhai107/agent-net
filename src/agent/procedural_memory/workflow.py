@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from agent.module_config import module_defaults
 from agent.procedural_memory.models import EvaluationEvidence, SkillStep
 from agent.procedural_memory.runtime import (
     strip_integrated_learning_guidance,
@@ -216,6 +217,7 @@ async def update_procedural_memory_from_session(
     metrics: dict[str, Any],
     session_dir: str | Path,
 ) -> dict[str, Any]:
+    defaults = module_defaults().procedural_memory
     if run_meta.get("procedural_memory_mode", "off") != "evolve":
         return {"status": "skipped", "reason": "procedural_memory_mode is not evolve"}
     session_path = Path(session_dir)
@@ -230,24 +232,47 @@ async def update_procedural_memory_from_session(
         bank_id=bank_id,
         llm_backend=run_meta.get("llm_backend"),
         model=run_meta.get("model"),
-        pool_size=_int_meta(run_meta, "procedural_memory_pool_size", 32),
+        pool_size=_int_meta(
+            run_meta, "procedural_memory_pool_size", defaults.pool_size
+        ),
         evolution_threshold=_int_meta(
-            run_meta, "procedural_memory_update_threshold", 6
+            run_meta, "procedural_memory_update_threshold", defaults.evolution_threshold
         ),
-        best_of_n=_int_meta(run_meta, "procedural_memory_best_of_n", 3),
-        ppo_epsilon=_float_meta(run_meta, "procedural_memory_ppo_epsilon", 0.2),
+        best_of_n=_int_meta(
+            run_meta, "procedural_memory_best_of_n", defaults.best_of_n
+        ),
+        ppo_epsilon=_float_meta(
+            run_meta, "procedural_memory_ppo_epsilon", defaults.ppo_epsilon
+        ),
         experience_pool_size=_int_meta(
-            run_meta, "procedural_memory_experience_pool_size", 1000
+            run_meta,
+            "procedural_memory_experience_pool_size",
+            defaults.experience_pool_size,
         ),
-        golden_pool_size=_int_meta(run_meta, "procedural_memory_golden_pool_size", 20),
+        golden_pool_size=_int_meta(
+            run_meta, "procedural_memory_golden_pool_size", defaults.golden_pool_size
+        ),
         baseline_ema_alpha=_float_meta(
-            run_meta, "procedural_memory_baseline_ema_alpha", 0.1
+            run_meta,
+            "procedural_memory_baseline_ema_alpha",
+            defaults.baseline_ema_alpha,
         ),
         selection_epsilon_decay_cases=_int_meta(
-            run_meta, "procedural_memory_selection_epsilon_decay_cases", 500
+            run_meta,
+            "procedural_memory_selection_epsilon_decay_cases",
+            defaults.selection_epsilon_decay_cases,
         ),
         acceptance_margin=_float_meta(
-            run_meta, "procedural_memory_acceptance_margin", 0.001
+            run_meta, "procedural_memory_acceptance_margin", defaults.acceptance_margin
+        ),
+        verifier=str(run_meta.get("procedural_memory_verifier") or defaults.verifier),
+        holdout_size=_int_meta(
+            run_meta, "procedural_memory_holdout_size", defaults.holdout_size
+        ),
+        min_positive_advantage=_int_meta(
+            run_meta,
+            "procedural_memory_min_positive_advantage",
+            defaults.min_positive_advantage,
         ),
         evolver_model=str(run_meta.get("procedural_memory_evolver_model") or ""),
         policy_scorer_model=str(
@@ -283,11 +308,13 @@ async def update_procedural_memory_from_session(
             "procedural_memory_config": {
                 "top_k": _int_meta(run_meta, "procedural_memory_top_k", 5),
                 "token_budget": _int_meta(
-                    run_meta, "procedural_memory_token_budget", 1500
+                    run_meta, "procedural_memory_token_budget", defaults.token_budget
                 ),
                 "selection_policy": "epsilon_then_similarity_top_k_online_value",
                 "selection_epsilon": _float_meta(
-                    run_meta, "procedural_memory_selection_epsilon", 0.3
+                    run_meta,
+                    "procedural_memory_selection_epsilon",
+                    defaults.selection_epsilon,
                 ),
                 "meta_controller": "llm_with_deterministic_fallback",
                 "max_skill_age": _int_meta(
@@ -302,6 +329,9 @@ async def update_procedural_memory_from_session(
                 "baseline_ema_alpha": module.baseline_ema_alpha,
                 "selection_epsilon_decay_cases": (module.selection_epsilon_decay_cases),
                 "acceptance_margin": module.acceptance_margin,
+                "verifier": module.verifier,
+                "holdout_size": module.holdout_size,
+                "min_positive_advantage": module.min_positive_advantage,
                 "evolver_model": module._selected_evolver_model(),
                 "policy_scorer_model": module._selected_policy_scorer_model(),
             },

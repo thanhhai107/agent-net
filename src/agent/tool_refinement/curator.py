@@ -12,6 +12,7 @@ import ast
 import difflib
 import hashlib
 import json
+import math
 import re
 from collections import defaultdict
 from collections.abc import Collection
@@ -25,6 +26,7 @@ from agent.learning_llm import (
     learning_model,
     learning_timeout_seconds,
 )
+from agent.module_config import module_defaults
 from agent.extensions.llm import load_extension_model as load_model
 from agent.tool_refinement.models import (
     ComprehensionGap,
@@ -51,8 +53,9 @@ from nika.evaluator.result_log import MESSAGES_FILENAME
 from nika.utils.session import Session
 
 
-DRAFT_CONVERGENCE_THRESHOLD = 0.75
-DRAFT_EXPLORATION_SIMILARITY_THRESHOLD = 0.9
+_DEFAULTS = module_defaults().tool_refinement
+DRAFT_CONVERGENCE_THRESHOLD = _DEFAULTS.convergence_threshold
+DRAFT_EXPLORATION_SIMILARITY_THRESHOLD = _DEFAULTS.exploration_similarity_threshold
 DIAGNOSIS_AGENT_NAMES = frozenset({DIAGNOSIS, "diagnosis_agent"})
 DRAFT_PROMPT_TEXT_LIMIT = 360
 INTEGRATED_GUIDANCE_MARKER = "[Integrated learning guidance - not evidence]"
@@ -667,17 +670,21 @@ def _invoke_draft_analyzer(
     llm_error: str = "",
 ) -> tuple[DraftAnalyzerSuggestion | None, str]:
     """Run DRAFT's natural-language Analyzer over feedback and revision history."""
-    if not learning_backend(llm_backend) or not learning_model(model):
+    selected_backend = (
+        learning_backend(llm_backend, "tool_refinement") if llm_backend else ""
+    )
+    selected_model = learning_model(model, "tool_refinement") if model else ""
+    if llm is None and (not selected_backend or not selected_model):
         return None, ""
     if llm is None:
         if llm_error:
             return None, llm_error
         try:
             llm = load_model(
-                learning_backend(llm_backend),
-                learning_model(model),
-                timeout=learning_timeout_seconds(),
-                max_retries=learning_max_retries(),
+                selected_backend,
+                selected_model,
+                timeout=learning_timeout_seconds("tool_refinement"),
+                max_retries=learning_max_retries("tool_refinement"),
             )
         except Exception as exc:
             return None, format_learning_error(exc)
@@ -809,8 +816,86 @@ def _refresh_tool_stats(
         convergence_score=doc.last_convergence_score,
         documented_path_rate=documented_path_rate,
         success_path_rate=success_path_rate,
-        mastered=doc.frozen and "converged" in doc.frozen_reason,
+        mastered=(doc.published and doc.frozen and "converged" in doc.frozen_reason),
     )
+
+
+def _diagnostic_outcome_score(metrics: dict[str, Any]) -> float | None:
+    """Return an outcome score without coupling it to documentation mastery."""
+
+    keys = (
+        "detection_score",
+        "localization_f1",
+        "localization_accuracy",
+        "rca_f1",
+        "rca_accuracy",
+    )
+    if not any(key in metrics for key in keys):
+        return None
+
+    def component(prefix: str) -> float:
+        for suffix in ("f1", "accuracy", "precision"):
+            value = metrics.get(f"{prefix}_{suffix}")
+            if value is not None:
+                return max(0.0, min(1.0, float(value)))
+        return 0.0
+
+    detection = max(0.0, min(1.0, float(metrics.get("detection_score") or 0.0)))
+    return (
+        (0.10 * detection)
+        + (0.35 * component("localization"))
+        + (0.55 * component("rca"))
+    )
+
+
+def _update_diagnostic_utility(
+    doc: ToolDocumentation,
+    *,
+    trials: list[ToolTrial],
+    metrics: dict[str, Any],
+) -> None:
+    """Update once per episode, including for documentation-frozen tools."""
+
+    outcome = _diagnostic_outcome_score(metrics)
+    if outcome is None:
+        return
+    by_session: dict[str, list[ToolTrial]] = defaultdict(list)
+    for trial in trials:
+        if trial.session_id:
+            by_session[trial.session_id].append(trial)
+    seen = set(doc.diagnostic_utility_sessions)
+    for session_id, session_trials in sorted(by_session.items()):
+        if session_id in seen:
+            continue
+        reliability = sum(trial.success for trial in session_trials) / max(
+            len(session_trials), 1
+        )
+        count = doc.diagnostic_utility_count
+        doc.diagnostic_utility_score = round(
+            ((doc.diagnostic_utility_score * count) + (outcome * reliability))
+            / (count + 1),
+            6,
+        )
+        doc.diagnostic_utility_count = count + 1
+        doc.diagnostic_utility_sessions = [
+            *doc.diagnostic_utility_sessions[-49:],
+            session_id,
+        ]
+        seen.add(session_id)
+
+
+def _diagnostic_utility_lcb(doc: ToolDocumentation) -> float:
+    """Conservative utility support for bounded episode outcomes.
+
+    Without counterfactual traces, diagnostic utility is associative rather
+    than marginal. A worst-case standard-error term prevents two lucky
+    episodes from being treated like stable evidence.
+    """
+
+    if doc.diagnostic_utility_count <= 0:
+        return 0.0
+    uncertainty = 0.5 / math.sqrt(doc.diagnostic_utility_count)
+    return max(0.0, doc.diagnostic_utility_score - uncertainty)
 
 
 def _draft_rewrite_prompt(
@@ -966,17 +1051,21 @@ def _invoke_draft_rewriter(
     llm: Any | None = None,
     llm_error: str = "",
 ) -> tuple[DraftRewriteProposal | None, str]:
-    if not learning_backend(llm_backend) or not learning_model(model):
+    selected_backend = (
+        learning_backend(llm_backend, "tool_refinement") if llm_backend else ""
+    )
+    selected_model = learning_model(model, "tool_refinement") if model else ""
+    if llm is None and (not selected_backend or not selected_model):
         return None, ""
     if llm is None:
         if llm_error:
             return None, llm_error
         try:
             llm = load_model(
-                learning_backend(llm_backend),
-                learning_model(model),
-                timeout=learning_timeout_seconds(),
-                max_retries=learning_max_retries(),
+                selected_backend,
+                selected_model,
+                timeout=learning_timeout_seconds("tool_refinement"),
+                max_retries=learning_max_retries("tool_refinement"),
             )
         except Exception as exc:
             return None, format_learning_error(exc)
@@ -1077,6 +1166,7 @@ def rewrite_documentation(
     rewriter_model: str | None = None,
     documented_tools_at_start: set[str] | None = None,
     convergence_threshold: float = DRAFT_CONVERGENCE_THRESHOLD,
+    publish_min_utility: float = _DEFAULTS.publish_min_utility,
     llm: Any | None = None,
 ) -> list[DocumentationRevision]:
     with store.exclusive():
@@ -1091,6 +1181,7 @@ def rewrite_documentation(
             rewriter_model=rewriter_model,
             documented_tools_at_start=documented_tools_at_start,
             convergence_threshold=convergence_threshold,
+            publish_min_utility=publish_min_utility,
             llm=llm,
         )
 
@@ -1107,19 +1198,22 @@ def _rewrite_documentation_unlocked(
     rewriter_model: str | None = None,
     documented_tools_at_start: set[str] | None = None,
     convergence_threshold: float = DRAFT_CONVERGENCE_THRESHOLD,
+    publish_min_utility: float = _DEFAULTS.publish_min_utility,
     llm: Any | None = None,
 ) -> list[DocumentationRevision]:
     state = store.load()
-    selected_backend = learning_backend(llm_backend)
+    selected_backend = (
+        learning_backend(llm_backend, "tool_refinement") if llm_backend else ""
+    )
     selected_analyzer_model = (
         analyzer_model.strip()
         if isinstance(analyzer_model, str) and analyzer_model.strip()
-        else learning_model(model)
+        else learning_model(model, "tool_refinement")
     )
     selected_rewriter_model = (
         rewriter_model.strip()
         if isinstance(rewriter_model, str) and rewriter_model.strip()
-        else learning_model(model)
+        else learning_model(model, "tool_refinement")
     )
     role_models: dict[str, tuple[Any | None, str]] = {}
 
@@ -1129,7 +1223,7 @@ def _rewrite_documentation_unlocked(
         selected_model = (
             role_model.strip()
             if isinstance(role_model, str) and role_model.strip()
-            else learning_model(model)
+            else learning_model(model, "tool_refinement")
         )
         if not selected_backend or not selected_model:
             return None, ""
@@ -1140,8 +1234,8 @@ def _rewrite_documentation_unlocked(
                 load_model(
                     selected_backend,
                     selected_model,
-                    timeout=learning_timeout_seconds(),
-                    max_retries=learning_max_retries(),
+                    timeout=learning_timeout_seconds("tool_refinement"),
+                    max_retries=learning_max_retries("tool_refinement"),
                 ),
                 "",
             )
@@ -1183,8 +1277,19 @@ def _rewrite_documentation_unlocked(
             tool_name,
             ToolDocumentation(name=tool_name),
         )
+        _update_diagnostic_utility(doc, trials=tool_trials, metrics=metrics)
         before_hash = doc.content_hash()
         before_description = doc.refined_description(max_chars=4000)
+        if doc.frozen and not doc.published:
+            doc.frozen = False
+            doc.frozen_reason = ""
+        if (
+            doc.frozen
+            and doc.diagnostic_utility_count >= 2
+            and _diagnostic_utility_lcb(doc) < convergence_threshold
+        ):
+            doc.frozen = False
+            doc.frozen_reason = ""
         if doc.frozen:
             _refresh_tool_stats(
                 state=state,
@@ -1354,6 +1459,12 @@ def _rewrite_documentation_unlocked(
         if not doc.tool_usage_description:
             doc.tool_usage_description = _tool_usage_description(doc)
         generalize_tool_documentation(doc, trials=all_evidence_trials)
+        valid_rewrite = (
+            proposal is not None
+            and not contract_rejected
+            and not analyzer_error
+            and not rewriter_error
+        )
 
         after_hash = doc.content_hash()
         after_description = doc.refined_description(max_chars=4000)
@@ -1416,19 +1527,35 @@ def _rewrite_documentation_unlocked(
         )
         doc.mastery_score = doc.contract_mastery_score
 
+        publication_utility_supported = doc.diagnostic_utility_count == 0 or (
+            doc.diagnostic_utility_count >= 2
+            and _diagnostic_utility_lcb(doc) >= publish_min_utility
+        )
+        if (
+            valid_rewrite
+            and publication_utility_supported
+            and diversity_support >= 1.0
+            and documentation_coverage >= 0.5
+        ):
+            doc.published = True
+        elif (
+            doc.diagnostic_utility_count >= 2
+            and _diagnostic_utility_lcb(doc) < publish_min_utility
+        ):
+            doc.published = False
+
         recent_hashes = _recent_revision_hashes(
             state.revisions,
             tool_name,
             source_signature=doc.source_signature,
         )
-        valid_rewrite = (
-            proposal is not None
-            and not contract_rejected
-            and not analyzer_error
-            and not rewriter_error
+        diagnostic_utility_supported = doc.diagnostic_utility_count == 0 or (
+            doc.diagnostic_utility_count >= 2
+            and _diagnostic_utility_lcb(doc) >= convergence_threshold
         )
         unchanged_streak = (
             valid_rewrite
+            and diagnostic_utility_supported
             and len(recent_hashes) >= 1
             and len(set(recent_hashes + [after_hash])) == 1
             and diversity_support >= 1.0
@@ -1436,6 +1563,7 @@ def _rewrite_documentation_unlocked(
         )
         converged = (
             valid_rewrite
+            and diagnostic_utility_supported
             and convergence_score >= convergence_threshold
             and len(doc.rewrite_history) >= 1
             and diversity_support >= 1.0
@@ -1520,6 +1648,10 @@ def finalize_tool_refinement_session(
     *,
     session_id: str,
     metrics: dict[str, Any],
+    rewrite: bool = True,
+    min_new_trials: int = _DEFAULTS.min_new_trials,
+    max_tools_per_update: int = _DEFAULTS.max_tools_per_update,
+    publish_min_utility: float = _DEFAULTS.publish_min_utility,
 ) -> dict[str, Any]:
     session = Session()
     session.load_closed_session(session_id=session_id)
@@ -1541,23 +1673,105 @@ def finalize_tool_refinement_session(
         session_id=session_id,
         task_description=str(getattr(session, "task_description", "") or ""),
     )
-    added_trials = store.record_trials(trials)
+    with store.exclusive():
+        state = store.load()
+        seen_trial_ids = {trial.trial_id for trial in state.trials}
+        added_trials = 0
+        for trial in trials:
+            if trial.trial_id in seen_trial_ids:
+                continue
+            state.trials.append(trial)
+            seen_trial_ids.add(trial.trial_id)
+            added_trials += 1
+        trials_by_tool: dict[str, list[ToolTrial]] = defaultdict(list)
+        for trial in trials:
+            trials_by_tool[trial.tool_name].append(trial)
+        for tool_name, session_trials in trials_by_tool.items():
+            doc = state.documents.setdefault(
+                tool_name,
+                ToolDocumentation(
+                    name=tool_name,
+                    description=tool_descriptions.get(tool_name, "").strip(),
+                ),
+            )
+            _update_diagnostic_utility(
+                doc,
+                trials=session_trials,
+                metrics=metrics,
+            )
+            if (
+                doc.published
+                and doc.diagnostic_utility_count >= 2
+                and _diagnostic_utility_lcb(doc) < publish_min_utility
+            ):
+                doc.published = False
+                doc.frozen = False
+                doc.frozen_reason = ""
+        processed_ids = set(state.processed_trial_ids)
+        pending_trials = [
+            trial for trial in state.trials if trial.trial_id not in processed_ids
+        ]
+        pending_by_tool: dict[str, list[ToolTrial]] = defaultdict(list)
+        for trial in pending_trials:
+            pending_by_tool[trial.tool_name].append(trial)
+        stable_trial_ids: set[str] = set()
+        eligible_tools: list[str] = []
+        for tool_name, tool_trials in pending_by_tool.items():
+            doc = state.documents.get(tool_name)
+            has_error = any(trial.status == "error" for trial in tool_trials)
+            if doc is not None and (doc.published or doc.frozen) and not has_error:
+                stable_trial_ids.update(trial.trial_id for trial in tool_trials)
+                continue
+            if len(tool_trials) >= max(1, min_new_trials) or has_error:
+                eligible_tools.append(tool_name)
+        if stable_trial_ids:
+            state.processed_trial_ids = sorted(
+                set(state.processed_trial_ids) | stable_trial_ids
+            )
+        selected_tools = sorted(
+            eligible_tools,
+            key=lambda tool_name: (
+                -sum(trial.status == "error" for trial in pending_by_tool[tool_name]),
+                -len(pending_by_tool[tool_name]),
+                tool_name,
+            ),
+        )[: max(1, max_tools_per_update)]
+        selected_trials = [
+            trial
+            for tool_name in selected_tools
+            for trial in pending_by_tool[tool_name]
+        ]
+        store.save(state)
     documented_path_rate, success_path_rate = _path_rates(
         trials=trials,
         documented_tools_at_start=documented_tools_at_start,
     )
-    revisions = rewrite_documentation(
-        store,
-        trials=trials,
-        tool_descriptions=tool_descriptions,
-        metrics=metrics,
-        llm_backend=getattr(session, "llm_backend", None),
-        model=getattr(session, "model", None),
-        analyzer_model=(getattr(session, "tool_analyzer_model", "") or None),
-        rewriter_model=(getattr(session, "tool_rewriter_model", "") or None),
-        documented_tools_at_start=documented_tools_at_start,
-        convergence_threshold=convergence_threshold,
-    )
+    revisions: list[DocumentationRevision] = []
+    if rewrite and selected_trials:
+        selected_descriptions = {
+            tool_name: tool_descriptions.get(tool_name, "")
+            for tool_name in selected_tools
+        }
+        revisions = rewrite_documentation(
+            store,
+            trials=selected_trials,
+            tool_descriptions=selected_descriptions,
+            metrics=metrics,
+            llm_backend=getattr(session, "llm_backend", None),
+            model=getattr(session, "model", None),
+            analyzer_model=(getattr(session, "tool_analyzer_model", "") or None),
+            rewriter_model=(getattr(session, "tool_rewriter_model", "") or None),
+            documented_tools_at_start=documented_tools_at_start,
+            convergence_threshold=convergence_threshold,
+            publish_min_utility=publish_min_utility,
+        )
+        with store.exclusive():
+            state = store.load()
+            state.processed_trial_ids = sorted(
+                set(state.processed_trial_ids)
+                | {trial.trial_id for trial in selected_trials}
+            )
+            store.save(state)
     state = store.load()
     llm_attempts = sum(
         revision.metrics.get("llm_attempted") == 1.0 for revision in revisions
@@ -1566,16 +1780,25 @@ def finalize_tool_refinement_session(
         revision.metrics.get("llm_failed") == 1.0 for revision in revisions
     )
     llm_errors = [revision.llm_error for revision in revisions if revision.llm_error]
+    processed_ids = set(state.processed_trial_ids)
+    pending_count = sum(trial.trial_id not in processed_ids for trial in state.trials)
     report = {
-        "status": "updated",
+        "status": (
+            "updated" if revisions else "collected" if not rewrite else "deferred"
+        ),
         "method": "DRAFT",
         "library_id": store.library_id,
         "draft_trials": len(trials),
         "draft_trials_added": added_trials,
+        "draft_pending_trials": pending_count,
+        "draft_selected_tools": selected_tools if rewrite else [],
         "draft_document_revisions": sum(revision.changed for revision in revisions),
         "draft_comprehension_gaps": len(state.gaps),
         "draft_frozen_documents": sum(doc.frozen for doc in state.documents.values()),
         "draft_documented_tools": len(state.documents),
+        "draft_published_documents": sum(
+            doc.published for doc in state.documents.values()
+        ),
         "draft_unique_trial_tools": len({trial.tool_name for trial in trials}),
         "draft_explorations": len(state.explorations),
         "draft_active_explorations": sum(
@@ -1605,6 +1828,10 @@ def finalize_tool_refinement_session(
         "draft_llm_errors": llm_errors[:5],
         "draft_config": {
             "convergence_threshold": convergence_threshold,
+            "update_due": rewrite,
+            "min_new_trials": min_new_trials,
+            "max_tools_per_update": max_tools_per_update,
+            "publish_min_utility": publish_min_utility,
             "tool_doc_chars": getattr(session, "tool_doc_chars", None),
             "exploration_similarity_threshold": getattr(
                 session,

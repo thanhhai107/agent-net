@@ -6,7 +6,6 @@ import json
 import html
 import re
 import shlex
-import time
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +13,7 @@ import streamlit as st
 import yaml
 
 from agent.composition import ProceduralMemoryConfig, ToolRefinementConfig
+from agent.module_config import module_defaults
 from agent.extensions.config import (
     DEFAULT_LLM_PROVIDER as DEFAULT_LLM_BACKEND,
     DEFAULT_MODEL,
@@ -36,8 +36,10 @@ from nika.visualization.experiment_runner import (
 
 TOOL_REFINEMENT_DEFAULTS = ToolRefinementConfig()
 PROCEDURAL_MEMORY_DEFAULTS = ProceduralMemoryConfig()
-DEFAULT_STUDIO_BENCHMARK = str(BENCHMARK_DIR / "benchmark_evaluate.yaml")
-DEFAULT_STUDIO_MAX_STEPS = 50
+MODULE_DEFAULTS = module_defaults()
+BASELINE_DEFAULTS = MODULE_DEFAULTS.baseline
+DEFAULT_STUDIO_BENCHMARK = str(BENCHMARK_DIR / BASELINE_DEFAULTS.benchmark)
+DEFAULT_STUDIO_MAX_STEPS = BASELINE_DEFAULTS.max_steps
 
 
 st.set_page_config(
@@ -152,6 +154,18 @@ st.markdown(
       [data-testid="stDataFrame"] {
         border: 1px solid var(--nika-line); border-radius: 14px; overflow: hidden;
       }
+      .nika-results-table-wrap {
+        overflow-x: auto; border: 1px solid var(--nika-line); border-radius: 8px;
+        background: var(--nika-panel);
+      }
+      .nika-results-table { width: 100%; border-collapse: collapse; font-size: 0.84rem; }
+      .nika-results-table th, .nika-results-table td {
+        padding: 0.6rem 0.75rem; border-bottom: 1px solid var(--nika-line);
+        text-align: left; white-space: nowrap;
+      }
+      .nika-results-table th { background: var(--nika-secondary); font-weight: 700; }
+      .nika-results-table tbody tr:last-child td { border-bottom: 0; }
+      .nika-results-empty { color: var(--nika-muted); margin: 0.6rem 0; }
       [data-testid="stExpander"] {
         border: 1px solid var(--nika-line); border-radius: 13px;
         background: var(--nika-panel);
@@ -370,22 +384,22 @@ def _fmt_delta(value: float | None) -> str:
 RESULT_SUMMARY_COLUMNS = [
     "result_root",
     "modules",
+    "incident_success",
     "detection_score",
     "localization_f1",
     "rca_f1",
-    "localization_precision",
-    "rca_precision",
     "tool_calls",
     "tool_errors",
+    "duration",
     "agent",
     "model",
-    "updated",
 ]
 
 RESULT_DETAIL_COLUMNS = [
     "result_root",
     "progress",
     "detection_score",
+    "incident_success",
     "localization_f1",
     "rca_f1",
     "localization_precision",
@@ -417,15 +431,13 @@ RESULT_DETAIL_COLUMNS = [
     "modules",
     "agent",
     "model",
-    "updated",
 ]
 
 RESULT_NUMERIC_COLUMNS = {
     "detection_score",
+    "incident_success",
     "localization_f1",
     "rca_f1",
-    "localization_precision",
-    "rca_precision",
     "tool_calls",
     "detection_precision",
     "detection_recall",
@@ -501,39 +513,113 @@ def _summary_result_rows(rows: list[dict[str, object]]) -> list[dict[str, object
     return summary
 
 
-def _results_dataframe(rows: list[dict[str, object]], columns: list[str]):
-    import pandas as pd
+def _result_column_label(column: str) -> str:
+    labels = {
+        "result_root": "Result",
+        "incident_success": "Incident Success",
+        "detection_score": "Detection",
+        "localization_f1": "Loc F1",
+        "rca_f1": "RCA F1",
+        "localization_precision": "Loc Precision",
+        "rca_precision": "RCA Precision",
+        "tool_calls": "Tool Calls",
+        "tool_errors": "Tool Errors",
+        "token_in": "Token In",
+        "token_out": "Token Out",
+        "procedural_memory_reward": "Memory Reward",
+        "procedural_memory_advantage": "Memory Advantage",
+        "procedural_memory_success": "Memory Success",
+    }
+    return labels.get(column, column.replace("_", " ").title())
 
-    display_rows = [
-        {column: _result_display_value(column, row.get(column)) for column in columns}
+
+def _result_cell_text(column: str, value: object) -> str:
+    display_value = _result_display_value(column, value)
+    if display_value is None:
+        return "-"
+    if column in RESULT_INTEGER_COLUMNS:
+        return str(int(display_value))
+    if column in RESULT_NUMERIC_COLUMNS:
+        return f"{float(display_value):.2f}"
+    return str(display_value)
+
+
+def _results_table_html(rows: list[dict[str, object]], columns: list[str]) -> str:
+    if not rows:
+        return "<p class='nika-results-empty'>No results yet.</p>"
+    header = "".join(
+        f"<th>{html.escape(_result_column_label(column))}</th>" for column in columns
+    )
+    body = "".join(
+        "<tr>"
+        + "".join(
+            f"<td>{html.escape(_result_cell_text(column, row.get(column)))}</td>"
+            for column in columns
+        )
+        + "</tr>"
         for row in rows
-    ]
-    return pd.DataFrame(display_rows, columns=columns)
+    )
+    return (
+        "<div class='nika-results-table-wrap'><table class='nika-results-table'>"
+        f"<thead><tr>{header}</tr></thead><tbody>{body}</tbody></table></div>"
+    )
+
+
+def _results_dataframe(rows: list[dict[str, object]], columns: list[str]):
+    import pyarrow as pa
+
+    # Avoid the Pandas 3 string[pyarrow] construction path. Streamlit accepts
+    # Arrow tables directly, and the explicit schema keeps mixed result records
+    # from reaching the native Pandas/Arrow conversion that can terminate the
+    # Studio process on rerun.
+    data: dict[str, pa.Array] = {}
+    for column in columns:
+        values = [_result_display_value(column, row.get(column)) for row in rows]
+        if column in RESULT_INTEGER_COLUMNS:
+            data[column] = pa.array(values, type=pa.int64())
+        elif column in RESULT_NUMERIC_COLUMNS:
+            data[column] = pa.array(values, type=pa.float64())
+        else:
+            data[column] = pa.array(
+                [str(value) if value is not None else None for value in values],
+                type=pa.string(),
+            )
+    return pa.table(data)
 
 
 def _transposed_results_dataframe(rows: list[dict[str, object]], columns: list[str]):
+    import pyarrow as pa
+
     frame = _results_dataframe(rows, columns)
-    if frame.empty:
+    if frame.num_rows == 0:
         return frame
     result_names = [
-        str(value) if value is not None and value != "" else f"Result {index + 1}"
-        for index, value in enumerate(frame["result_root"].tolist())
+        str(value.as_py())
+        if value.as_py() is not None and value.as_py() != ""
+        else f"Result {index + 1}"
+        for index, value in enumerate(frame["result_root"])
     ]
     metric_columns = [column for column in columns if column != "result_root"]
-    transposed = frame[metric_columns].transpose()
-    transposed.columns = result_names
-    transposed.insert(0, "metric", transposed.index)
-    # After transposition each result column mixes metric types: floats, ints,
-    # strings such as "8233s", and nulls. Streamlit serializes dataframes via
-    # Arrow, which requires one stable type per column. Keep normal result
-    # tables numeric, but render transposed comparison tables as text.
-    return transposed.reset_index(drop=True).fillna("-").astype(str)
+    transposed: dict[str, pa.Array] = {
+        "metric": pa.array(metric_columns, type=pa.string())
+    }
+    for index, result_name in enumerate(result_names):
+        transposed[result_name] = pa.array(
+            [
+                str(frame[column][index].as_py())
+                if frame[column][index].as_py() is not None
+                else "-"
+                for column in metric_columns
+            ],
+            type=pa.string(),
+        )
+    return pa.table(transposed)
 
 
 def _result_column_config() -> dict[str, object]:
     return {
         "metric": st.column_config.TextColumn("Metric", width="medium"),
-        "result_root": st.column_config.TextColumn("Result", width="large"),
+        "result_root": st.column_config.TextColumn("Result", width="small"),
         "modules": st.column_config.TextColumn("Modules", width="medium"),
         "progress": st.column_config.TextColumn("Progress", width="small"),
         "cases": st.column_config.NumberColumn("Cases", format="%d"),
@@ -541,12 +627,11 @@ def _result_column_config() -> dict[str, object]:
         "failed": st.column_config.NumberColumn("Failed", format="%d"),
         "submitted": st.column_config.NumberColumn("Submitted", format="%d"),
         "detection_score": st.column_config.NumberColumn("Detection", format="%.2f"),
+        "incident_success": st.column_config.NumberColumn(
+            "Incident Success", format="%.2f"
+        ),
         "localization_f1": st.column_config.NumberColumn("Loc F1", format="%.2f"),
         "rca_f1": st.column_config.NumberColumn("RCA F1", format="%.2f"),
-        "localization_precision": st.column_config.NumberColumn(
-            "Loc Prec", format="%.2f"
-        ),
-        "rca_precision": st.column_config.NumberColumn("RCA Prec", format="%.2f"),
         "tool_calls": st.column_config.NumberColumn("Tool Calls", format="%.2f"),
         "tool_errors": st.column_config.NumberColumn("Tool Errors", format="%d"),
         "detection_precision": st.column_config.NumberColumn(
@@ -592,10 +677,9 @@ def _result_column_config() -> dict[str, object]:
         "procedural_memory_delta_tokens_step": st.column_config.NumberColumn(
             "Mem Δ Tokens/Step", format="%.2f"
         ),
-        "duration": st.column_config.TextColumn("Duration", width="small"),
+        "duration": st.column_config.TextColumn("Runtime", width="small"),
         "agent": st.column_config.TextColumn("Agent", width="small"),
         "model": st.column_config.TextColumn("Model", width="medium"),
-        "updated": st.column_config.TextColumn("Updated", width="medium"),
     }
 
 
@@ -774,6 +858,7 @@ def _result_rows(*, benchmark_name: str | None = None) -> list[dict[str, object]
         reverse=True,
     ):
         detections: list[float] = []
+        incident_successes: list[float] = []
         localization_f1s: list[float] = []
         rca_f1s: list[float] = []
         localization_precisions: list[float] = []
@@ -798,7 +883,6 @@ def _result_rows(*, benchmark_name: str | None = None) -> list[dict[str, object]
         result_modules: set[str] = set()
         agents: set[str] = set()
         models: set[str] = set()
-        updated = "-"
 
         for run_path in run_paths:
             session_dir = run_path.parent
@@ -834,6 +918,10 @@ def _result_rows(*, benchmark_name: str | None = None) -> list[dict[str, object]
                 value = _float(metrics.get(key))
                 if value is not None:
                     target.append(value)
+
+            incident_score = _metric_total(metrics, is_anomaly=is_anomaly)
+            if incident_score is not None:
+                incident_successes.append(1.0 if incident_score >= 1.0 else 0.0)
 
             detection_tp += _float(metrics.get("detection_tp")) or 0.0
             detection_tn += _float(metrics.get("detection_tn")) or 0.0
@@ -871,7 +959,6 @@ def _result_rows(*, benchmark_name: str | None = None) -> list[dict[str, object]
                 agents.add(agent_name)
             if meta.get("model"):
                 models.add(str(meta["model"]))
-            updated = str(meta.get("updated_at") or meta.get("created_at") or updated)
 
         display_name = gkey.name
 
@@ -882,6 +969,7 @@ def _result_rows(*, benchmark_name: str | None = None) -> list[dict[str, object]
             "failed": failed,
             "submitted": submitted,
             "detection_score": _avg(detections),
+            "incident_success": _avg(incident_successes),
             "detection_precision": _ratio(detection_tp, detection_tp + detection_fp),
             "detection_recall": _ratio(detection_tp, detection_tp + detection_fn),
             "detection_f1": (
@@ -912,7 +1000,6 @@ def _result_rows(*, benchmark_name: str | None = None) -> list[dict[str, object]
             "modules": ", ".join(sorted(result_modules)) or "-",
             "agent": ", ".join(sorted(agents)) or "-",
             "model": ", ".join(sorted(models)) or "-",
-            "updated": updated,
         }
         row.update(
             _paired_stats(
@@ -1062,8 +1149,8 @@ def _case_event_html(
         f"<b>[Case {index}]</b> {verb}: "
         f"<code style='font-size: 0.75rem; background: var(--nika-secondary); "
         f"padding: 2px 4px; border-radius: 4px;'>{case_summary}</code>"
-        f"<div style='margin-top: 2px; color: var(--nika-muted);'>inject: "
-        f"<code style='font-size: 0.75rem;'>{inject_summary}</code></div>"
+        f"<span style='margin-left: 0.5rem; color: var(--nika-muted);'>&nbsp;inject: "
+        f"<code style='font-size: 0.75rem;'>{inject_summary}</code></span>"
         f"</div>"
     )
 
@@ -1090,7 +1177,12 @@ st.markdown('<div class="section-title">Studio</div>', unsafe_allow_html=True)
 with st.expander("Baseline Settings", expanded=False):
     b_col1, b_col2, b_col3 = st.columns([1.2, 1, 1.5], gap="small")
     with b_col1:
-        agent_type = st.selectbox("Workflow", ["react", "plan-execute", "reflexion"])
+        agent_options = ["react", "plan-execute", "reflexion"]
+        agent_type = st.selectbox(
+            "Workflow",
+            agent_options,
+            index=agent_options.index(BASELINE_DEFAULTS.agent_type),
+        )
     with b_col2:
         backend_options = ["custom", "openai", "deepseek", "ollama"]
         llm_backend = st.selectbox(
@@ -1138,7 +1230,7 @@ with st.expander("Baseline Settings", expanded=False):
             "Attempts",
             min_value=1,
             max_value=10,
-            value=3,
+            value=BASELINE_DEFAULTS.max_attempts,
             disabled=agent_type != "reflexion",
         )
 
@@ -1148,13 +1240,21 @@ with st.expander("Baseline Settings", expanded=False):
         st.markdown(
             "<div style='margin-top: 2rem;'></div>", unsafe_allow_html=True
         )  # aligns checkbox vertically with text_inputs
-        run_judge = st.checkbox("Run LLM judge", value=False)
+        run_judge = st.checkbox(
+            "Run LLM judge", value=BASELINE_DEFAULTS.judge_evaluation
+        )
     with e_col2:
         judge_backend = st.text_input(
-            "Judge backend", value=llm_backend, disabled=not run_judge
+            "Judge backend",
+            value=BASELINE_DEFAULTS.judge_provider,
+            disabled=not run_judge,
         )
     with e_col3:
-        judge_model = st.text_input("Judge model", value=model, disabled=not run_judge)
+        judge_model = st.text_input(
+            "Judge model",
+            value=BASELINE_DEFAULTS.judge_model,
+            disabled=not run_judge,
+        )
 
 st.markdown("<div style='margin-top: 0.5rem;'></div>", unsafe_allow_html=True)
 col_modules = st.columns(2, gap="medium")
@@ -1213,15 +1313,56 @@ with col_modules[0]:
         t_col5, t_col6, t_col7 = st.columns(3, gap="small")
         with t_col5:
             tool_explorer_model = st.text_input(
-                "Explorer model", value=model, disabled=not tool_selected
+                "Explorer model",
+                value=MODULE_DEFAULTS.tool_refinement.llm_model,
+                disabled=not tool_selected,
             )
         with t_col6:
             tool_analyzer_model = st.text_input(
-                "Analyzer model", value=model, disabled=not tool_selected
+                "Analyzer model",
+                value=MODULE_DEFAULTS.tool_refinement.llm_model,
+                disabled=not tool_selected,
             )
         with t_col7:
             tool_rewriter_model = st.text_input(
-                "Rewriter model", value=model, disabled=not tool_selected
+                "Rewriter model",
+                value=MODULE_DEFAULTS.tool_refinement.llm_model,
+                disabled=not tool_selected,
+            )
+        t_col8, t_col9, t_col10, t_col11 = st.columns(4, gap="small")
+        with t_col8:
+            tool_update_interval = st.number_input(
+                "Cases / update",
+                min_value=1,
+                max_value=100,
+                value=TOOL_REFINEMENT_DEFAULTS.update_interval,
+                disabled=not tool_selected,
+            )
+        with t_col9:
+            tool_min_new_trials = st.number_input(
+                "Minimum new trials",
+                min_value=1,
+                max_value=100,
+                value=TOOL_REFINEMENT_DEFAULTS.min_new_trials,
+                disabled=not tool_selected,
+            )
+        with t_col10:
+            tool_max_tools_per_update = st.number_input(
+                "Tools / update",
+                min_value=1,
+                max_value=50,
+                value=TOOL_REFINEMENT_DEFAULTS.max_tools_per_update,
+                disabled=not tool_selected,
+            )
+        with t_col11:
+            tool_publish_min_utility = st.number_input(
+                "Publication utility",
+                min_value=0.0,
+                max_value=1.0,
+                value=TOOL_REFINEMENT_DEFAULTS.publish_min_utility,
+                step=0.05,
+                format="%.2f",
+                disabled=not tool_selected,
             )
 
 with col_modules[1]:
@@ -1259,12 +1400,15 @@ with col_modules[1]:
             )
         with m_col4:
             procedural_memory_evolve_until = st.number_input(
-                "Evolve first cases",
+                "Evolve first cases (all modules)",
                 min_value=0,
                 max_value=max(int(row_count or 0), 1),
                 value=int(default_evolve_cases),
                 step=1,
-                disabled=not procedural_memory_selected or row_count is None,
+                disabled=(
+                    not (tool_selected or procedural_memory_selected)
+                    or row_count is None
+                ),
             )
 
         m_col5, m_col6 = st.columns(2, gap="small")
@@ -1377,13 +1521,45 @@ with col_modules[1]:
         with m_col19:
             procedural_memory_evolver_model = st.text_input(
                 "Critic / Evolver model",
-                value=model,
+                value=MODULE_DEFAULTS.procedural_memory.llm_model,
                 disabled=not procedural_memory_selected,
             )
         with m_col20:
             procedural_memory_policy_scorer_model = st.text_input(
                 "PPO policy scorer model",
-                value=model,
+                value=MODULE_DEFAULTS.procedural_memory.skill_logprob_model,
+                disabled=not procedural_memory_selected,
+            )
+        m_col21, m_col22, m_col23 = st.columns(3, gap="small")
+        with m_col21:
+            procedural_memory_verifier = st.selectbox(
+                "Trust-region verifier",
+                options=(
+                    "behavioral_replay",
+                    "structured_replay",
+                    "policy_logprob",
+                ),
+                index=(
+                    "behavioral_replay",
+                    "structured_replay",
+                    "policy_logprob",
+                ).index(PROCEDURAL_MEMORY_DEFAULTS.verifier),
+                disabled=not procedural_memory_selected,
+            )
+        with m_col22:
+            procedural_memory_holdout_size = st.number_input(
+                "Verification holdout",
+                min_value=1,
+                max_value=20,
+                value=PROCEDURAL_MEMORY_DEFAULTS.holdout_size,
+                disabled=not procedural_memory_selected,
+            )
+        with m_col23:
+            procedural_memory_min_positive_advantage = st.number_input(
+                "Positive trajectories",
+                min_value=0,
+                max_value=20,
+                value=PROCEDURAL_MEMORY_DEFAULTS.min_positive_advantage,
                 disabled=not procedural_memory_selected,
             )
 
@@ -1412,8 +1588,13 @@ config = {
     "tool_explorer_model": tool_explorer_model,
     "tool_analyzer_model": tool_analyzer_model,
     "tool_rewriter_model": tool_rewriter_model,
+    "tool_update_interval": int(tool_update_interval),
+    "tool_min_new_trials": int(tool_min_new_trials),
+    "tool_max_tools_per_update": int(tool_max_tools_per_update),
+    "tool_publish_min_utility": float(tool_publish_min_utility),
     "procedural_memory_bank": procedural_memory_bank,
     "procedural_memory_evolve_until": int(procedural_memory_evolve_until),
+    "learning_evolve_until": int(procedural_memory_evolve_until),
     "procedural_memory_k": int(procedural_memory_k),
     "procedural_memory_tokens": int(procedural_memory_tokens),
     "procedural_memory_max_skill_age": int(procedural_memory_max_skill_age),
@@ -1433,6 +1614,11 @@ config = {
     "procedural_memory_acceptance_margin": float(procedural_memory_acceptance_margin),
     "procedural_memory_evolver_model": procedural_memory_evolver_model,
     "procedural_memory_policy_scorer_model": (procedural_memory_policy_scorer_model),
+    "procedural_memory_verifier": procedural_memory_verifier,
+    "procedural_memory_holdout_size": int(procedural_memory_holdout_size),
+    "procedural_memory_min_positive_advantage": int(
+        procedural_memory_min_positive_advantage
+    ),
     "run_judge": bool(run_judge),
     "judge_backend": judge_backend,
     "judge_model": judge_model,
@@ -1546,15 +1732,11 @@ if selected is not None:
     log_text = read_run_log(selected)
     spec = read_run_spec(selected)
     events = parse_progress_events(log_text)
-    fraction, progress_label = _progress_fraction(
-        events, len(spec.get("commands") or [])
-    )
     log_key = f"log-{selected.name}"
 else:
     status = {}
     log_text = ""
     events = []
-    fraction, progress_label = 0.0, "No active run"
     log_key = "log-none"
 
 if selected is not None:
@@ -1658,20 +1840,6 @@ st.markdown(
 tab_progress, tab_logs = st.tabs(["Progress", "Logs"])
 
 with tab_progress:
-    # Render a professional custom HTML/CSS progress bar with text inside
-    pct = int(fraction * 100)
-    st.markdown(
-        f"""
-        <div style="margin: 0.5rem 0 1rem 0; width: 100%; height: 28px; background-color: var(--nika-secondary); border: 1px solid var(--nika-line); border-radius: 8px; position: relative; overflow: hidden; display: flex; align-items: center; box-shadow: inset 0 1px 2px var(--nika-shadow); box-sizing: border-box;">
-          <div style="width: {pct}%; height: 100%; background: var(--nika-accent); border-radius: 7px; transition: width 0.4s ease;"></div>
-          <div style="position: absolute; width: 100%; text-align: center; left: 0; top: 0; line-height: 28px; font-size: 0.82rem; font-weight: 800; color: #ffffff; text-shadow: 0 1.5px 4px rgba(0, 0, 0, 0.95); z-index: 2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 0 12px; box-sizing: border-box; pointer-events: none; letter-spacing: 0.02em;">
-            {progress_label} ({pct}%)
-          </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
     formatted_msgs = []
     for ev in events:
         msg = format_event_message_html(ev)
@@ -1711,30 +1879,16 @@ st.markdown(
 
 result_rows = _result_rows(benchmark_name=None)
 summary_tab, detail_tab = st.tabs(["Summary", "Details"])
-column_config = _result_column_config()
+display_result_rows = _summary_result_rows(result_rows)
 
 with summary_tab:
-    st.dataframe(
-        _results_dataframe(
-            _summary_result_rows(result_rows),
-            RESULT_SUMMARY_COLUMNS,
-        ),
+    st.html(
+        _results_table_html(display_result_rows, RESULT_SUMMARY_COLUMNS),
         width="stretch",
-        hide_index=True,
-        column_config=column_config,
     )
 
 with detail_tab:
-    st.dataframe(
-        _results_dataframe(
-            _summary_result_rows(result_rows),
-            RESULT_DETAIL_COLUMNS,
-        ),
+    st.html(
+        _results_table_html(display_result_rows, RESULT_DETAIL_COLUMNS),
         width="stretch",
-        hide_index=True,
-        column_config=column_config,
     )
-
-if has_running_run:
-    time.sleep(2)
-    st.rerun()

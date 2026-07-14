@@ -10,7 +10,6 @@ def create_extension_agent(config: AgentRunConfig):
     validate_agent_composition(config)
     factories = {
         "react": create_react_agent,
-        "byo.langgraph": create_react_agent,
         "plan-execute": PlanExecuteAgent,
         "reflexion": ReflexionAgent,
     }

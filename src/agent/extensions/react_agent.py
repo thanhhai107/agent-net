@@ -75,8 +75,17 @@ class LearningDiagnosisPhase(DiagnosisPhase):
         await super().load_tools()
         if self.config.tool_refinement.enabled:
             explorer_model = self.config.tool_refinement.explorer_model.strip()
-            explorer_llm = self.llm
-            if explorer_model and explorer_model != self.config.model:
+            explorer_llm = (
+                self.llm
+                if self.config.tool_refinement.learning_mode == "evolve"
+                and self.config.tool_refinement.update_due
+                else None
+            )
+            if (
+                explorer_llm is not None
+                and explorer_model
+                and explorer_model != self.config.model
+            ):
                 explorer_llm = load_extension_model(
                     self.config.llm_provider,
                     explorer_model,
@@ -96,6 +105,7 @@ class LearningDiagnosisPhase(DiagnosisPhase):
                 explorer_reflection_limit=(
                     self.config.tool_refinement.explorer_reflection_limit
                 ),
+                max_tools_per_update=(self.config.tool_refinement.max_tools_per_update),
                 explorer_model=self.config.tool_refinement.explorer_model,
                 analyzer_model=self.config.tool_refinement.analyzer_model,
                 rewriter_model=self.config.tool_refinement.rewriter_model,
@@ -126,6 +136,9 @@ class LearningDiagnosisPhase(DiagnosisPhase):
                 procedural_memory_config.selection_epsilon_decay_cases
             ),
             acceptance_margin=procedural_memory_config.acceptance_margin,
+            verifier=procedural_memory_config.verifier,
+            holdout_size=procedural_memory_config.holdout_size,
+            min_positive_advantage=(procedural_memory_config.min_positive_advantage),
             evolver_model=procedural_memory_config.evolver_model,
             policy_scorer_model=procedural_memory_config.policy_scorer_model,
         )

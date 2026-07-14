@@ -2,23 +2,19 @@
 
 from __future__ import annotations
 
-import os
-
+from agent.module_config import module_defaults
 from nika.config import RUNTIME_DIR
 
-DEFAULT_LLM_PROVIDER = "custom"
-DEFAULT_MODEL = "openai/gpt-oss-120b"
+DEFAULT_LLM_PROVIDER = module_defaults().baseline.llm_provider
+DEFAULT_MODEL = module_defaults().baseline.model
 
 PROCEDURAL_MEMORY_DIR = RUNTIME_DIR / "procedural_memory"
 TOOL_REFINEMENT_DIR = RUNTIME_DIR / "tool_refinement"
 
 
 def default_llm_provider() -> str:
-    return (
-        os.getenv("NIKA_LLM_PROVIDER", DEFAULT_LLM_PROVIDER).strip()
-        or DEFAULT_LLM_PROVIDER
-    )
+    return DEFAULT_LLM_PROVIDER
 
 
 def default_model() -> str:
-    return os.getenv("NIKA_MODEL", DEFAULT_MODEL).strip() or DEFAULT_MODEL
+    return DEFAULT_MODEL

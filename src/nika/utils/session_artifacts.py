@@ -10,8 +10,9 @@ RUN_FILENAME = "run.json"
 
 
 def is_finished_session(run_meta: dict) -> bool:
-    if run_meta.get("status") == "finished":
-        return True
+    status = run_meta.get("status")
+    if status is not None:
+        return status == "finished"
     return run_meta.get("end_time") is not None
 
 

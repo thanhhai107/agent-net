@@ -81,7 +81,7 @@ def benchmark_run(
         "-p",
         "--provider",
         envvar=ENV_LLM_PROVIDER,
-        help="LLM provider for byo.langgraph only: openai, ollama, deepseek, custom.",
+        help="LLM provider for react only: openai, ollama, deepseek, custom.",
     ),
     model: str | None = typer.Option(
         None,
@@ -95,16 +95,12 @@ def benchmark_run(
         "-n",
         "--max-steps",
         envvar=ENV_MAX_STEPS,
-        help="Max steps per phase (required unless NIKA_MAX_STEPS is in .env; byo.langgraph, byo.mcp_agent, byo.autogen, community.sade).",
+        help="Max steps per phase (required unless NIKA_MAX_STEPS is in .env; react, byo.mcp_agent, byo.autogen, community.sade).",
     ),
     batch_size: int = typer.Option(
         1,
         "--batch-size",
-        help=(
-            "YAML batch mode: number of rows to run simultaneously per batch. "
-            "Rows are chunked into groups of this size; each group runs fully in "
-            "parallel before the next group starts (default: 1)."
-        ),
+        help="YAML batch mode is sequential; only --batch-size 1 is supported.",
     ),
     run_judge: bool = typer.Option(
         False,
@@ -159,13 +155,15 @@ def benchmark_run(
             "Use either SCENARIO (single-case mode) or --config (batch mode), not both."
         )
 
+    if batch_size != 1:
+        raise typer.BadParameter(
+            "Only --batch-size 1 is supported because each case cleans the entire "
+            "emulation environment."
+        )
+
     single_mode = scenario is not None
 
     if single_mode:
-        if batch_size != 1:
-            raise typer.BadParameter(
-                "--batch-size applies to YAML batch mode only; omit it for a single case."
-            )
         if not problem:
             raise typer.BadParameter("--problem is required when SCENARIO is given.")
         if scenario_requires_topo_size(scenario) and not size:

@@ -14,6 +14,10 @@ class RuntimeCapabilityError(RuntimeError):
     """Raised when a runtime backend cannot provide a requested operation."""
 
 
+class LabCleanupError(RuntimeError):
+    """Raised when a lab cannot be proven clean after teardown."""
+
+
 class LabRuntime(ExecSemanticOpsMixin, ABC):
     """Backend-neutral lab lifecycle, exec, and semantic observation APIs."""
 

@@ -2,13 +2,21 @@
 
 import shutil
 import subprocess
+import time
 from datetime import datetime
 from pathlib import Path
 
 from Kathara.manager.Kathara import Kathara
 
-from nika.config import RESULTS_DIR, RUNTIME_DIR, SESSIONS_DB, SESSIONS_DIR, resolve_results_root
+from nika.config import (
+    RESULTS_DIR,
+    RUNTIME_DIR,
+    SESSIONS_DB,
+    SESSIONS_DIR,
+    resolve_results_root,
+)
 from nika.net_env.net_env_pool import get_net_env_instance
+from nika.runtime.base import LabCleanupError
 from nika.runtime.factory import resolve_backend, runtime_for_session
 from nika.runtime.meta import meta_get, meta_path
 from nika.utils.logger import bind_session_dir, log_error_event, log_event
@@ -96,24 +104,51 @@ def wipe_runtime_artifacts(
     return removed
 
 
-def wipe_kathara_labs() -> None:
-    """Remove all Kathara devices and collision domains for the current user."""
-    Kathara.get_instance().wipe()
+def clean_emulation_environment() -> None:
+    """Remove all Kathara and Containerlab labs owned by this benchmark host."""
+    errors: list[str] = []
+    kathara_error: Exception | None = None
+    for attempt in range(3):
+        try:
+            Kathara.get_instance().wipe(all_users=False)
+            kathara_error = None
+            break
+        except Exception as exc:
+            kathara_error = exc
+            if attempt < 2:
+                time.sleep(1)
+    if kathara_error is not None:
+        errors.append(f"Kathara cleanup failed after 3 attempts: {kathara_error}")
+
+    if shutil.which("clab") is not None:
+        result = subprocess.run(
+            [
+                "clab",
+                "destroy",
+                "--all",
+                "--cleanup",
+                "--yes",
+                "--log-level",
+                "error",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout).strip()
+            errors.append(f"Containerlab cleanup failed: {detail or result.returncode}")
+
+    if errors:
+        raise LabCleanupError("; ".join(errors))
 
 
-def wipe_all_containerlab_labs() -> None:
-    """Remove all Containerlab labs for the current user."""
-    result = subprocess.run(
-        ["clab", "destroy", "--all", "--cleanup", "--yes", "--log-level", "error"],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        print(f"Error wiping containerlab labs: {result.stderr or result.stdout}")
-
-
-def _stop_session_record(session_meta: dict, *, undeploy: bool = True) -> None:
+def _stop_session_record(
+    session_meta: dict,
+    *,
+    undeploy: bool = True,
+    final_status: str = "finished",
+) -> None:
     session = Session()
     for key, value in session_meta.items():
         setattr(session, key, value)
@@ -131,7 +166,9 @@ def _stop_session_record(session_meta: dict, *, undeploy: bool = True) -> None:
         net_env_kwargs["lab_name"] = session.lab_name
     if backend == "containerlab":
         topology_file = meta_path(session_meta, "topology_file", scenario_params=True)
-        runtime_workdir = meta_path(session_meta, "runtime_workdir", scenario_params=True)
+        runtime_workdir = meta_path(
+            session_meta, "runtime_workdir", scenario_params=True
+        )
         if topology_file is not None:
             net_env_kwargs["topology_file"] = topology_file
         if runtime_workdir is not None:
@@ -149,7 +186,25 @@ def _stop_session_record(session_meta: dict, *, undeploy: bool = True) -> None:
         raise ValueError(f"Session '{session.session_id}' has no session_dir.")
     bind_session_dir(session_dir)
 
-    if undeploy and net_env.lab_exists():
+    try:
+        lab_exists = net_env.lab_exists() if undeploy else False
+    except Exception as exc:
+        log_error_event(
+            "env_stop_failed",
+            f"Failed to inspect network environment before cleanup: {scenario} "
+            f"({session.session_id}): {exc}",
+            scenario=scenario,
+            session_id=session.session_id,
+            backend=backend,
+            error=str(exc),
+            error_type=type(exc).__name__,
+        )
+        raise LabCleanupError(
+            f"Failed to inspect lab {session.lab_name!r} before cleanup"
+        ) from exc
+
+    should_undeploy = undeploy and (lab_exists or backend == "containerlab")
+    if should_undeploy:
         try:
             net_env.undeploy()
         except Exception as exc:
@@ -162,7 +217,9 @@ def _stop_session_record(session_meta: dict, *, undeploy: bool = True) -> None:
                 error=str(exc),
                 error_type=type(exc).__name__,
             )
-            raise
+            if isinstance(exc, LabCleanupError):
+                raise
+            raise LabCleanupError(f"Failed to clean lab {session.lab_name!r}") from exc
         log_event(
             "env_stop",
             f"Stopped network environment: {scenario} ({session.session_id})",
@@ -198,7 +255,7 @@ def _stop_session_record(session_meta: dict, *, undeploy: bool = True) -> None:
             backend=backend,
         )
 
-    session.clear_session()
+    session.clear_session(status=final_status)
     log_event(
         "session_cleared",
         f"Cleared session {session.session_id} for scenario {scenario}",
@@ -212,6 +269,7 @@ def close_session(
     *,
     undeploy: bool = True,
     stop_all: bool = False,
+    final_status: str = "finished",
 ) -> None:
     """Close one or all running sessions and clear runtime state."""
     store = SessionStore()
@@ -221,11 +279,14 @@ def close_session(
         try:
             for session_meta in running:
                 full_meta = store.get_session(session_meta["session_id"])
-                _stop_session_record(full_meta, undeploy=undeploy)
+                _stop_session_record(
+                    full_meta,
+                    undeploy=undeploy,
+                    final_status=final_status,
+                )
         finally:
             if undeploy:
-                wipe_kathara_labs()
-                wipe_all_containerlab_labs()
+                clean_emulation_environment()
                 removed = wipe_runtime_artifacts()
                 if removed:
                     log_event(
@@ -242,4 +303,56 @@ def close_session(
         )
 
     resolved_id = resolve_running_session_id(session_id, store=store)
-    _stop_session_record(store.get_session(resolved_id), undeploy=undeploy)
+    _stop_session_record(
+        store.get_session(resolved_id),
+        undeploy=undeploy,
+        final_status=final_status,
+    )
+
+
+def close_session_after_failure(
+    session_id: str,
+    error: BaseException,
+) -> Exception | None:
+    """Close a failed case without masking the exception that caused it."""
+    try:
+        close_session(
+            session_id=session_id,
+            undeploy=True,
+            final_status="failed",
+        )
+    except FileNotFoundError:
+        try:
+            Session().load_closed_session(session_id=session_id).update_run_meta(
+                "status", "failed"
+            )
+        except (FileNotFoundError, ValueError) as state_error:
+            if hasattr(error, "add_note"):
+                error.add_note(
+                    "The lab was already closed, but its result status could not "
+                    f"be changed to failed: {type(state_error).__name__}: "
+                    f"{state_error}"
+                )
+            log_error_event(
+                "case_status_update_failed",
+                f"Failed to mark closed session {session_id} as failed: {state_error}",
+                session_id=session_id,
+                error=str(state_error),
+                error_type=type(state_error).__name__,
+            )
+        return None
+    except Exception as cleanup_error:
+        if hasattr(error, "add_note"):
+            error.add_note(
+                "Cleanup after the case failure also failed: "
+                f"{type(cleanup_error).__name__}: {cleanup_error}"
+            )
+        log_error_event(
+            "case_cleanup_failed",
+            f"Failed to clean session {session_id}: {cleanup_error}",
+            session_id=session_id,
+            error=str(cleanup_error),
+            error_type=type(cleanup_error).__name__,
+        )
+        return cleanup_error
+    return None

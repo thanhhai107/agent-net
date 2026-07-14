@@ -9,6 +9,11 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
+from agent.module_config import module_defaults
+
+
+_DEFAULTS = module_defaults().procedural_memory
+
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -31,8 +36,8 @@ class ProceduralMemoryQuery(BaseModel):
     symptoms: list[str] = Field(default_factory=list)
     task_stage: str = "diagnosis"
     tools: list[str] = Field(default_factory=list)
-    top_k: int = 5
-    token_budget: int = 1500
+    top_k: int = _DEFAULTS.top_k
+    token_budget: int = _DEFAULTS.token_budget
 
 
 class SkillStep(BaseModel):
@@ -89,6 +94,12 @@ class SkillCandidateDraft(BaseModel):
     termination: str = ""
 
 
+class SkillCandidateBatchDraft(BaseModel):
+    """Bounded best-of-N candidates generated in one learning request."""
+
+    candidates: list[SkillCandidateDraft] = Field(default_factory=list)
+
+
 class EvaluationEvidence(BaseModel):
     session_id: str
     task_description: str = ""
@@ -129,6 +140,10 @@ class SkillExperience(BaseModel):
     transitions: list[SkillTransition] = Field(default_factory=list)
     step_count: int = 0
     total_added_tokens: int = 0
+    # Inferred only from task-visible evidence and tool output; evaluator-only
+    # labels are never part of a reusable procedure's retrieval scope.
+    evidence_family: str = ""
+    semantic_gradient: SemanticGradient | None = None
     used_for_evolution: bool = False
     success: bool = False
     ground_truth_is_anomaly: bool | None = None
@@ -147,7 +162,7 @@ class ProceduralSkill(BaseModel):
     services: list[str] = Field(default_factory=list)
     symptoms: list[str] = Field(default_factory=list)
     tools: list[str] = Field(default_factory=list)
-    status: Literal["candidate", "validated", "retired"] = "candidate"
+    status: Literal["candidate", "probationary", "validated", "retired"] = "candidate"
     reuse_count: int = 0
     success_count: int = 0
     failure_count: int = 0
@@ -214,7 +229,10 @@ class ProceduralSkill(BaseModel):
             f"Skill Name: {self.skill_id}\n"
             f"Initiation (When to use): {self.activation_condition}\n"
             f"Strategy Steps:\n{steps}\n"
-            f"Termination (When to stop): {self.termination_condition}"
+            "Option Termination (when to return control to the skill selector): "
+            f"{self.termination_condition}\n"
+            "Option termination is not task completion and never authorizes a "
+            "diagnosis submission."
         )
 
 
