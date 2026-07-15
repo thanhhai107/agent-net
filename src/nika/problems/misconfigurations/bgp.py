@@ -171,7 +171,9 @@ class BGPMissingAdvertise(ProblemBase):
                     f"{type(self).__name__} cannot inject_fault: unsupported backend {backend!r}."
                 )
 
-    def _inject_missing_adv_containerlab(self, params: BGPMissingAdvertiseParams) -> None:
+    def _inject_missing_adv_containerlab(
+        self, params: BGPMissingAdvertiseParams
+    ) -> None:
         prefix = str(
             ipaddress.ip_network(
                 resolve_victim_host_ip(self.runtime, params.host_name),
@@ -205,7 +207,9 @@ class BGPMissingAdvertise(ProblemBase):
                     f"{type(self).__name__} cannot verify_fault: unsupported backend {backend!r}."
                 )
 
-    def _verify_missing_adv_containerlab(self, params: BGPMissingAdvertiseParams) -> dict:
+    def _verify_missing_adv_containerlab(
+        self, params: BGPMissingAdvertiseParams
+    ) -> dict:
         prefix = getattr(
             self,
             "_withdrawn_prefix",

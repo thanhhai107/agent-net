@@ -16,7 +16,7 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 from agent.utils.mcp_servers import MCPServerConfig
 from tests.support.integration_base import PerTestEnvTestCase
 from tests.support.integration_pipeline import tool_text_list
-from tests.support.prerequisites import docker_available, min3clos_prerequisites
+from tests.support.prerequisites import containerlab_prerequisites, docker_available
 
 
 def _invoke_pingmesh(session_id: str, *, scenario_name: str) -> dict:
@@ -94,7 +94,7 @@ class KatharaPingMeshIntegrationTest(PerTestEnvTestCase):
 
 
 @unittest.skipUnless(
-    min3clos_prerequisites(), "containerlab, gnmic, or Docker not available"
+    containerlab_prerequisites(), "containerlab, gnmic, or Docker not available"
 )
 class ContainerlabPingMeshIntegrationTest(PerTestEnvTestCase):
     SCENARIO = "min3clos"

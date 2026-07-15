@@ -91,14 +91,6 @@ def procedural_memory_run(
         "--max-steps",
         help="Per-worker step limit. Defaults to NIKA_MAX_STEPS.",
     ),
-    k: int = typer.Option(
-        5,
-        "-k",
-        "--k",
-        min=1,
-        max=20,
-        help="Maximum procedural skills injected into one diagnosis.",
-    ),
     tokens: int = typer.Option(
         1500,
         "--tokens",
@@ -179,8 +171,6 @@ def procedural_memory_run(
         str(resolved_max_steps),
         procedural_memory_flag,
         bank,
-        "--procedural-memory-k",
-        str(k),
         "--procedural-memory-tokens",
         str(tokens),
         "--procedural-memory-max-skill-age",
@@ -209,7 +199,7 @@ def procedural_memory_inspect(
     """Print skill, episode, and PPO decision counts for one bank."""
     typer.echo(
         json.dumps(
-            _module(bank).store.bank_stats(bank),
+            _module(bank).store.bank_stats(),
             ensure_ascii=False,
             indent=2,
         )
@@ -233,7 +223,7 @@ def procedural_memory_health(
         report["store"] = {
             "backend": type(module.store).__name__,
             "ready": True,
-            "stats": module.store.bank_stats(bank),
+            "stats": module.store.bank_stats(),
         }
     except Exception as exc:
         report["store"]["reason"] = _safe_error(exc)
@@ -252,7 +242,7 @@ def procedural_memory_snapshot(
 ) -> None:
     """Export a reproducible JSONL snapshot of one skill bank."""
     target = output or (Path(PROCEDURAL_MEMORY_DIR) / f"{bank}.snapshot.jsonl")
-    path = _module(bank).snapshot(session_id="manual", output_path=target)
+    path = _module(bank).snapshot(output_path=target)
     typer.echo(f"Wrote Procedural Memory snapshot: {path}")
 
 

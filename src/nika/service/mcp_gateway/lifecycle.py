@@ -20,12 +20,8 @@ from nika.service.mcp_gateway.session_registry import (
 )
 
 ENV_GATEWAY_URL = "NIKA_MCP_GATEWAY_URL"
-ENV_GATEWAY_AGENT_URL = "NIKA_MCP_GATEWAY_AGENT_URL"
 ENV_GATEWAY_HOST = "NIKA_MCP_GATEWAY_HOST"
 ENV_GATEWAY_PORT = "NIKA_MCP_GATEWAY_PORT"
-
-SANDBOX_GATEWAY_BIND_HOST = "0.0.0.0"
-SANDBOX_GATEWAY_AGENT_HOST = "host.docker.internal"
 
 PolicyMode = Literal["two_phase", "unified"]
 
@@ -87,13 +83,6 @@ class McpGatewayManager:
         self._thread = None
 
 
-def set_gateway_agent_url(manager: McpGatewayManager, *, agent_host: str) -> str:
-    """Expose a container-reachable gateway URL via ``NIKA_MCP_GATEWAY_AGENT_URL``."""
-    agent_url = f"http://{agent_host}:{manager.port}"
-    os.environ[ENV_GATEWAY_AGENT_URL] = agent_url
-    return agent_url
-
-
 def start_gateway(
     *, host: str | None = None, port: int | None = None
 ) -> McpGatewayManager:
@@ -123,7 +112,6 @@ def stop_gateway() -> None:
         manager.stop()
     reset_gateway_mcp_state()
     os.environ.pop(ENV_GATEWAY_URL, None)
-    os.environ.pop(ENV_GATEWAY_AGENT_URL, None)
     clear_sessions()
 
 
@@ -135,16 +123,9 @@ def mcp_gateway_for_session(
     policy_mode: PolicyMode = "two_phase",
     host: str | None = None,
     port: int | None = None,
-    sandbox: bool = False,
-    sandbox_agent_host: str = SANDBOX_GATEWAY_AGENT_HOST,
 ) -> Iterator[McpGatewayManager]:
     """Start gateway, register *session_id*, expose URL via env, then clean up."""
-    bind_host = host
-    if sandbox and bind_host is None:
-        bind_host = SANDBOX_GATEWAY_BIND_HOST
-    manager = start_gateway(host=bind_host, port=port)
-    if sandbox:
-        set_gateway_agent_url(manager, agent_host=sandbox_agent_host)
+    manager = start_gateway(host=host, port=port)
     register_session(
         session_id,
         scenario_name=scenario_name,

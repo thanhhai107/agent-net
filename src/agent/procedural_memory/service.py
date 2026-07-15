@@ -2,8 +2,8 @@
 
 This adapts the official Skill-Pro semantics to NIKA's diagnosis-agent
 boundary: a Skill-MDP style selector injects active procedural skills before
-diagnosis, while closed benchmark episodes feed an ExperiencePool /
-GoldenExperiencePool and non-parametric PPO-style evolution gate.
+diagnosis, while closed benchmark episodes feed a persistent trajectory buffer
+and a provider-compatible evolution gate.
 """
 
 from __future__ import annotations
@@ -36,7 +36,6 @@ from agent.procedural_memory.models import (
     ProceduralSkill,
     SemanticGradient,
     SemanticGradientDraft,
-    SkillCandidateBatchDraft,
     SkillCandidateDraft,
     SkillComponentGradient,
     SkillExperience,
@@ -57,7 +56,6 @@ from agent.procedural_memory.store import ProceduralMemoryStore, public_episode_
 _DEFAULTS = module_defaults().procedural_memory
 DEFAULT_POOL_SIZE = _DEFAULTS.pool_size
 EXPERIENCE_POOL_SIZE = _DEFAULTS.experience_pool_size
-GOLDEN_POOL_SIZE = _DEFAULTS.golden_pool_size
 PPO_EPSILON = _DEFAULTS.ppo_epsilon
 
 GENERIC_SEED_SKILL_IDS = frozenset(
@@ -70,9 +68,11 @@ GENERIC_SEED_SKILL_IDS = frozenset(
         "seed_strategic_planning",
     }
 )
-SEED_SKILL_IDS = GENERIC_SEED_SKILL_IDS
 BASELINE_EMA_ALPHA = _DEFAULTS.baseline_ema_alpha
 SELECTION_EPSILON_DECAY_EPISODES = _DEFAULTS.selection_epsilon_decay_cases
+SUPPORTED_VERIFIERS = frozenset(
+    {"behavioral_replay", "policy_logprob", "structured_replay"}
+)
 
 
 def _stable_id(*parts: Any, prefix: str) -> str:
@@ -92,13 +92,6 @@ def _metric_success(
         and _component_complete(metrics, "localization")
         and _component_complete(metrics, "rca")
     )
-
-
-def _safe_skill_promotion(
-    metrics: dict[str, Any],
-    ground_truth_is_anomaly: bool | None = None,
-) -> bool:
-    return _metric_success(metrics, ground_truth_is_anomaly)
 
 
 def _component_complete(metrics: dict[str, Any], prefix: str) -> bool:
@@ -131,28 +124,8 @@ def _evidence_score(evidence: EvaluationEvidence) -> float:
     return _clamp(quality, 0.0, 1.0)
 
 
-def _skill_stat_reward(
-    evidence: EvaluationEvidence, reward: float, baseline: float
-) -> tuple[float, float]:
-    """Return the continuous reward/baseline used by online score maintenance."""
-
-    del evidence
-    return reward, baseline
-
-
 def _baseline_key(evidence: EvaluationEvidence) -> str:
     return evidence.scenario or "default"
-
-
-def _evidence_signature_text(attrs: Any, tool_steps: list[SkillStep]) -> str:
-    labels = attrs.protocols[:2] + attrs.services[:2] + attrs.symptoms[:3]
-    tools = [step.tool_name for step in tool_steps if step.tool_name][:4]
-    pieces: list[str] = []
-    if labels:
-        pieces.append("evidence labels: " + ", ".join(labels))
-    if tools:
-        pieces.append("observed tools: " + ", ".join(tools))
-    return "; ".join(pieces) or "matching current observations"
 
 
 def _trim_text(value: Any, *, limit: int = 360) -> str:
@@ -191,18 +164,6 @@ def _skill_steps_summary(tool_steps: list[SkillStep]) -> list[dict[str, Any]]:
     ]
 
 
-def _skill_topic(
-    evidence: EvaluationEvidence,
-    attrs_protocols: list[str],
-    attrs_services: list[str],
-    attrs_symptoms: list[str],
-) -> str:
-    pieces = attrs_protocols[:2] + attrs_services[:2] + attrs_symptoms[:2]
-    if pieces:
-        return ", ".join(pieces)
-    return "network diagnosis"
-
-
 def _tokens(text: str) -> set[str]:
     return {token for token in re.findall(r"[a-zA-Z0-9_]{3,}", text.lower())}
 
@@ -219,13 +180,6 @@ def _jaccard(left: str, right: str) -> float:
     return len(lhs & rhs) / len(lhs | rhs)
 
 
-def _dump_for_alignment(value: Any) -> str:
-    try:
-        return json.dumps(value, sort_keys=True, ensure_ascii=False, default=str)
-    except TypeError:
-        return str(value)
-
-
 def _clamp(value: float, low: float, high: float) -> float:
     return max(low, min(high, value))
 
@@ -235,11 +189,7 @@ def _skill_base_id(skill_id: str) -> str:
 
 
 def _is_seed_skill(skill: ProceduralSkill) -> bool:
-    return skill.skill_id in SEED_SKILL_IDS
-
-
-def _uses_generic_seed_policy(skill: ProceduralSkill | None) -> bool:
-    return bool(skill and _skill_base_id(skill.skill_id) in GENERIC_SEED_SKILL_IDS)
+    return skill.skill_id in GENERIC_SEED_SKILL_IDS
 
 
 def _learned_skill_unstable(skill: ProceduralSkill) -> bool:
@@ -285,70 +235,6 @@ def _activation_similarity(
     )
 
 
-def _signature_activation(signature: str) -> str:
-    return (
-        "Use when the current observation history matches this "
-        f"evidence signature: {signature}. Do not activate from "
-        "scenario name or tool catalog alone."
-    )
-
-
-def _experience_signature(
-    exp: SkillExperience,
-) -> tuple[frozenset[str], frozenset[str], frozenset[str]]:
-    tools = [step.tool_name for step in exp.transitions if step.tool_name]
-    context_attrs = infer_procedural_memory_attributes(
-        exp.trajectory,
-        scenario=exp.scenario,
-        include_network_context=True,
-    )
-    observation_text = " ".join(
-        step.observation_summary for step in exp.transitions if step.observation_summary
-    )
-    observation_attrs = infer_procedural_memory_attributes(
-        observation_text,
-        scenario=exp.scenario,
-        tools=tools,
-    )
-    return (
-        frozenset([*context_attrs.protocols, *observation_attrs.protocols]),
-        frozenset([*context_attrs.services, *observation_attrs.services]),
-        frozenset(observation_attrs.symptoms),
-    )
-
-
-def _experience_family(exp: SkillExperience) -> str:
-    """Return an auditable family key built from observable evidence only."""
-
-    protocols, services, symptoms = _experience_signature(exp)
-    labels = [
-        *(f"protocol:{item}" for item in sorted(protocols)),
-        *(f"service:{item}" for item in sorted(services)),
-        *(f"symptom:{item}" for item in sorted(symptoms)),
-    ]
-    return " | ".join(labels)
-
-
-def _compatible_experience_signature(
-    left: tuple[frozenset[str], frozenset[str], frozenset[str]],
-    right: tuple[frozenset[str], frozenset[str], frozenset[str]],
-) -> bool:
-    left_protocols, left_services, left_symptoms = left
-    right_protocols, right_services, right_symptoms = right
-    comparable = [
-        len(left & right) / len(left | right)
-        for left, right in (
-            (left_protocols, right_protocols),
-            (left_services, right_services),
-            (left_symptoms, right_symptoms),
-        )
-        if left and right
-    ]
-    if not comparable:
-        return False
-    return sum(comparable) / len(comparable) >= 0.6
-
-
 def _episode_attribute_text(
     evidence: EvaluationEvidence,
     tool_steps: list[SkillStep],
@@ -390,7 +276,6 @@ class ProceduralMemoryModule:
         best_of_n: int = _DEFAULTS.best_of_n,
         ppo_epsilon: float = PPO_EPSILON,
         experience_pool_size: int = EXPERIENCE_POOL_SIZE,
-        golden_pool_size: int = GOLDEN_POOL_SIZE,
         baseline_ema_alpha: float = BASELINE_EMA_ALPHA,
         selection_epsilon_decay_cases: int = SELECTION_EPSILON_DECAY_EPISODES,
         acceptance_margin: float = _DEFAULTS.acceptance_margin,
@@ -409,10 +294,14 @@ class ProceduralMemoryModule:
         self.best_of_n = max(1, best_of_n)
         self.ppo_epsilon = ppo_epsilon
         self.experience_pool_size = max(1, experience_pool_size)
-        self.golden_pool_size = max(1, golden_pool_size)
         self.baseline_ema_alpha = baseline_ema_alpha
         self.selection_epsilon_decay_cases = max(1, selection_epsilon_decay_cases)
         self.acceptance_margin = max(0.0, acceptance_margin)
+        if verifier not in SUPPORTED_VERIFIERS:
+            supported = ", ".join(sorted(SUPPORTED_VERIFIERS))
+            raise ValueError(
+                f"Unsupported verifier {verifier!r}; expected one of: {supported}"
+            )
         self.verifier = verifier
         self.holdout_size = max(1, holdout_size)
         self.min_positive_advantage = max(0, min_positive_advantage)
@@ -428,27 +317,35 @@ class ProceduralMemoryModule:
         self._ensure_seed_skills()
 
     def _default_policy_scorer(self) -> PolicyScorer:
-        selected_backend = self._selected_learning_backend()
         selected_model = self._selected_policy_scorer_model()
         if self.verifier == "structured_replay":
             return StructuredReplayPolicyScorer()
-        if self.verifier == "policy_logprob" and selected_model:
+        if self.verifier == "policy_logprob":
+            if not selected_model:
+                raise ValueError(
+                    "policy_logprob verifier requires a policy scorer model"
+                )
             base_url = os.getenv("NIKA_SKILL_LOGPROB_URL", "").strip()
             api_key = (
                 os.getenv("NIKA_SKILL_LOGPROB_API_KEY", "").strip()
                 or os.getenv("CUSTOM_API_KEY", "").strip()
             )
-            scorer_model = selected_model
-            if base_url and api_key:
-                return PolicyLogprobScorer(
-                    base_url=base_url,
-                    api_key=api_key,
-                    model=scorer_model,
-                    timeout=learning_timeout_seconds(),
+            if not base_url:
+                raise ValueError(
+                    "policy_logprob verifier requires NIKA_SKILL_LOGPROB_URL"
                 )
-        if selected_backend and selected_model:
-            return BehavioralReplayPolicyScorer(self._policy_llm)
-        return StructuredReplayPolicyScorer()
+            if not api_key:
+                raise ValueError(
+                    "policy_logprob verifier requires NIKA_SKILL_LOGPROB_API_KEY "
+                    "or CUSTOM_API_KEY"
+                )
+            return PolicyLogprobScorer(
+                base_url=base_url,
+                api_key=api_key,
+                model=selected_model,
+                timeout=learning_timeout_seconds(),
+            )
+        return BehavioralReplayPolicyScorer(self._policy_llm)
 
     def _learning_llm(self) -> Any | None:
         selected_backend = self._selected_learning_backend()
@@ -504,6 +401,18 @@ class ProceduralMemoryModule:
         with self.store.exclusive():
             state = self.store.load()
             changed = False
+            accepted_candidate_ids = {
+                decision.candidate_skill_id
+                for decision in state.ppo_decisions
+                if decision.accepted and decision.candidate_skill_id
+            }
+            for stored in state.skills.values():
+                if (
+                    stored.status == "probationary"
+                    and stored.skill_id in accepted_candidate_ids
+                ):
+                    stored.status = "validated"
+                    changed = True
             for skill in self._seed_skills():
                 if skill.skill_id not in state.skills:
                     state.skills[skill.skill_id] = skill
@@ -519,14 +428,6 @@ class ProceduralMemoryModule:
                     if stored.status not in {"validated", "retired"}:
                         stored.status = "validated"
                         changed = True
-            legacy_expert_skill_ids = [
-                skill_id
-                for skill_id, skill in state.skills.items()
-                if skill.origin == "expert_seed"
-            ]
-            for skill_id in legacy_expert_skill_ids:
-                del state.skills[skill_id]
-                changed = True
             if changed:
                 self.store.save(state)
 
@@ -624,7 +525,6 @@ class ProceduralMemoryModule:
         self,
         *,
         query: ProceduralMemoryQuery,
-        session_id: str = "",
         include_probationary: bool = False,
     ) -> list[SkillRetrieval]:
         state = self.store.load()
@@ -699,70 +599,83 @@ class ProceduralMemoryModule:
             used_tokens += cost
         return selected
 
-    def select_skill(
+    def selection_candidates(
         self,
         *,
-        query: ProceduralMemoryQuery,
-        session_id: str = "",
-        top_k: int | None = None,
+        include_probationary: bool = False,
+        exclude_skill_ids: Collection[str] | None = None,
+    ) -> list[ProceduralSkill]:
+        """Return the complete eligible pool for direct LLM selection."""
+
+        excluded = {skill_id for skill_id in (exclude_skill_ids or []) if skill_id}
+        allowed = (
+            {"validated", "probationary"} if include_probationary else {"validated"}
+        )
+        return sorted(
+            (
+                skill
+                for skill in self.store.load().skills.values()
+                if skill.status in allowed
+                and skill.skill_id not in excluded
+                and not _learned_skill_unstable(skill)
+            ),
+            key=lambda skill: skill.skill_id,
+        )
+
+    def activate_skill(
+        self,
+        skill_id: str,
+        *,
+        record_reuse: bool = True,
+        include_probationary: bool = False,
+        exclude_skill_ids: Collection[str] | None = None,
+    ) -> SkillRetrieval | None:
+        """Validate and activate exactly one selector-provided skill id."""
+
+        candidates = {
+            skill.skill_id: skill
+            for skill in self.selection_candidates(
+                include_probationary=include_probationary,
+                exclude_skill_ids=exclude_skill_ids,
+            )
+        }
+        skill = candidates.get(skill_id)
+        if skill is None:
+            return None
+        selected = SkillRetrieval(
+            skill=skill,
+            score=self._skill_effective_score(skill),
+            reasons=["llm_direct_selection"],
+        )
+        return self._record_skill_reuse(selected) if record_reuse else selected
+
+    def exploration_selection(
+        self,
+        *,
+        epsilon: float,
+        key: str,
         record_reuse: bool = True,
         exclude_skill_ids: Collection[str] | None = None,
-        allow_excluded_fallback: bool = True,
-        exploration_epsilon: float = 0.0,
-        exploration_key: str = "",
-        include_probationary: bool = False,
-    ) -> SkillRetrieval | None:
-        top_k = top_k or query.top_k
-        state = self.store.load()
-        excluded = {skill_id for skill_id in (exclude_skill_ids or []) if skill_id}
-        candidates = self.retrieve(
-            query=query.model_copy(update={"top_k": max(top_k + len(excluded), 1)}),
-            session_id=session_id,
+    ) -> tuple[bool, SkillRetrieval | None]:
+        """Apply reproducible epsilon exploration over the complete active pool."""
+
+        if not self._exploration_triggered(epsilon, key):
+            return False, None
+        candidates = self.selection_candidates(
+            include_probationary=True,
+            exclude_skill_ids=exclude_skill_ids,
         )
-        selectable = [
-            item for item in candidates if item.skill.skill_id not in excluded
-        ]
-        pool = selectable or (candidates if allow_excluded_fallback else [])
-        exploration_triggered = self._exploration_triggered(
-            exploration_epsilon, exploration_key
+        choices: list[ProceduralSkill | None] = [*candidates, None]
+        index = int(self._stable_unit_interval(f"{key}:choice") * len(choices))
+        choice = choices[min(index, len(choices) - 1)]
+        if choice is None:
+            return True, None
+        selected = SkillRetrieval(
+            skill=choice,
+            score=self._skill_effective_score(choice),
+            reasons=["epsilon_exploration"],
         )
-        exploration_candidates = [
-            item for item in candidates if item.skill.skill_id not in excluded
-        ]
-        if include_probationary and exploration_triggered:
-            exploration_candidates = self.retrieve(
-                query=query.model_copy(
-                    update={
-                        "top_k": max(len(state.skills), top_k),
-                        "token_budget": max(query.token_budget, 100_000),
-                    }
-                ),
-                session_id=session_id,
-                include_probationary=True,
-            )
-            exploration_candidates = [
-                item
-                for item in exploration_candidates
-                if item.skill.skill_id not in excluded
-            ]
-        selected = self._exploration_choice(
-            state=state,
-            candidates=exploration_candidates if exploration_triggered else pool,
-            epsilon=exploration_epsilon,
-            key=exploration_key,
-            excluded_skill_ids=excluded,
-            include_probationary=include_probationary,
-        )
-        if selected is None and not exploration_triggered and pool:
-            selected = max(
-                pool[: max(top_k, 1)],
-                key=lambda item: (item.score, self._skill_effective_score(item.skill)),
-            )
-        if selected is None:
-            return None
-        if record_reuse:
-            selected = self._record_skill_reuse(selected)
-        return selected
+        return True, self._record_skill_reuse(selected) if record_reuse else selected
 
     @staticmethod
     def _stable_unit_interval(value: str) -> float:
@@ -773,25 +686,6 @@ class ProceduralMemoryModule:
         return bool(
             epsilon > 0 and key and self._stable_unit_interval(f"{key}:gate") < epsilon
         )
-
-    def _exploration_choice(
-        self,
-        *,
-        state,
-        candidates: list[SkillRetrieval],
-        epsilon: float,
-        key: str,
-        excluded_skill_ids: set[str] | None = None,
-        include_probationary: bool = False,
-    ) -> SkillRetrieval | None:
-        if not self._exploration_triggered(epsilon, key):
-            return None
-        del state, excluded_skill_ids, include_probationary
-        # Exploration varies among context-compatible candidates only. Sampling
-        # a globally unrelated Skill makes the online gain uninterpretable.
-        choices: list[SkillRetrieval | None] = [*candidates, None]
-        index = int(self._stable_unit_interval(f"{key}:choice") * len(choices))
-        return choices[min(index, len(choices) - 1)]
 
     def decayed_selection_epsilon(self, initial: float) -> float:
         iteration = self.store.load().iteration
@@ -872,42 +766,7 @@ class ProceduralMemoryModule:
                 selected.skill = stored
         return selected
 
-    def format_context(
-        self,
-        retrieved: list[SkillRetrieval],
-        *,
-        active_skill_id: str | None = None,
-    ) -> str:
-        if not retrieved:
-            return ""
-        blocks = [
-            "Retrieved Skill-Pro Skill-MDP procedures. Treat them as reusable diagnostic policies, not as ground truth."
-        ]
-        for index, item in enumerate(retrieved):
-            skill = item.skill
-            if active_skill_id is None:
-                label = "ACTIVE" if index == 0 else "CANDIDATE"
-            else:
-                label = "ACTIVE" if skill.skill_id == active_skill_id else "CANDIDATE"
-            blocks.append(
-                redact_oracle_markers(
-                    "\n".join(
-                        [
-                            f"- {label} Skill {skill.skill_id} ({skill.title}) score={item.score:.3f}",
-                            f"  Activation / Initiation: {skill.activation_condition}",
-                            "  Policy:",
-                            *[
-                                f"    {step.order}. {step.action}"
-                                for step in skill.execution_steps[:6]
-                            ],
-                            f"  Termination: {skill.termination_condition}",
-                        ]
-                    )
-                )
-            )
-        return "\n".join(blocks)
-
-    def snapshot(self, *, session_id: str, output_path: Path) -> Path:
+    def snapshot(self, *, output_path: Path) -> Path:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(
             "\n".join(self.store.snapshot_jsonl()) + "\n", encoding="utf-8"
@@ -924,25 +783,16 @@ class ProceduralMemoryModule:
         critique: SemanticGradient | None = None,
         experiences: list[SkillExperience] | None = None,
         sampled_candidate: SkillCandidateDraft | None = None,
-        sample_with_llm: bool = True,
     ) -> ProceduralSkill:
         if not tool_steps:
             raise ValueError("Skill-Pro requires at least one observed execution step.")
-        attrs = infer_procedural_memory_attributes(
-            _episode_attribute_text(evidence, tool_steps),
-            scenario=evidence.scenario,
-            topology_class=evidence.topology_class,
-            tools=[step.tool_name for step in tool_steps if step.tool_name],
-        )
-        topic = _skill_topic(evidence, attrs.protocols, attrs.services, attrs.symptoms)
-        signature = _evidence_signature_text(attrs, tool_steps)
         critique = (
             critique.model_copy(deep=True)
             if critique is not None
             else self.semantic_gradient(evidence=evidence, tool_steps=tool_steps)
         )
         sampled = sampled_candidate
-        if sampled is None and sample_with_llm:
+        if sampled is None:
             sampled = self._llm_skill_candidate(
                 evidence=evidence,
                 parent=parent,
@@ -950,6 +800,27 @@ class ProceduralMemoryModule:
                 experiences=experiences or [],
                 candidate_index=candidate_index,
             )
+        if sampled is None:
+            raise RuntimeError(
+                "Procedural Memory candidate evolver returned no valid skill."
+            )
+        batch_text = " ".join(
+            [
+                _episode_attribute_text(evidence, tool_steps),
+                sampled.title,
+                sampled.initiation,
+                " ".join(sampled.policy),
+                sampled.termination,
+                *(item.trajectory for item in (experiences or []) if item.trajectory),
+            ]
+        )
+        attrs = infer_procedural_memory_attributes(
+            batch_text,
+            tools=[step.tool_name for step in tool_steps if step.tool_name],
+        )
+        source_session_ids = sorted(
+            {item.session_id for item in (experiences or []) if item.session_id}
+        ) or [evidence.session_id]
         if parent is None:
             skill_id = _stable_id(
                 attrs.protocols,
@@ -958,22 +829,6 @@ class ProceduralMemoryModule:
                 attrs.tools,
                 [step.tool_name for step in tool_steps if step.tool_name],
                 prefix="skill",
-            )
-            title = f"Procedure for {topic}"
-            activation = _signature_activation(signature)
-            steps = [
-                SkillStep(
-                    order=index + 1,
-                    action=step.action,
-                    tool_name=step.tool_name,
-                    rationale="Distilled from an observed Skill-Pro transition.",
-                )
-                for index, step in enumerate(tool_steps[:10])
-            ]
-            termination = (
-                "Stop when current observations support the anomaly decision; if an "
-                "anomaly is present, also require supported localization and root cause. "
-                "Do not invent localization or root cause for a no-anomaly conclusion."
             )
             version = 0
             parent_id = ""
@@ -984,8 +839,7 @@ class ProceduralMemoryModule:
                 json.dumps(
                     [
                         parent.skill_id,
-                        evidence.session_id,
-                        evidence.scenario,
+                        source_session_ids,
                         attrs.protocols,
                         attrs.services,
                         attrs.symptoms,
@@ -997,54 +851,22 @@ class ProceduralMemoryModule:
                 ).encode("utf-8")
             ).hexdigest()[:6]
             skill_id = f"{base}_v{version}_{revision}"
-            title = parent.title
-            activation = critique.component_update.initiation or (
-                _signature_activation(signature)
-                if _uses_generic_seed_policy(parent)
-                else parent.activation_condition
-            )
-            update_steps = [
-                SkillStep(
-                    order=i + 1, action=step, rationale="Skill-Pro semantic update."
-                )
-                for i, step in enumerate(critique.component_update.policy)
-                if step.strip()
-            ]
-            steps = update_steps or parent.execution_steps
-            termination = (
-                critique.component_update.termination or parent.termination_condition
-            )
             parent_id = parent.skill_id
-        if sampled is not None:
-            title = sampled.title.strip() or title
-            activation = sampled.initiation.strip() or activation
-            sampled_steps = [
-                SkillStep(
-                    order=index + 1,
-                    action=action.strip(),
-                    rationale="Independently sampled Skill-Pro candidate.",
-                )
-                for index, action in enumerate(sampled.policy[:8])
-                if action.strip()
-            ]
-            if sampled_steps:
-                steps = sampled_steps
-            termination = sampled.termination.strip() or termination
+        title = sampled.title.strip()
+        activation = sampled.initiation.strip()
+        steps = [
+            SkillStep(
+                order=index + 1,
+                action=action.strip(),
+                rationale="Independently sampled Skill-Pro candidate.",
+            )
+            for index, action in enumerate(sampled.policy[:8])
+            if action.strip()
+        ]
+        termination = sampled.termination.strip()
         if critique.proposed_update:
             termination += f" Semantic update: {critique.proposed_update[:240]}"
-        if sampled is None and candidate_index == 1:
-            termination += (
-                " Require independent confirmation before the final conclusion."
-            )
-        elif sampled is None and candidate_index >= 2:
-            steps = steps + [
-                SkillStep(
-                    order=len(steps) + 1,
-                    action="Cross-check the leading hypothesis with an independent tool before submitting.",
-                    rationale="Best-of-N Skill-Pro candidate variant.",
-                )
-            ]
-        outcome_success = _safe_skill_promotion(
+        outcome_success = _metric_success(
             evidence.metrics,
             evidence.ground_truth_is_anomaly,
         )
@@ -1054,8 +876,8 @@ class ProceduralMemoryModule:
             activation_condition=activation,
             execution_steps=steps[:10],
             termination_condition=termination,
-            source_sessions=[evidence.session_id],
-            scenarios=[evidence.scenario] if evidence.scenario else [],
+            source_sessions=source_session_ids,
+            scenarios=[],
             protocols=attrs.protocols,
             services=attrs.services,
             symptoms=attrs.symptoms,
@@ -1138,24 +960,63 @@ class ProceduralMemoryModule:
         )
 
     @staticmethod
+    def _redact_semantic_gradient(
+        gradient: SemanticGradient,
+        evidence: EvaluationEvidence,
+    ) -> SemanticGradient:
+        redacted = gradient.model_copy(deep=True)
+        redacted.critique = _redact_hidden_labels(
+            redact_oracle_markers(redacted.critique), evidence
+        )
+        redacted.proposed_update = _redact_hidden_labels(
+            redact_oracle_markers(redacted.proposed_update), evidence
+        )
+        redacted.component_update.initiation = _redact_hidden_labels(
+            redact_oracle_markers(redacted.component_update.initiation), evidence
+        )
+        redacted.component_update.policy = [
+            _redact_hidden_labels(redact_oracle_markers(step), evidence)
+            for step in redacted.component_update.policy
+        ]
+        redacted.component_update.termination = _redact_hidden_labels(
+            redact_oracle_markers(redacted.component_update.termination), evidence
+        )
+        return redacted
+
+    @staticmethod
     def _redact_skill_candidate(
         draft: SkillCandidateDraft,
         evidence: EvaluationEvidence,
     ) -> SkillCandidateDraft | None:
-        draft.title = _redact_hidden_labels(
-            redact_oracle_markers(draft.title), evidence
-        )
-        draft.initiation = _redact_hidden_labels(
-            redact_oracle_markers(draft.initiation), evidence
-        )
-        draft.policy = [
-            _redact_hidden_labels(redact_oracle_markers(step), evidence)
-            for step in draft.policy
+        redacted = draft.model_copy(deep=True)
+        redacted.title = _redact_hidden_labels(
+            redact_oracle_markers(redacted.title), evidence
+        ).strip()
+        redacted.initiation = _redact_hidden_labels(
+            redact_oracle_markers(redacted.initiation), evidence
+        ).strip()
+        redacted.policy = [
+            value
+            for step in redacted.policy
+            if (
+                value := _redact_hidden_labels(
+                    redact_oracle_markers(step), evidence
+                ).strip()
+            )
         ]
-        draft.termination = _redact_hidden_labels(
-            redact_oracle_markers(draft.termination), evidence
-        )
-        return draft if draft.policy else None
+        redacted.termination = _redact_hidden_labels(
+            redact_oracle_markers(redacted.termination), evidence
+        ).strip()
+        if not all(
+            (
+                redacted.title,
+                redacted.initiation,
+                redacted.policy,
+                redacted.termination,
+            )
+        ):
+            return None
+        return redacted
 
     def _llm_skill_candidate(
         self,
@@ -1183,7 +1044,7 @@ class ProceduralMemoryModule:
         try:
             llm = self._learning_llm()
             if llm is None:
-                return None
+                raise RuntimeError("learning LLM is unavailable")
             evolver = llm.with_structured_output(SkillCandidateDraft)
             raw = evolver.invoke(prompt)
             draft = (
@@ -1191,53 +1052,12 @@ class ProceduralMemoryModule:
                 if isinstance(raw, SkillCandidateDraft)
                 else SkillCandidateDraft.model_validate(raw)
             )
-            return self._redact_skill_candidate(draft, evidence)
-        except Exception:
-            return None
-
-    def _llm_skill_candidates(
-        self,
-        *,
-        evidence: EvaluationEvidence,
-        parent: ProceduralSkill | None,
-        critique: SemanticGradient,
-        experiences: list[SkillExperience],
-        count: int,
-    ) -> list[SkillCandidateDraft]:
-        """Generate bounded best-of-N candidates in one structured request."""
-        if not self._selected_learning_backend() or not self._selected_evolver_model():
-            return []
-        prompt = self._skill_candidate_prompt(
-            parent=parent,
-            critique=critique,
-            experiences=experiences,
-            output_instruction=(
-                f"Return exactly {count} behaviorally distinct candidates in "
-                "SkillCandidateBatchDraft.candidates. Every candidate needs a concise "
-                "title, observable initiation condition, 3-6 executable policy steps, "
-                "and a checkable termination condition."
-            ),
-        )
-        try:
-            llm = self._learning_llm()
-            if llm is None:
-                return []
-            evolver = llm.with_structured_output(SkillCandidateBatchDraft)
-            raw = evolver.invoke(prompt)
-            batch = (
-                raw
-                if isinstance(raw, SkillCandidateBatchDraft)
-                else SkillCandidateBatchDraft.model_validate(raw)
-            )
-            candidates = [
-                redacted
-                for draft in batch.candidates[:count]
-                if (redacted := self._redact_skill_candidate(draft, evidence))
-                is not None
-            ]
-            return candidates
-        except Exception:
-            return []
+            candidate = self._redact_skill_candidate(draft, evidence)
+            if candidate is None:
+                raise RuntimeError("candidate evolver returned an incomplete skill")
+            return candidate
+        except Exception as exc:
+            raise RuntimeError(format_learning_error(exc)) from exc
 
     def semantic_gradient(
         self,
@@ -1253,12 +1073,9 @@ class ProceduralMemoryModule:
         )
         if llm_gradient is not None:
             return llm_gradient
-        gradient = self._deterministic_semantic_gradient(
-            evidence=evidence,
-            tool_steps=tool_steps,
+        raise RuntimeError(
+            llm_error or "Procedural Memory semantic-gradient LLM is not configured."
         )
-        gradient.llm_error = llm_error
-        return gradient
 
     def semantic_gradient_from_experience(
         self,
@@ -1306,202 +1123,69 @@ class ProceduralMemoryModule:
     ) -> SemanticGradient:
         """Consolidate per-trajectory gradients into one stable batch update."""
         if not gradients:
-            return SemanticGradient(
+            raise RuntimeError("No trajectory gradients were available for evolution.")
+        if not self._selected_learning_backend() or not self._selected_evolver_model():
+            raise RuntimeError(
+                "Procedural Memory semantic-gradient LLM is not configured."
+            )
+        prompt = (
+            "You are the Skill-Pro batch semantic-gradient aggregator. "
+            "Consolidate recurring, causally supported updates and discard "
+            "conflicting or trajectory-specific details. Do not include device "
+            "names, hidden labels, benchmark ids, or exact one-off values.\n\n"
+            "Parent skill:\n"
+            f"{skill.format_for_llm() if skill else 'NEW SKILL'}\n\n"
+            "Per-trajectory gradients:\n"
+            f"{json.dumps([item.model_dump(mode='json') for item in gradients], indent=2, ensure_ascii=False)}\n\n"
+            "Return one SemanticGradientDraft. Keep policy to 3-6 short, "
+            "executable steps. Set is_related=false only if no recurring "
+            "signal applies to the parent skill."
+        )
+        try:
+            llm = self._learning_llm()
+            if llm is None:
+                raise RuntimeError("learning LLM is unavailable")
+            aggregator = llm.with_structured_output(SemanticGradientDraft)
+            raw = aggregator.invoke(prompt)
+            draft = (
+                raw
+                if isinstance(raw, SemanticGradientDraft)
+                else SemanticGradientDraft.model_validate(raw)
+            )
+            gradient = SemanticGradient(
                 source_session_id=source_session_id,
-                critique="No related trajectory gradients were available.",
-                proposed_update="Preserve the current skill until more evidence arrives.",
-                component_update=SkillComponentGradient(is_related=False),
-            )
-        if self._selected_learning_backend() and self._selected_evolver_model():
-            prompt = (
-                "You are the Skill-Pro batch semantic-gradient aggregator. "
-                "Consolidate recurring, causally supported updates and discard "
-                "conflicting or trajectory-specific details. Do not include device "
-                "names, hidden labels, benchmark ids, or exact one-off values.\n\n"
-                "Parent skill:\n"
-                f"{skill.format_for_llm() if skill else 'NEW SKILL'}\n\n"
-                "Per-trajectory gradients:\n"
-                f"{json.dumps([item.model_dump(mode='json') for item in gradients], indent=2, ensure_ascii=False)}\n\n"
-                "Return one SemanticGradientDraft. Keep policy to 3-6 short, "
-                "executable steps. Set is_related=false only if no recurring "
-                "signal applies to the parent skill."
-            )
-            try:
-                llm = self._learning_llm()
-                if llm is None:
-                    raise RuntimeError("learning LLM is unavailable")
-                aggregator = llm.with_structured_output(SemanticGradientDraft)
-                raw = aggregator.invoke(prompt)
-                draft = (
-                    raw
-                    if isinstance(raw, SemanticGradientDraft)
-                    else SemanticGradientDraft.model_validate(raw)
-                )
-                gradient = SemanticGradient(
-                    source_session_id=source_session_id,
-                    critique=redact_oracle_markers(draft.critique),
-                    proposed_update=redact_oracle_markers(draft.proposed_update),
-                    component_update=SkillComponentGradient(
-                        initiation=redact_oracle_markers(draft.initiation),
-                        policy=[
-                            redact_oracle_markers(step)
-                            for step in draft.policy[:6]
-                            if step.strip()
-                        ],
-                        termination=redact_oracle_markers(draft.termination),
-                        is_related=draft.is_related,
-                    ),
-                    gradient_source="llm",
-                )
-                if evidence is not None:
-                    gradient.critique = _redact_hidden_labels(
-                        gradient.critique, evidence
-                    )
-                    gradient.proposed_update = _redact_hidden_labels(
-                        gradient.proposed_update, evidence
-                    )
-                    gradient.component_update.initiation = _redact_hidden_labels(
-                        gradient.component_update.initiation, evidence
-                    )
-                    gradient.component_update.policy = [
-                        _redact_hidden_labels(step, evidence)
-                        for step in gradient.component_update.policy
-                    ]
-                    gradient.component_update.termination = _redact_hidden_labels(
-                        gradient.component_update.termination, evidence
-                    )
-                return gradient
-            except Exception as exc:
-                aggregate_error = format_learning_error(exc)
-        else:
-            aggregate_error = ""
-
-        related = [item for item in gradients if item.component_update.is_related]
-        selected = related or gradients
-        policies: list[str] = []
-        for item in selected:
-            for step in item.component_update.policy:
-                if step and step not in policies:
-                    policies.append(step)
-        initiations = [
-            item.component_update.initiation
-            for item in selected
-            if item.component_update.initiation
-        ]
-        terminations = [
-            item.component_update.termination
-            for item in selected
-            if item.component_update.termination
-        ]
-        return SemanticGradient(
-            source_session_id=source_session_id,
-            critique="Batch patterns: "
-            + " | ".join(item.critique for item in selected[:4] if item.critique),
-            proposed_update=" | ".join(
-                item.proposed_update for item in selected[:4] if item.proposed_update
-            ),
-            component_update=SkillComponentGradient(
-                initiation=initiations[0] if initiations else "",
-                policy=policies[:6],
-                termination=terminations[0] if terminations else "",
-                is_related=bool(related),
-            ),
-            gradient_source="deterministic",
-            llm_error=aggregate_error,
-        )
-
-    def _deterministic_semantic_gradient(
-        self,
-        *,
-        evidence: EvaluationEvidence,
-        tool_steps: list[SkillStep],
-    ) -> SemanticGradient:
-        if _safe_skill_promotion(
-            evidence.metrics,
-            evidence.ground_truth_is_anomaly,
-        ):
-            critique = (
-                "Successful trajectory: preserve evidence order and termination rule."
-            )
-            update = "Promote or reinforce this procedure if it improves step/tool efficiency."
-            termination = (
-                "Terminate after current evidence supports a no-anomaly conclusion; "
-                "leave localization and root cause empty."
-                if evidence.ground_truth_is_anomaly is False
-                else "Terminate after direct evidence supports detection, localization, and RCA."
-            )
-            component = SkillComponentGradient(
-                policy=[step.action for step in tool_steps[:6]],
-                termination=termination,
-                is_related=True,
-            )
-        else:
-            detection = float(evidence.metrics.get("detection_score") or 0.0)
-            high_tool_budget = (evidence.tool_calls or len(tool_steps)) >= 10
-            if detection >= 1.0 and (
-                not _component_complete(evidence.metrics, "localization")
-                or not _component_complete(evidence.metrics, "rca")
-            ):
-                critique = (
-                    "Failed Skill-Pro outcome: anomaly detection succeeded but "
-                    "localization/RCA was not supported. Treat this as premature "
-                    "termination or an overly broad initiation condition, not as "
-                    "a reusable success."
-                )
-                update = (
-                    "Narrow initiation to states with matching current evidence "
-                    "signature and require discriminating localization/RCA evidence "
-                    "before final diagnosis."
-                )
-                termination = (
-                    "Terminate only after current observations support detection, "
-                    "localization, and RCA; detection-only evidence must continue "
-                    "to a discriminating check."
-                )
-            elif high_tool_budget:
-                critique = (
-                    "Failed Skill-Pro outcome: the procedure consumed too many "
-                    "tool calls without converging. The termination condition is "
-                    "too weak or the policy lacks a short evidence ladder."
-                )
-                update = (
-                    "Add a bounded ladder and terminate or switch skills when the "
-                    "latest observations no longer satisfy initiation."
-                )
-                termination = (
-                    "Terminate or switch after the ladder's discriminating checks "
-                    "are exhausted, or when observations contradict initiation."
-                )
-            else:
-                critique = (
-                    "Failed trajectory: revise initiation or policy to require stronger "
-                    "evidence before localization/RCA."
-                )
-                update = "Store only as candidate unless PPO gate beats the existing/default policy."
-                termination = "Do not terminate until diagnosis has at least two independent observations."
-            component = SkillComponentGradient(
-                initiation=(
-                    "Use only when the current observation history matches the "
-                    "skill's evidence signature; do not activate from scenario "
-                    "or tool catalog alone."
+                critique=redact_oracle_markers(draft.critique),
+                proposed_update=redact_oracle_markers(draft.proposed_update),
+                component_update=SkillComponentGradient(
+                    initiation=redact_oracle_markers(draft.initiation),
+                    policy=[
+                        redact_oracle_markers(step)
+                        for step in draft.policy[:6]
+                        if step.strip()
+                    ],
+                    termination=redact_oracle_markers(draft.termination),
+                    is_related=draft.is_related,
                 ),
-                policy=[
-                    "Summarize observations relevant to the skill's activation condition.",
-                    "Collect the most specific discriminating check for localization.",
-                    "Verify the suspected root cause with an independent command.",
-                ],
-                termination=termination,
-                is_related=bool(tool_steps),
+                gradient_source="llm",
             )
-        if not tool_steps:
-            critique += " Trace contained no usable diagnosis tool calls."
-        return SemanticGradient(
-            source_session_id=evidence.session_id,
-            critique=critique,
-            proposed_update=update,
-            component_update=component,
-            gradient_source="deterministic",
-        )
+            if evidence is not None:
+                gradient.critique = _redact_hidden_labels(gradient.critique, evidence)
+                gradient.proposed_update = _redact_hidden_labels(
+                    gradient.proposed_update, evidence
+                )
+                gradient.component_update.initiation = _redact_hidden_labels(
+                    gradient.component_update.initiation, evidence
+                )
+                gradient.component_update.policy = [
+                    _redact_hidden_labels(step, evidence)
+                    for step in gradient.component_update.policy
+                ]
+                gradient.component_update.termination = _redact_hidden_labels(
+                    gradient.component_update.termination, evidence
+                )
+            return gradient
+        except Exception as exc:
+            raise RuntimeError(format_learning_error(exc)) from exc
 
     def _llm_semantic_gradient(
         self,
@@ -1600,7 +1284,6 @@ class ProceduralMemoryModule:
                 evidence,
             )
             gradient.gradient_source = "llm"
-            gradient.llm_error = ""
             return gradient, ""
         except Exception as exc:
             return None, format_learning_error(exc)
@@ -1618,19 +1301,14 @@ class ProceduralMemoryModule:
         current_reward = _evidence_score(evidence)
         candidate_score = self._skill_effective_score(candidate)
         baseline_score = self._skill_effective_score(baseline) if baseline else 0.0
-        sample_reward, sample_baseline = _skill_stat_reward(
-            evidence,
-            current_reward,
-            baseline_score,
-        )
         sample_batch = samples or [
             SkillExperience(
                 experience_id=_stable_id(evidence.session_id, "gate", prefix="exp"),
                 session_id=evidence.session_id,
-                reward=sample_reward,
-                baseline=sample_baseline,
-                advantage=sample_reward - sample_baseline,
-                success=_safe_skill_promotion(
+                reward=current_reward,
+                baseline=baseline_score,
+                advantage=current_reward - baseline_score,
+                success=_metric_success(
                     evidence.metrics,
                     evidence.ground_truth_is_anomaly,
                 ),
@@ -1651,25 +1329,35 @@ class ProceduralMemoryModule:
         no_alignment_regression = (
             replay["candidate_alignment"] + margin >= replay["baseline_alignment"]
         )
+        verification_method = str(
+            replay.get("verification_method") or "structured_replay"
+        )
+        exact_ppo = verification_method == "policy_logprob"
         accepted = (
-            parent_safe
-            and not verification_error
-            and has_positive_support
-            and no_alignment_regression
+            not verification_error
             and j_score > margin
+            and (
+                exact_ppo
+                or (parent_safe and has_positive_support and no_alignment_regression)
+            )
+        )
+        gate_name = (
+            "Skill-Pro PPO gate"
+            if verification_method == "policy_logprob"
+            else verification_method.replace("_", " ") + " gate"
         )
         reason = (
-            "candidate passed Skill-Pro PPO gate"
+            f"candidate passed {gate_name}"
             if accepted
             else "candidate verification deferred: verifier unavailable"
             if verification_error
-            else "candidate failed Skill-Pro PPO gate: unstable parent skill"
-            if not parent_safe
-            else "candidate failed Skill-Pro PPO gate: insufficient positive support"
-            if not has_positive_support
-            else "candidate failed Skill-Pro PPO gate: alignment regression"
-            if not no_alignment_regression
-            else "candidate failed Skill-Pro PPO gate"
+            else f"candidate failed {gate_name}: unstable parent skill"
+            if not exact_ppo and not parent_safe
+            else f"candidate failed {gate_name}: insufficient positive support"
+            if not exact_ppo and not has_positive_support
+            else f"candidate failed {gate_name}: alignment regression"
+            if not exact_ppo and not no_alignment_regression
+            else f"candidate failed {gate_name}"
         )
         return PPOGateDecision(
             accepted=accepted,
@@ -1685,43 +1373,11 @@ class ProceduralMemoryModule:
             sample_count=len(sample_batch),
             best_of_n=best_of_n,
             candidate_type="REFINE" if candidate_type == "REFINE" else "NEW",
-            verification_method=str(
-                replay.get("verification_method") or "structured_replay"
-            ),
+            verification_method=verification_method,
             verified_success_count=verified_success_count,
             positive_advantage_count=positive_advantage_count,
             verification_error=verification_error,
         )
-
-    @staticmethod
-    def _candidate_preselection_score(
-        candidate: ProceduralSkill,
-        *,
-        baseline: ProceduralSkill | None,
-        samples: list[SkillExperience],
-    ) -> float:
-        replay = StructuredReplayPolicyScorer().score_batch(
-            candidate=candidate,
-            baseline=baseline,
-            experiences=samples,
-        )
-        by_id = {item.experience_id: item for item in replay.scores}
-        total = 0.0
-        weight_total = 0.0
-        for sample in samples:
-            score = by_id.get(sample.experience_id)
-            if score is None:
-                continue
-            advantage = (
-                sample.advantage
-                if sample.advantage != 0
-                else sample.reward - sample.baseline
-            )
-            weight = max(abs(advantage), 0.05)
-            alignment_delta = score.candidate_alignment - score.baseline_alignment
-            total += (alignment_delta if advantage >= 0 else -alignment_delta) * weight
-            weight_total += weight
-        return total / max(weight_total, 1e-9)
 
     def learn_from_episode(
         self,
@@ -1742,30 +1398,78 @@ class ProceduralMemoryModule:
         tool_steps: list[SkillStep],
     ) -> dict[str, Any]:
         state = self.store.load()
-        maintenance_logs = self._normalize_experience_pools(state)
-        if maintenance_logs:
-            state.maintenance_log.extend(maintenance_logs)
         total_added_tokens = int(
             evidence.metrics.get("procedural_memory_total_added_tokens") or 0
         )
         delta_prompt_tokens_per_step = total_added_tokens / max(
             evidence.steps or len(tool_steps), 1
         )
-        if not tool_steps:
-            state_changed = bool(maintenance_logs)
-            if not any(
-                item.session_id == evidence.session_id for item in state.episodes
-            ):
-                state.episodes.append(public_episode_evidence(evidence))
-                state_changed = True
-            if state_changed:
-                self.store.save(state)
+        reward = _evidence_score(evidence)
+        baseline_key = _baseline_key(evidence)
+        baseline_value = state.baselines.get(baseline_key, 0.0)
+        promotion_safe = _metric_success(
+            evidence.metrics,
+            evidence.ground_truth_is_anomaly,
+        )
+        runtime_skill_counts = self._runtime_skill_counts(state, tool_steps)
+        experience_skill_ids = sorted(runtime_skill_counts)
+        attributed_steps = sum(
+            bool(
+                step.skill_id
+                and step.activation_id
+                and step.skill_id in runtime_skill_counts
+            )
+            for step in tool_steps
+        )
+        unattributed_steps = max(0, len(tool_steps) - attributed_steps)
+        attribution_rate = attributed_steps / max(len(tool_steps), 1)
+        segment_experiences = self._segment_experiences(
+            evidence=evidence,
+            tool_steps=tool_steps,
+            reward=reward,
+            baseline=baseline_value,
+            success=promotion_safe,
+            valid_skill_ids=set(runtime_skill_counts),
+        )
+        episode_is_new = not any(
+            item.session_id == evidence.session_id for item in state.episodes
+        )
+        if episode_is_new:
+            state.episodes.append(public_episode_evidence(evidence))
+        existing_experience_ids = {item.experience_id for item in state.experiences}
+        current_experience_ids = sorted(
+            segment.experience_id for segment in segment_experiences.values()
+        )
+        if episode_is_new:
+            for segment in segment_experiences.values():
+                if segment.experience_id in existing_experience_ids:
+                    continue
+                state.experiences.append(segment)
+                existing_experience_ids.add(segment.experience_id)
+        state.experiences = state.experiences[-self.experience_pool_size :]
+        if episode_is_new:
+            self._update_baseline(state, baseline_key, reward)
+            state.iteration += 1
+            for skill in state.skills.values():
+                if skill.status != "retired":
+                    skill.increment_maturity()
+            total_calls = max(sum(runtime_skill_counts.values()), 1)
+            for skill_id, count in runtime_skill_counts.items():
+                state.skills[skill_id].update_stats(
+                    reward=reward,
+                    baseline=baseline_value,
+                    total_skill_calls=total_calls,
+                    skill_call_count=count,
+                )
+
+        current_experience = next(iter(segment_experiences.values()), None)
+
+        def report_base() -> dict[str, Any]:
             return {
-                "status": "rejected",
-                "reason": "Skill-Pro requires at least one observed execution step.",
-                "skill_id": "",
-                "decision": None,
-                "skills": len(state.skills),
+                "episode_reward": reward,
+                "episode_baseline": baseline_value,
+                "episode_advantage": reward - baseline_value,
+                "episode_success": promotion_safe,
                 "total_added_tokens": total_added_tokens,
                 "delta_prompt_tokens_per_step": round(
                     delta_prompt_tokens_per_step,
@@ -1780,178 +1484,6 @@ class ProceduralMemoryModule:
                     )
                     or 0
                 ),
-                "followup_added_tokens": int(
-                    evidence.metrics.get("procedural_memory_followup_added_tokens") or 0
-                ),
-            }
-
-        parent = self._runtime_parent_from_steps(state, tool_steps)
-        if parent is not None and _learned_skill_unstable(parent):
-            parent = None
-        # Seeds are cold-start controllers, not procedures worth refining.
-        # A seed-led trace can create a new skill only from compatible evidence.
-        evolution_parent = (
-            parent if parent is not None and not _is_seed_skill(parent) else None
-        )
-        reward = _evidence_score(evidence)
-        baseline_key = _baseline_key(evidence)
-        baseline_value = state.baselines.get(baseline_key, 0.0)
-        promotion_safe = _safe_skill_promotion(
-            evidence.metrics,
-            evidence.ground_truth_is_anomaly,
-        )
-        stat_reward, stat_baseline = _skill_stat_reward(
-            evidence,
-            reward,
-            baseline_value,
-        )
-        runtime_skill_counts = self._runtime_skill_counts(state, tool_steps)
-        experience_skill_ids = sorted(runtime_skill_counts)
-        attributed_steps = sum(
-            step.skill_id in runtime_skill_counts for step in tool_steps
-        )
-        unattributed_steps = max(0, len(tool_steps) - attributed_steps)
-        attribution_rate = attributed_steps / max(len(tool_steps), 1)
-        segment_experiences = self._segment_experiences(
-            evidence=evidence,
-            tool_steps=tool_steps,
-            reward=stat_reward,
-            baseline=stat_baseline,
-            success=promotion_safe,
-            valid_skill_ids=set(runtime_skill_counts),
-        )
-        target_segment_id = (
-            evolution_parent.skill_id if evolution_parent is not None else ""
-        )
-        experience = segment_experiences.get(target_segment_id)
-        if experience is None:
-            self._maintain(state)
-            self.store.save(state)
-            return {
-                "status": "rejected",
-                "reason": "No execution segment was attributable to the selected parent.",
-                "skill_id": "",
-                "episode_reward": reward,
-                "episode_baseline": baseline_value,
-                "episode_advantage": reward - baseline_value,
-                "attributed_steps": attributed_steps,
-                "unattributed_steps": unattributed_steps,
-                "attribution_rate": round(attribution_rate, 6),
-            }
-        if evolution_parent is None:
-            target_tool_steps = [
-                step
-                for step in tool_steps
-                if not step.skill_id
-                or _skill_base_id(step.skill_id) in GENERIC_SEED_SKILL_IDS
-            ]
-        else:
-            target_tool_steps = [
-                step for step in tool_steps if step.skill_id == target_segment_id
-            ]
-
-        if not any(item.session_id == evidence.session_id for item in state.episodes):
-            state.episodes.append(public_episode_evidence(evidence))
-        existing_experience_ids = {item.experience_id for item in state.experiences}
-        current_experience_ids = sorted(
-            segment.experience_id for segment in segment_experiences.values()
-        )
-        for segment in segment_experiences.values():
-            if segment.experience_id not in existing_experience_ids:
-                state.experiences.append(segment)
-                existing_experience_ids.add(segment.experience_id)
-            self._update_golden_pool(state, segment)
-
-        # Preserve the per-episode learning signal even while the batch is too
-        # small to safely propose a candidate skill.
-        episode_gradient = self._deterministic_semantic_gradient(
-            evidence=evidence,
-            tool_steps=target_tool_steps,
-        )
-        episode_gradient.critique = _redact_hidden_labels(
-            redact_oracle_markers(episode_gradient.critique), evidence
-        )
-        episode_gradient.proposed_update = _redact_hidden_labels(
-            redact_oracle_markers(episode_gradient.proposed_update), evidence
-        )
-        episode_gradient.component_update.initiation = _redact_hidden_labels(
-            redact_oracle_markers(episode_gradient.component_update.initiation),
-            evidence,
-        )
-        episode_gradient.component_update.policy = [
-            _redact_hidden_labels(redact_oracle_markers(step), evidence)
-            for step in episode_gradient.component_update.policy
-        ]
-        episode_gradient.component_update.termination = _redact_hidden_labels(
-            redact_oracle_markers(episode_gradient.component_update.termination),
-            evidence,
-        )
-        experience.semantic_gradient = episode_gradient
-        state.experiences = state.experiences[-self.experience_pool_size :]
-        self._update_baseline(
-            state,
-            baseline_key,
-            stat_reward,
-        )
-        state.iteration += 1
-        for skill in state.skills.values():
-            if skill.status != "retired":
-                skill.increment_maturity()
-        if runtime_skill_counts:
-            total_calls = max(sum(runtime_skill_counts.values()), 1)
-            for skill_id, count in runtime_skill_counts.items():
-                state.skills[skill_id].update_stats(
-                    reward=stat_reward,
-                    baseline=stat_baseline,
-                    total_skill_calls=total_calls,
-                    skill_call_count=count,
-                )
-
-        samples = self._evolution_batch(state, evolution_parent, current=experience)
-        if len(samples) < self.evolution_threshold:
-            self._maintain(state)
-            state.evolution_log.append(
-                {
-                    "iteration": state.iteration,
-                    "parent": evolution_parent.skill_id if evolution_parent else "",
-                    "runtime_skill_ids": sorted(set(experience_skill_ids)),
-                    "candidate": "",
-                    "action": "deferred",
-                    "reason": "insufficient Skill-Pro evolution batch",
-                    "sample_count": len(samples),
-                    "required_sample_count": self.evolution_threshold,
-                    "attributed_steps": attributed_steps,
-                    "unattributed_steps": unattributed_steps,
-                    "attribution_rate": round(attribution_rate, 6),
-                }
-            )
-            self.store.save(state)
-            return {
-                "status": "deferred",
-                "reason": "insufficient Skill-Pro evolution batch",
-                "skill_id": parent.skill_id if parent else "",
-                "episode_reward": reward,
-                "episode_baseline": baseline_value,
-                "episode_advantage": reward - baseline_value,
-                "episode_success": promotion_safe,
-                "total_added_tokens": experience.total_added_tokens,
-                "delta_prompt_tokens_per_step": round(
-                    experience.total_added_tokens
-                    / max(evidence.steps or len(tool_steps), 1),
-                    6,
-                ),
-                "prompt_added_tokens": int(
-                    evidence.metrics.get("procedural_memory_prompt_added_tokens") or 0
-                ),
-                "tool_description_added_tokens": int(
-                    evidence.metrics.get(
-                        "procedural_memory_tool_description_added_tokens"
-                    )
-                    or 0
-                ),
-                "followup_added_tokens": int(
-                    evidence.metrics.get("procedural_memory_followup_added_tokens") or 0
-                ),
                 "prompt_injection_count": int(
                     evidence.metrics.get("procedural_memory_prompt_injection_count")
                     or 0
@@ -1962,21 +1494,10 @@ class ProceduralMemoryModule:
                     )
                     or 0
                 ),
-                "followup_guidance_count": int(
-                    evidence.metrics.get("procedural_memory_followup_guidance_count")
-                    or 0
-                ),
-                "semantic_gradient_source": episode_gradient.gradient_source,
-                "semantic_gradient_llm_attempted": False,
-                "semantic_gradient_llm_failed": bool(episode_gradient.llm_error),
-                "semantic_gradient_llm_error": episode_gradient.llm_error,
-                "semantic_gradient_count": 1,
-                "evidence_family": experience.evidence_family,
-                "decision": None,
-                "sample_count": len(samples),
-                "required_sample_count": self.evolution_threshold,
                 "skills": len(state.skills),
-                "experience_id": experience.experience_id,
+                "experience_id": (
+                    current_experience.experience_id if current_experience else ""
+                ),
                 "runtime_skill_ids": sorted(set(experience_skill_ids)),
                 "experience_ids": current_experience_ids,
                 "attributed_steps": attributed_steps,
@@ -1985,62 +1506,62 @@ class ProceduralMemoryModule:
                 "method": "Skill-Pro",
             }
 
+        # Persist episode accounting before potentially slow LLM evolution calls.
+        self.store.save(state)
+        required_batch_size = max(self.evolution_threshold, 2)
+        evolution_parent = self._next_evolution_parent(state)
+        samples = self._evolution_batch(state, evolution_parent)
+        if len(samples) < required_batch_size:
+            reason = (
+                "no Skill-Pro trajectory batch is ready"
+                if evolution_parent is None
+                else "insufficient Skill-Pro evolution batch"
+            )
+            self._maintain(state)
+            state.evolution_log.append(
+                {
+                    "iteration": state.iteration,
+                    "parent": evolution_parent.skill_id if evolution_parent else "",
+                    "runtime_skill_ids": sorted(set(experience_skill_ids)),
+                    "candidate": "",
+                    "action": "deferred",
+                    "reason": reason,
+                    "sample_count": len(samples),
+                    "required_sample_count": required_batch_size,
+                    "attributed_steps": attributed_steps,
+                    "unattributed_steps": unattributed_steps,
+                    "attribution_rate": round(attribution_rate, 6),
+                }
+            )
+            self.store.save(state)
+            return {
+                "status": "deferred",
+                "reason": reason,
+                "skill_id": evolution_parent.skill_id if evolution_parent else "",
+                "semantic_gradient_source": "pending",
+                "semantic_gradient_llm_attempted": False,
+                "semantic_gradient_llm_failed": False,
+                "semantic_gradient_llm_error": "",
+                "semantic_gradient_count": 0,
+                "decision": None,
+                "sample_count": len(samples),
+                "required_sample_count": required_batch_size,
+                **report_base(),
+            }
+
         verification_samples = self._verification_batch(
             state,
-            evolution_parent,
             generation_samples=samples,
-            current=experience,
         )
-        verification_ids = {sample.experience_id for sample in verification_samples}
+        verification_session_ids = {
+            sample.session_id for sample in verification_samples
+        }
         if len(samples) > 1:
             samples = [
                 sample
                 for sample in samples
-                if sample.experience_id not in verification_ids
+                if sample.session_id not in verification_session_ids
             ]
-        per_trajectory_gradients: list[SemanticGradient] = []
-        for sample in samples:
-            if sample.semantic_gradient is not None:
-                gradient = sample.semantic_gradient.model_copy(deep=True)
-            elif sample.experience_id == experience.experience_id:
-                gradient = episode_gradient.model_copy(deep=True)
-            else:
-                gradient = self.semantic_gradient_from_experience(
-                    experience=sample,
-                    skill=evolution_parent,
-                )
-            gradient.critique = _redact_hidden_labels(
-                redact_oracle_markers(gradient.critique), evidence
-            )
-            gradient.proposed_update = _redact_hidden_labels(
-                redact_oracle_markers(gradient.proposed_update), evidence
-            )
-            gradient.component_update.initiation = _redact_hidden_labels(
-                redact_oracle_markers(gradient.component_update.initiation), evidence
-            )
-            gradient.component_update.policy = [
-                _redact_hidden_labels(redact_oracle_markers(step), evidence)
-                for step in gradient.component_update.policy
-            ]
-            gradient.component_update.termination = _redact_hidden_labels(
-                redact_oracle_markers(gradient.component_update.termination), evidence
-            )
-            per_trajectory_gradients.append(gradient)
-        related_gradient_count = sum(
-            gradient.component_update.is_related
-            for gradient in per_trajectory_gradients
-        )
-        related_gradients = [
-            gradient
-            for gradient in per_trajectory_gradients
-            if gradient.component_update.is_related
-        ]
-        batch_gradient = self.aggregate_semantic_gradients(
-            gradients=related_gradients,
-            skill=evolution_parent,
-            source_session_id=evidence.session_id,
-            evidence=evidence,
-        )
         if not verification_samples:
             reason = "insufficient disjoint Skill-Pro verification batch"
             self._maintain(state)
@@ -2057,7 +1578,7 @@ class ProceduralMemoryModule:
                     "action": "deferred",
                     "reason": reason,
                     "sample_count": len(samples),
-                    "required_sample_count": self.evolution_threshold,
+                    "required_sample_count": required_batch_size,
                     "required_verification_count": 1,
                     "attributed_steps": attributed_steps,
                     "unattributed_steps": unattributed_steps,
@@ -2068,127 +1589,206 @@ class ProceduralMemoryModule:
             return {
                 "status": "deferred",
                 "reason": reason,
-                "skill_id": parent.skill_id if parent else "",
-                "episode_reward": reward,
-                "episode_baseline": baseline_value,
-                "episode_advantage": reward - baseline_value,
-                "episode_success": promotion_safe,
-                "total_added_tokens": experience.total_added_tokens,
-                "delta_prompt_tokens_per_step": round(
-                    experience.total_added_tokens
-                    / max(evidence.steps or len(tool_steps), 1),
-                    6,
-                ),
-                "prompt_added_tokens": int(
-                    evidence.metrics.get("procedural_memory_prompt_added_tokens") or 0
-                ),
-                "tool_description_added_tokens": int(
-                    evidence.metrics.get(
-                        "procedural_memory_tool_description_added_tokens"
-                    )
-                    or 0
-                ),
-                "followup_added_tokens": int(
-                    evidence.metrics.get("procedural_memory_followup_added_tokens") or 0
-                ),
-                "semantic_gradient_source": episode_gradient.gradient_source,
+                "skill_id": evolution_parent.skill_id,
+                "semantic_gradient_source": "pending",
                 "semantic_gradient_llm_attempted": False,
-                "semantic_gradient_llm_failed": bool(episode_gradient.llm_error),
-                "semantic_gradient_llm_error": episode_gradient.llm_error,
-                "semantic_gradient_count": 1,
+                "semantic_gradient_llm_failed": False,
+                "semantic_gradient_llm_error": "",
+                "semantic_gradient_count": 0,
                 "verification_method": "none",
                 "verification_error": "",
                 "decision": None,
                 "sample_count": len(samples),
-                "required_sample_count": self.evolution_threshold,
+                "required_sample_count": required_batch_size,
                 "verification_sample_count": 0,
                 "required_verification_count": 1,
-                "skills": len(state.skills),
-                "experience_id": experience.experience_id,
-                "runtime_skill_ids": sorted(set(experience_skill_ids)),
-                "experience_ids": current_experience_ids,
-                "attributed_steps": attributed_steps,
-                "unattributed_steps": unattributed_steps,
-                "attribution_rate": round(attribution_rate, 6),
-                "method": "Skill-Pro",
+                **report_base(),
             }
-        relevance_ratio = related_gradient_count / max(len(per_trajectory_gradients), 1)
-        candidate_type = (
-            "REFINE"
-            if evolution_parent is not None and relevance_ratio >= 0.5
-            else "NEW"
-        )
-        sampled_candidates = self._llm_skill_candidates(
-            evidence=evidence,
-            parent=evolution_parent if candidate_type == "REFINE" else None,
-            critique=batch_gradient,
-            experiences=samples,
-            count=self.best_of_n,
-        )
-        ranked_candidates: list[tuple[float, ProceduralSkill]] = []
-        for index in range(self.best_of_n):
-            candidate = self.propose_skill(
-                evidence=evidence,
-                tool_steps=target_tool_steps,
-                parent=evolution_parent if candidate_type == "REFINE" else None,
-                candidate_index=index,
-                critique=batch_gradient,
-                experiences=samples,
-                sampled_candidate=(
-                    sampled_candidates[index]
-                    if index < len(sampled_candidates)
-                    else None
-                ),
-                sample_with_llm=False,
-            )
-            candidate.status = "candidate"
-            candidate.success_count = 0
-            candidate.failure_count = 0
-            candidate.score = (
-                self._skill_effective_score(evolution_parent)
-                if evolution_parent is not None
-                else 0.0
-            )
-            candidate.prior_score = candidate.score
-            ranked_candidates.append(
-                (
-                    self._candidate_preselection_score(
-                        candidate,
-                        baseline=evolution_parent,
-                        samples=verification_samples,
-                    ),
-                    candidate,
+        target_tool_steps = self._tool_steps_from_experiences(samples)
+        if not target_tool_steps:
+            raise RuntimeError("Skill-Pro evolution batch contains no actions")
+        candidate_attempts: list[
+            tuple[
+                ProceduralSkill,
+                PPOGateDecision,
+                list[SemanticGradient],
+                int,
+                float,
+                str,
+            ]
+        ] = []
+        candidate_errors: list[str] = []
+        gradients: list[SemanticGradient] = []
+        related_count = 0
+        relevance = 0.0
+        candidate_type = "REFINE"
+        candidate_parent: ProceduralSkill | None = evolution_parent
+        batch_gradient: SemanticGradient | None = None
+        try:
+            for sample in samples:
+                gradient = self.semantic_gradient_from_experience(
+                    experience=sample,
+                    skill=evolution_parent,
                 )
+                gradients.append(self._redact_semantic_gradient(gradient, evidence))
+            related_count = sum(
+                gradient.component_update.is_related for gradient in gradients
             )
+            relevance = related_count / max(len(gradients), 1)
+            candidate_type = (
+                "REFINE"
+                if evolution_parent is not None
+                and not _learned_skill_unstable(evolution_parent)
+                and relevance >= 0.5
+                else "NEW"
+            )
+            candidate_parent = evolution_parent if candidate_type == "REFINE" else None
+            batch_gradient = self.aggregate_semantic_gradients(
+                gradients=gradients,
+                skill=candidate_parent,
+                source_session_id=_stable_id(
+                    *(sample.session_id for sample in samples),
+                    prefix="batch",
+                ),
+                evidence=evidence,
+            )
+        except Exception as exc:
+            candidate_errors.append(f"semantic gradient: {format_learning_error(exc)}")
 
-        _, best_candidate = max(ranked_candidates, key=lambda item: item[0])
-        best_decision = self.ppo_gate(
-            candidate=best_candidate,
-            evidence=evidence,
-            baseline=evolution_parent,
-            samples=verification_samples,
-            candidate_type=candidate_type,
-            best_of_n=self.best_of_n,
-        )
+        for index in range(self.best_of_n if batch_gradient is not None else 0):
+            try:
+                sampled_candidate = self._llm_skill_candidate(
+                    evidence=evidence,
+                    parent=candidate_parent,
+                    critique=batch_gradient,
+                    experiences=samples,
+                    candidate_index=index,
+                )
+                if sampled_candidate is None:
+                    raise RuntimeError(
+                        "Procedural Memory candidate evolver returned no valid skill."
+                    )
+                candidate = self.propose_skill(
+                    evidence=evidence,
+                    tool_steps=target_tool_steps,
+                    parent=candidate_parent,
+                    candidate_index=index,
+                    critique=batch_gradient,
+                    experiences=samples,
+                    sampled_candidate=sampled_candidate,
+                )
+                candidate.status = "candidate"
+                candidate.success_count = 0
+                candidate.failure_count = 0
+                candidate.score = (
+                    self._skill_effective_score(candidate_parent)
+                    if candidate_parent is not None
+                    else 0.0
+                )
+                candidate.prior_score = candidate.score
+                decision = self.ppo_gate(
+                    candidate=candidate,
+                    evidence=evidence,
+                    baseline=candidate_parent,
+                    samples=verification_samples,
+                    candidate_type=candidate_type,
+                    best_of_n=self.best_of_n,
+                )
+                state.ppo_decisions.append(decision)
+                candidate_attempts.append(
+                    (
+                        candidate,
+                        decision,
+                        gradients,
+                        related_count,
+                        relevance,
+                        candidate_type,
+                    )
+                )
+            except Exception as exc:
+                candidate_errors.append(
+                    f"candidate {index}: {format_learning_error(exc)}"
+                )
 
-        gradient_source = (
-            best_candidate.semantic_gradients[-1].gradient_source
-            if best_candidate.semantic_gradients
-            else "deterministic"
-        )
-        gradient_error = (
-            best_candidate.semantic_gradients[-1].llm_error
-            if best_candidate.semantic_gradients
-            else ""
-        )
+        valid_attempts = [
+            attempt
+            for attempt in candidate_attempts
+            if not attempt[1].verification_error
+        ]
+        if not valid_attempts:
+            verification_errors = [
+                attempt[1].verification_error
+                for attempt in candidate_attempts
+                if attempt[1].verification_error
+            ]
+            errors = [*candidate_errors, *verification_errors]
+            reason = "Procedural Memory evolution deferred: " + (
+                " | ".join(dict.fromkeys(errors))
+                if errors
+                else "no candidate completed verification"
+            )
+            state.evolution_log.append(
+                {
+                    "iteration": state.iteration,
+                    "parent": evolution_parent.skill_id if evolution_parent else "",
+                    "runtime_skill_ids": sorted(set(experience_skill_ids)),
+                    "generation_experience_ids": [
+                        sample.experience_id for sample in samples
+                    ],
+                    "verification_experience_ids": [
+                        sample.experience_id for sample in verification_samples
+                    ],
+                    "candidate": "",
+                    "action": "deferred",
+                    "reason": reason,
+                    "best_of_n": self.best_of_n,
+                    "candidate_attempt_count": len(candidate_attempts),
+                    "candidate_errors": candidate_errors,
+                    "attributed_steps": attributed_steps,
+                    "unattributed_steps": unattributed_steps,
+                    "attribution_rate": round(attribution_rate, 6),
+                }
+            )
+            self._maintain(state)
+            self.store.save(state)
+            return {
+                "status": "deferred",
+                "reason": reason,
+                "skill_id": evolution_parent.skill_id if evolution_parent else "",
+                "semantic_gradient_source": "llm",
+                "semantic_gradient_llm_attempted": True,
+                "semantic_gradient_llm_failed": bool(candidate_errors),
+                "semantic_gradient_llm_error": " | ".join(candidate_errors),
+                "semantic_gradient_count": 0,
+                "verification_method": (
+                    candidate_attempts[0][1].verification_method
+                    if candidate_attempts
+                    else "none"
+                ),
+                "verification_error": " | ".join(dict.fromkeys(verification_errors)),
+                "verification_sample_count": len(verification_samples),
+                "decision": None,
+                **report_base(),
+            }
+
+        (
+            best_candidate,
+            best_decision,
+            per_trajectory_gradients,
+            related_gradient_count,
+            relevance_ratio,
+            candidate_type,
+        ) = max(valid_attempts, key=lambda attempt: attempt[1].j_score)
+        gradient_source = "llm"
+        gradient_error = ""
         if best_decision.accepted:
-            best_candidate.status = "probationary"
+            best_candidate.status = "validated"
             best_candidate.source_sessions = sorted(
                 set(best_candidate.source_sessions)
                 | {
                     sample.session_id
-                    for sample in verification_samples
-                    if sample.success and sample.session_id
+                    for sample in [*samples, *verification_samples]
+                    if sample.session_id
                 }
             )
             if evolution_parent is not None and candidate_type == "REFINE":
@@ -2235,18 +1835,25 @@ class ProceduralMemoryModule:
             )
         )
         consumed_sample_id_set = set(consumed_sample_ids)
-        retained_ids: set[str] = set()
-        verification_deferred = bool(best_decision.verification_error)
-        if not best_decision.accepted and not verification_deferred:
-            retain_count = max(1, self.evolution_threshold // 2)
-            retained_ids = {sample.experience_id for sample in samples[-retain_count:]}
+        consumed_session_order = list(
+            dict.fromkeys(
+                sample.session_id for sample in [*samples, *verification_samples]
+            )
+        )
+        consumed_session_ids = set(consumed_session_order)
+        retained_session_ids: set[str] = set()
+        if not best_decision.accepted:
+            retain_count = max(1, len(consumed_session_ids) // 2)
+            retained_session_ids = set(consumed_session_order[-retain_count:])
         for item in state.experiences:
             if (
                 item.experience_id in consumed_sample_id_set
-                and item.experience_id not in retained_ids
-            ):
+                or (
+                    item.session_id in consumed_session_ids
+                    and evolution_parent.skill_id in item.skill_ids
+                )
+            ) and item.session_id not in retained_session_ids:
                 item.used_for_evolution = True
-        state.ppo_decisions.append(best_decision)
         state.evolution_log.append(
             {
                 "iteration": state.iteration,
@@ -2254,22 +1861,22 @@ class ProceduralMemoryModule:
                 "runtime_skill_ids": sorted(set(experience_skill_ids)),
                 "sample_experience_ids": consumed_sample_ids,
                 "generation_experience_ids": generation_sample_ids,
+                "generation_session_ids": [sample.session_id for sample in samples],
                 "verification_experience_ids": [
                     sample.experience_id for sample in verification_samples
                 ],
+                "verification_session_ids": [
+                    sample.session_id for sample in verification_samples
+                ],
                 "candidate": best_candidate.skill_id,
-                "action": (
-                    "accepted"
-                    if best_decision.accepted
-                    else "deferred"
-                    if verification_deferred
-                    else "rejected"
-                ),
+                "action": ("accepted" if best_decision.accepted else "rejected"),
                 "j_score": best_decision.j_score,
                 "candidate_alignment": best_decision.candidate_alignment,
                 "baseline_alignment": best_decision.baseline_alignment,
                 "sample_count": best_decision.sample_count,
                 "best_of_n": self.best_of_n,
+                "candidate_attempt_count": len(candidate_attempts),
+                "candidate_errors": candidate_errors,
                 "semantic_gradient_source": gradient_source,
                 "semantic_gradient_llm_error": gradient_error,
                 "semantic_gradient_count": len(per_trajectory_gradients),
@@ -2286,47 +1893,9 @@ class ProceduralMemoryModule:
         self._maintain(state)
         self.store.save(state)
         return {
-            "status": (
-                "accepted"
-                if best_decision.accepted
-                else "deferred"
-                if verification_deferred
-                else "rejected"
-            ),
+            "status": ("accepted" if best_decision.accepted else "rejected"),
             "reason": best_decision.reason,
             "skill_id": best_candidate.skill_id,
-            "episode_reward": reward,
-            "episode_baseline": baseline_value,
-            "episode_advantage": reward - baseline_value,
-            "episode_success": promotion_safe,
-            "total_added_tokens": experience.total_added_tokens,
-            "delta_prompt_tokens_per_step": round(
-                experience.total_added_tokens
-                / max(evidence.steps or len(tool_steps), 1),
-                6,
-            ),
-            "prompt_added_tokens": int(
-                evidence.metrics.get("procedural_memory_prompt_added_tokens") or 0
-            ),
-            "tool_description_added_tokens": int(
-                evidence.metrics.get("procedural_memory_tool_description_added_tokens")
-                or 0
-            ),
-            "followup_added_tokens": int(
-                evidence.metrics.get("procedural_memory_followup_added_tokens") or 0
-            ),
-            "prompt_injection_count": int(
-                evidence.metrics.get("procedural_memory_prompt_injection_count") or 0
-            ),
-            "tool_description_injection_count": int(
-                evidence.metrics.get(
-                    "procedural_memory_tool_description_injection_count"
-                )
-                or 0
-            ),
-            "followup_guidance_count": int(
-                evidence.metrics.get("procedural_memory_followup_guidance_count") or 0
-            ),
             "semantic_gradient_source": gradient_source,
             "semantic_gradient_llm_attempted": bool(
                 self._selected_learning_backend() and self._selected_evolver_model()
@@ -2342,14 +1911,7 @@ class ProceduralMemoryModule:
             "verification_sample_count": len(verification_samples),
             "decision": best_decision.model_dump(),
             "skill_status": best_candidate.status,
-            "skills": len(state.skills),
-            "experience_id": experience.experience_id,
-            "runtime_skill_ids": sorted(set(experience_skill_ids)),
-            "experience_ids": current_experience_ids,
-            "attributed_steps": attributed_steps,
-            "unattributed_steps": unattributed_steps,
-            "attribution_rate": round(attribution_rate, 6),
-            "method": "Skill-Pro",
+            **report_base(),
         }
 
     def _runtime_skill_counts(
@@ -2361,59 +1923,12 @@ class ProceduralMemoryModule:
             step
             for step in tool_steps
             if step.skill_id
+            and step.activation_id
             and step.skill_id in state.skills
             and state.skills[step.skill_id].status != "retired"
-            and not _learned_skill_unstable(state.skills[step.skill_id])
         ]
-        activations: set[tuple[str, str]] = set()
-        fallback_runs: Counter[str] = Counter()
-        previous_skill_id = ""
-        for step in valid_steps:
-            if step.activation_id:
-                activations.add((step.skill_id, step.activation_id))
-            elif step.skill_id != previous_skill_id:
-                fallback_runs[step.skill_id] += 1
-            previous_skill_id = step.skill_id
-        counts = Counter(skill_id for skill_id, _ in activations)
-        counts.update(fallback_runs)
-        return counts
-
-    def _runtime_parent_from_steps(
-        self,
-        state,
-        tool_steps: list[SkillStep],
-    ) -> ProceduralSkill | None:
-        counts = self._runtime_skill_counts(state, tool_steps)
-        if not counts:
-            return None
-        unused_counts = Counter(
-            skill_id
-            for experience in state.experiences
-            if not experience.used_for_evolution
-            for skill_id in experience.skill_ids
-            if skill_id in counts
-        )
-        ready_ids = [
-            skill_id
-            for skill_id in counts
-            if unused_counts[skill_id] + 1 >= self.evolution_threshold
-        ]
-        if ready_ids:
-            skill_id = max(
-                ready_ids,
-                key=lambda item: (
-                    self._skill_evolution_priority(state, state.skills[item]),
-                    unused_counts[item],
-                    counts[item],
-                    item,
-                ),
-            )
-        else:
-            skill_id, _ = counts.most_common(1)[0]
-        skill = state.skills.get(skill_id)
-        if skill is not None and _learned_skill_unstable(skill):
-            return None
-        return skill
+        activations = {(step.skill_id, step.activation_id) for step in valid_steps}
+        return Counter(skill_id for skill_id, _ in activations)
 
     def _skill_evolution_priority(self, state, skill: ProceduralSkill) -> float:
         if (
@@ -2476,7 +1991,6 @@ class ProceduralMemoryModule:
             success=success,
             ground_truth_is_anomaly=evidence.ground_truth_is_anomaly,
         )
-        experience.evidence_family = _experience_family(experience)
         return experience
 
     def _transitions_from_steps(
@@ -2530,7 +2044,12 @@ class ProceduralMemoryModule:
         success: bool,
         valid_skill_ids: set[str] | None = None,
     ) -> dict[str, SkillExperience]:
-        """Build one replay experience per actually active Skill-MDP option."""
+        """Build one replay trajectory per Skill and episode.
+
+        Activation ids remain attached to transitions for exact attribution,
+        but repeated activations in one episode are correlated segments of the
+        same trajectory and must not count as independent evolution samples.
+        """
 
         all_transitions = self._transitions_from_steps(
             evidence=evidence,
@@ -2538,28 +2057,21 @@ class ProceduralMemoryModule:
         )
         grouped: dict[str, tuple[list[SkillStep], list[SkillTransition]]] = {}
         for step, transition in zip(tool_steps, all_transitions, strict=True):
-            original_skill_id = step.skill_id
+            skill_id = step.skill_id
+            activation_id = step.activation_id
             valid_attribution = (
-                valid_skill_ids is None or original_skill_id in valid_skill_ids
+                bool(skill_id)
+                and bool(activation_id)
+                and (valid_skill_ids is None or skill_id in valid_skill_ids)
             )
-            attributed_skill_id = original_skill_id if valid_attribution else ""
-            skill_id = attributed_skill_id
-            if _skill_base_id(attributed_skill_id) in GENERIC_SEED_SKILL_IDS:
-                skill_id = ""
+            if not valid_attribution:
+                continue
             grouped_steps, grouped_transitions = grouped.setdefault(
                 skill_id,
                 ([], []),
             )
-            grouped_steps.append(
-                step
-                if attributed_skill_id == step.skill_id
-                else step.model_copy(update={"skill_id": ""})
-            )
-            grouped_transitions.append(
-                transition
-                if attributed_skill_id == transition.skill_id
-                else transition.model_copy(update={"skill_id": ""})
-            )
+            grouped_steps.append(step)
+            grouped_transitions.append(transition)
         for _, grouped_transitions in grouped.values():
             for transition in grouped_transitions:
                 transition.done = False
@@ -2570,78 +2082,151 @@ class ProceduralMemoryModule:
                 tool_steps=steps,
                 reward=reward,
                 baseline=baseline,
-                skill_ids=[skill_id] if skill_id else [],
+                skill_ids=[skill_id],
                 success=success,
                 transitions=transitions,
             )
             for skill_id, (steps, transitions) in grouped.items()
         }
 
+    @staticmethod
+    def _coalesce_legacy_experiences(
+        experiences: list[SkillExperience],
+        *,
+        skill_id: str,
+    ) -> list[SkillExperience]:
+        """Merge pre-migration activation records into trajectory records."""
+
+        by_session: dict[str, list[SkillExperience]] = defaultdict(list)
+        for experience in experiences:
+            by_session[experience.session_id].append(experience)
+        merged: list[SkillExperience] = []
+        for session_id, session_items in by_session.items():
+            if len(session_items) == 1:
+                merged.append(session_items[0])
+                continue
+            first = session_items[0]
+            transitions = [
+                transition for item in session_items for transition in item.transitions
+            ]
+            for transition in transitions:
+                transition.done = False
+            if transitions:
+                transitions[-1].done = True
+            merged.append(
+                first.model_copy(
+                    update={
+                        "experience_id": _stable_id(
+                            session_id,
+                            skill_id,
+                            [item.experience_id for item in session_items],
+                            prefix="exp",
+                        ),
+                        "skill_ids": [skill_id],
+                        "transitions": transitions,
+                        "step_count": len(transitions),
+                        "used_for_evolution": all(
+                            item.used_for_evolution for item in session_items
+                        ),
+                    }
+                )
+            )
+        return merged
+
     def _evolution_batch(
         self,
         state,
         parent: ProceduralSkill | None,
-        *,
-        current: SkillExperience | None = None,
     ) -> list[SkillExperience]:
-        if parent is not None:
-            pool = [
-                exp
-                for exp in state.experiences
-                if parent.skill_id in exp.skill_ids and not exp.used_for_evolution
-            ]
-        else:
-            # Generic seed options are controllers, not evidence families.
-            # Consolidate their episodes by observed evidence before proposing
-            # a new Skill-Pro option.
-            pool = [exp for exp in state.experiences if not exp.used_for_evolution]
-        if current is not None:
-            current_signature = _experience_signature(current)
-            if not any(current_signature):
-                return [current]
-            pool = [
-                exp
-                for exp in pool
-                if exp.experience_id == current.experience_id
-                or _compatible_experience_signature(
-                    current_signature,
-                    _experience_signature(exp),
-                )
-            ]
-        if len(pool) <= self.evolution_threshold:
+        if parent is None:
+            return []
+        pool = [
+            exp
+            for exp in state.experiences
+            if parent.skill_id in exp.skill_ids and not exp.used_for_evolution
+        ]
+        pool = self._coalesce_legacy_experiences(pool, skill_id=parent.skill_id)
+        batch_size = max(self.evolution_threshold, 2)
+        if len(pool) <= batch_size:
             return list(pool)
         ordered = sorted(pool, key=lambda exp: exp.reward)
-        low_count = self.evolution_threshold // 2
-        high_count = self.evolution_threshold - low_count
+        low_count = batch_size // 2
+        high_count = batch_size - low_count
         batch = ordered[:low_count] + ordered[-high_count:]
         seen: dict[str, SkillExperience] = {}
         for exp in batch:
             seen[exp.experience_id] = exp
         return list(seen.values())
 
+    def _next_evolution_parent(self, state) -> ProceduralSkill | None:
+        buffered: list[tuple[ProceduralSkill, int]] = []
+        for skill in state.skills.values():
+            if skill.status == "retired" or _learned_skill_unstable(skill):
+                continue
+            available = self._evolution_batch(state, skill)
+            if available:
+                buffered.append((skill, len(available)))
+        if not buffered:
+            return None
+        required = max(self.evolution_threshold, 2)
+        ready = [item for item in buffered if item[1] >= required]
+        candidates = ready or buffered
+        skill, _ = max(
+            candidates,
+            key=lambda item: (
+                item[1] >= required,
+                self._skill_evolution_priority(state, item[0]),
+                item[1],
+                item[0].skill_id,
+            ),
+        )
+        return skill
+
+    @staticmethod
+    def _tool_steps_from_experiences(
+        experiences: list[SkillExperience],
+    ) -> list[SkillStep]:
+        steps: list[SkillStep] = []
+        for experience in experiences:
+            for transition in experience.transitions:
+                steps.append(
+                    SkillStep(
+                        order=len(steps) + 1,
+                        action=transition.action,
+                        skill_id=transition.skill_id,
+                        tool_name=transition.tool_name,
+                        arguments_hint=transition.arguments_hint,
+                        observation_summary=transition.observation_summary,
+                        status=transition.status,
+                        rationale="Observed Skill-Pro trajectory transition.",
+                        policy_state=transition.state,
+                        policy_context=transition.policy_context,
+                        activation_id=transition.activation_id,
+                    )
+                )
+        return steps
+
     def _verification_batch(
         self,
         state,
-        parent: ProceduralSkill | None,
         *,
         generation_samples: list[SkillExperience],
-        current: SkillExperience | None = None,
     ) -> list[SkillExperience]:
-        """Reserve a deterministic holdout from the compatible evolution batch."""
-        del parent, current
-        if not generation_samples:
+        """Reserve a deterministic trajectory-level holdout."""
+        if len(generation_samples) < 2:
             return []
-        if len(generation_samples) == 1:
-            holdout = list(generation_samples)
-        else:
-            holdout_count = min(self.holdout_size, len(generation_samples) - 1)
-            ordered = sorted(
-                generation_samples,
-                key=lambda item: hashlib.sha256(
-                    item.experience_id.encode("utf-8")
-                ).hexdigest(),
-            )
-            holdout = ordered[-holdout_count:]
+        if len({sample.session_id for sample in generation_samples}) != len(
+            generation_samples
+        ):
+            raise ValueError("verification batch contains duplicate session ids")
+        holdout_count = min(self.holdout_size, len(generation_samples) - 1)
+        ordered = sorted(
+            generation_samples,
+            key=lambda item: hashlib.sha256(
+                item.experience_id.encode("utf-8")
+            ).hexdigest(),
+        )
+        holdout = ordered[-holdout_count:]
         rebased: list[SkillExperience] = []
         for sample in holdout:
             baseline = state.baselines.get(
@@ -2791,15 +2376,6 @@ class ProceduralMemoryModule:
             else (1 - self.baseline_ema_alpha) * old + self.baseline_ema_alpha * reward
         )
 
-    def _update_golden_pool(self, state, experience: SkillExperience) -> None:
-        if not experience.transitions:
-            return
-        pool = {item.experience_id: item for item in state.golden_experiences}
-        pool[experience.experience_id] = experience.model_copy(deep=True)
-        state.golden_experiences = sorted(
-            pool.values(), key=lambda item: item.reward, reverse=True
-        )[: self.golden_pool_size]
-
     def _skill_effective_score(self, skill: ProceduralSkill) -> float:
         prior = skill.prior_score or max(skill.score, 0.0)
         if skill.frequency <= 0:
@@ -2809,197 +2385,8 @@ class ProceduralMemoryModule:
             prior_weight + skill.frequency
         )
 
-    def _normalize_experience_pools(self, state) -> list[dict[str, Any]]:
-        episodes_by_session = {
-            episode.session_id: episode
-            for episode in state.episodes
-            if episode.session_id and episode.metrics
-        }
-        logs: list[dict[str, Any]] = []
-        repaired_ids: set[str] = set()
-
-        generic_by_session: dict[str, list[SkillExperience]] = defaultdict(list)
-        for experience in state.experiences:
-            if experience.used_for_evolution or not experience.session_id:
-                continue
-            if experience.skill_ids and not all(
-                _skill_base_id(skill_id) in GENERIC_SEED_SKILL_IDS
-                for skill_id in experience.skill_ids
-            ):
-                continue
-            generic_by_session[experience.session_id].append(experience)
-        merged_legacy_ids: set[str] = set()
-        merged_experiences: list[SkillExperience] = []
-        for session_id, segments in generic_by_session.items():
-            if len(segments) < 2:
-                continue
-            indexed_transitions = [
-                (segment_index, transition_index, transition)
-                for segment_index, segment in enumerate(segments)
-                for transition_index, transition in enumerate(segment.transitions)
-            ]
-
-            def transition_order(item: tuple[int, int, SkillTransition]) -> tuple:
-                segment_index, transition_index, transition = item
-                activation_tail = transition.activation_id.rsplit(":", 1)[-1]
-                activation_order = (
-                    int(activation_tail) if activation_tail.isdigit() else segment_index
-                )
-                return activation_order, segment_index, transition_index
-
-            transitions = [
-                transition.model_copy(deep=True)
-                for _, _, transition in sorted(
-                    indexed_transitions,
-                    key=transition_order,
-                )
-            ]
-            if not transitions:
-                continue
-            for transition in transitions:
-                transition.done = False
-            transitions[-1].done = True
-            template = segments[0]
-            merged = template.model_copy(
-                deep=True,
-                update={
-                    "experience_id": _stable_id(
-                        session_id,
-                        [
-                            transition.model_dump(mode="json")
-                            for transition in transitions
-                        ],
-                        prefix="exp",
-                    ),
-                    "skill_ids": [],
-                    "transitions": transitions,
-                    "step_count": len(transitions),
-                    "total_added_tokens": max(
-                        segment.total_added_tokens for segment in segments
-                    ),
-                    "used_for_evolution": False,
-                },
-            )
-            merged.evidence_family = _experience_family(merged)
-            evidence = episodes_by_session.get(session_id)
-            if evidence is not None:
-                merged.semantic_gradient = self._deterministic_semantic_gradient(
-                    evidence=evidence,
-                    tool_steps=[
-                        SkillStep(
-                            order=index,
-                            action=transition.action,
-                            skill_id=transition.skill_id,
-                            tool_name=transition.tool_name,
-                            arguments_hint=transition.arguments_hint,
-                            observation_summary=transition.observation_summary,
-                            status=transition.status,
-                            policy_state=transition.state,
-                            policy_context=transition.policy_context,
-                            activation_id=transition.activation_id,
-                        )
-                        for index, transition in enumerate(transitions, start=1)
-                    ],
-                )
-            merged_experiences.append(merged)
-            merged_legacy_ids.update(segment.experience_id for segment in segments)
-            logs.append(
-                {
-                    "stage": "merge generic seed episode",
-                    "session_id": session_id,
-                    "source_experience_ids": sorted(
-                        segment.experience_id for segment in segments
-                    ),
-                    "experience_id": merged.experience_id,
-                    "transition_count": len(transitions),
-                }
-            )
-        if merged_legacy_ids:
-            state.experiences = [
-                experience
-                for experience in state.experiences
-                if experience.experience_id not in merged_legacy_ids
-            ] + merged_experiences
-            state.golden_experiences = [
-                experience
-                for experience in state.golden_experiences
-                if experience.experience_id not in merged_legacy_ids
-            ]
-            state.golden_experiences.extend(
-                experience.model_copy(deep=True)
-                for experience in merged_experiences
-                if experience.success
-            )
-
-        def repair(experience: SkillExperience) -> None:
-            evidence = episodes_by_session.get(experience.session_id)
-            if evidence is None:
-                return
-            safe = _safe_skill_promotion(
-                evidence.metrics,
-                evidence.ground_truth_is_anomaly,
-            )
-            changed = False
-            if experience.success != safe:
-                experience.success = safe
-                changed = True
-            if not safe:
-                raw_reward = _evidence_score(evidence)
-                repaired_reward, _ = _skill_stat_reward(
-                    evidence,
-                    raw_reward,
-                    experience.baseline,
-                )
-                if experience.reward > repaired_reward:
-                    experience.reward = repaired_reward
-                    experience.advantage = experience.reward - experience.baseline
-                    changed = True
-            if changed and experience.experience_id not in repaired_ids:
-                repaired_ids.add(experience.experience_id)
-                logs.append(
-                    {
-                        "stage": "normalize unsafe experience",
-                        "experience_id": experience.experience_id,
-                        "session_id": experience.session_id,
-                    }
-                )
-
-        for experience in state.experiences:
-            repair(experience)
-        for experience in state.golden_experiences:
-            repair(experience)
-            if experience.used_for_evolution:
-                experience.used_for_evolution = False
-
-        experiences_by_id = {
-            experience.experience_id: experience for experience in state.experiences
-        }
-        kept: dict[str, SkillExperience] = {}
-        removed_ids: list[str] = []
-        for experience in state.golden_experiences:
-            normalized = experiences_by_id.get(experience.experience_id, experience)
-            if normalized.transitions:
-                golden = normalized.model_copy(deep=True)
-                golden.used_for_evolution = False
-                kept[golden.experience_id] = golden
-            else:
-                removed_ids.append(normalized.experience_id)
-        if removed_ids:
-            logs.append(
-                {
-                    "stage": "remove unsafe golden experience",
-                    "experience_ids": sorted(set(removed_ids)),
-                }
-            )
-        state.golden_experiences = sorted(
-            kept.values(),
-            key=lambda item: item.reward,
-            reverse=True,
-        )[: self.golden_pool_size]
-        return logs
-
     def _maintain(self, state) -> None:
-        logs = self._normalize_experience_pools(state)
+        logs: list[dict[str, Any]] = []
         active = [skill for skill in state.skills.values() if skill.status != "retired"]
         current_iteration = max(
             [state.iteration, *(skill.maturity for skill in active)], default=1
@@ -3025,10 +2412,13 @@ class ProceduralMemoryModule:
                 payload["duplicate_of"] = duplicate_of
             logs.append(payload)
 
-        probation_support = max(2, self.evolution_threshold)
+        probation_support = max(2, self.holdout_size)
         for skill in active:
             if skill.status == "probationary" and skill.frequency >= probation_support:
-                if skill.avg_gain > self.acceptance_margin:
+                if (
+                    skill.avg_gain > self.acceptance_margin
+                    and skill.success_count >= self.min_positive_advantage
+                ):
                     skill.status = "validated"
                     logs.append(
                         {

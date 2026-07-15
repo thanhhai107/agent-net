@@ -45,14 +45,18 @@ def learning_max_retries(module: str = "procedural_memory") -> int:
     return parsed
 
 
-def learning_backend(default: str | None, module: str = "procedural_memory") -> str | None:
+def learning_backend(
+    default: str | None, module: str = "procedural_memory"
+) -> str | None:
     value = os.getenv(ENV_LEARNING_LLM_BACKEND)
     if value is not None:
         return value.strip() or default
     return _defaults(module).llm_backend or default
 
 
-def learning_model(default: str | None, module: str = "procedural_memory") -> str | None:
+def learning_model(
+    default: str | None, module: str = "procedural_memory"
+) -> str | None:
     value = os.getenv(ENV_LEARNING_LLM_MODEL)
     if value is not None:
         return value.strip() or default

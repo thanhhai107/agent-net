@@ -6,13 +6,10 @@ import argparse
 import asyncio
 import json
 import signal
-import textwrap
 import time
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
-
-import yaml
 
 from agent.composition import (
     AgentRunConfig,
@@ -27,12 +24,9 @@ from agent.extensions.run import start_agent
 from agent.procedural_memory.workflow import update_procedural_memory_from_session
 from agent.tool_refinement.curator import finalize_tool_refinement_session
 from nika.evaluator.result_log import EVAL_METRICS_FILENAME
-from nika.evaluator.scoring import score_detection
 from nika.runtime.base import LabCleanupError
 from nika.utils.logger import log_event
 from nika.net_env.net_env_pool import (
-    get_net_env_instance,
-    scenario_backend,
     scenario_requires_topo_size,
 )
 from nika.utils.session import Session
@@ -41,7 +35,15 @@ from nika.workflows.benchmark.resume import (
     benchmark_row_fingerprint,
     scan_benchmark_cases,
 )
-from nika.workflows.benchmark.run import run_single_case
+from nika.workflows.benchmark.load_config import (
+    is_no_fault_problem,
+    load_benchmark_yaml,
+)
+from nika.workflows.benchmark.run import (
+    normalize_no_fault_metrics,
+    prepare_no_fault_case,
+    run_single_case,
+)
 from nika.workflows.env.start import start_net_env
 from nika.workflows.eval.session import eval_results
 from nika.workflows.failure.inject import inject_failure
@@ -50,127 +52,19 @@ from nika.workflows.session.close import (
     close_session_after_failure,
 )
 
-NO_FAULT_NAMES = frozenset({"no_fault", "clean", "normal", "healthy", "none"})
-
 
 def is_no_fault(problem: str) -> bool:
-    return problem.strip().lower() in NO_FAULT_NAMES
+    return is_no_fault_problem(problem)
 
 
 def load_custom_benchmark(path: str | Path) -> list[dict[str, Any]]:
-    """Load NIKA rows while allowing an empty inject map for clean controls."""
-    data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
-    cases = data.get("cases") if isinstance(data, dict) else None
-    if not isinstance(cases, list):
-        raise ValueError(f"Invalid benchmark YAML (missing list 'cases'): {path}")
-    rows: list[dict[str, Any]] = []
-    for index, raw in enumerate(cases):
-        if (
-            not isinstance(raw, dict)
-            or not raw.get("scenario")
-            or not raw.get("problem")
-        ):
-            raise ValueError(f"Benchmark case {index} requires scenario and problem")
-        inject = raw.get("inject") or {}
-        if not isinstance(inject, dict):
-            raise ValueError(f"Benchmark case {index} inject must be a mapping")
-        problem = str(raw["problem"])
-        if not inject and not is_no_fault(problem):
-            raise ValueError(f"Benchmark case {index} requires non-empty inject params")
-        rows.append(
-            {
-                "scenario": str(raw["scenario"]),
-                "problem": problem,
-                "topo_size": str(raw.get("topo_size") or ""),
-                "inject": {str(key): str(value) for key, value in inject.items()},
-            }
-        )
-    return rows
+    """Load extension benchmark rows with the shared NIKA validator."""
 
-
-def _clean_task_description(session: Session) -> str:
-    net_env = get_net_env_instance(
-        session.scenario_name,
-        backend=scenario_backend(session.scenario_name),
-        topo_size=session.scenario_topo_size,
-        lab_name=session.lab_name,
-    )
-    return textwrap.dedent(
-        f"""\
-        You are provided with the following network description and its current state:
-        {net_env.get_info()}
-
-        Your goal is to analyze the network condition and, if needed, use the available tools.
-        You need to generate a troubleshooting diagnosis report.
-        The report should reflect your assessment of the network's health,
-        indicate any abnormal behavior you identify, and describe relevant
-        findings based on your analysis.
-
-        Focus on producing an informative and coherent diagnostic report
-        derived from the network state.
-        Do not need to propose any solutions or remediation steps at this stage.
-        """
-    ).strip()
-
-
-def _prepare_clean_control(session: Session) -> None:
-    session.update_session("problem_names", ["no_fault"])
-    session.update_session("root_cause_category", "none")
-    session.update_session("task_description", _clean_task_description(session))
-    session.write_gt(
-        {
-            "is_anomaly": False,
-            "faulty_devices": [],
-            "root_cause_category": "none",
-            "root_cause_name": [],
-            "detailed_cause": "",
-        }
-    )
+    return load_benchmark_yaml(path)
 
 
 def _read_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
-
-
-def _empty_list_score(value: Any) -> float:
-    return 1.0 if isinstance(value, list) and not value else 0.0
-
-
-def _clean_control_scores(submission: dict[str, Any]) -> dict[str, float]:
-    detection = score_detection(submission, {"is_anomaly": False})
-    localization = _empty_list_score(submission.get("faulty_devices"))
-    rca = _empty_list_score(submission.get("root_cause_name"))
-    return {
-        "detection_score": detection,
-        "localization_accuracy": localization,
-        "localization_precision": localization,
-        "localization_recall": localization,
-        "localization_f1": localization,
-        "rca_accuracy": rca,
-        "rca_precision": rca,
-        "rca_recall": rca,
-        "rca_f1": rca,
-    }
-
-
-def _normalize_clean_control_metrics(session_id: str, session_dir: Path) -> None:
-    """Apply empty-set semantics after the unchanged upstream evaluator runs."""
-    submission_path = session_dir / "submission.json"
-    metrics_path = session_dir / EVAL_METRICS_FILENAME
-    if not submission_path.exists() or not metrics_path.exists():
-        return
-    submission = _read_json(submission_path)
-    metrics = _read_json(metrics_path)
-    metrics.update(_clean_control_scores(submission))
-    metrics_path.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
-    Session().load_closed_session(session_id=session_id).update_run_meta(
-        "eval_metrics", metrics
-    )
-    log_event(
-        "clean_control_metrics_saved",
-        f"Applied no-fault empty-set scoring for session {session_id}.",
-        session_id=session_id,
-    )
 
 
 def _update_learning(session_id: str, config: AgentRunConfig) -> dict[str, float]:
@@ -282,7 +176,7 @@ def run_extended_case(
         session = Session().load_running_session(session_id=session_id)
         session_dir = Path(SessionStore().get_session(session_id)["session_dir"])
         if is_no_fault(row["problem"]):
-            _prepare_clean_control(session)
+            prepare_no_fault_case(session)
         else:
             inject_failure(
                 problem_names=[row["problem"]],
@@ -303,7 +197,7 @@ def run_extended_case(
         )
         evaluation_duration = time.perf_counter() - evaluation_started
         if is_no_fault(row["problem"]):
-            _normalize_clean_control_metrics(session_id, session_dir)
+            normalize_no_fault_metrics(session_id, session_dir)
         learning_timings = _update_learning(session_id, config) or {}
         tool_runtime = _read_json(session_dir / "tool_refinement_session.json")
         tool_exploration_duration = float(tool_runtime.get("explorer_duration") or 0.0)
@@ -352,7 +246,7 @@ def run_batch(args: argparse.Namespace) -> int:
     tool_defaults = ToolRefinementConfig()
     memory_defaults = ProceduralMemoryConfig()
     rows = load_custom_benchmark(args.config)
-    evolve_until = getattr(args, "procedural_memory_evolve_until", None)
+    evolve_until = getattr(args, "evolve_until", None)
     if evolve_until is not None and not 0 <= evolve_until <= len(rows):
         raise ValueError(
             f"--evolve-until must be between 0 and the benchmark size ({len(rows)})"
@@ -373,7 +267,6 @@ def run_batch(args: argparse.Namespace) -> int:
         procedural_memory=ProceduralMemoryConfig(
             mode=procedural_memory_mode,
             bank=args.procedural_memory or args.procedural_memory_read or "default",
-            top_k=args.procedural_memory_k,
             token_budget=args.procedural_memory_tokens,
             max_skill_age=args.procedural_memory_max_skill_age,
             pool_size=args.procedural_memory_pool_size,
@@ -389,11 +282,6 @@ def run_batch(args: argparse.Namespace) -> int:
                 args,
                 "procedural_memory_experience_pool_size",
                 memory_defaults.experience_pool_size,
-            ),
-            golden_pool_size=getattr(
-                args,
-                "procedural_memory_golden_pool_size",
-                memory_defaults.golden_pool_size,
             ),
             baseline_ema_alpha=getattr(
                 args,
@@ -656,21 +544,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--evolve-until",
-        "--procedural-memory-evolve-until",
-        dest="procedural_memory_evolve_until",
+        dest="evolve_until",
         type=int,
         metavar="CASE_COUNT",
         help=(
             "Evolve enabled learning modules on the first CASE_COUNT benchmark "
             "cases, then reuse their artifacts read-only. Zero reads for all cases."
         ),
-    )
-    parser.add_argument(
-        "--procedural-memory-k",
-        dest="procedural_memory_k",
-        type=int,
-        default=memory_defaults.top_k,
-        metavar="TOP_K",
     )
     parser.add_argument(
         "--procedural-memory-tokens",
@@ -728,12 +608,6 @@ def build_parser() -> argparse.ArgumentParser:
         default=memory_defaults.experience_pool_size,
     )
     parser.add_argument(
-        "--procedural-memory-golden-pool-size",
-        dest="procedural_memory_golden_pool_size",
-        type=int,
-        default=memory_defaults.golden_pool_size,
-    )
-    parser.add_argument(
         "--procedural-memory-baseline-ema-alpha",
         dest="procedural_memory_baseline_ema_alpha",
         type=float,
@@ -779,7 +653,7 @@ def main() -> None:
             "Use either --procedural-memory or --procedural-memory-read, not both"
         )
     if (
-        args.procedural_memory_evolve_until is not None
+        args.evolve_until is not None
         and not args.procedural_memory
         and not args.tool_refinement
     ):

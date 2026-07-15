@@ -10,6 +10,7 @@ from typing import Any
 ORACLE_KEYS = {"ground_truth", "answer", "oracle", "expected_root_cause"}
 _REDACTED = "[redacted]"
 
+
 @lru_cache(maxsize=1)
 def _known_root_cause_ids() -> tuple[str, ...]:
     try:
@@ -17,7 +18,11 @@ def _known_root_cause_ids() -> tuple[str, ...]:
 
         return tuple(
             sorted(
-                {str(item).strip() for item in list_avail_problem_names() if str(item).strip()},
+                {
+                    str(item).strip()
+                    for item in list_avail_problem_names()
+                    if str(item).strip()
+                },
                 key=len,
                 reverse=True,
             )

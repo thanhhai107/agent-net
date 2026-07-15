@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import ast
 import json
 from pathlib import Path
 from typing import Any
@@ -13,27 +12,9 @@ from agent.procedural_memory.runtime import (
     strip_integrated_learning_guidance,
 )
 from agent.procedural_memory.service import ProceduralMemoryModule, _metric_success
-from agent.utils.phases import DIAGNOSIS
 from nika.evaluator.result_log import MESSAGES_FILENAME
 
-DIAGNOSIS_AGENT_NAMES = frozenset({DIAGNOSIS, "diagnosis_agent"})
 PROCEDURAL_MEMORY_AGENT_NAME = "procedural_memory_agent"
-
-
-def _parse_args(raw: Any) -> dict[str, Any]:
-    if isinstance(raw, dict):
-        return raw
-    text = str(raw or "").strip()
-    if not text:
-        return {}
-    try:
-        parsed = json.loads(text)
-    except json.JSONDecodeError:
-        try:
-            parsed = ast.literal_eval(text)
-        except (ValueError, SyntaxError):
-            return {"_raw": text}
-    return parsed if isinstance(parsed, dict) else {"_value": parsed}
 
 
 def extract_skill_steps(trace_path: str | Path) -> list[SkillStep]:
@@ -45,74 +26,7 @@ def extract_skill_steps(trace_path: str | Path) -> list[SkillStep]:
         for line in path.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
-    runtime_steps = _extract_runtime_skill_steps(entries)
-    if runtime_steps:
-        return runtime_steps
-    starts: dict[str, dict[str, Any]] = {}
-    anonymous_starts: list[tuple[str, dict[str, Any]]] = []
-    steps: list[SkillStep] = []
-    unnamed_index = 0
-    for entry in entries:
-        if entry.get("agent") not in DIAGNOSIS_AGENT_NAMES:
-            continue
-        event = entry.get("event")
-        raw_run_id = str(entry.get("run_id") or "")
-        run_id = raw_run_id or f"anon-{unnamed_index}"
-        if event == "tool_start":
-            unnamed_index += 1
-            tool = entry.get("tool") or {}
-            name = str(tool.get("name") or "")
-            if not name:
-                continue
-            start = {
-                "tool_name": name,
-                "arguments": _parse_args(entry.get("input")),
-            }
-            starts[run_id] = start
-            if not raw_run_id:
-                anonymous_starts.append((run_id, start))
-            continue
-        if event not in {"tool_end", "tool_error"}:
-            continue
-        start = starts.get(run_id)
-        if start is None and not raw_run_id and anonymous_starts:
-            run_id, start = anonymous_starts.pop(0)
-        if start is None:
-            continue
-        status = "success" if event == "tool_end" else "error"
-        output = entry.get("output") or entry.get("error") or ""
-        name = start["tool_name"]
-        steps.append(
-            SkillStep(
-                order=len(steps) + 1,
-                action=(
-                    f"Call `{name}` to collect diagnostic evidence and interpret "
-                    "whether the observation supports or contradicts the active hypothesis."
-                ),
-                tool_name=name,
-                arguments_hint=start["arguments"],
-                observation_summary=_short_text(output),
-                status=status,
-                rationale="Observed in diagnosis trajectory with tool feedback.",
-            )
-        )
-        starts.pop(run_id, None)
-    for start in starts.values():
-        name = start["tool_name"]
-        steps.append(
-            SkillStep(
-                order=len(steps) + 1,
-                action=(
-                    f"Call `{name}` to collect diagnostic evidence; no tool output "
-                    "was captured in the trace."
-                ),
-                tool_name=name,
-                arguments_hint=start["arguments"],
-                status="unknown",
-                rationale="Observed tool start without a matched tool result.",
-            )
-        )
-    return steps
+    return _extract_runtime_skill_steps(entries)
 
 
 def _normalize_args(value: Any) -> dict[str, Any]:
@@ -126,19 +40,21 @@ def _normalize_args(value: Any) -> dict[str, Any]:
 def _extract_runtime_skill_steps(entries: list[dict[str, Any]]) -> list[SkillStep]:
     steps: list[SkillStep] = []
     for entry in entries:
-        if (
-            entry.get("agent") != PROCEDURAL_MEMORY_AGENT_NAME
-            or entry.get("event") != "skill_transition"
-        ):
+        if entry.get("agent") != PROCEDURAL_MEMORY_AGENT_NAME or entry.get(
+            "event"
+        ) not in {"skill_transition", "skill_terminal_transition"}:
             continue
+        terminal = entry.get("event") == "skill_terminal_transition"
         tool_name = str(entry.get("tool") or "")
-        if not tool_name:
+        action = str(entry.get("action") or "") if terminal else ""
+        if not tool_name and not action:
             continue
         skill_id = str(entry.get("active_skill_id") or "")
         steps.append(
             SkillStep(
                 order=len(steps) + 1,
-                action=(
+                action=action
+                or (
                     f"Use active Skill-Pro option `{skill_id or 'none'}` while "
                     f"calling `{tool_name}` and interpreting its observation."
                 ),
@@ -149,8 +65,13 @@ def _extract_runtime_skill_steps(entries: list[dict[str, Any]]) -> list[SkillSte
                 status=str(entry.get("status") or "unknown")
                 if entry.get("status") in {"success", "error", "unknown"}
                 else "unknown",
-                rationale="Observed Skill-Pro online runtime transition.",
-                # PPO replay requires byte-equivalent pre-action context.
+                rationale=(
+                    "Observed terminal diagnosis action."
+                    if terminal
+                    else "Observed Skill-Pro online runtime transition."
+                ),
+                # This is the canonical replay context, not a byte-equivalent
+                # serialization of provider-specific chat/tool payloads.
                 policy_state=str(entry.get("policy_state") or ""),
                 policy_context=str(entry.get("policy_context") or ""),
                 activation_id=str(entry.get("activation_id") or ""),
@@ -169,11 +90,9 @@ def _runtime_overhead_metrics(runtime_snapshot: dict[str, Any]) -> dict[str, int
     fields = (
         "prompt_added_tokens",
         "tool_description_added_tokens",
-        "followup_added_tokens",
         "total_added_tokens",
         "prompt_injection_count",
         "tool_description_injection_count",
-        "followup_guidance_count",
     )
     metrics: dict[str, int] = {}
     for field in fields:
@@ -249,9 +168,6 @@ async def update_procedural_memory_from_session(
             "procedural_memory_experience_pool_size",
             defaults.experience_pool_size,
         ),
-        golden_pool_size=_int_meta(
-            run_meta, "procedural_memory_golden_pool_size", defaults.golden_pool_size
-        ),
         baseline_ema_alpha=_float_meta(
             run_meta,
             "procedural_memory_baseline_ema_alpha",
@@ -305,18 +221,27 @@ async def update_procedural_memory_from_session(
         {
             "method": "Skill-Pro",
             "bank_id": bank_id,
+            "runtime_controller": {
+                key: int(runtime_snapshot.get(key) or 0)
+                for key in (
+                    "selector_calls",
+                    "selector_errors",
+                    "selector_none",
+                    "termination_calls",
+                    "termination_errors",
+                )
+            },
             "procedural_memory_config": {
-                "top_k": _int_meta(run_meta, "procedural_memory_top_k", 5),
                 "token_budget": _int_meta(
                     run_meta, "procedural_memory_token_budget", defaults.token_budget
                 ),
-                "selection_policy": "epsilon_then_similarity_top_k_online_value",
+                "selection_policy": "llm_direct_epsilon_greedy",
                 "selection_epsilon": _float_meta(
                     run_meta,
                     "procedural_memory_selection_epsilon",
                     defaults.selection_epsilon,
                 ),
-                "meta_controller": "llm_with_deterministic_fallback",
+                "meta_controller": "llm_with_runtime_guards",
                 "max_skill_age": _int_meta(
                     run_meta, "procedural_memory_max_skill_age", 8
                 ),
@@ -325,7 +250,6 @@ async def update_procedural_memory_from_session(
                 "best_of_n": module.best_of_n,
                 "ppo_epsilon": module.ppo_epsilon,
                 "experience_pool_size": module.experience_pool_size,
-                "golden_pool_size": module.golden_pool_size,
                 "baseline_ema_alpha": module.baseline_ema_alpha,
                 "selection_epsilon_decay_cases": (module.selection_epsilon_decay_cases),
                 "acceptance_margin": module.acceptance_margin,

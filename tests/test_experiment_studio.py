@@ -42,8 +42,7 @@ def _config(**overrides: object) -> dict[str, object]:
         "tool_rewriter_model": "rewriter-model",
         "procedural_memory_bank": "procedural-memory-test",
         "procedural_memory_mode": "evolve",
-        "procedural_memory_evolve_until": 12,
-        "procedural_memory_k": 5,
+        "evolve_until": 12,
         "procedural_memory_tokens": 1500,
         "procedural_memory_max_skill_age": 6,
         "procedural_memory_pool_size": 24,
@@ -52,7 +51,6 @@ def _config(**overrides: object) -> dict[str, object]:
         "procedural_memory_ppo_epsilon": 0.15,
         "procedural_memory_selection_epsilon": 0.25,
         "procedural_memory_experience_pool_size": 900,
-        "procedural_memory_golden_pool_size": 15,
         "procedural_memory_baseline_ema_alpha": 0.2,
         "procedural_memory_selection_epsilon_decay_cases": 300,
         "procedural_memory_acceptance_margin": 0.005,
@@ -78,7 +76,7 @@ def test_empty_studio_config_uses_yaml_defaults() -> None:
     command = build_experiment_command(
         {
             "modules": ["tool_refinement", "procedural_memory"],
-            "procedural_memory_evolve_until": 75,
+            "evolve_until": 75,
         }
     )
 
@@ -95,6 +93,7 @@ def test_empty_studio_config_uses_yaml_defaults() -> None:
     assert command[command.index("--procedural-memory-verifier") + 1] == (
         "behavioral_replay"
     )
+    assert "--procedural-memory-k" not in command
 
 
 def test_create_run_snapshots_module_config(monkeypatch, tmp_path: Path) -> None:
@@ -196,9 +195,7 @@ def test_stop_run_does_not_start_queue_when_cleanup_fails(
     )
     monkeypatch.setattr(experiment_runner, "_append_run_log", lambda *_a: None)
     monkeypatch.setattr(experiment_runner.os, "killpg", lambda *_a: None)
-    monkeypatch.setattr(
-        experiment_runner, "_process_group_running", lambda _pid: False
-    )
+    monkeypatch.setattr(experiment_runner, "_process_group_running", lambda _pid: False)
     monkeypatch.setattr(experiment_runner, "_pid_running", lambda _pid: False)
     monkeypatch.setattr(
         experiment_runner,
@@ -230,29 +227,6 @@ def test_result_summary_uses_selected_benchmark_metrics() -> None:
     assert "localization_precision" not in RESULT_SUMMARY_COLUMNS
     assert "rca_precision" not in RESULT_SUMMARY_COLUMNS
     assert "total_tokens" not in RESULT_SUMMARY_COLUMNS
-
-
-def test_result_table_uses_explicit_arrow_column_types() -> None:
-    import pyarrow as pa
-
-    from nika.visualization.experiment_dashboard import _results_dataframe
-
-    table = _results_dataframe(
-        [
-            {
-                "result_root": "results/experiment-01",
-                "modules": "Tool Refinement, Procedural Memory",
-                "duration": "2435s",
-                "detection_score": 0.9,
-            }
-        ],
-        ["result_root", "modules", "duration", "detection_score"],
-    )
-
-    assert table.schema.field("result_root").type == pa.string()
-    assert table.schema.field("modules").type == pa.string()
-    assert table.schema.field("duration").type == pa.string()
-    assert table.schema.field("detection_score").type == pa.float64()
 
 
 def test_result_html_table_escapes_result_values() -> None:
@@ -392,7 +366,7 @@ def test_tool_and_memory_modules_share_one_sequential_command() -> None:
     assert (
         command[command.index("--procedural-memory-experience-pool-size") + 1] == "900"
     )
-    assert command[command.index("--procedural-memory-golden-pool-size") + 1] == "15"
+    assert "--procedural-memory-golden-pool-size" not in command
     assert command[command.index("--procedural-memory-baseline-ema-alpha") + 1] == "0.2"
     assert (
         command[command.index("--procedural-memory-selection-epsilon-decay-cases") + 1]
@@ -462,6 +436,28 @@ def test_prepare_experiment_config_uses_one_sequential_name_for_outputs(
     assert command[command.index("--result-dir") + 1].endswith("experiment-07")
     assert command[command.index("--tool-refinement") + 1] == "experiment-07"
     assert command[command.index("--procedural-memory") + 1] == "experiment-07"
+
+
+def test_prepare_experiment_config_normalizes_legacy_evolve_until(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        experiment_runner,
+        "next_experiment_id",
+        lambda _benchmark: "experiment-07",
+    )
+
+    legacy = _config(
+        procedural_memory_evolve_until=12,
+        learning_evolve_until=10,
+    )
+    legacy.pop("evolve_until")
+
+    prepared = prepare_experiment_config(legacy)
+
+    assert prepared["evolve_until"] == 10
+    assert "procedural_memory_evolve_until" not in prepared
+    assert "learning_evolve_until" not in prepared
 
 
 def test_resume_command_uses_existing_result_root() -> None:

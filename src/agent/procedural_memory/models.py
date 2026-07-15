@@ -13,6 +13,7 @@ from agent.module_config import module_defaults
 
 
 _DEFAULTS = module_defaults().procedural_memory
+DEFAULT_MANUAL_RETRIEVAL_TOP_K = 5
 
 
 def utc_now() -> str:
@@ -36,7 +37,7 @@ class ProceduralMemoryQuery(BaseModel):
     symptoms: list[str] = Field(default_factory=list)
     task_stage: str = "diagnosis"
     tools: list[str] = Field(default_factory=list)
-    top_k: int = _DEFAULTS.top_k
+    top_k: int = DEFAULT_MANUAL_RETRIEVAL_TOP_K
     token_budget: int = _DEFAULTS.token_budget
 
 
@@ -69,7 +70,6 @@ class SemanticGradient(BaseModel):
         default_factory=SkillComponentGradient
     )
     gradient_source: Literal["llm", "deterministic"] = "deterministic"
-    llm_error: str = ""
     created_at: str = Field(default_factory=utc_now)
 
 
@@ -94,10 +94,11 @@ class SkillCandidateDraft(BaseModel):
     termination: str = ""
 
 
-class SkillCandidateBatchDraft(BaseModel):
-    """Bounded best-of-N candidates generated in one learning request."""
+class SkillSelectionDraft(BaseModel):
+    """Strict output contract for the online Skill-MDP selector."""
 
-    candidates: list[SkillCandidateDraft] = Field(default_factory=list)
+    skill_id: str = ""
+    reason: str = ""
 
 
 class EvaluationEvidence(BaseModel):
@@ -140,10 +141,6 @@ class SkillExperience(BaseModel):
     transitions: list[SkillTransition] = Field(default_factory=list)
     step_count: int = 0
     total_added_tokens: int = 0
-    # Inferred only from task-visible evidence and tool output; evaluator-only
-    # labels are never part of a reusable procedure's retrieval scope.
-    evidence_family: str = ""
-    semantic_gradient: SemanticGradient | None = None
     used_for_evolution: bool = False
     success: bool = False
     ground_truth_is_anomaly: bool | None = None
@@ -176,13 +173,9 @@ class ProceduralSkill(BaseModel):
     version: int = 0
     last_evolved_iteration: int = 0
     semantic_gradients: list[SemanticGradient] = Field(default_factory=list)
-    origin: Literal["learned", "generic_seed", "expert_seed"] = "learned"
+    origin: Literal["learned", "generic_seed"] = "learned"
     created_at: str = Field(default_factory=utc_now)
     updated_at: str = Field(default_factory=utc_now)
-
-    @property
-    def procedural_memory_id(self) -> str:
-        return self.skill_id
 
     def content_hash(self) -> str:
         payload = {
@@ -218,10 +211,6 @@ class ProceduralSkill(BaseModel):
     def increment_maturity(self) -> None:
         self.maturity += 1
         self.updated_at = utc_now()
-
-    def maintenance_score(self, total_frequency: int) -> float:
-        freq_weight = self.frequency / max(total_frequency, 1)
-        return freq_weight * self.avg_gain
 
     def format_for_llm(self) -> str:
         steps = "\n".join(f"- {step.action}" for step in self.execution_steps)
@@ -271,7 +260,6 @@ class ProceduralMemoryState(BaseModel):
     skills: dict[str, ProceduralSkill] = Field(default_factory=dict)
     episodes: list[EvaluationEvidence] = Field(default_factory=list)
     experiences: list[SkillExperience] = Field(default_factory=list)
-    golden_experiences: list[SkillExperience] = Field(default_factory=list)
     ppo_decisions: list[PPOGateDecision] = Field(default_factory=list)
     baselines: dict[str, float] = Field(default_factory=dict)
     iteration: int = 0

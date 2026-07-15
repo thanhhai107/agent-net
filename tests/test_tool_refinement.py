@@ -189,7 +189,7 @@ class DraftToolRefinementTest(unittest.TestCase):
         calls: list[str] = []
         explorer_prompts: list[str] = []
 
-        def ping_host(host_name: str) -> str:
+        async def ping_host(host_name: str) -> str:
             calls.append(host_name)
             return f"{host_name} reachable"
 
@@ -219,7 +219,7 @@ class DraftToolRefinementTest(unittest.TestCase):
                 )
 
         tool = StructuredTool.from_function(
-            ping_host,
+            coroutine=ping_host,
             name="ping_host",
             description="Check whether one host is reachable.",
         )
@@ -248,9 +248,7 @@ class DraftToolRefinementTest(unittest.TestCase):
                     tools=[tool],
                     store=store,
                     llm=FakeModel(),
-                    llm_backend="custom",
                     model="test-model",
-                    convergence_threshold=0.75,
                 )
             )
             state = store.load()
@@ -270,7 +268,7 @@ class DraftToolRefinementTest(unittest.TestCase):
         calls: list[str] = []
         prompts: list[str] = []
 
-        def ping_host(host_name: str) -> str:
+        async def ping_host(host_name: str) -> str:
             calls.append(host_name)
             return "reachable"
 
@@ -286,7 +284,7 @@ class DraftToolRefinementTest(unittest.TestCase):
                 )
 
         tool = StructuredTool.from_function(
-            ping_host,
+            coroutine=ping_host,
             name="ping_host",
             description="Check whether one host is reachable.",
         )
@@ -337,9 +335,7 @@ class DraftToolRefinementTest(unittest.TestCase):
                     tools=[tool],
                     store=store,
                     llm=FakeModel(),
-                    llm_backend="custom",
                     model="test-model",
-                    convergence_threshold=0.75,
                 )
             )
 
@@ -353,11 +349,11 @@ class DraftToolRefinementTest(unittest.TestCase):
     def test_self_driven_explorer_schedules_one_underexplored_tool(self) -> None:
         calls: list[str] = []
 
-        def ping_host(host_name: str) -> str:
+        async def ping_host(host_name: str) -> str:
             calls.append(f"ping:{host_name}")
             return "reachable"
 
-        def inspect_state() -> str:
+        async def inspect_state() -> str:
             calls.append("inspect")
             return "healthy"
 
@@ -392,12 +388,12 @@ class DraftToolRefinementTest(unittest.TestCase):
 
         tools = [
             StructuredTool.from_function(
-                ping_host,
+                coroutine=ping_host,
                 name="ping_host",
                 description="Check whether one host is reachable.",
             ),
             StructuredTool.from_function(
-                inspect_state,
+                coroutine=inspect_state,
                 name="inspect_state",
                 description="Inspect the current network state.",
             ),
@@ -425,9 +421,7 @@ class DraftToolRefinementTest(unittest.TestCase):
                     tools=tools,
                     store=store,
                     llm=FakeModel(),
-                    llm_backend="custom",
                     model="test-model",
-                    convergence_threshold=0.75,
                 )
             )
 
@@ -438,7 +432,7 @@ class DraftToolRefinementTest(unittest.TestCase):
     def test_self_driven_explorer_enforces_query_diversity(self) -> None:
         calls: list[str] = []
 
-        def ping_host(host_name: str) -> str:
+        async def ping_host(host_name: str) -> str:
             calls.append(host_name)
             return "reachable"
 
@@ -453,7 +447,7 @@ class DraftToolRefinementTest(unittest.TestCase):
                 )
 
         tool = StructuredTool.from_function(
-            ping_host,
+            coroutine=ping_host,
             name="ping_host",
             description="Check whether one host is reachable.",
         )
@@ -504,9 +498,7 @@ class DraftToolRefinementTest(unittest.TestCase):
                     tools=[tool],
                     store=store,
                     llm=FakeModel(),
-                    llm_backend="custom",
                     model="test-model",
-                    convergence_threshold=0.75,
                 )
             )
 
@@ -1433,11 +1425,18 @@ class DraftToolRefinementTest(unittest.TestCase):
         prompts: list[str] = []
 
         class FakeModel:
-            def with_structured_output(self, _schema):
+            schema: type | None = None
+
+            def with_structured_output(self, schema):
+                self.schema = schema
                 return self
 
             def invoke(self, prompt):
                 prompts.append(prompt)
+                if self.schema is DraftAnalyzerDraft:
+                    return DraftAnalyzerDraft(
+                        suggestion="Clarify the observed interface output."
+                    )
                 return DraftRewriteProposal(
                     tool_name="show_iface",
                     description="Inspect one router interface with verified names.",
@@ -1808,10 +1807,14 @@ class DraftToolRefinementTest(unittest.TestCase):
 
     def test_llm_rewrite_failure_is_reported(self) -> None:
         class FailingModel:
+            def __init__(self) -> None:
+                self.invocations = 0
+
             def with_structured_output(self, _schema):
                 return self
 
             def invoke(self, _prompt):
+                self.invocations += 1
                 raise TimeoutError("draft timeout")
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -1826,6 +1829,7 @@ class DraftToolRefinementTest(unittest.TestCase):
                 ),
                 session_id="s1",
             )
+            failing_model = FailingModel()
             with (
                 patch.dict(
                     os.environ,
@@ -1836,7 +1840,7 @@ class DraftToolRefinementTest(unittest.TestCase):
                 ),
                 patch(
                     "agent.tool_refinement.curator.load_model",
-                    return_value=FailingModel(),
+                    return_value=failing_model,
                 ) as load_model,
             ):
                 revisions = rewrite_documentation(
@@ -1852,6 +1856,7 @@ class DraftToolRefinementTest(unittest.TestCase):
         args, kwargs = load_model.call_args
         self.assertEqual(args[:2], ("custom", "learning-model"))
         self.assertEqual(kwargs["max_retries"], 0)
+        self.assertEqual(failing_model.invocations, 1)
         self.assertEqual(revisions[0].metrics["llm_attempted"], 1.0)
         self.assertEqual(revisions[0].metrics["llm_failed"], 1.0)
         self.assertEqual(revisions[0].metrics["llm_rewrite"], 0.0)
@@ -1898,11 +1903,18 @@ class DraftToolRefinementTest(unittest.TestCase):
         prompts: list[str] = []
 
         class FakeModel:
-            def with_structured_output(self, _schema):
+            schema: type | None = None
+
+            def with_structured_output(self, schema):
+                self.schema = schema
                 return self
 
             def invoke(self, prompt):
                 prompts.append(prompt)
+                if self.schema is DraftAnalyzerDraft:
+                    return DraftAnalyzerDraft(
+                        suggestion="Clarify the observed reachability output."
+                    )
                 return DraftRewriteProposal(
                     tool_name="get_reachability",
                     tool_usage_description="Summarize reachability matrix safely.",

@@ -32,7 +32,6 @@ procedural_memory:
   skill_logprob_model: openai/gpt-oss-120b
   timeout_seconds: 20
   max_retries: 0
-  top_k: 5
   token_budget: 1500
   max_skill_age: 8
   pool_size: 32
@@ -41,7 +40,6 @@ procedural_memory:
   ppo_epsilon: 0.2
   selection_epsilon: 0.3
   experience_pool_size: 1000
-  golden_pool_size: 20
   baseline_ema_alpha: 0.1
   selection_epsilon_decay_cases: 500
   acceptance_margin: 0.001
@@ -51,5 +49,4 @@ procedural_memory:
   policy_token_budget_min: 120
   policy_token_budget_max: 350
   policy_token_budget_divisor: 2
-  followup_token_budget: 100
   tool_guidance_char_budget: 120

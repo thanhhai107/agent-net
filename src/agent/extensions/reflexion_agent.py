@@ -140,6 +140,7 @@ class ReflexionAgent(ExtensionWorkflowBase):
                         reflections.append(ReflexionLesson.model_validate(raw_lesson))
                     except Exception as exc:
                         self.log_error(f"reflect_{attempt}", exc)
+            self.record_terminal_diagnosis(best_report)
             await self.explore_tools(task_description)
             return await self.submit(best_report)
         finally:

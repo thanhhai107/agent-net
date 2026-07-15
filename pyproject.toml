@@ -5,20 +5,19 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "nika"
 version = "1.0.0"
-description = ""
+description = "Network troubleshooting benchmark with adaptive agent workflows"
 authors = [{ name = "Zhihao Wang", email = "zhihaowang9802@gmail.com" }, 
            { name = "Alessandro Cornacchia", email = "alessandro.cornacchia@kaust.edu.sa" }]
 license = { text = "MIT" }
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.14"
 dependencies = [
     "pydantic>=2.11,<2.14",
-    "openai",
-    "instructor",
     "kathara",
     "python-dotenv",
     "requests>=2.32",
     "langchain-deepseek",
+    "langchain-openai",
     "langgraph",
     "mcp[cli]==1.28.0",
     "langchain-mcp-adapters",
@@ -27,19 +26,17 @@ dependencies = [
     "typer>=0.25.1",
     "func_timeout",
     "pyyaml",
-    "mcp-agent[openai]>=0.2.6",
-    "autogen-agentchat>=0.7.5",
-    "autogen-ext[mcp,openai]>=0.7.5",
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
     "ruff>=0.15.20",
 ]
 
 [project.optional-dependencies]
 # Streamlit-based experiment and result dashboards.
 studio = ["streamlit>=1.40"]
-# SADE community agent (src/agent/community/sade) drives Claude Code via the SDK.
-sade = ["claude-agent-sdk"]
-# SDK agents (src/agent/sdk/claude_sdk, src/agent/sdk/codex_sdk).
-sdk = ["claude-agent-sdk", "openai-codex>=0.1.0b3"]
 # Optional Langfuse tracing for byo.langgraph.
 observability = ["langfuse"]
 

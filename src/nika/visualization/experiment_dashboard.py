@@ -56,7 +56,7 @@ st.markdown(
         --nika-text: var(--text-color, #0f172a);
         --nika-bg: var(--background-color, #f8fafc);
         --nika-secondary: var(--secondary-background-color, #f1f5f9);
-        --nika-accent: var(--primary-color, #0ea5e9);
+        --nika-accent: #2563eb;
         --nika-muted: color-mix(in srgb, var(--nika-text) 62%, transparent);
         --nika-panel: color-mix(in srgb, var(--nika-secondary) 88%, transparent);
         --nika-elevated: color-mix(in srgb, var(--nika-bg) 82%, var(--nika-secondary));
@@ -131,7 +131,7 @@ st.markdown(
       }
       [data-testid="stTabs"] [data-baseweb="tab-list"] {
         gap: 1.5rem; background: transparent; border: none;
-        border-bottom: 1px solid var(--nika-line);
+        border-bottom: 0 !important;
         border-radius: 0px; padding: 0px; margin: 0 0 1rem 0 !important;
       }
       [data-testid="stTabs"] [data-baseweb="tab-panel"] {
@@ -146,10 +146,14 @@ st.markdown(
       }
       [data-testid="stTabs"] [aria-selected="true"] {
         background: transparent !important; color: var(--nika-accent-text);
-        border-bottom: 2px solid var(--nika-accent) !important;
+        border-bottom: 2px solid transparent !important;
       }
       div[data-baseweb="tab-border"] {
         display: none !important;
+      }
+      [data-testid="stTabs"] [data-baseweb="tab-highlight"] {
+        background: var(--nika-accent) !important;
+        height: 2px !important;
       }
       [data-testid="stDataFrame"] {
         border: 1px solid var(--nika-line); border-radius: 14px; overflow: hidden;
@@ -170,6 +174,7 @@ st.markdown(
         border: 1px solid var(--nika-line); border-radius: 13px;
         background: var(--nika-panel);
       }
+      .module-expander-gap {height: 0.75rem;}
 
       div[data-testid="stCheckbox"] label {font-weight:700;}
 
@@ -181,8 +186,8 @@ st.markdown(
       /* Stable action colors. Target explicit widget keys, not column order. */
       div.st-key-studio_run_button button,
       div.stButton button[data-testid="baseButton-primary"] {
-        border: 1px solid #16a34a !important;
-        background: linear-gradient(135deg, #22c55e, #16a34a) !important;
+        border: 1px solid #2563eb !important;
+        background: #2563eb !important;
         color: #ffffff !important;
         border-radius: 11px !important;
         font-weight: 800 !important;
@@ -190,11 +195,11 @@ st.markdown(
       }
       div.st-key-studio_run_button button:hover,
       div.stButton button[data-testid="baseButton-primary"]:hover {
-        border-color: #15803d !important;
-        background: linear-gradient(135deg, #4ade80, #22c55e) !important;
+        border-color: #1d4ed8 !important;
+        background: #1d4ed8 !important;
         color: #ffffff !important;
         transform: translateY(-1.5px) !important;
-        box-shadow: 0 6px 20px rgba(34, 197, 94, 0.35) !important;
+        box-shadow: 0 6px 20px rgba(37, 99, 235, 0.35) !important;
       }
       div.st-key-studio_run_button button:active,
       div.stButton button[data-testid="baseButton-primary"]:active {
@@ -322,15 +327,6 @@ def _default_evolve_cases(path: Path, *, row_count: int) -> int:
         if 0 <= configured <= row_count:
             return configured
     return row_count
-
-
-def _status_html(status: str) -> str:
-    return (
-        f'<span class="status-pill status-{status}">'
-        '<span class="status-dot"></span>'
-        f"{status}"
-        "</span>"
-    )
 
 
 def _selected_run_dir() -> Path | None:
@@ -563,124 +559,6 @@ def _results_table_html(rows: list[dict[str, object]], columns: list[str]) -> st
         "<div class='nika-results-table-wrap'><table class='nika-results-table'>"
         f"<thead><tr>{header}</tr></thead><tbody>{body}</tbody></table></div>"
     )
-
-
-def _results_dataframe(rows: list[dict[str, object]], columns: list[str]):
-    import pyarrow as pa
-
-    # Avoid the Pandas 3 string[pyarrow] construction path. Streamlit accepts
-    # Arrow tables directly, and the explicit schema keeps mixed result records
-    # from reaching the native Pandas/Arrow conversion that can terminate the
-    # Studio process on rerun.
-    data: dict[str, pa.Array] = {}
-    for column in columns:
-        values = [_result_display_value(column, row.get(column)) for row in rows]
-        if column in RESULT_INTEGER_COLUMNS:
-            data[column] = pa.array(values, type=pa.int64())
-        elif column in RESULT_NUMERIC_COLUMNS:
-            data[column] = pa.array(values, type=pa.float64())
-        else:
-            data[column] = pa.array(
-                [str(value) if value is not None else None for value in values],
-                type=pa.string(),
-            )
-    return pa.table(data)
-
-
-def _transposed_results_dataframe(rows: list[dict[str, object]], columns: list[str]):
-    import pyarrow as pa
-
-    frame = _results_dataframe(rows, columns)
-    if frame.num_rows == 0:
-        return frame
-    result_names = [
-        str(value.as_py())
-        if value.as_py() is not None and value.as_py() != ""
-        else f"Result {index + 1}"
-        for index, value in enumerate(frame["result_root"])
-    ]
-    metric_columns = [column for column in columns if column != "result_root"]
-    transposed: dict[str, pa.Array] = {
-        "metric": pa.array(metric_columns, type=pa.string())
-    }
-    for index, result_name in enumerate(result_names):
-        transposed[result_name] = pa.array(
-            [
-                str(frame[column][index].as_py())
-                if frame[column][index].as_py() is not None
-                else "-"
-                for column in metric_columns
-            ],
-            type=pa.string(),
-        )
-    return pa.table(transposed)
-
-
-def _result_column_config() -> dict[str, object]:
-    return {
-        "metric": st.column_config.TextColumn("Metric", width="medium"),
-        "result_root": st.column_config.TextColumn("Result", width="small"),
-        "modules": st.column_config.TextColumn("Modules", width="medium"),
-        "progress": st.column_config.TextColumn("Progress", width="small"),
-        "cases": st.column_config.NumberColumn("Cases", format="%d"),
-        "finished": st.column_config.NumberColumn("Finished", format="%d"),
-        "failed": st.column_config.NumberColumn("Failed", format="%d"),
-        "submitted": st.column_config.NumberColumn("Submitted", format="%d"),
-        "detection_score": st.column_config.NumberColumn("Detection", format="%.2f"),
-        "incident_success": st.column_config.NumberColumn(
-            "Incident Success", format="%.2f"
-        ),
-        "localization_f1": st.column_config.NumberColumn("Loc F1", format="%.2f"),
-        "rca_f1": st.column_config.NumberColumn("RCA F1", format="%.2f"),
-        "tool_calls": st.column_config.NumberColumn("Tool Calls", format="%.2f"),
-        "tool_errors": st.column_config.NumberColumn("Tool Errors", format="%d"),
-        "detection_precision": st.column_config.NumberColumn(
-            "Detect Prec", format="%.2f"
-        ),
-        "detection_recall": st.column_config.NumberColumn(
-            "Detect Recall", format="%.2f"
-        ),
-        "detection_f1": st.column_config.NumberColumn("Detect F1", format="%.2f"),
-        "detection_fpr": st.column_config.NumberColumn("Detect FPR", format="%.2f"),
-        "detection_fp": st.column_config.NumberColumn("FP", format="%d"),
-        "detection_fn": st.column_config.NumberColumn("FN", format="%d"),
-        "paired_baseline": st.column_config.TextColumn("Baseline", width="large"),
-        "paired_cases": st.column_config.NumberColumn("Paired", format="%d"),
-        "paired_delta_detection": st.column_config.NumberColumn(
-            "Δ Detect", format="%+.2f"
-        ),
-        "paired_delta_localization_f1": st.column_config.NumberColumn(
-            "Δ Loc F1", format="%+.2f"
-        ),
-        "paired_delta_rca_f1": st.column_config.NumberColumn(
-            "Δ RCA F1", format="%+.2f"
-        ),
-        "paired_record": st.column_config.TextColumn("W/L/T", width="small"),
-        "paired_wins": st.column_config.NumberColumn("Wins", format="%d"),
-        "paired_losses": st.column_config.NumberColumn("Losses", format="%d"),
-        "paired_ties": st.column_config.NumberColumn("Ties", format="%d"),
-        "token_in": st.column_config.NumberColumn("Token In", format="%d"),
-        "token_out": st.column_config.NumberColumn("Token Out", format="%d"),
-        "total_tokens": st.column_config.NumberColumn("Total Tokens", format="%d"),
-        "procedural_memory_reward": st.column_config.NumberColumn(
-            "Procedural Memory Reward", format="%.2f"
-        ),
-        "procedural_memory_advantage": st.column_config.NumberColumn(
-            "Procedural Memory Advantage", format="%.2f"
-        ),
-        "procedural_memory_success": st.column_config.NumberColumn(
-            "Procedural Memory Success", format="%.2f"
-        ),
-        "procedural_memory_added_tokens": st.column_config.NumberColumn(
-            "Procedural Memory Tokens", format="%d"
-        ),
-        "procedural_memory_delta_tokens_step": st.column_config.NumberColumn(
-            "Mem Δ Tokens/Step", format="%.2f"
-        ),
-        "duration": st.column_config.TextColumn("Runtime", width="small"),
-        "agent": st.column_config.TextColumn("Agent", width="small"),
-        "model": st.column_config.TextColumn("Model", width="medium"),
-    }
 
 
 def _parse_duration(meta: dict) -> float | None:
@@ -1012,107 +890,6 @@ def _result_rows(*, benchmark_name: str | None = None) -> list[dict[str, object]
     return rows
 
 
-def _event_int(value: object) -> int | None:
-    try:
-        return int(str(value))
-    except (TypeError, ValueError):
-        return None
-
-
-def _index_progress(value: object) -> tuple[int | None, int | None]:
-    raw = str(value or "")
-    if "/" not in raw:
-        return None, None
-    left, right = raw.split("/", 1)
-    return _event_int(left), _event_int(right)
-
-
-def _benchmark_progress_state(
-    events: list[dict[str, str]],
-) -> tuple[int, int, str] | None:
-    completed: int | None = None
-    total: int | None = None
-    failed = 0
-    summary_seen = False
-
-    for event in events:
-        kind = event.get("event")
-        if kind not in {
-            "benchmark_start",
-            "benchmark_skip",
-            "benchmark_progress",
-            "benchmark_failed",
-            "benchmark_summary",
-        }:
-            continue
-
-        index_value, index_total = _index_progress(event.get("index"))
-        if index_total is not None:
-            total = index_total
-
-        event_total = _event_int(event.get("total"))
-        if event_total is not None:
-            total = event_total
-
-        event_completed = _event_int(event.get("completed"))
-        if event_completed is not None:
-            completed = event_completed
-        elif (
-            kind == "benchmark_start" and completed is None and index_value is not None
-        ):
-            completed = max(0, index_value - 1)
-
-        event_failed = _event_int(event.get("failed"))
-        if event_failed is not None:
-            failed = event_failed
-
-        if kind == "benchmark_summary":
-            summary_seen = True
-
-    if completed is None or total is None:
-        return None
-    completed = max(0, min(completed, total))
-    suffix = f"{completed}/{total} completed"
-    if failed:
-        suffix += f" ({failed} failed)"
-    if summary_seen and completed >= total and not failed:
-        suffix = "Completed"
-    return completed, total, suffix
-
-
-def _progress_fraction(
-    events: list[dict[str, str]], command_count: int
-) -> tuple[float, str]:
-    if not events:
-        return 0.0, "Waiting"
-
-    benchmark_state = _benchmark_progress_state(events)
-    if benchmark_state is not None:
-        completed, total, label = benchmark_state
-        return completed / max(1, total), label
-
-    if events[-1]["event"] == "ui_run_done":
-        exit_code = events[-1].get("exit_code", "1")
-        return (1.0, "Done") if str(exit_code) == "0" else (0.0, "Failed")
-
-    step_index = 1
-    step_total = max(1, command_count)
-    for event in events:
-        if event["event"] in {"ui_step_start", "ui_step_done"}:
-            try:
-                step_index = int(event.get("index", step_index))
-                step_total = int(event.get("total", step_total))
-            except ValueError:
-                pass
-
-    # Only show Step prefix if there are multiple steps in the plan
-    prefix = f"Step {step_index}/{step_total}" if step_total > 1 else ""
-    label = prefix if prefix else "Running"
-
-    fraction = max(0, step_index - 1) / step_total
-    return max(0.0, min(1.0, fraction)), label
-
-
 def _event_case_summary(ev: dict) -> str:
     scenario = ev.get("scenario") or "?"
     topo_size = ev.get("topo_size") or ev.get("topo") or "-"
@@ -1155,27 +932,12 @@ def _case_event_html(
     )
 
 
-st.markdown(
-    '<div class="eyebrow">Experimentation & Benchmarking Suite</div>',
-    unsafe_allow_html=True,
-)
-st.markdown(
-    """
-    <div class="nika-brand" style="margin-bottom: 2rem;">
-      <div class="nika-mark">N</div>
-      <div>
-        <div class="nika-brand-title" style="font-size: 1.5rem; line-height: 1.1;">NIKA</div>
-        <div class="nika-brand-sub" style="font-size: 0.9rem; letter-spacing: 0.12em;">EXPERIMENTS STUDIO</div>
-      </div>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
-
 st.markdown('<div class="section-title">Studio</div>', unsafe_allow_html=True)
 
-with st.expander("Baseline Settings", expanded=False):
-    b_col1, b_col2, b_col3 = st.columns([1.2, 1, 1.5], gap="small")
+baseline_settings = st.expander("Experimental Setting", expanded=False)
+baseline_settings.__enter__()
+if baseline_settings is not None:
+    b_col1, b_col2, b_col3, b_col4 = st.columns([1.1, 1, 1.5, 1.5], gap="small")
     with b_col1:
         agent_options = ["react", "plan-execute", "reflexion"]
         agent_type = st.selectbox(
@@ -1194,8 +956,6 @@ with st.expander("Baseline Settings", expanded=False):
         )
     with b_col3:
         model = st.text_input("Model", value=DEFAULT_MODEL)
-
-    b_col4, b_col5, b_col6 = st.columns([1.5, 1, 1], gap="small")
     with b_col4:
         benchmark_name = st.text_input(
             "Benchmark",
@@ -1221,49 +981,316 @@ with st.expander("Baseline Settings", expanded=False):
             row_count = None
             default_evolve_cases = 0
             benchmark_error = f"Invalid benchmark YAML: {exc}"
-    with b_col5:
+    evolve_module_enabled = bool(
+        st.session_state.get("tool_refinement_enabled", False)
+        or st.session_state.get("procedural_memory_enabled", False)
+    )
+    baseline_controls = st.columns(
+        4 if agent_type == "reflexion" else 3,
+        gap="small",
+    )
+    with baseline_controls[0]:
         default_max_steps = DEFAULT_STUDIO_MAX_STEPS
         max_steps_str = st.text_input("Steps", value=str(default_max_steps))
         max_steps = int(max_steps_str) if max_steps_str.isdigit() else default_max_steps
-    with b_col6:
-        max_attempts = st.number_input(
-            "Attempts",
-            min_value=1,
-            max_value=10,
-            value=BASELINE_DEFAULTS.max_attempts,
-            disabled=agent_type != "reflexion",
-        )
-
-    st.markdown("<div style='margin-top: 1rem;'></div>", unsafe_allow_html=True)
-    e_col1, e_col2, e_col3 = st.columns([1.2, 1, 1.5], gap="small")
-    with e_col1:
-        st.markdown(
-            "<div style='margin-top: 2rem;'></div>", unsafe_allow_html=True
-        )  # aligns checkbox vertically with text_inputs
-        run_judge = st.checkbox(
-            "Run LLM judge", value=BASELINE_DEFAULTS.judge_evaluation
-        )
-    with e_col2:
-        judge_backend = st.text_input(
-            "Judge backend",
-            value=BASELINE_DEFAULTS.judge_provider,
-            disabled=not run_judge,
-        )
-    with e_col3:
-        judge_model = st.text_input(
-            "Judge model",
-            value=BASELINE_DEFAULTS.judge_model,
-            disabled=not run_judge,
-        )
+    control_index = 1
+    if agent_type == "reflexion":
+        with baseline_controls[control_index]:
+            max_attempts = st.number_input(
+                "Attempts",
+                min_value=1,
+                max_value=10,
+                value=BASELINE_DEFAULTS.max_attempts,
+            )
+        control_index += 1
+    else:
+        max_attempts = BASELINE_DEFAULTS.max_attempts
+    evolve_until = int(default_evolve_cases)
+    if evolve_module_enabled:
+        with baseline_controls[control_index]:
+            evolve_until = st.number_input(
+                "Learning cases before read-only",
+                min_value=0,
+                max_value=max(int(row_count or 0), 1),
+                value=int(default_evolve_cases),
+                step=1,
+                help="Applies only while Tool Refinement or Procedural Memory is enabled.",
+            )
+    run_judge = BASELINE_DEFAULTS.judge_evaluation
+    judge_backend = BASELINE_DEFAULTS.judge_provider
+    judge_model = BASELINE_DEFAULTS.judge_model
+    if run_judge:
+        judge_col1, judge_col2 = st.columns(2, gap="small")
+        with judge_col1:
+            judge_backend = st.text_input("Judge backend", value=judge_backend)
+        with judge_col2:
+            judge_model = st.text_input("Judge model", value=judge_model)
 
 st.markdown("<div style='margin-top: 0.5rem;'></div>", unsafe_allow_html=True)
-col_modules = st.columns(2, gap="medium")
 
-with col_modules[0]:
-    with st.expander("Tool Refinement Settings", expanded=False):
-        tool_selected = st.checkbox("Enable Tool Refinement", value=False)
-        st.markdown("<div style='margin-top: 0.5rem;'></div>", unsafe_allow_html=True)
+# Keep config values stable while module-specific controls are conditionally hidden.
+tool_library_id = ""
+tool_doc_chars = TOOL_REFINEMENT_DEFAULTS.tool_doc_chars
+tool_convergence_threshold = TOOL_REFINEMENT_DEFAULTS.convergence_threshold
+tool_exploration_similarity_threshold = (
+    TOOL_REFINEMENT_DEFAULTS.exploration_similarity_threshold
+)
+tool_explorer_reflection_limit = TOOL_REFINEMENT_DEFAULTS.explorer_reflection_limit
+tool_explorer_model = MODULE_DEFAULTS.tool_refinement.llm_model
+tool_analyzer_model = MODULE_DEFAULTS.tool_refinement.llm_model
+tool_rewriter_model = MODULE_DEFAULTS.tool_refinement.llm_model
+tool_update_interval = TOOL_REFINEMENT_DEFAULTS.update_interval
+tool_min_new_trials = TOOL_REFINEMENT_DEFAULTS.min_new_trials
+tool_max_tools_per_update = TOOL_REFINEMENT_DEFAULTS.max_tools_per_update
+tool_publish_min_utility = TOOL_REFINEMENT_DEFAULTS.publish_min_utility
+procedural_memory_bank = ""
+procedural_memory_tokens = PROCEDURAL_MEMORY_DEFAULTS.token_budget
+procedural_memory_max_skill_age = PROCEDURAL_MEMORY_DEFAULTS.max_skill_age
+procedural_memory_pool_size = PROCEDURAL_MEMORY_DEFAULTS.pool_size
+procedural_memory_update_threshold = PROCEDURAL_MEMORY_DEFAULTS.evolution_threshold
+procedural_memory_best_of_n = PROCEDURAL_MEMORY_DEFAULTS.best_of_n
+procedural_memory_ppo_epsilon = PROCEDURAL_MEMORY_DEFAULTS.ppo_epsilon
+procedural_memory_selection_epsilon = PROCEDURAL_MEMORY_DEFAULTS.selection_epsilon
+procedural_memory_experience_pool_size = PROCEDURAL_MEMORY_DEFAULTS.experience_pool_size
+procedural_memory_epsilon_decay_cases = (
+    PROCEDURAL_MEMORY_DEFAULTS.selection_epsilon_decay_cases
+)
+procedural_memory_baseline_ema_alpha = PROCEDURAL_MEMORY_DEFAULTS.baseline_ema_alpha
+procedural_memory_acceptance_margin = PROCEDURAL_MEMORY_DEFAULTS.acceptance_margin
+procedural_memory_verifier = PROCEDURAL_MEMORY_DEFAULTS.verifier
+procedural_memory_evolver_model = MODULE_DEFAULTS.procedural_memory.llm_model
+procedural_memory_policy_scorer_model = (
+    MODULE_DEFAULTS.procedural_memory.skill_logprob_model
+)
+procedural_memory_holdout_size = PROCEDURAL_MEMORY_DEFAULTS.holdout_size
+procedural_memory_min_positive_advantage = (
+    PROCEDURAL_MEMORY_DEFAULTS.min_positive_advantage
+)
 
+with st.container():
+    memory_header, memory_toggle_col = st.columns([3, 1], vertical_alignment="center")
+    with memory_header:
+        st.markdown("Enable Procedural Memory")
+    with memory_toggle_col:
+        procedural_memory_selected = st.toggle(
+            "Enabled",
+            value=False,
+            key="procedural_memory_enabled",
+            label_visibility="collapsed",
+            help="Enable Procedural Memory",
+        )
+    if procedural_memory_selected:
+        m_col1, m_col2, m_col5, m_col6 = st.columns(4, gap="small")
+        with m_col1:
+            procedural_memory_bank = st.text_input(
+                "Procedural Memory bank",
+                value="",
+                placeholder="auto",
+                disabled=not procedural_memory_selected,
+            )
+        with m_col2:
+            procedural_memory_tokens = st.number_input(
+                "Skill context budget",
+                min_value=100,
+                max_value=8000,
+                value=PROCEDURAL_MEMORY_DEFAULTS.token_budget,
+                step=100,
+                disabled=not procedural_memory_selected,
+                help="Upper budget used to derive the bounded active-skill policy context.",
+            )
+
+        with m_col5:
+            procedural_memory_max_skill_age = st.number_input(
+                "Max actions / activation",
+                min_value=1,
+                max_value=100,
+                value=PROCEDURAL_MEMORY_DEFAULTS.max_skill_age,
+                disabled=not procedural_memory_selected,
+            )
+
+        with m_col6:
+            procedural_memory_pool_size = st.number_input(
+                "Skill pool capacity",
+                min_value=1,
+                max_value=512,
+                value=PROCEDURAL_MEMORY_DEFAULTS.pool_size,
+                disabled=not procedural_memory_selected,
+            )
+
+        m_col10, m_col11, m_col12, m_col13 = st.columns(4, gap="small")
+        with m_col10:
+            procedural_memory_update_threshold = st.number_input(
+                "Evolution threshold (trajectories)",
+                min_value=2,
+                max_value=100,
+                value=PROCEDURAL_MEMORY_DEFAULTS.evolution_threshold,
+                disabled=not procedural_memory_selected,
+            )
+        with m_col11:
+            procedural_memory_best_of_n = st.number_input(
+                "Candidate skills / update",
+                min_value=1,
+                max_value=20,
+                value=PROCEDURAL_MEMORY_DEFAULTS.best_of_n,
+                disabled=not procedural_memory_selected,
+            )
+        with m_col12:
+            procedural_memory_ppo_epsilon = st.number_input(
+                "Trust-region clip epsilon",
+                min_value=0.0,
+                max_value=1.0,
+                value=PROCEDURAL_MEMORY_DEFAULTS.ppo_epsilon,
+                step=0.05,
+                format="%.2f",
+                disabled=not procedural_memory_selected,
+            )
+        with m_col13:
+            procedural_memory_selection_epsilon = st.number_input(
+                "Exploration epsilon",
+                min_value=0.0,
+                max_value=1.0,
+                value=PROCEDURAL_MEMORY_DEFAULTS.selection_epsilon,
+                step=0.05,
+                format="%.2f",
+                disabled=not procedural_memory_selected,
+            )
+
+        m_col14, m_col15, m_col17, m_col18 = st.columns(4, gap="small")
+        with m_col14:
+            procedural_memory_experience_pool_size = st.number_input(
+                "Experience buffer capacity",
+                min_value=1,
+                max_value=10000,
+                value=PROCEDURAL_MEMORY_DEFAULTS.experience_pool_size,
+                step=100,
+                disabled=not procedural_memory_selected,
+            )
+        with m_col15:
+            procedural_memory_epsilon_decay_cases = st.number_input(
+                "Exploration decay horizon (cases)",
+                min_value=1,
+                max_value=10000,
+                value=PROCEDURAL_MEMORY_DEFAULTS.selection_epsilon_decay_cases,
+                step=50,
+                disabled=not procedural_memory_selected,
+            )
+
+        with m_col17:
+            procedural_memory_baseline_ema_alpha = st.number_input(
+                "Baseline EMA alpha",
+                min_value=0.01,
+                max_value=1.0,
+                value=PROCEDURAL_MEMORY_DEFAULTS.baseline_ema_alpha,
+                step=0.01,
+                format="%.2f",
+                disabled=not procedural_memory_selected,
+            )
+        with m_col18:
+            procedural_memory_acceptance_margin = st.number_input(
+                "Minimum surrogate improvement",
+                min_value=0.0,
+                max_value=1.0,
+                value=PROCEDURAL_MEMORY_DEFAULTS.acceptance_margin,
+                step=0.001,
+                format="%.3f",
+                disabled=not procedural_memory_selected,
+            )
+        verifier_options = (
+            "behavioral_replay",
+            "structured_replay",
+            "policy_logprob",
+        )
+        verifier_col, m_col21, m_col22 = st.columns(3, gap="small")
+        with verifier_col:
+            procedural_memory_verifier = st.selectbox(
+                "Candidate verifier",
+                options=verifier_options,
+                index=verifier_options.index(PROCEDURAL_MEMORY_DEFAULTS.verifier),
+                format_func=lambda value: {
+                    "behavioral_replay": "Behavioral replay (LLM)",
+                    "structured_replay": "Structured replay",
+                    "policy_logprob": "Policy log-prob (exact PPO)",
+                }[value],
+                disabled=not procedural_memory_selected,
+            )
+
+        m_col19, m_col20 = st.columns(2, gap="small")
+        with m_col19:
+            procedural_memory_evolver_model = st.text_input(
+                "Semantic-gradient / Evolver model",
+                value=MODULE_DEFAULTS.procedural_memory.llm_model,
+                disabled=not procedural_memory_selected,
+            )
+        with m_col20:
+            procedural_memory_policy_scorer_model = st.text_input(
+                "Verifier model",
+                value=MODULE_DEFAULTS.procedural_memory.skill_logprob_model,
+                disabled=(
+                    not procedural_memory_selected
+                    or procedural_memory_verifier == "structured_replay"
+                ),
+            )
+
+        maximum_holdout = max(1, int(procedural_memory_update_threshold) - 1)
+        holdout_key = "procedural_memory_holdout_size_input"
+        holdout_default = min(
+            PROCEDURAL_MEMORY_DEFAULTS.holdout_size,
+            maximum_holdout,
+        )
+        if int(st.session_state.get(holdout_key, 1)) > maximum_holdout:
+            st.session_state[holdout_key] = maximum_holdout
+        holdout_value = (
+            {} if holdout_key in st.session_state else {"value": holdout_default}
+        )
+        with m_col21:
+            procedural_memory_holdout_size = st.number_input(
+                "Verification holdout (trajectories)",
+                min_value=1,
+                max_value=maximum_holdout,
+                key=holdout_key,
+                disabled=not procedural_memory_selected,
+                **holdout_value,
+            )
+        maximum_positive_holdouts = int(procedural_memory_holdout_size)
+        positive_holdout_key = "procedural_memory_positive_holdouts_input"
+        if (
+            int(st.session_state.get(positive_holdout_key, 0))
+            > maximum_positive_holdouts
+        ):
+            st.session_state[positive_holdout_key] = maximum_positive_holdouts
+        positive_holdout_default = min(
+            PROCEDURAL_MEMORY_DEFAULTS.min_positive_advantage,
+            maximum_positive_holdouts,
+        )
+        positive_holdout_value = (
+            {}
+            if positive_holdout_key in st.session_state
+            else {"value": positive_holdout_default}
+        )
+        with m_col22:
+            procedural_memory_min_positive_advantage = st.number_input(
+                "Min positive-advantage holdouts",
+                min_value=0,
+                max_value=maximum_positive_holdouts,
+                key=positive_holdout_key,
+                disabled=not procedural_memory_selected,
+                **positive_holdout_value,
+            )
+st.markdown('<div class="module-expander-gap"></div>', unsafe_allow_html=True)
+
+with st.container():
+    tool_header, tool_toggle_col = st.columns([3, 1], vertical_alignment="center")
+    with tool_header:
+        st.markdown("Enable Tool Refinement")
+    with tool_toggle_col:
+        tool_selected = st.toggle(
+            "Enabled",
+            value=False,
+            key="tool_refinement_enabled",
+            label_visibility="collapsed",
+            help="Enable Tool Refinement",
+        )
+    if tool_selected:
         t_col1, t_col2 = st.columns([1.5, 1], gap="small")
         with t_col1:
             tool_library_id = st.text_input(
@@ -1274,7 +1301,7 @@ with col_modules[0]:
             )
         with t_col2:
             tool_doc_chars = st.number_input(
-                "Documentation budget (chars)",
+                "Refined documentation limit (chars)",
                 min_value=100,
                 max_value=4000,
                 value=TOOL_REFINEMENT_DEFAULTS.tool_doc_chars,
@@ -1282,16 +1309,17 @@ with col_modules[0]:
                 disabled=not tool_selected,
             )
 
-        tool_convergence_threshold = st.number_input(
-            "Convergence threshold",
-            min_value=0.0,
-            max_value=1.0,
-            value=TOOL_REFINEMENT_DEFAULTS.convergence_threshold,
-            step=0.05,
-            format="%.2f",
-            disabled=not tool_selected,
-        )
-        t_col3, t_col4 = st.columns(2, gap="small")
+        t_threshold_col, t_col3, t_col4 = st.columns(3, gap="small")
+        with t_threshold_col:
+            tool_convergence_threshold = st.number_input(
+                "Convergence threshold",
+                min_value=0.0,
+                max_value=1.0,
+                value=TOOL_REFINEMENT_DEFAULTS.convergence_threshold,
+                step=0.05,
+                format="%.2f",
+                disabled=not tool_selected,
+            )
         with t_col3:
             tool_exploration_similarity_threshold = st.number_input(
                 "Exploration similarity threshold",
@@ -1332,7 +1360,7 @@ with col_modules[0]:
         t_col8, t_col9, t_col10, t_col11 = st.columns(4, gap="small")
         with t_col8:
             tool_update_interval = st.number_input(
-                "Cases / update",
+                "Rewrite interval (cases)",
                 min_value=1,
                 max_value=100,
                 value=TOOL_REFINEMENT_DEFAULTS.update_interval,
@@ -1356,7 +1384,7 @@ with col_modules[0]:
             )
         with t_col11:
             tool_publish_min_utility = st.number_input(
-                "Publication utility",
+                "Minimum publication utility",
                 min_value=0.0,
                 max_value=1.0,
                 value=TOOL_REFINEMENT_DEFAULTS.publish_min_utility,
@@ -1365,203 +1393,25 @@ with col_modules[0]:
                 disabled=not tool_selected,
             )
 
-with col_modules[1]:
-    with st.expander("Procedural Memory Settings", expanded=False):
-        procedural_memory_selected = st.checkbox(
-            "Enable Procedural Memory",
-            value=False,
+st.markdown('<div class="module-expander-gap"></div>', unsafe_allow_html=True)
+with st.container():
+    judge_header, judge_toggle_col = st.columns([3, 1], vertical_alignment="center")
+    with judge_header:
+        st.markdown("Enable LLM Judge")
+    with judge_toggle_col:
+        run_judge = st.toggle(
+            "Enabled",
+            value=BASELINE_DEFAULTS.judge_evaluation,
+            key="llm_judge_enabled",
+            label_visibility="collapsed",
+            help="Enable LLM Judge and run the evaluator after each benchmark case.",
         )
-        st.markdown("<div style='margin-top: 0.5rem;'></div>", unsafe_allow_html=True)
-
-        m_col1, m_col2, m_col3, m_col4 = st.columns([1.5, 1, 1.2, 1.1], gap="small")
-        with m_col1:
-            procedural_memory_bank = st.text_input(
-                "Procedural Memory bank",
-                value="",
-                placeholder="auto",
-                disabled=not procedural_memory_selected,
-            )
-        with m_col2:
-            procedural_memory_k = st.number_input(
-                "Retrieval candidates",
-                min_value=1,
-                max_value=20,
-                value=PROCEDURAL_MEMORY_DEFAULTS.top_k,
-                disabled=not procedural_memory_selected,
-            )
-        with m_col3:
-            procedural_memory_tokens = st.number_input(
-                "Retrieval token budget",
-                min_value=100,
-                max_value=8000,
-                value=PROCEDURAL_MEMORY_DEFAULTS.token_budget,
-                step=100,
-                disabled=not procedural_memory_selected,
-            )
-        with m_col4:
-            procedural_memory_evolve_until = st.number_input(
-                "Evolve first cases (all modules)",
-                min_value=0,
-                max_value=max(int(row_count or 0), 1),
-                value=int(default_evolve_cases),
-                step=1,
-                disabled=(
-                    not (tool_selected or procedural_memory_selected)
-                    or row_count is None
-                ),
-            )
-
-        m_col5, m_col6 = st.columns(2, gap="small")
-        with m_col5:
-            procedural_memory_max_skill_age = st.number_input(
-                "Max actions / activation",
-                min_value=1,
-                max_value=100,
-                value=PROCEDURAL_MEMORY_DEFAULTS.max_skill_age,
-                disabled=not procedural_memory_selected,
-            )
-
-        with m_col6:
-            procedural_memory_pool_size = st.number_input(
-                "Skill pool capacity",
-                min_value=1,
-                max_value=512,
-                value=PROCEDURAL_MEMORY_DEFAULTS.pool_size,
-                disabled=not procedural_memory_selected,
-            )
-
-        m_col10, m_col11, m_col12, m_col13 = st.columns(4, gap="small")
-        with m_col10:
-            procedural_memory_update_threshold = st.number_input(
-                "Trajectories / update",
-                min_value=1,
-                max_value=100,
-                value=PROCEDURAL_MEMORY_DEFAULTS.evolution_threshold,
-                disabled=not procedural_memory_selected,
-            )
-        with m_col11:
-            procedural_memory_best_of_n = st.number_input(
-                "PPO candidates",
-                min_value=1,
-                max_value=20,
-                value=PROCEDURAL_MEMORY_DEFAULTS.best_of_n,
-                disabled=not procedural_memory_selected,
-            )
-        with m_col12:
-            procedural_memory_ppo_epsilon = st.number_input(
-                "PPO clip epsilon",
-                min_value=0.0,
-                max_value=1.0,
-                value=PROCEDURAL_MEMORY_DEFAULTS.ppo_epsilon,
-                step=0.05,
-                format="%.2f",
-                disabled=not procedural_memory_selected,
-            )
-        with m_col13:
-            procedural_memory_selection_epsilon = st.number_input(
-                "Exploration epsilon",
-                min_value=0.0,
-                max_value=1.0,
-                value=PROCEDURAL_MEMORY_DEFAULTS.selection_epsilon,
-                step=0.05,
-                format="%.2f",
-                disabled=not procedural_memory_selected,
-            )
-
-        m_col14, m_col15, m_col16 = st.columns(3, gap="small")
-        with m_col14:
-            procedural_memory_experience_pool_size = st.number_input(
-                "Experience buffer",
-                min_value=1,
-                max_value=10000,
-                value=PROCEDURAL_MEMORY_DEFAULTS.experience_pool_size,
-                step=100,
-                disabled=not procedural_memory_selected,
-            )
-        with m_col15:
-            procedural_memory_golden_pool_size = st.number_input(
-                "Golden buffer",
-                min_value=1,
-                max_value=1000,
-                value=PROCEDURAL_MEMORY_DEFAULTS.golden_pool_size,
-                disabled=not procedural_memory_selected,
-            )
-        with m_col16:
-            procedural_memory_epsilon_decay_cases = st.number_input(
-                "Exploration decay cases",
-                min_value=1,
-                max_value=10000,
-                value=PROCEDURAL_MEMORY_DEFAULTS.selection_epsilon_decay_cases,
-                step=50,
-                disabled=not procedural_memory_selected,
-            )
-
-        m_col17, m_col18 = st.columns(2, gap="small")
-        with m_col17:
-            procedural_memory_baseline_ema_alpha = st.number_input(
-                "Baseline EMA alpha",
-                min_value=0.01,
-                max_value=1.0,
-                value=PROCEDURAL_MEMORY_DEFAULTS.baseline_ema_alpha,
-                step=0.01,
-                format="%.2f",
-                disabled=not procedural_memory_selected,
-            )
-        with m_col18:
-            procedural_memory_acceptance_margin = st.number_input(
-                "PPO acceptance margin",
-                min_value=0.0,
-                max_value=1.0,
-                value=PROCEDURAL_MEMORY_DEFAULTS.acceptance_margin,
-                step=0.001,
-                format="%.3f",
-                disabled=not procedural_memory_selected,
-            )
-        m_col19, m_col20 = st.columns(2, gap="small")
-        with m_col19:
-            procedural_memory_evolver_model = st.text_input(
-                "Critic / Evolver model",
-                value=MODULE_DEFAULTS.procedural_memory.llm_model,
-                disabled=not procedural_memory_selected,
-            )
-        with m_col20:
-            procedural_memory_policy_scorer_model = st.text_input(
-                "PPO policy scorer model",
-                value=MODULE_DEFAULTS.procedural_memory.skill_logprob_model,
-                disabled=not procedural_memory_selected,
-            )
-        m_col21, m_col22, m_col23 = st.columns(3, gap="small")
-        with m_col21:
-            procedural_memory_verifier = st.selectbox(
-                "Trust-region verifier",
-                options=(
-                    "behavioral_replay",
-                    "structured_replay",
-                    "policy_logprob",
-                ),
-                index=(
-                    "behavioral_replay",
-                    "structured_replay",
-                    "policy_logprob",
-                ).index(PROCEDURAL_MEMORY_DEFAULTS.verifier),
-                disabled=not procedural_memory_selected,
-            )
-        with m_col22:
-            procedural_memory_holdout_size = st.number_input(
-                "Verification holdout",
-                min_value=1,
-                max_value=20,
-                value=PROCEDURAL_MEMORY_DEFAULTS.holdout_size,
-                disabled=not procedural_memory_selected,
-            )
-        with m_col23:
-            procedural_memory_min_positive_advantage = st.number_input(
-                "Positive trajectories",
-                min_value=0,
-                max_value=20,
-                value=PROCEDURAL_MEMORY_DEFAULTS.min_positive_advantage,
-                disabled=not procedural_memory_selected,
-            )
+    if run_judge:
+        judge_col1, judge_col2 = st.columns(2, gap="small")
+        with judge_col1:
+            judge_backend = st.text_input("Judge backend", value=judge_backend)
+        with judge_col2:
+            judge_model = st.text_input("Judge model", value=judge_model)
 
 modules = []
 if tool_selected:
@@ -1593,9 +1443,7 @@ config = {
     "tool_max_tools_per_update": int(tool_max_tools_per_update),
     "tool_publish_min_utility": float(tool_publish_min_utility),
     "procedural_memory_bank": procedural_memory_bank,
-    "procedural_memory_evolve_until": int(procedural_memory_evolve_until),
-    "learning_evolve_until": int(procedural_memory_evolve_until),
-    "procedural_memory_k": int(procedural_memory_k),
+    "evolve_until": int(evolve_until),
     "procedural_memory_tokens": int(procedural_memory_tokens),
     "procedural_memory_max_skill_age": int(procedural_memory_max_skill_age),
     "procedural_memory_pool_size": int(procedural_memory_pool_size),
@@ -1606,7 +1454,6 @@ config = {
     "procedural_memory_experience_pool_size": int(
         procedural_memory_experience_pool_size
     ),
-    "procedural_memory_golden_pool_size": int(procedural_memory_golden_pool_size),
     "procedural_memory_baseline_ema_alpha": float(procedural_memory_baseline_ema_alpha),
     "procedural_memory_selection_epsilon_decay_cases": int(
         procedural_memory_epsilon_decay_cases
@@ -1623,6 +1470,7 @@ config = {
     "judge_backend": judge_backend,
     "judge_model": judge_model,
 }
+baseline_settings.__exit__(None, None, None)
 prepared_config = prepare_experiment_config(config)
 plan = build_command_plan(prepared_config)
 
@@ -1649,6 +1497,8 @@ with st.expander("Command Preview", expanded=False):
 
         st.code(format_command_multiline(item.command), language="bash")
 
+
+st.markdown('<div style="margin-top: 0.75rem;"></div>', unsafe_allow_html=True)
 
 all_runs = list_runs()
 run_statuses = {path: run_status(path) for path in all_runs}

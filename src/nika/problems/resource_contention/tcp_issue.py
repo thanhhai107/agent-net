@@ -101,9 +101,7 @@ class SenderApplicationDelay(ProblemBase):
     def inject_fault(self, params: SenderApplicationDelayParams):
         self.set_faulty_devices([params.host_name])
         self.runtime.exec(params.host_name, "cp web_server.py web_server.py.bak")
-        self.runtime.write_file(
-            params.host_name, "/web_server.py", _SLOW_SENDER_SERVER
-        )
+        self.runtime.write_file(params.host_name, "/web_server.py", _SLOW_SENDER_SERVER)
         self.runtime.systemctl(params.host_name, "web_server.service", "restart")
         system_logger.info(
             f"Injected TCP sender application delay issue on params.host_name {params.host_name}"

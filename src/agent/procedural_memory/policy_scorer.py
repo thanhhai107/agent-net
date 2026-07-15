@@ -64,13 +64,11 @@ class PolicyLogprobScorer:
         api_key: str,
         model: str,
         timeout: float = 60.0,
-        fallback: PolicyScorer | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.model = model
         self.timeout = timeout
-        self.fallback = fallback or StructuredReplayPolicyScorer()
 
     @staticmethod
     def _prefix(state: str, skill: ProceduralSkill | None) -> str:
@@ -143,23 +141,19 @@ class PolicyLogprobScorer:
         try:
             return self._score_batch(
                 candidate=candidate,
-                baseline=baseline,
                 experiences=experiences,
             )
         except Exception as exc:
-            fallback = self.fallback.score_batch(
-                candidate=candidate,
-                baseline=baseline,
-                experiences=experiences,
+            return PolicyReplayResult(
+                scores=[],
+                method="policy_logprob",
+                error=f"{type(exc).__name__}: {exc}",
             )
-            fallback.error = f"{type(exc).__name__}: {exc}"
-            return fallback
 
     def _score_batch(
         self,
         *,
         candidate: ProceduralSkill,
-        baseline: ProceduralSkill | None,
         experiences: Sequence[SkillExperience],
     ) -> PolicyReplayResult:
         indexed = [
@@ -314,11 +308,8 @@ class BehavioralReplayPolicyScorer:
     def __init__(
         self,
         llm_factory: Callable[[], Any | None],
-        *,
-        fallback: PolicyScorer | None = None,
     ) -> None:
         self.llm_factory = llm_factory
-        self.fallback = fallback or StructuredReplayPolicyScorer()
 
     def score_batch(
         self,
@@ -382,10 +373,8 @@ class BehavioralReplayPolicyScorer:
                 method="behavioral_replay",
             )
         except Exception as exc:
-            fallback = self.fallback.score_batch(
-                candidate=candidate,
-                baseline=baseline,
-                experiences=experiences,
+            return PolicyReplayResult(
+                scores=[],
+                method="behavioral_replay",
+                error=f"{type(exc).__name__}: {exc}",
             )
-            fallback.error = f"{type(exc).__name__}: {exc}"
-            return fallback

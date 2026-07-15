@@ -22,11 +22,6 @@ def experiment_stem(benchmark: str | Path) -> str:
     return "experiment"
 
 
-# Compatibility for callers that imported the old helper. New IDs are always
-# generated through the experiment-prefixed stem above.
-benchmark_stem = experiment_stem
-
-
 def experiment_id(name: str, index: int) -> str:
     return f"{slugify_experiment_name(name)}-{index:0{SEQUENCE_WIDTH}d}"
 

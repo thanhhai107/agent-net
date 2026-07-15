@@ -7,7 +7,6 @@ from nika.visualization.data import (
     load_session_bundle,
     parse_topology,
     replay_steps,
-    timeline_rows,
 )
 from nika.visualization.topology import render_topology_svg
 
@@ -29,8 +28,7 @@ def test_discover_and_load_finished_session(tmp_path: Path) -> None:
             "scenario_name": "simple_bgp",
             "created_at": "2026-01-01T00:00:00Z",
             "task_description": (
-                "Topology: (router1:eth0, router2:eth0), "
-                "(router1:eth1, pc1:eth0)"
+                "Topology: (router1:eth0, router2:eth0), (router1:eth1, pc1:eth0)"
             ),
         },
     )
@@ -39,7 +37,9 @@ def test_discover_and_load_finished_session(tmp_path: Path) -> None:
         {"is_anomaly": True, "faulty_devices": ["pc1"]},
     )
     (session_dir / "events.jsonl").write_text(
-        json.dumps({"timestamp": "2026-01-01", "event": "env_start", "message": "started"})
+        json.dumps(
+            {"timestamp": "2026-01-01", "event": "env_start", "message": "started"}
+        )
         + "\n",
         encoding="utf-8",
     )
@@ -55,7 +55,6 @@ def test_discover_and_load_finished_session(tmp_path: Path) -> None:
         ("router1:eth1", "pc1:eth0"),
     ]
     assert faulty_devices(bundle.ground_truth) == {"pc1"}
-    assert timeline_rows(bundle)[0]["event"] == "env_start"
 
 
 def test_discover_and_load_nested_benchmark_session(tmp_path: Path) -> None:

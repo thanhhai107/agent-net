@@ -10,10 +10,10 @@ from tests.support.integration_base import OrderedPipelineTestCase
 from tests.support.integration_pipeline import (
     ClabCommonPipelineSteps,
     CommonPipelineSteps,
-    _min3clos_prerequisites,
     deepseek_api_key_available,
     load_test_env,
 )
+from tests.support.prerequisites import containerlab_prerequisites
 
 load_test_env()
 
@@ -67,7 +67,7 @@ class LangGraphAgentPipelineTest(CommonPipelineSteps, OrderedPipelineTestCase):
 
 
 @unittest.skipUnless(
-    _min3clos_prerequisites() and deepseek_api_key_available(),
+    containerlab_prerequisites() and deepseek_api_key_available(),
     "containerlab/gnmic/Docker or DEEPSEEK_API_KEY not available",
 )
 class LangGraphClabPipelineTest(ClabCommonPipelineSteps, OrderedPipelineTestCase):

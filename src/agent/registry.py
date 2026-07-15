@@ -10,8 +10,6 @@ def create_agent(
     model: str,
     llm_provider: str | None = None,
     max_steps: int = 20,
-    reasoning_effort: str | None = None,
-    stream_output: bool = True,
 ) -> Any:
     """Instantiate an agent for ``agent_type``."""
     match agent_type.lower():
@@ -32,67 +30,6 @@ def create_agent(
             from agent.mock.mock_agent import MockAgent
 
             return MockAgent(
-                session_id=session_id,
-                model=model,
-                max_steps=max_steps,
-            )
-        case "sdk.claude_sdk":
-            from agent.sdk.claude_sdk.agent import ClaudeSdkAgent
-
-            return ClaudeSdkAgent(
-                session_id=session_id,
-                model=model,
-                max_steps=max_steps,
-                stream_output=stream_output,
-            )
-        case "sdk.codex_sdk":
-            from agent.sdk.codex_sdk.agent import CodexSdkAgent
-
-            return CodexSdkAgent(
-                session_id=session_id,
-                model=model,
-                reasoning_effort=reasoning_effort,
-                stream_output=stream_output,
-            )
-        case "local_cli.codex_cli":
-            from agent.local_cli.codex_cli.agent import CodexCliAgent
-
-            return CodexCliAgent(
-                session_id=session_id,
-                model=model,
-                reasoning_effort=reasoning_effort,
-                stream_output=stream_output,
-            )
-        case "local_cli.claude_cli":
-            from agent.local_cli.claude_cli.agent import ClaudeAgent
-
-            return ClaudeAgent(
-                session_id=session_id,
-                model=model,
-                stream_output=stream_output,
-            )
-        case "byo.mcp_agent":
-            from agent.byo.mcp_agent.agent import McpAgent
-
-            return McpAgent(
-                session_id=session_id,
-                model=model,
-                max_steps=max_steps,
-                stream_output=stream_output,
-            )
-        case "byo.autogen":
-            from agent.byo.autogen.agent import AutogenAgent
-
-            return AutogenAgent(
-                session_id=session_id,
-                model=model,
-                max_steps=max_steps,
-                stream_output=stream_output,
-            )
-        case "community.sade":
-            from agent.community.sade.agent import SadeAgent
-
-            return SadeAgent(
                 session_id=session_id,
                 model=model,
                 max_steps=max_steps,

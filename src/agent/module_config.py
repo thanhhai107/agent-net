@@ -43,7 +43,6 @@ class ProceduralMemoryDefaults:
     skill_logprob_model: str
     timeout_seconds: float
     max_retries: int
-    top_k: int
     token_budget: int
     max_skill_age: int
     pool_size: int
@@ -52,7 +51,6 @@ class ProceduralMemoryDefaults:
     ppo_epsilon: float
     selection_epsilon: float
     experience_pool_size: int
-    golden_pool_size: int
     baseline_ema_alpha: float
     selection_epsilon_decay_cases: int
     acceptance_margin: float
@@ -62,7 +60,6 @@ class ProceduralMemoryDefaults:
     policy_token_budget_min: int
     policy_token_budget_max: int
     policy_token_budget_divisor: int
-    followup_token_budget: int
     tool_guidance_char_budget: int
 
 
@@ -169,7 +166,6 @@ def load_module_defaults(path: str | Path | None = None) -> ModuleDefaults:
             skill_logprob_model=_str(memory, "skill_logprob_model"),
             timeout_seconds=_float(memory, "timeout_seconds"),
             max_retries=_int(memory, "max_retries"),
-            top_k=_int(memory, "top_k"),
             token_budget=_int(memory, "token_budget"),
             max_skill_age=_int(memory, "max_skill_age"),
             pool_size=_int(memory, "pool_size"),
@@ -178,7 +174,6 @@ def load_module_defaults(path: str | Path | None = None) -> ModuleDefaults:
             ppo_epsilon=_float(memory, "ppo_epsilon"),
             selection_epsilon=_float(memory, "selection_epsilon"),
             experience_pool_size=_int(memory, "experience_pool_size"),
-            golden_pool_size=_int(memory, "golden_pool_size"),
             baseline_ema_alpha=_float(memory, "baseline_ema_alpha"),
             selection_epsilon_decay_cases=_int(memory, "selection_epsilon_decay_cases"),
             acceptance_margin=_float(memory, "acceptance_margin"),
@@ -188,7 +183,6 @@ def load_module_defaults(path: str | Path | None = None) -> ModuleDefaults:
             policy_token_budget_min=_int(memory, "policy_token_budget_min"),
             policy_token_budget_max=_int(memory, "policy_token_budget_max"),
             policy_token_budget_divisor=_int(memory, "policy_token_budget_divisor"),
-            followup_token_budget=_int(memory, "followup_token_budget"),
             tool_guidance_char_budget=_int(memory, "tool_guidance_char_budget"),
         ),
         baseline=BaselineDefaults(
@@ -249,20 +243,17 @@ def load_module_defaults(path: str | Path | None = None) -> ModuleDefaults:
     if memory_defaults.timeout_seconds <= 0 or memory_defaults.max_retries < 0:
         raise ValueError("procedural memory timeout/retries are invalid")
     positive_memory_values = (
-        memory_defaults.top_k,
         memory_defaults.token_budget,
         memory_defaults.max_skill_age,
         memory_defaults.pool_size,
         memory_defaults.evolution_threshold,
         memory_defaults.best_of_n,
         memory_defaults.experience_pool_size,
-        memory_defaults.golden_pool_size,
         memory_defaults.selection_epsilon_decay_cases,
         memory_defaults.holdout_size,
         memory_defaults.policy_token_budget_min,
         memory_defaults.policy_token_budget_max,
         memory_defaults.policy_token_budget_divisor,
-        memory_defaults.followup_token_budget,
         memory_defaults.tool_guidance_char_budget,
     )
     if min(positive_memory_values) < 1:
@@ -287,10 +278,9 @@ def load_module_defaults(path: str | Path | None = None) -> ModuleDefaults:
         raise ValueError(
             "procedural memory positive-advantage support exceeds holdout size"
         )
-    if (
-        memory_defaults.evolution_threshold > 1
-        and memory_defaults.holdout_size >= memory_defaults.evolution_threshold
-    ):
+    if memory_defaults.evolution_threshold < 2:
+        raise ValueError("procedural memory evolution batch size must be at least 2")
+    if memory_defaults.holdout_size >= memory_defaults.evolution_threshold:
         raise ValueError(
             "procedural memory holdout must leave at least one generation trajectory"
         )

@@ -126,6 +126,12 @@ class ExtensionWorkflowBase:
             return {}
         return await runtime.explore(task_description)
 
+    def record_terminal_diagnosis(self, diagnosis_report: str) -> None:
+        diagnosis_phase = getattr(self, "diagnosis_phase", None)
+        runtime = getattr(diagnosis_phase, "skill_tool_runtime", None)
+        if runtime is not None:
+            runtime.record_terminal_diagnosis(diagnosis_report)
+
     def write_extension_snapshots(self) -> None:
         write_tool_refinement_session(
             self.diagnosis_phase.tool_refinement_runtime,

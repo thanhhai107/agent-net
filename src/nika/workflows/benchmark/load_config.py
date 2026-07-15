@@ -8,6 +8,12 @@ from typing import Any
 import yaml
 
 
+def is_no_fault_problem(problem: str) -> bool:
+    """Return whether a benchmark problem is the explicit clean control."""
+
+    return problem.strip().lower() == "no_fault"
+
+
 def load_benchmark_yaml(path: str | Path) -> list[dict[str, Any]]:
     """Load benchmark cases from a YAML file.
 
@@ -41,15 +47,16 @@ def load_benchmark_yaml(path: str | Path) -> list[dict[str, Any]]:
         inject = row.get("inject") or {}
         if not isinstance(inject, dict):
             raise ValueError(f"Benchmark case {idx} 'inject' must be a mapping")
-        if not inject:
+        problem = str(row["problem"])
+        if not inject and not is_no_fault_problem(problem):
             raise ValueError(
                 f"Benchmark case {idx} ({row.get('scenario')}/{row.get('problem')}) "
-                f"missing non-empty 'inject' map in {path}"
+                f"missing non-empty inject map in {path}"
             )
         normalized.append(
             {
                 "scenario": str(row["scenario"]),
-                "problem": str(row["problem"]),
+                "problem": problem,
                 "topo_size": "" if topo in ("-", "", None) else str(topo),
                 "inject": {str(k): str(v) for k, v in inject.items()},
             }

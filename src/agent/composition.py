@@ -57,9 +57,6 @@ class ToolRefinementConfig:
 class ProceduralMemoryConfig:
     mode: str = "off"
     bank: str = "default"
-    top_k: int = field(
-        default_factory=lambda: module_defaults().procedural_memory.top_k
-    )
     token_budget: int = field(
         default_factory=lambda: module_defaults().procedural_memory.token_budget
     )
@@ -83,9 +80,6 @@ class ProceduralMemoryConfig:
     )
     experience_pool_size: int = field(
         default_factory=lambda: module_defaults().procedural_memory.experience_pool_size
-    )
-    golden_pool_size: int = field(
-        default_factory=lambda: module_defaults().procedural_memory.golden_pool_size
     )
     baseline_ema_alpha: float = field(
         default_factory=lambda: module_defaults().procedural_memory.baseline_ema_alpha
@@ -142,11 +136,6 @@ class AgentRunConfig:
         return normalized
 
     @property
-    def llm_backend(self) -> str:
-        """Compatibility name used by persisted pre-upstream run metadata."""
-        return self.llm_provider
-
-    @property
     def extensions_enabled(self) -> bool:
         return self.tool_refinement.enabled or self.procedural_memory.enabled
 
@@ -191,16 +180,14 @@ def validate_agent_extensions(config: AgentRunConfig) -> None:
         raise ValueError("Tool Refinement publication utility must be in [0, 1]")
     if config.procedural_memory.mode not in {"off", "read", "evolve"}:
         raise ValueError("Procedural Memory mode must be one of: off, read, evolve")
-    if config.procedural_memory.top_k < 1:
-        raise ValueError("Procedural Memory top-k must be >= 1")
     if config.procedural_memory.token_budget < 100:
         raise ValueError("Procedural Memory token budget must be >= 100")
     if config.procedural_memory.max_skill_age < 1:
         raise ValueError("Procedural Memory maximum skill age must be >= 1")
     if config.procedural_memory.pool_size < 1:
         raise ValueError("Procedural Memory pool size must be >= 1")
-    if config.procedural_memory.evolution_threshold < 1:
-        raise ValueError("Procedural Memory update threshold must be >= 1")
+    if config.procedural_memory.evolution_threshold < 2:
+        raise ValueError("Procedural Memory evolution batch size must be >= 2")
     if config.procedural_memory.best_of_n < 1:
         raise ValueError("Procedural Memory best-of-N must be >= 1")
     if not 0 <= config.procedural_memory.ppo_epsilon <= 1:
@@ -209,8 +196,6 @@ def validate_agent_extensions(config: AgentRunConfig) -> None:
         raise ValueError("Procedural Memory selection epsilon must be in [0, 1]")
     if config.procedural_memory.experience_pool_size < 1:
         raise ValueError("Procedural Memory experience pool size must be >= 1")
-    if config.procedural_memory.golden_pool_size < 1:
-        raise ValueError("Procedural Memory golden pool size must be >= 1")
     if not 0 < config.procedural_memory.baseline_ema_alpha <= 1:
         raise ValueError("Procedural Memory baseline EMA alpha must be in (0, 1]")
     if config.procedural_memory.selection_epsilon_decay_cases < 1:
@@ -235,8 +220,7 @@ def validate_agent_extensions(config: AgentRunConfig) -> None:
             "Procedural Memory positive-advantage support exceeds holdout size"
         )
     if (
-        config.procedural_memory.evolution_threshold > 1
-        and config.procedural_memory.holdout_size
+        config.procedural_memory.holdout_size
         >= config.procedural_memory.evolution_threshold
     ):
         raise ValueError("Procedural Memory holdout must leave a generation trajectory")

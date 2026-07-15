@@ -10,14 +10,10 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from agent.extensions.config import PROCEDURAL_MEMORY_DIR
-from agent.module_config import module_defaults
 from agent.utils.atomic import atomic_write_text
 
 from agent.procedural_memory.models import (
     EvaluationEvidence,
-    PPOGateDecision,
-    ProceduralSkill,
-    SkillExperience,
     ProceduralMemoryState,
     utc_now,
 )
@@ -78,55 +74,7 @@ class ProceduralMemoryStore:
                 else:
                     path.unlink(missing_ok=True)
 
-    def upsert_skill(self, skill: ProceduralSkill) -> ProceduralSkill:
-        with self.exclusive():
-            state = self.load()
-            skill.updated_at = utc_now()
-            state.skills[skill.skill_id] = skill
-            self.save(state)
-        return skill
-
-    def record_episode(self, evidence: EvaluationEvidence) -> None:
-        with self.exclusive():
-            state = self.load()
-            if not any(
-                item.session_id == evidence.session_id for item in state.episodes
-            ):
-                state.episodes.append(public_episode_evidence(evidence))
-                self.save(state)
-
-    def record_experience(
-        self,
-        experience: SkillExperience,
-        *,
-        max_experiences: int = module_defaults().procedural_memory.experience_pool_size,
-        golden_size: int = module_defaults().procedural_memory.golden_pool_size,
-    ) -> None:
-        with self.exclusive():
-            state = self.load()
-            if not any(
-                item.experience_id == experience.experience_id
-                for item in state.experiences
-            ):
-                state.experiences.append(experience)
-                state.experiences = state.experiences[-max_experiences:]
-            if experience.transitions:
-                gold = {item.experience_id: item for item in state.golden_experiences}
-                gold[experience.experience_id] = experience
-                state.golden_experiences = sorted(
-                    gold.values(),
-                    key=lambda item: item.reward,
-                    reverse=True,
-                )[:golden_size]
-            self.save(state)
-
-    def record_decision(self, decision: PPOGateDecision) -> None:
-        with self.exclusive():
-            state = self.load()
-            state.ppo_decisions.append(decision)
-            self.save(state)
-
-    def bank_stats(self, bank_id: str | None = None) -> dict:
+    def bank_stats(self) -> dict:
         state = self.load()
         skills = list(state.skills.values())
         gradients = [
@@ -144,7 +92,6 @@ class ProceduralMemoryStore:
             "retired_skills": sum(skill.status == "retired" for skill in skills),
             "episodes": len(state.episodes),
             "experiences": len(state.experiences),
-            "golden_experiences": len(state.golden_experiences),
             "ppo_decisions": len(state.ppo_decisions),
             "ppo_accepted": sum(decision.accepted for decision in state.ppo_decisions),
             "ppo_rejected": sum(
@@ -170,9 +117,6 @@ class ProceduralMemoryStore:
             "llm_semantic_gradients": sum(
                 gradient.gradient_source == "llm" for gradient in gradients
             ),
-            "semantic_gradient_llm_failures": sum(
-                bool(gradient.llm_error) for gradient in gradients
-            ),
             "total_skill_frequency": sum(skill.frequency for skill in skills),
         }
 
@@ -195,9 +139,5 @@ class ProceduralMemoryStore:
         rows.extend(
             {"kind": "experience", **experience.model_dump()}
             for experience in state.experiences
-        )
-        rows.extend(
-            {"kind": "golden_experience", **experience.model_dump()}
-            for experience in state.golden_experiences
         )
         return [json.dumps(row, ensure_ascii=False, default=str) for row in rows]

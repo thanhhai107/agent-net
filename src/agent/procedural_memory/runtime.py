@@ -2,8 +2,7 @@
 
 The offline Procedural Memory module learns reusable procedures after a session closes.
 This runtime is the read-time counterpart: it injects retrieved procedures into
-the diagnosis prompt, adds tool-specific skill hints to tool descriptions, and
-keeps an active Skill-MDP option across tool calls.
+the diagnosis prompt and keeps an active Skill-MDP option across tool calls.
 """
 
 from __future__ import annotations
@@ -20,16 +19,17 @@ from pydantic import ConfigDict, Field
 
 from agent.module_config import module_defaults
 from agent.procedural_memory.attributes import infer_procedural_memory_attributes
-from agent.procedural_memory.models import ProceduralMemoryQuery, SkillRetrieval
+from agent.procedural_memory.models import (
+    ProceduralMemoryQuery,
+    SkillRetrieval,
+    SkillSelectionDraft,
+)
 from agent.procedural_memory.policy_context import (
     build_skill_policy_prefix,
     build_skill_policy_suffix,
 )
 from agent.procedural_memory.safety import redact_oracle_markers
-from agent.procedural_memory.service import (
-    GENERIC_SEED_SKILL_IDS,
-    ProceduralMemoryModule,
-)
+from agent.procedural_memory.service import ProceduralMemoryModule
 from agent.tool_refinement.runtime import ToolRefinementRuntime
 from agent.utils.loggers import MessageLogger
 from agent.utils.tool_output import (
@@ -83,19 +83,6 @@ def _tool_result_content(result: Any) -> Any:
     return tool_output_content(result)
 
 
-def _append_followup_guidance(result: Any, guidance: str) -> Any:
-    if isinstance(result, tuple) and len(result) == 2:
-        content, artifact = result
-        return (_append_guidance_to_content(content, guidance), artifact)
-    return _append_guidance_to_content(result, guidance)
-
-
-def _append_guidance_to_content(content: Any, guidance: str) -> Any:
-    if isinstance(content, list):
-        return [*content, {"type": "text", "text": guidance}]
-    return f"{content}\n\n{guidance}"
-
-
 def _estimate_tokens(text: str) -> int:
     return max(1, len(str(text or "")) // 4)
 
@@ -113,7 +100,6 @@ class SkillToolRuntime:
         tools: list[BaseTool],
         session_dir: str | Path = "",
         tool_refinement_runtime: ToolRefinementRuntime | None = None,
-        top_k: int = _DEFAULTS.top_k,
         token_budget: int = _DEFAULTS.token_budget,
         max_skill_age: int = _DEFAULTS.max_skill_age,
         selection_epsilon: float = _DEFAULTS.selection_epsilon,
@@ -128,7 +114,6 @@ class SkillToolRuntime:
             tool.name: (getattr(tool, "description", "") or "") for tool in tools
         }
         self.tool_refinement_runtime = tool_refinement_runtime
-        self.top_k = top_k
         self.token_budget = token_budget
         self.policy_token_budget = min(
             _DEFAULTS.policy_token_budget_max,
@@ -137,7 +122,6 @@ class SkillToolRuntime:
                 self.token_budget // _DEFAULTS.policy_token_budget_divisor,
             ),
         )
-        self.followup_token_budget = _DEFAULTS.followup_token_budget
         self.max_skill_age = max(1, max_skill_age)
         self.selection_epsilon = max(0.0, min(1.0, selection_epsilon))
         self.selection_count = 0
@@ -148,6 +132,11 @@ class SkillToolRuntime:
         self.prompt_selection_count = 0
         self.post_tool_selection_count = 0
         self.meta_controller_cache_hits = 0
+        self.selector_calls = 0
+        self.selector_errors = 0
+        self.selector_none = 0
+        self.termination_calls = 0
+        self.termination_errors = 0
         self.skill_cooldowns: dict[str, int] = {}
         self.recent_observations: list[str] = []
         self.recent_transitions: list[dict[str, Any]] = []
@@ -160,11 +149,9 @@ class SkillToolRuntime:
         self._metrics_lock = Lock()
         self.prompt_added_tokens = 0
         self.tool_description_added_tokens = 0
-        self.followup_added_tokens = 0
         self.prompt_injection_count = 0
         self.tool_description_injection_count = 0
-        self.followup_guidance_count = 0
-        self._last_followup_signature = ""
+        self._terminal_action_recorded = False
         self._logger = (
             MessageLogger(
                 agent="procedural_memory_agent",
@@ -188,7 +175,7 @@ class SkillToolRuntime:
         activate_skill: bool = True,
         decision_context: str = "",
     ) -> str:
-        active_skill, _ = self._prepare_prompt_context(
+        active_skill = self._prepare_prompt_context(
             activate_skill=activate_skill,
             decision_context=decision_context,
         )
@@ -330,8 +317,7 @@ class SkillToolRuntime:
                     "activation_id": transition["activation_id"],
                 },
             )
-            emit_followup_guidance = self.inflight_tool_calls == 0
-            if emit_followup_guidance:
+            if self.inflight_tool_calls == 0:
                 self._refresh_active_skill_after_observation(
                     tool_name=tool_name,
                     tool_input=tool_input,
@@ -339,19 +325,36 @@ class SkillToolRuntime:
                     status=status,
                 )
                 self._capture_decision_policy_context()
-                guidance = self._followup_guidance(
-                    tool_name,
-                )
-            else:
-                guidance = ""
-        if not guidance:
-            return result
-        capped_guidance = _short_text(
-            guidance,
-            limit=self.followup_token_budget * 4,
-        )
-        self._record_added_tokens("followup", capped_guidance)
-        return _append_followup_guidance(result, capped_guidance)
+        return result
+
+    def record_terminal_diagnosis(self, diagnosis_report: str) -> None:
+        """Record the final diagnosis as the terminal primitive action."""
+
+        report = redact_oracle_markers(
+            _short_text(diagnosis_report, limit=2400)
+        ).strip()
+        if not report or report.startswith("ERROR_"):
+            return
+        with self._lock:
+            if self._terminal_action_recorded:
+                return
+            self._terminal_action_recorded = True
+            transition = {
+                "active_skill_id": (
+                    self.active_skill.skill.skill_id if self.active_skill else ""
+                ),
+                "tool": "",
+                "tool_input": {},
+                "action": report,
+                "status": "success",
+                "observation_summary": "",
+                "policy_state": self._decision_policy_state,
+                "policy_context": self._decision_policy_context,
+                "activation_id": self.active_activation_id,
+            }
+            self.recent_transitions.append(transition)
+            self.recent_transitions = self.recent_transitions[-16:]
+            self._log("skill_terminal_transition", transition)
 
     def _capture_decision_policy_context(self, *, decision_context: str = "") -> None:
         state = self.task_description
@@ -367,11 +370,6 @@ class SkillToolRuntime:
         skill = self.active_skill.skill if self.active_skill else None
         self._decision_policy_state = state
         self._decision_policy_context = build_skill_policy_prefix(state, skill)
-
-    def _tool_refinement_policy_context(self) -> str:
-        # DRAFT guidance is attached to the corresponding tool once. Repeating
-        # the whole catalog in every policy prompt crowds out live evidence.
-        return ""
 
     def snapshot(self) -> dict[str, Any]:
         attributed_transitions = sum(
@@ -389,11 +387,15 @@ class SkillToolRuntime:
             "prompt_selection_count": self.prompt_selection_count,
             "post_tool_selection_count": self.post_tool_selection_count,
             "meta_controller_cache_hits": self.meta_controller_cache_hits,
-            "selection_policy": "epsilon_then_similarity_top_k_online_value",
+            "selector_calls": self.selector_calls,
+            "selector_errors": self.selector_errors,
+            "selector_none": self.selector_none,
+            "termination_calls": self.termination_calls,
+            "termination_errors": self.termination_errors,
+            "selection_policy": "llm_direct_epsilon_greedy",
             "selection_epsilon_initial": self.selection_epsilon,
             "meta_controller_available": self.meta_controller_llm is not None,
             "config": {
-                "top_k": self.top_k,
                 "token_budget": self.token_budget,
                 "max_skill_age": self.max_skill_age,
             },
@@ -410,20 +412,14 @@ class SkillToolRuntime:
             "inflight_tool_calls": self.inflight_tool_calls,
             "prompt_added_tokens": self.prompt_added_tokens,
             "tool_description_added_tokens": self.tool_description_added_tokens,
-            "followup_added_tokens": self.followup_added_tokens,
             "total_added_tokens": self.total_added_tokens,
             "prompt_injection_count": self.prompt_injection_count,
             "tool_description_injection_count": (self.tool_description_injection_count),
-            "followup_guidance_count": self.followup_guidance_count,
         }
 
     @property
     def total_added_tokens(self) -> int:
-        return (
-            self.prompt_added_tokens
-            + self.tool_description_added_tokens
-            + self.followup_added_tokens
-        )
+        return self.prompt_added_tokens + self.tool_description_added_tokens
 
     def _record_added_tokens(self, bucket: str, text: str) -> int:
         added_tokens = _estimate_tokens(text)
@@ -434,9 +430,6 @@ class SkillToolRuntime:
             elif bucket == "tool_description":
                 self.tool_description_added_tokens += added_tokens
                 self.tool_description_injection_count += 1
-            elif bucket == "followup":
-                self.followup_added_tokens += added_tokens
-                self.followup_guidance_count += 1
         return added_tokens
 
     def _prepare_prompt_context(
@@ -444,7 +437,7 @@ class SkillToolRuntime:
         *,
         activate_skill: bool = True,
         decision_context: str = "",
-    ) -> tuple[SkillRetrieval | None, list[SkillRetrieval]]:
+    ) -> SkillRetrieval | None:
         with self._lock:
             query = self._query(
                 extra_text=" ".join(
@@ -457,16 +450,11 @@ class SkillToolRuntime:
                 )
             )
             if not activate_skill:
-                retrieved = self._retrieve(query)
-                return self.active_skill, self._merge_active_with_retrieved(retrieved)
+                return self.active_skill
             termination_reason = (
                 ""
                 if self.active_skill is None
-                else self._active_skill_termination_reason(
-                    query,
-                    allow_context_mismatch=True,
-                    source="prompt",
-                )
+                else self._active_skill_termination_reason(query, source="prompt")
             )
             if self.active_skill is None or termination_reason:
                 if termination_reason:
@@ -483,23 +471,13 @@ class SkillToolRuntime:
                         },
                     )
                 self._select_active_skill(query=query, source="prompt")
-            retrieved = self._retrieve(query)
-            return self.active_skill, self._merge_active_with_retrieved(retrieved)
-
-    def _retrieve(self, query: ProceduralMemoryQuery) -> list[SkillRetrieval]:
-        return self.procedural_memory.retrieve(
-            query=query,
-            session_id="",
-            include_probationary=self.procedural_memory_mode == "evolve",
-        )
+            return self.active_skill
 
     def _query(
         self,
         *,
         extra_text: str = "",
         tools: list[str] | None = None,
-        top_k: int | None = None,
-        token_budget: int | None = None,
     ) -> ProceduralMemoryQuery:
         query_tools = list(tools) if tools is not None else self._recent_tool_scope()
         text = " ".join(
@@ -513,8 +491,6 @@ class SkillToolRuntime:
         )
         attrs = infer_procedural_memory_attributes(
             text,
-            scenario=self.scenario,
-            topology_class=self.topology_class,
             tools=query_tools,
         )
         return ProceduralMemoryQuery(
@@ -526,8 +502,7 @@ class SkillToolRuntime:
             symptoms=attrs.symptoms,
             task_stage="diagnosis",
             tools=query_tools,
-            top_k=top_k or self.top_k,
-            token_budget=token_budget or self.token_budget,
+            token_budget=self.token_budget,
         )
 
     def _recent_tool_scope(self, *, limit: int = 6) -> list[str]:
@@ -543,28 +518,17 @@ class SkillToolRuntime:
         self,
         query: ProceduralMemoryQuery,
         *,
-        allow_context_mismatch: bool = True,
         source: str = "",
     ) -> str:
         if self.active_skill is None:
             return "no_active_skill"
         if self.skill_age >= self.max_skill_age:
             return "max_skill_age"
-        if self._termination_condition_satisfied(self.active_skill.skill):
-            return "termination_condition_satisfied"
         meta_reason = self._meta_controller_termination_reason(
             query=query,
             source=source,
         )
-        if meta_reason:
-            return meta_reason
-        if not allow_context_mismatch:
-            return ""
-        active_id = self.active_skill.skill.skill_id
-        for item in self._retrieve(query):
-            if item.skill.skill_id == active_id and item.score > 0.05:
-                return ""
-        return "context_mismatch"
+        return meta_reason
 
     def _meta_controller_termination_reason(
         self,
@@ -630,6 +594,7 @@ class SkillToolRuntime:
         )
         raw_text = ""
         try:
+            self.termination_calls += 1
             response = self.meta_controller_llm.invoke(prompt)
             raw_text = str(getattr(response, "content", response) or "")
             status = self._parse_meta_controller_status(raw_text)
@@ -647,6 +612,7 @@ class SkillToolRuntime:
             self._last_meta_controller_reason = reason
             return reason
         except Exception as exc:
+            self.termination_errors += 1
             self._last_meta_controller_signature = state_signature
             self._last_meta_controller_reason = ""
             self._log(
@@ -693,21 +659,19 @@ class SkillToolRuntime:
         source: str,
     ) -> None:
         session_id = str(getattr(self.session, "session_id", "") or "")
-        self.active_skill = self.procedural_memory.select_skill(
-            query=query,
-            session_id=session_id,
-            top_k=max(1, self.top_k),
+        exploration_key = f"{session_id}:{self.selection_count}"
+        epsilon = (
+            self.procedural_memory.decayed_selection_epsilon(self.selection_epsilon)
+            if self.procedural_memory_mode == "evolve"
+            else 0.0
+        )
+        explored, selected = self.procedural_memory.exploration_selection(
+            epsilon=epsilon,
+            key=exploration_key,
             record_reuse=self.procedural_memory_mode == "evolve",
             exclude_skill_ids=self.skill_cooldowns,
-            allow_excluded_fallback=False,
-            exploration_epsilon=(
-                self.procedural_memory.decayed_selection_epsilon(self.selection_epsilon)
-                if self.procedural_memory_mode == "evolve"
-                else 0.0
-            ),
-            exploration_key=f"{session_id}:{self.selection_count}",
-            include_probationary=self.procedural_memory_mode == "evolve",
         )
+        self.active_skill = selected if explored else self._select_skill_with_llm(query)
         self.selection_count += 1
         self.active_activation_id = (
             f"{session_id}:{self.selection_count}"
@@ -732,11 +696,80 @@ class SkillToolRuntime:
                 "activation_id": self.active_activation_id,
                 "skill_age": self.skill_age,
                 "cooldown_exclusions": sorted(self.skill_cooldowns),
-                "selection_policy": "epsilon_then_similarity_top_k_online_value",
+                "selection_policy": "llm_direct_epsilon_greedy",
             },
         )
         selected_id = self.active_skill.skill.skill_id if self.active_skill else ""
         self._decay_skill_cooldowns(selected_skill_id=selected_id)
+
+    def _select_skill_with_llm(
+        self,
+        query: ProceduralMemoryQuery,
+    ) -> SkillRetrieval | None:
+        candidates = self.procedural_memory.selection_candidates(
+            include_probationary=self.procedural_memory_mode == "evolve",
+            exclude_skill_ids=self.skill_cooldowns,
+        )
+        if not candidates or self.meta_controller_llm is None:
+            self.selector_none += 1
+            return None
+        payload = [
+            {
+                "skill_id": skill.skill_id,
+                "title": skill.title,
+                "initiation": skill.activation_condition,
+            }
+            for skill in candidates
+        ]
+        prompt = (
+            "You are the Skill-Pro skill-selection policy for a network diagnosis "
+            "agent. Select the single skill whose initiation condition best matches "
+            "the visible current state. Return an empty skill_id when no skill is "
+            "clearly applicable. Never invent an id.\n\n"
+            f"Current state:\n{query.text[:4000]}\n\n"
+            f"Available skills:\n{json.dumps(payload, ensure_ascii=False)}"
+        )
+        self.selector_calls += 1
+        try:
+            selector = self.meta_controller_llm.with_structured_output(
+                SkillSelectionDraft
+            )
+            raw = selector.invoke(prompt)
+            draft = (
+                raw
+                if isinstance(raw, SkillSelectionDraft)
+                else SkillSelectionDraft.model_validate(raw)
+            )
+            selected = self.procedural_memory.activate_skill(
+                draft.skill_id.strip(),
+                record_reuse=self.procedural_memory_mode == "evolve",
+                include_probationary=self.procedural_memory_mode == "evolve",
+                exclude_skill_ids=self.skill_cooldowns,
+            )
+            if selected is None:
+                self.selector_none += 1
+            self._log(
+                "skill_selector",
+                {
+                    "status": "selected" if selected else "none",
+                    "selected_skill_id": selected.skill.skill_id if selected else "",
+                    "reason": _short_text(draft.reason, limit=500),
+                    "candidate_count": len(candidates),
+                },
+            )
+            return selected
+        except Exception as exc:
+            self.selector_errors += 1
+            self.selector_none += 1
+            self._log(
+                "skill_selector",
+                {
+                    "status": "error",
+                    "error": _short_text(exc, limit=500),
+                    "candidate_count": len(candidates),
+                },
+            )
+            return None
 
     def _refresh_active_skill_after_observation(
         self,
@@ -764,9 +797,7 @@ class SkillToolRuntime:
             )
         )
         termination_reason = self._active_skill_termination_reason(
-            query,
-            allow_context_mismatch=True,
-            source="post_tool",
+            query, source="post_tool"
         )
         if not termination_reason:
             return
@@ -803,48 +834,6 @@ class SkillToolRuntime:
                 next_cooldowns[skill_id] = remaining
         self.skill_cooldowns = next_cooldowns
 
-    def _merge_active_with_retrieved(
-        self,
-        retrieved: list[SkillRetrieval],
-    ) -> list[SkillRetrieval]:
-        if self.active_skill is None:
-            return retrieved
-        active_id = self.active_skill.skill.skill_id
-        merged = [self.active_skill]
-        merged.extend(item for item in retrieved if item.skill.skill_id != active_id)
-        return merged[: self.top_k]
-
-    def _active_skill_prompt_block(
-        self,
-        active: SkillRetrieval | None,
-        *,
-        tool_candidates: list[str] | None = None,
-    ) -> str:
-        if active is None:
-            return ""
-        skill = active.skill
-        lines = [
-            f"Skill: {redact_oracle_markers(skill.skill_id)} ({redact_oracle_markers(skill.title)}) score={active.score:.3f}",
-            f"Initiation: {redact_oracle_markers(skill.activation_condition)}",
-            "Policy:",
-        ]
-        lines.extend(
-            f"- {redact_oracle_markers(step.action)}"
-            for step in skill.execution_steps[:6]
-        )
-        candidates = (
-            list(tool_candidates)
-            if tool_candidates is not None
-            else sorted(self._contextual_tool_candidates(active))
-        )
-        if candidates:
-            lines.append("Candidate tools: " + ", ".join(candidates[:8]))
-        lines.append(
-            "Skill termination condition (runtime only): "
-            f"{redact_oracle_markers(skill.termination_condition)}"
-        )
-        return "\n".join(lines)
-
     def _contextual_tool_candidates(
         self,
         retrieval: SkillRetrieval | None,
@@ -852,9 +841,9 @@ class SkillToolRuntime:
         explicit = self._skill_tool_candidates(retrieval)
         if explicit:
             return explicit
-        return self._fallback_tool_candidates()
+        return self._rank_contextual_tool_candidates()
 
-    def _fallback_tool_candidates(self) -> set[str]:
+    def _rank_contextual_tool_candidates(self) -> set[str]:
         known_tools = list(dict.fromkeys(self.tool_names))
         if len(known_tools) <= 6:
             return set(known_tools)
@@ -924,75 +913,6 @@ class SkillToolRuntime:
     ) -> bool:
         candidates = self._contextual_tool_candidates(retrieval)
         return not candidates or tool_name in candidates
-
-    def _termination_condition_satisfied(self, skill) -> bool:
-        if self.skill_age <= 0:
-            return False
-        condition = str(getattr(skill, "termination_condition", "") or "").lower()
-        if any(
-            marker in condition
-            for marker in (
-                "stop after one",
-                "after one concrete",
-                "after selecting the next",
-                "after creating the initial",
-                "after choosing exploration or exploitation",
-            )
-        ):
-            return self.skill_age >= 1
-        recent_successes = [
-            item
-            for item in self.recent_transitions[-self.max_skill_age :]
-            if item.get("status") == "success" and item.get("tool")
-        ]
-        unique_tools = {str(item.get("tool")) for item in recent_successes}
-        if any(
-            marker in condition
-            for marker in (
-                "two independent",
-                "at least two",
-                "independent confirmation",
-                "independent observations",
-            )
-        ):
-            return len(unique_tools) >= 2
-        if "evidence budget" in condition and self.skill_age >= self.max_skill_age:
-            return True
-        return False
-
-    def _followup_guidance(
-        self,
-        tool_name: str,
-    ) -> str:
-        del tool_name
-        if self.active_skill is None:
-            return ""
-        skill = self.active_skill.skill
-        base_skill_id = skill.skill_id.split("__", 1)[0]
-        if base_skill_id in GENERIC_SEED_SKILL_IDS:
-            return ""
-        next_index = (
-            min(self.skill_age, len(skill.execution_steps) - 1)
-            if skill.execution_steps
-            else -1
-        )
-        signature = f"{skill.skill_id}:{next_index}"
-        if signature == self._last_followup_signature:
-            return ""
-        self._last_followup_signature = signature
-        lines = [
-            INTEGRATED_GUIDANCE_MARKER,
-            "Active Skill-MDP option: "
-            f"{redact_oracle_markers(skill.skill_id)} "
-            f"({redact_oracle_markers(skill.title)}).",
-        ]
-        if skill.execution_steps:
-            next_step = skill.execution_steps[next_index].action
-            lines.append("Next active policy step: " + redact_oracle_markers(next_step))
-        lines.append(
-            "Use the current tool output as evidence; the skill and DRAFT contract notes are guidance only."
-        )
-        return "\n".join(lines)
 
     def _log(self, event: str, payload: dict[str, Any]) -> None:
         if self._logger is not None:

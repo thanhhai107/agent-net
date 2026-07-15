@@ -157,6 +157,7 @@ class PlanExecuteAgent(ExtensionWorkflowBase):
                 except Exception as exc:
                     self.log_error("synthesis", exc)
                     report = synthesis_payload
+            self.record_terminal_diagnosis(report)
             await self.explore_tools(task_description)
             return await self.submit(report)
         finally:

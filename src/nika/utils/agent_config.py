@@ -9,33 +9,12 @@ from __future__ import annotations
 import os
 
 from agent.module_config import module_defaults
-from agent.local_cli.claude_cli.config import resolve_claude_model
 
 # Shared CLI options (nika agent run / nika benchmark run)
 ENV_AGENT_TYPE = "NIKA_AGENT_TYPE"
 ENV_LLM_PROVIDER = "NIKA_LLM_PROVIDER"
 ENV_MAX_STEPS = "NIKA_MAX_STEPS"
 ENV_MODEL = "NIKA_MODEL"
-
-# ReAct agent (implemented with LangGraph)
-ENV_LANGGRAPH_MODEL = "NIKA_LANGGRAPH_MODEL"
-
-# mcp-agent agent
-ENV_MCP_AGENT_MODEL = "NIKA_MCP_AGENT_MODEL"
-
-# SADE community agent
-ENV_SADE_MODEL = "NIKA_SADE_MODEL"
-
-# SDK agents
-ENV_CLAUDE_SDK_MODEL = "NIKA_CLAUDE_SDK_MODEL"
-ENV_CODEX_SDK_MODEL = "NIKA_CODEX_SDK_MODEL"
-
-# AutoGen agent
-ENV_AUTOGEN_MODEL = "NIKA_AUTOGEN_MODEL"
-
-# Codex CLI agent
-ENV_CODEX_MODEL = "NIKA_CODEX_MODEL"
-ENV_CODEX_REASONING_EFFORT = "NIKA_CODEX_REASONING_EFFORT"
 
 # LLM judge (nika eval judge / nika benchmark run --judge)
 ENV_JUDGE_PROVIDER = "NIKA_JUDGE_PROVIDER"
@@ -47,22 +26,6 @@ SUPPORTED_AGENT_TYPES = ("react", "plan-execute", "reflexion")
 def _env_str(key: str) -> str | None:
     value = os.environ.get(key, "").strip()
     return value or None
-
-
-def _require_str(*, value: str | None, env_key: str, cli_flag: str) -> str:
-    if value:
-        return value
-    if env := _env_str(env_key):
-        return env
-    raise ValueError(f"Missing {env_key}: set it in .env or pass {cli_flag}.")
-
-
-def _require_int(*, value: int | None, env_key: str, cli_flag: str) -> int:
-    if value is not None:
-        return value
-    if raw := _env_str(env_key):
-        return int(raw)
-    raise ValueError(f"Missing {env_key}: set it in .env or pass {cli_flag}.")
 
 
 def canonical_agent_type(agent_type: str) -> str:
@@ -101,58 +64,19 @@ def resolve_max_steps(value: int | None = None) -> int:
     return value if value is not None else module_defaults().baseline.max_steps
 
 
-def resolve_reasoning_effort(value: str | None = None) -> str | None:
-    if value is not None:
-        return value
-    return _env_str(ENV_CODEX_REASONING_EFFORT)
-
-
 def resolve_agent_model(agent_type: str, model: str | None = None) -> str:
-    """Resolve model id for *agent_type*; explicit *model* wins over env."""
+    """Resolve the model from an explicit value or shared baseline config."""
     if model:
         return model
     if canonical_agent_type(agent_type) in SUPPORTED_AGENT_TYPES:
         return module_defaults().baseline.model
 
-    match canonical_agent_type(agent_type):
-        case "local_cli.claude_cli":
-            return resolve_claude_model(None)
-        case "community.sade":
-            if sade_model := _env_str(ENV_SADE_MODEL):
-                return sade_model
-            return resolve_claude_model(None)
-        case "sdk.claude_sdk":
-            if claude_sdk_model := _env_str(ENV_CLAUDE_SDK_MODEL):
-                return claude_sdk_model
-            return resolve_claude_model(None)
-        case "sdk.codex_sdk":
-            if codex_sdk_model := _env_str(ENV_CODEX_SDK_MODEL):
-                return codex_sdk_model
-            return _require_str(
-                value=None, env_key=ENV_CODEX_MODEL, cli_flag="-m/--model"
-            )
-        case "local_cli.codex_cli":
-            return _require_str(
-                value=None, env_key=ENV_CODEX_MODEL, cli_flag="-m/--model"
-            )
-        case "mock":
-            return _require_str(value=None, env_key=ENV_MODEL, cli_flag="-m/--model")
-        case "byo.mcp_agent":
-            return _require_str(
-                value=None, env_key=ENV_MCP_AGENT_MODEL, cli_flag="-m/--model"
-            )
-        case "byo.autogen":
-            return _require_str(
-                value=None, env_key=ENV_AUTOGEN_MODEL, cli_flag="-m/--model"
-            )
-        case "react" | "plan-execute" | "reflexion":
-            return _require_str(
-                value=None, env_key=ENV_LANGGRAPH_MODEL, cli_flag="-m/--model"
-            )
-        case _:
-            raise ValueError(
-                f"Unsupported agent type for model resolution: {agent_type!r}"
-            )
+    normalized = canonical_agent_type(agent_type)
+    if normalized in SUPPORTED_AGENT_TYPES:
+        return module_defaults().baseline.model
+    if normalized == "mock":
+        return _env_str(ENV_MODEL) or "mock"
+    raise ValueError(f"Unsupported agent type for model resolution: {agent_type!r}")
 
 
 def resolve_judge_provider(value: str | None = None) -> str:

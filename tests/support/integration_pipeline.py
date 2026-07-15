@@ -4,14 +4,12 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 from pathlib import Path
 
 from nika.utils.session_index import SessionIndex
 from nika.utils.session_store import SessionStore
 from nika.workflows.eval.session import run_eval_metrics
 from nika.workflows.session.close import close_session
-from tests.support.prerequisites import containerlab_prerequisites
 
 SCENARIO = "simple_bgp"
 PROBLEM = "link_down"
@@ -19,9 +17,6 @@ LINK_INJECT_PARAMS = {"host_name": "pc1", "intf_name": "eth0"}
 
 CLAB_SCENARIO = "min3clos"
 CLAB_LINK_INJECT_PARAMS = {"host_name": "leaf1", "intf_name": "e1-1"}
-
-# Backward-compatible alias for agent pipeline tests.
-_min3clos_prerequisites = containerlab_prerequisites
 
 
 def load_test_env() -> None:
@@ -36,53 +31,8 @@ def openai_api_key_available() -> bool:
     return bool(os.environ.get("OPENAI_API_KEY"))
 
 
-def codex_cli_available() -> bool:
-    if shutil.which("codex") is None:
-        return False
-    return (
-        bool(os.environ.get("OPENAI_API_KEY"))
-        or (Path.home() / ".codex" / "auth.json").is_file()
-    )
-
-
-def claude_cli_available() -> bool:
-    from agent.local_cli.claude_cli.config import claude_credentials_available
-
-    return claude_credentials_available()
-
-
 def deepseek_api_key_available() -> bool:
     return bool(os.environ.get("DEEPSEEK_API_KEY"))
-
-
-def sade_available() -> bool:
-    try:
-        import claude_agent_sdk  # noqa: F401
-    except ImportError:
-        return False
-    from agent.community.sade.config import sade_credentials_available
-
-    return sade_credentials_available()
-
-
-def claude_sdk_available() -> bool:
-    try:
-        import claude_agent_sdk  # noqa: F401
-    except ImportError:
-        return False
-    from agent.sdk.claude_sdk.config import claude_sdk_credentials_available
-
-    return claude_sdk_credentials_available()
-
-
-def codex_sdk_available() -> bool:
-    try:
-        import openai_codex  # noqa: F401
-    except ImportError:
-        return False
-    from agent.sdk.codex_sdk.config import codex_sdk_local_auth_available
-
-    return codex_sdk_local_auth_available()
 
 
 def tool_text_list(result: object) -> list[str]:

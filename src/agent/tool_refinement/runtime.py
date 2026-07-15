@@ -310,9 +310,7 @@ class ToolRefinementRuntime:
                 tools=self.primitive_tools,
                 store=self.store,
                 llm=self.explorer_llm,
-                llm_backend=self.llm_backend,
                 model=self.model,
-                convergence_threshold=self.convergence_threshold,
                 exploration_similarity_threshold=(
                     self.exploration_similarity_threshold
                 ),

@@ -15,7 +15,6 @@ from nika.workflows.agent.run import start_agent as start_nika_agent
 def _write_extension_metadata(session: Session, config: AgentRunConfig) -> None:
     session.update_session("procedural_memory_mode", config.procedural_memory.mode)
     session.update_session("procedural_memory_bank", config.procedural_memory.bank)
-    session.update_session("procedural_memory_top_k", config.procedural_memory.top_k)
     session.update_session(
         "procedural_memory_token_budget", config.procedural_memory.token_budget
     )
@@ -42,10 +41,6 @@ def _write_extension_metadata(session: Session, config: AgentRunConfig) -> None:
     session.update_session(
         "procedural_memory_experience_pool_size",
         config.procedural_memory.experience_pool_size,
-    )
-    session.update_session(
-        "procedural_memory_golden_pool_size",
-        config.procedural_memory.golden_pool_size,
     )
     session.update_session(
         "procedural_memory_baseline_ema_alpha",
@@ -126,7 +121,6 @@ def start_agent(config: AgentRunConfig, *, session_id: str | None = None) -> Non
             model=config.model,
             max_steps=config.max_steps,
             session_id=session_id,
-            stream_output=False,
         )
         return
 

@@ -118,7 +118,9 @@ def load_session_bundle(
     """Load one session and its optional result artifacts."""
     sessions = {
         str(item["session_id"]): item
-        for item in discover_sessions(results_dir=results_dir, sessions_dir=sessions_dir)
+        for item in discover_sessions(
+            results_dir=results_dir, sessions_dir=sessions_dir
+        )
     }
     if session_id not in sessions:
         raise FileNotFoundError(f"Session '{session_id}' not found.")
@@ -160,7 +162,11 @@ def parse_topology(meta: dict[str, Any]) -> list[tuple[str, str]]:
         return pairs
 
     description = str(meta.get("task_description") or "")
-    topology_text = description.split("Topology:", 1)[1] if "Topology:" in description else description
+    topology_text = (
+        description.split("Topology:", 1)[1]
+        if "Topology:" in description
+        else description
+    )
     return [
         (left.strip(), right.strip())
         for left, right in _TOPOLOGY_PAIR.findall(topology_text)
@@ -189,7 +195,9 @@ def fault_endpoints(bundle: SessionBundle) -> set[tuple[str, str]]:
     def visit(value: Any) -> None:
         if isinstance(value, dict):
             host = value.get("host") or value.get("host_name")
-            interface = value.get("intf") or value.get("intf_name") or value.get("interface")
+            interface = (
+                value.get("intf") or value.get("intf_name") or value.get("interface")
+            )
             if host and interface:
                 found.add((str(host), str(interface)))
             for child in value.values():
@@ -206,42 +214,6 @@ def fault_endpoints(bundle: SessionBundle) -> set[tuple[str, str]]:
         if match:
             found.add((match.group(1), match.group(2)))
     return found
-
-
-def timeline_rows(bundle: SessionBundle) -> list[dict[str, str]]:
-    """Merge system and agent records into one chronological timeline."""
-    rows: list[dict[str, str]] = []
-    for event in bundle.events:
-        rows.append(
-            {
-                "timestamp": str(event.get("timestamp") or ""),
-                "source": "system",
-                "actor": str(event.get("level") or ""),
-                "event": str(event.get("event") or ""),
-                "detail": str(event.get("message") or ""),
-            }
-        )
-    for message in bundle.messages:
-        tool = message.get("tool")
-        tool_name = tool.get("name") if isinstance(tool, dict) else ""
-        detail = (
-            message.get("text")
-            or message.get("input")
-            or message.get("output")
-            or tool_name
-            or ""
-        )
-        rows.append(
-            {
-                "timestamp": str(message.get("timestamp") or ""),
-                "source": "agent",
-                "actor": str(message.get("agent") or ""),
-                "event": str(message.get("event") or ""),
-                "detail": str(detail),
-            }
-        )
-    rows.sort(key=lambda row: row["timestamp"])
-    return rows
 
 
 def _display_value(value: Any) -> str:
@@ -271,7 +243,9 @@ def replay_steps(
     endpoint_pairs: list[tuple[str, str]] | None = None,
 ) -> list[ReplayStep]:
     """Normalize agent JSONL records into replayable steps."""
-    pairs = endpoint_pairs if endpoint_pairs is not None else parse_topology(bundle.meta)
+    pairs = (
+        endpoint_pairs if endpoint_pairs is not None else parse_topology(bundle.meta)
+    )
     device_names = {
         endpoint_parts(endpoint)[0]
         for pair in pairs
@@ -288,7 +262,9 @@ def replay_steps(
 
         if event == "tool_start":
             tool = message.get("tool") or {}
-            name = str(tool.get("name") or "tool") if isinstance(tool, dict) else str(tool)
+            name = (
+                str(tool.get("name") or "tool") if isinstance(tool, dict) else str(tool)
+            )
             input_text = _display_value(message.get("input"))
             step = ReplayStep(
                 index=len(steps),
@@ -340,7 +316,9 @@ def replay_steps(
             else:
                 title = "Agent response" if event == "llm_end" else "Agent error"
                 input_text = ""
-                output_text = _display_value(message.get("text") or message.get("error"))
+                output_text = _display_value(
+                    message.get("text") or message.get("error")
+                )
                 kind = "response" if event == "llm_end" else "error"
             payload = f"{input_text}\n{output_text}"
             steps.append(

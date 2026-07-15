@@ -281,9 +281,7 @@ class LinkDetach(ProblemBase):
     def _inject_link_detach(self, params: LinkDetachParams, intf_name: str) -> None:
         self.faulty_intf = intf_name
         self.runtime.exec(params.host_name, f"ip link del {intf_name}")
-        system_logger.info(
-            f"Injected link detach on {params.host_name}:{intf_name}"
-        )
+        system_logger.info(f"Injected link detach on {params.host_name}:{intf_name}")
 
     def verify_fault(self, params: LinkDetachParams) -> dict:
         """Verify the link-detach fault is active by confirming the interface no longer exists."""

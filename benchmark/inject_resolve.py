@@ -18,9 +18,7 @@ DEFAULT_SEED = 42
 _DEVICE_KEYS = ("host_name", "host_name_2", "attacker_device")
 
 
-def _case_rng(
-    seed: int, scenario: str, problem: str, topo_size: str
-) -> random.Random:
+def _case_rng(seed: int, scenario: str, problem: str, topo_size: str) -> random.Random:
     key = f"{seed}|{scenario}|{problem}|{topo_size}".encode()
     digest = int.from_bytes(hashlib.blake2b(key, digest_size=8).digest(), "big")
     return random.Random(digest)

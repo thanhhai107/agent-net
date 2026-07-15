@@ -70,4 +70,3 @@ def load_extension_model(
             max_retries=max_retries,
         )
     raise ValueError(f"Unsupported LLM provider: {provider}")
-

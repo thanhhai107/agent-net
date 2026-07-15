@@ -34,10 +34,12 @@ def build_skill_policy_suffix(
     skill_header = "\n\n[ACTIVE SKILL-MDP OPTION]\n"
     guidance = (
         "\n\nUse the option as procedural guidance, not as evidence. Option "
-        "termination only returns control to the skill selector; it never means "
-        "the diagnosis is complete and never justifies submission. Generate the "
-        "next primitive diagnostic action from current-run observations only.\n\n"
-        "Return the next primitive action or tool call only.\nAction:\n"
+        "termination only returns control to the skill selector; it neither proves "
+        "the diagnosis nor authorizes submission. Use current-run observations only. "
+        "If evidence is incomplete, choose the next diagnostic action or tool call. "
+        "If evidence already supports a complete diagnosis, stop calling tools and "
+        "return a concise diagnosis report with anomaly status and any supported "
+        "localization and root cause. Do not submit from the diagnosis phase.\n"
     )
     # Reserve a small truncation margin so the rendered suffix never exceeds
     # the caller's context allowance.
@@ -62,8 +64,7 @@ def build_skill_policy_suffix(
     rendered_state = state_section + f"{state_text}\n" if include_state else ""
     suffix = rendered_state + skill_header + f"{skill_text}\n" + guidance
     if budget_chars and len(suffix) > budget_chars:
-        # The budget is deliberately conservative; this fallback only covers
-        # unusual short budgets where static instructions dominate.
+        # Final guard for unusually small budgets where static instructions dominate.
         return suffix[:budget_chars]
     return suffix
 

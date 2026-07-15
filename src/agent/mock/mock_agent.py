@@ -171,9 +171,7 @@ class MockAgent:
         )
 
         begin_submission_mcp_phase(self.session_id)
-        config = load_session_mcp_config(
-            self.session_id, scenario, backend=backend
-        )
+        config = load_session_mcp_config(self.session_id, scenario, backend=backend)
         client = MultiServerMCPClient(connections=config)
         tools = {tool.name: tool for tool in await client.get_tools()}
 

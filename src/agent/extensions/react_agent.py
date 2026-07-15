@@ -130,7 +130,6 @@ class LearningDiagnosisPhase(DiagnosisPhase):
             best_of_n=procedural_memory_config.best_of_n,
             ppo_epsilon=procedural_memory_config.ppo_epsilon,
             experience_pool_size=procedural_memory_config.experience_pool_size,
-            golden_pool_size=procedural_memory_config.golden_pool_size,
             baseline_ema_alpha=procedural_memory_config.baseline_ema_alpha,
             selection_epsilon_decay_cases=(
                 procedural_memory_config.selection_epsilon_decay_cases
@@ -150,7 +149,6 @@ class LearningDiagnosisPhase(DiagnosisPhase):
             tools=list(self._base_tools),
             session_dir=session_dir,
             tool_refinement_runtime=self.tool_refinement_runtime,
-            top_k=procedural_memory_config.top_k,
             token_budget=procedural_memory_config.token_budget,
             max_skill_age=procedural_memory_config.max_skill_age,
             selection_epsilon=procedural_memory_config.selection_epsilon,
@@ -208,7 +206,13 @@ class LearningReActAgent(BasicReActAgent):
             self._diagnosis_runner = self._learning_phase.get_agent()
             self._install_exploring_runner()
         try:
-            return await super().run(task_description)
+            result = await super().run(task_description)
+            reports = result.get("diagnosis_report") or []
+            report = reports[-1] if isinstance(reports, list) and reports else reports
+            runtime = self._learning_phase.skill_tool_runtime
+            if runtime is not None:
+                runtime.record_terminal_diagnosis(str(report or ""))
+            return result
         finally:
             self._write_extension_snapshots()
 

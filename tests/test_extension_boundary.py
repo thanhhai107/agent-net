@@ -22,6 +22,8 @@ from agent.extensions.react_agent import LearningReActAgent
 from nika.extensions import benchmark as benchmark_extension
 from nika.extensions.benchmark import load_custom_benchmark
 from nika.cli.commands import procedural_memory as procedural_memory_command
+from nika.workflows.benchmark import run as benchmark_run
+from nika.workflows.benchmark.run import validate_inject_params
 
 
 def _config(*, procedural_memory_mode: str = "off") -> AgentRunConfig:
@@ -181,7 +183,6 @@ def test_modules_off_delegates_to_original_nika_runner(monkeypatch) -> None:
             "model": "openai/gpt-oss-120b",
             "max_steps": 20,
             "session_id": "session-1",
-            "stream_output": False,
         }
     ]
 
@@ -230,6 +231,9 @@ def test_custom_benchmark_allows_empty_inject_only_for_clean_control(
         encoding="utf-8",
     )
     assert load_custom_benchmark(valid)[0]["inject"] == {}
+    validate_inject_params("no_fault", "simple_bgp", "", {})
+    with pytest.raises(ValueError, match="empty inject map"):
+        validate_inject_params("no_fault", "simple_bgp", "", {"host_name": "pc1"})
 
     invalid = tmp_path / "invalid.yaml"
     invalid.write_text(
@@ -263,7 +267,6 @@ def test_extension_parser_uses_canonical_feature_terms() -> None:
     assert canonical.tool_refinement_exploration_similarity_threshold == 0.9
     assert canonical.tool_refinement_explorer_reflection_limit == 3
     assert canonical.procedural_memory_experience_pool_size == 1000
-    assert canonical.procedural_memory_golden_pool_size == 20
     assert canonical.procedural_memory_baseline_ema_alpha == 0.1
     assert canonical.procedural_memory_selection_epsilon_decay_cases == 500
     assert canonical.procedural_memory_acceptance_margin == 0.001
@@ -280,7 +283,7 @@ def test_extension_parser_uses_canonical_feature_terms() -> None:
 def test_clean_control_scores_false_and_empty_submission_as_fully_correct() -> None:
     from agent.procedural_memory.service import _metric_success
 
-    scores = benchmark_extension._clean_control_scores(
+    scores = benchmark_run.no_fault_scores(
         {
             "is_anomaly": 0,
             "faulty_devices": [],
@@ -293,7 +296,7 @@ def test_clean_control_scores_false_and_empty_submission_as_fully_correct() -> N
 
 
 def test_clean_control_scores_each_component_independently() -> None:
-    scores = benchmark_extension._clean_control_scores(
+    scores = benchmark_run.no_fault_scores(
         {
             "is_anomaly": True,
             "faulty_devices": ["router1"],
@@ -318,12 +321,12 @@ def test_clean_control_ground_truth_uses_complete_empty_schema(monkeypatch) -> N
             ground_truth.append(value)
 
     monkeypatch.setattr(
-        benchmark_extension,
-        "_clean_task_description",
+        benchmark_run,
+        "_no_fault_task_description",
         lambda _session: "Inspect the clean network.",
     )
 
-    benchmark_extension._prepare_clean_control(FakeSession())
+    benchmark_run.prepare_no_fault_case(FakeSession())
 
     assert updates == {
         "problem_names": ["no_fault"],
@@ -372,12 +375,10 @@ def test_clean_control_normalization_updates_artifact_before_learning(
             assert key == "eval_metrics"
             persisted.append(value)
 
-    monkeypatch.setattr(benchmark_extension, "Session", FakeSession)
-    monkeypatch.setattr(
-        benchmark_extension, "log_event", lambda *_args, **_kwargs: None
-    )
+    monkeypatch.setattr(benchmark_run, "Session", FakeSession)
+    monkeypatch.setattr(benchmark_run, "log_event", lambda *_args, **_kwargs: None)
 
-    benchmark_extension._normalize_clean_control_metrics("clean-session", tmp_path)
+    benchmark_run.normalize_no_fault_metrics("clean-session", tmp_path)
 
     normalized = benchmark_extension._read_json(tmp_path / "eval_metrics.json")
     assert normalized["tool_calls"] == 4
@@ -398,12 +399,12 @@ def test_clean_control_without_submission_keeps_upstream_missing_scores(
     metrics_path = tmp_path / "eval_metrics.json"
     metrics_path.write_text(benchmark_extension.json.dumps(metrics), encoding="utf-8")
     monkeypatch.setattr(
-        benchmark_extension,
+        benchmark_run,
         "Session",
         lambda: pytest.fail("a missing submission must not update run metadata"),
     )
 
-    benchmark_extension._normalize_clean_control_metrics("missing", tmp_path)
+    benchmark_run.normalize_no_fault_metrics("missing", tmp_path)
 
     assert benchmark_extension._read_json(metrics_path) == metrics
 
@@ -437,7 +438,12 @@ def test_clean_control_path_never_injects_and_normalizes_before_learning(
     monkeypatch.setattr(benchmark_extension, "SessionStore", FakeStore)
     monkeypatch.setattr(
         benchmark_extension,
-        "_prepare_clean_control",
+        "clean_emulation_environment",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        benchmark_extension,
+        "prepare_no_fault_case",
         lambda _session: calls.append("prepare_clean"),
     )
     monkeypatch.setattr(
@@ -457,7 +463,7 @@ def test_clean_control_path_never_injects_and_normalizes_before_learning(
     )
     monkeypatch.setattr(
         benchmark_extension,
-        "_normalize_clean_control_metrics",
+        "normalize_no_fault_metrics",
         lambda *_args: calls.append("normalize"),
     )
     monkeypatch.setattr(
@@ -516,7 +522,6 @@ def test_procedural_memory_command_routes_through_extension_benchmark(
         llm_backend="custom",
         model="openai/gpt-oss-120b",
         max_steps=20,
-        k=4,
         tokens=1200,
         max_skill_age=6,
         pool_size=24,
@@ -579,7 +584,6 @@ def test_baseline_fault_row_routes_to_upstream_single_case(
             tool_refinement_convergence_threshold=0.75,
             procedural_memory=None,
             procedural_memory_read=None,
-            procedural_memory_k=5,
             procedural_memory_tokens=1500,
             procedural_memory_max_skill_age=4,
             procedural_memory_pool_size=32,
@@ -643,8 +647,7 @@ def test_benchmark_switches_both_modules_to_read_after_evolve_cutoff(
             tool_refinement_convergence_threshold=0.75,
             procedural_memory="shared-bank",
             procedural_memory_read=None,
-            procedural_memory_evolve_until=2,
-            procedural_memory_k=5,
+            evolve_until=2,
             procedural_memory_tokens=1500,
             procedural_memory_max_skill_age=8,
             procedural_memory_pool_size=32,

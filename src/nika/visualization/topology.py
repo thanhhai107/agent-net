@@ -13,10 +13,15 @@ def _node_kind(name: str) -> str:
     lowered = name.lower()
     if "controller" in lowered:
         return "controller"
-    if any(token in lowered for token in ("server", "dns", "dhcp", "web", "vpn", "lb", "influx")):
+    if any(
+        token in lowered
+        for token in ("server", "dns", "dhcp", "web", "vpn", "lb", "influx")
+    ):
         return "server"
-    if "router" in lowered or re.match(r"^r\d", lowered) or lowered.startswith(
-        ("spine", "leaf", "super_spine")
+    if (
+        "router" in lowered
+        or re.match(r"^r\d", lowered)
+        or lowered.startswith(("spine", "leaf", "super_spine"))
     ):
         return "router"
     if "switch" in lowered or re.match(r"^(sw|s)\d", lowered):
@@ -24,7 +29,9 @@ def _node_kind(name: str) -> str:
     return "host"
 
 
-def _force_layout(nodes: list[str], edges: list[tuple[str, str]]) -> dict[str, tuple[float, float]]:
+def _force_layout(
+    nodes: list[str], edges: list[tuple[str, str]]
+) -> dict[str, tuple[float, float]]:
     """Small deterministic force layout suitable for dashboard-sized graphs."""
     count = len(nodes)
     if count == 1:
@@ -121,13 +128,18 @@ def render_topology_svg(
 
     def xy(node: str) -> tuple[float, float]:
         x, y = positions[node]
-        return margin_x + x * (width - 2 * margin_x), margin_y + y * (height - 2 * margin_y)
+        return margin_x + x * (width - 2 * margin_x), margin_y + y * (
+            height - 2 * margin_y
+        )
 
     edge_markup: list[str] = []
     for left, right, left_intf, right_intf in parsed_edges:
         x1, y1 = xy(left)
         x2, y2 = xy(right)
-        failed = (left, left_intf) in fault_interfaces or (right, right_intf) in fault_interfaces
+        failed = (left, left_intf) in fault_interfaces or (
+            right,
+            right_intf,
+        ) in fault_interfaces
         color = "#ff647c" if failed else "#4c617a"
         dash = ' stroke-dasharray="10 7"' if failed else ""
         glow = ' filter="url(#faultGlow)"' if failed else ""
@@ -167,7 +179,7 @@ def render_topology_svg(
         safe_name = html.escape(node)
         active_glow = ' filter="url(#activeGlow)"' if node in active_devices else ""
         node_markup.append(
-            f'<g><title>{safe_name}</title>'
+            f"<g><title>{safe_name}</title>"
             f'<circle cx="{x:.1f}" cy="{y:.1f}" r="31" fill="#06101d" opacity=".55"/>'
             f'<circle cx="{x:.1f}" cy="{y:.1f}" r="27" fill="{fill}" stroke="{stroke}" '
             f'stroke-width="2.5"{active_glow}/>'
@@ -203,8 +215,8 @@ def render_topology_svg(
         </defs>
         <rect width="100%" height="100%" fill="url(#surfaceGlow)"/>
         <rect width="100%" height="100%" fill="url(#grid)"/>
-        {''.join(edge_markup)}
-        {''.join(node_markup)}
+        {"".join(edge_markup)}
+        {"".join(node_markup)}
       </svg>
     </div>
     """

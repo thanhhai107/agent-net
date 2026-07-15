@@ -66,26 +66,7 @@ class Session:
         )
         self._write_run_json({k: v for k, v in self.__dict__.items() if k != "store"})
 
-    def load_from_run_json(self, session_dir: str | Path) -> "Session":
-        """Load session metadata from a mounted ``run.json`` (sandbox execution)."""
-        session_path = Path(session_dir)
-        run_path = session_path / RUN_FILENAME
-        if not run_path.is_file():
-            raise FileNotFoundError(f"Missing session run metadata: {run_path}")
-        run_meta = json.loads(run_path.read_text(encoding="utf-8"))
-        for key, value in run_meta.items():
-            setattr(self, key, value)
-        self.session_dir = str(session_path.resolve())
-        return self
-
     def load_running_session(self, session_id: str | None = None):
-        if os.environ.get("NIKA_SANDBOX_EXECUTION") == "1":
-            session_dir = os.environ.get("NIKA_SESSION_DIR", "").strip()
-            if not session_dir:
-                raise ValueError(
-                    "NIKA_SESSION_DIR is required when NIKA_SANDBOX_EXECUTION=1"
-                )
-            return self.load_from_run_json(session_dir)
         resolved_id = resolve_running_session_id(session_id, store=self.store)
         session_meta = self.store.get_session(resolved_id)
         for key, value in session_meta.items():
@@ -192,10 +173,6 @@ class Session:
         if not hasattr(self, "session_id"):
             raise ValueError("Session ID is not set.")
         payload = {k: v for k, v in self.__dict__.items() if k != "store"}
-        if os.environ.get("NIKA_SANDBOX_EXECUTION") == "1":
-            if getattr(self, "session_dir", None):
-                self._write_run_json(payload)
-            return self.session_id
         self.store.update_session(self.session_id, payload)
         if getattr(self, "session_dir", None):
             self._write_run_json(payload)

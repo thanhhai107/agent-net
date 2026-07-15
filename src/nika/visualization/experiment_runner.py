@@ -61,10 +61,6 @@ class CommandPlan:
     variant: str = "setup"
 
 
-def _python_module_command(*args: str) -> list[str]:
-    return [sys.executable, "-m", "nika.cli.main", *args]
-
-
 def _str(value: Any, default: str) -> str:
     if value is None or value == "":
         return default
@@ -261,13 +257,6 @@ def build_experiment_command(config: dict[str, Any]) -> list[str]:
                     config.get("procedural_memory_bank"),
                     default_library_id,
                 ),
-                "--procedural-memory-k",
-                str(
-                    _int(
-                        config.get("procedural_memory_k"),
-                        PROCEDURAL_MEMORY_DEFAULTS.top_k,
-                    )
-                ),
                 "--procedural-memory-tokens",
                 str(
                     _int(
@@ -320,13 +309,6 @@ def build_experiment_command(config: dict[str, Any]) -> list[str]:
                         PROCEDURAL_MEMORY_DEFAULTS.experience_pool_size,
                     )
                 ),
-                "--procedural-memory-golden-pool-size",
-                str(
-                    _int(
-                        config.get("procedural_memory_golden_pool_size"),
-                        PROCEDURAL_MEMORY_DEFAULTS.golden_pool_size,
-                    )
-                ),
                 "--procedural-memory-baseline-ema-alpha",
                 _str(
                     config.get("procedural_memory_baseline_ema_alpha"),
@@ -375,10 +357,7 @@ def build_experiment_command(config: dict[str, Any]) -> list[str]:
                 ),
             ]
         )
-    evolve_until = config.get(
-        "learning_evolve_until",
-        config.get("procedural_memory_evolve_until"),
-    )
+    evolve_until = config.get("evolve_until")
     if (
         evolve_until is not None
         and (tool_enabled or procedural_memory_mode != "read")
@@ -402,6 +381,15 @@ def build_command_plan(config: dict[str, Any]) -> list[CommandPlan]:
 
 def prepare_experiment_config(config: dict[str, Any]) -> dict[str, Any]:
     prepared = dict(config)
+    if "evolve_until" not in prepared:
+        legacy_evolve_until = prepared.get(
+            "learning_evolve_until",
+            prepared.get("procedural_memory_evolve_until"),
+        )
+        if legacy_evolve_until is not None:
+            prepared["evolve_until"] = legacy_evolve_until
+    prepared.pop("learning_evolve_until", None)
+    prepared.pop("procedural_memory_evolve_until", None)
     prepared["agent_type"] = agent_type(prepared)
     benchmark_file = _str(prepared.get("benchmark_file"), DEFAULT_STUDIO_BENCHMARK)
     run_id = _str(prepared.get("experiment_id"), "")
@@ -659,11 +647,6 @@ def read_run_log(run_dir: Path) -> str:
     if not path.exists():
         return ""
     return path.read_text(encoding="utf-8", errors="replace")
-
-
-def tail_log(run_dir: Path, *, max_lines: int = 300) -> str:
-    lines = read_run_log(run_dir).splitlines()
-    return "\n".join(lines[-max_lines:])
 
 
 def _pid_running(pid: int | None) -> bool:

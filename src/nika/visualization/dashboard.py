@@ -6,7 +6,6 @@ import html
 import json
 import os
 from datetime import datetime
-from pathlib import Path
 from typing import Any
 import streamlit as st
 import importlib
@@ -287,33 +286,6 @@ def _diagnosis_card(title: str, payload: dict[str, Any], accent: str) -> None:
         """,
         unsafe_allow_html=True,
     )
-
-
-def _read_artifact_json(path: os.PathLike[str] | str) -> dict[str, Any]:
-    try:
-        value = json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {}
-    return value if isinstance(value, dict) else {}
-
-
-def _read_artifact_text(
-    path: os.PathLike[str] | str,
-    *,
-    max_lines: int = 500,
-) -> str:
-    try:
-        lines = Path(path).read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError:
-        return ""
-    if len(lines) > max_lines:
-        return "\n".join(
-            [
-                f"... truncated {len(lines) - max_lines} earlier lines ...",
-                *lines[-max_lines:],
-            ]
-        )
-    return "\n".join(lines)
 
 
 def _module_labels(meta: dict[str, Any]) -> list[str]:

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 from pathlib import Path
 from typing import ClassVar
@@ -18,8 +17,10 @@ from nika.workflows.eval.session import run_eval_metrics
 from nika.workflows.failure.inject import inject_failure
 from nika.workflows.session.close import close_session
 from nika.workflows.session.containers import list_session_containers
-from tests.support.integration_base import CliIntegrationTestCase, OrderedPipelineTestCase
-from tests.support.integration_pipeline import tool_text_list
+from tests.support.integration_base import (
+    CliIntegrationTestCase,
+    OrderedPipelineTestCase,
+)
 
 
 class PipelineCaseBase(CliIntegrationTestCase, OrderedPipelineTestCase):
@@ -107,13 +108,13 @@ class PipelineCaseBase(CliIntegrationTestCase, OrderedPipelineTestCase):
         for device in self.SUBMIT_FAULTY_DEVICES:
             self.assertIn(device, ground_truth["faulty_devices"])
 
-    def test_step_04_mcp_session_context(self) -> None:
+    def test_step_04_session_context(self) -> None:
         self.assertIsNotNone(self.session_id)
         row = SessionStore().get_session(self.session_id)
         prev = os.environ.get("NIKA_SESSION_ID")
         try:
             os.environ["NIKA_SESSION_ID"] = self.session_id
-            from nika.service.mcp_server.mcp_session_context import (
+            from nika.service.mcp_server.session_context import (
                 get_lab_name,
                 get_session_dir,
                 require_session_id,

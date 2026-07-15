@@ -621,7 +621,7 @@ def _exploration_is_read_only(
     return _MUTATING_TEXT_RE.search(combined) is None
 
 
-def _analyzer_suggestion_for_tool(
+def _offline_analyzer_suggestion(
     *,
     tool_name: str,
     trials: list[ToolTrial],
@@ -730,7 +730,7 @@ def _invoke_draft_analyzer(
             else DraftAnalyzerDraft.model_validate(raw)
         )
         if not draft.suggestion.strip():
-            return None, ""
+            return None, "DRAFT Analyzer returned an empty suggestion"
         suggestion_text = draft.suggestion.strip()
         if draft.rationale.strip():
             suggestion_text += " Rationale: " + draft.rationale.strip()
@@ -1358,12 +1358,6 @@ def _rewrite_documentation_unlocked(
         if grounded_constraint not in doc.constraints:
             doc.constraints.append(grounded_constraint)
 
-        fallback_suggestion = _analyzer_suggestion_for_tool(
-            tool_name=tool_name,
-            trials=tool_trials,
-            gaps=gaps,
-            doc=doc,
-        )
         llm_suggestion, analyzer_error = _invoke_draft_analyzer(
             tool_name=tool_name,
             trials=tool_trials,
@@ -1374,14 +1368,26 @@ def _rewrite_documentation_unlocked(
             llm=analyzer_llm,
             llm_error=analyzer_llm_error,
         )
-        suggestion = llm_suggestion or fallback_suggestion
-        tool_suggestions = [suggestion]
-        if not any(
-            item.suggestion_id == suggestion.suggestion_id
-            for item in state.analyzer_suggestions
-        ):
-            state.analyzer_suggestions.append(suggestion)
-        _append_unique(doc.analyzer_suggestions, [suggestion.suggestion], limit=20)
+        suggestion = llm_suggestion
+        if suggestion is None and not analyzer_error:
+            suggestion = _offline_analyzer_suggestion(
+                tool_name=tool_name,
+                trials=tool_trials,
+                gaps=gaps,
+                doc=doc,
+            )
+        tool_suggestions = [suggestion] if suggestion is not None else []
+        if suggestion is not None:
+            if not any(
+                item.suggestion_id == suggestion.suggestion_id
+                for item in state.analyzer_suggestions
+            ):
+                state.analyzer_suggestions.append(suggestion)
+            _append_unique(
+                doc.analyzer_suggestions,
+                [suggestion.suggestion],
+                limit=20,
+            )
 
         seen_explorations = {item.exploration_id for item in state.explorations}
         seen_exploration_trials = {
@@ -1395,7 +1401,7 @@ def _rewrite_documentation_unlocked(
             exploration = _exploration_from_trial(
                 trial=trial,
                 doc=doc,
-                analyzer_suggestion=suggestion.suggestion,
+                analyzer_suggestion=(suggestion.suggestion if suggestion else ""),
                 prior_explorations=[*prior_explorations, *explorations],
             )
             explorations.append(exploration)
@@ -1408,19 +1414,22 @@ def _rewrite_documentation_unlocked(
                 seen_explorations.add(exploration.exploration_id)
                 seen_exploration_trials.add(exploration.trial_id)
 
-        proposal, rewriter_error = _invoke_draft_rewriter(
-            tool_name=tool_name,
-            doc=doc,
-            trials=tool_trials,
-            gaps=gaps,
-            suggestions=tool_suggestions,
-            explorations=explorations,
-            metrics=metrics,
-            llm_backend=llm_backend,
-            model=rewriter_model or model,
-            llm=rewriter_llm,
-            llm_error=rewriter_llm_error,
-        )
+        if analyzer_error:
+            proposal, rewriter_error = None, ""
+        else:
+            proposal, rewriter_error = _invoke_draft_rewriter(
+                tool_name=tool_name,
+                doc=doc,
+                trials=tool_trials,
+                gaps=gaps,
+                suggestions=tool_suggestions,
+                explorations=explorations,
+                metrics=metrics,
+                llm_backend=llm_backend,
+                model=rewriter_model or model,
+                llm=rewriter_llm,
+                llm_error=rewriter_llm_error,
+            )
         all_evidence_trials = [
             trial for trial in state.trials if trial.tool_name == tool_name
         ]
@@ -1623,7 +1632,9 @@ def _rewrite_documentation_unlocked(
                 "documented_path_rate": documented_path_rate,
                 "success_path_rate": success_path_rate,
             },
-            analyzer_suggestion_ids=[suggestion.suggestion_id],
+            analyzer_suggestion_ids=(
+                [suggestion.suggestion_id] if suggestion is not None else []
+            ),
             llm_error=" | ".join(
                 error for error in (analyzer_error, rewriter_error) if error
             ),

@@ -40,7 +40,12 @@ SYMPTOM_KEYWORDS = {
     ),
     "acl_block": ("acl", "blocked", "filter"),
     "missing_ip": ("missing ip", "no ipv4", "no ip address", "network is unreachable"),
-    "bad_gateway": ("incorrect gateway", "wrong gateway", "default via", "default gateway"),
+    "bad_gateway": (
+        "incorrect gateway",
+        "wrong gateway",
+        "default via",
+        "default gateway",
+    ),
     "duplicate_ip": ("duplicate", "ip conflict", "address conflict"),
     "dns_failure": ("servfail", "nxdomain", "no such host", "resolver", "resolv.conf"),
     "link_down": ("link down", "state down", "no-carrier", "carrier down"),
@@ -52,7 +57,11 @@ SYMPTOM_KEYWORDS = {
 
 
 def _matches(text: str, mapping: dict[str, tuple[str, ...]]) -> list[str]:
-    return [label for label, needles in mapping.items() if any(item in text for item in needles)]
+    return [
+        label
+        for label, needles in mapping.items()
+        if any(item in text for item in needles)
+    ]
 
 
 def _attribute_text(text: str) -> str:
@@ -73,8 +82,6 @@ def _attribute_text(text: str) -> str:
 def infer_procedural_memory_attributes(
     text: str,
     *,
-    scenario: str = "",
-    topology_class: str = "",
     task_stage: str = "diagnosis",
     tools: list[str] | None = None,
     include_network_context: bool = False,
@@ -82,7 +89,9 @@ def infer_procedural_memory_attributes(
     # Scenario/topology names are stored separately and should not leak broad,
     # always-present design facts (for example OSPF/DHCP in every enterprise
     # task) into the transfer signature.
-    evidence_text = str(text or "") if include_network_context else _attribute_text(text)
+    evidence_text = (
+        str(text or "") if include_network_context else _attribute_text(text)
+    )
     haystack = " ".join([evidence_text, " ".join(tools or [])]).lower()
     return ProceduralMemoryAttributes(
         protocols=_matches(haystack, PROTOCOL_KEYWORDS),

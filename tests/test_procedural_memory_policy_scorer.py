@@ -70,7 +70,8 @@ class PolicyScorerTest(unittest.TestCase):
             experiences=[experience],
         )
 
-        self.assertEqual(result.method, "structured_replay")
+        self.assertEqual(result.method, "policy_logprob")
+        self.assertEqual(result.scores, [])
         self.assertIn("no pre-action policy context", result.error)
 
     def test_policy_logprob_scorer_teacher_forces_target_actions(self) -> None:
@@ -87,7 +88,7 @@ class PolicyScorerTest(unittest.TestCase):
         def post(_url, *, json, **_kwargs):
             choices = []
             for index, prompt in enumerate(json["prompt"]):
-                target_offset = prompt.rfind("Action:\n") + len("Action:\n")
+                target_offset = prompt.rfind("Call ping_pair and inspect the result.")
                 target_logprob = -1.0 if "Skill Name: candidate" in prompt else -2.0
                 choices.append(
                     {
@@ -149,7 +150,8 @@ class PolicyScorerTest(unittest.TestCase):
             experiences=[_experience()],
         )
 
-        self.assertEqual(result.method, "structured_replay")
+        self.assertEqual(result.method, "behavioral_replay")
+        self.assertEqual(result.scores, [])
         self.assertIn("omitted or invented", result.error)
 
     def test_behavioral_replay_reports_verified_batch(self) -> None:

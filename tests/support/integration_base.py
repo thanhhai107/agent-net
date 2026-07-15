@@ -11,7 +11,7 @@ from typing import Any, ClassVar
 from typer.testing import CliRunner
 
 from nika.cli.main import app
-from nika.service.mcp_server.mcp_session_context import SESSION_ID_ENV, get_lab_name
+from nika.service.mcp_server.session_context import SESSION_ID_ENV, get_lab_name
 from nika.utils.session_id import (
     TEST_SESSION_TAG,
     resolve_session_tag,
@@ -23,6 +23,8 @@ from nika.workflows.failure.inject import inject_failure as inject_failure_workf
 from nika.workflows.session.close import close_session
 
 TEST_SESSION_ID_RE = session_id_pattern(TEST_SESSION_TAG)
+
+
 def _parse_env_run_args(extra_args: list[str] | None) -> dict[str, Any]:
     kwargs: dict[str, Any] = {}
     args = list(extra_args or [])
@@ -125,9 +127,7 @@ class IntegrationTestCase(unittest.TestCase):
         model: str | None = None,
         llm_provider: str | None = None,
         max_steps: int | None = None,
-        reasoning_effort: str | None = None,
         session_id: str | None = None,
-        sandbox: bool = False,
     ) -> None:
         from nika.workflows.agent.run import start_agent
 
@@ -137,9 +137,6 @@ class IntegrationTestCase(unittest.TestCase):
             model,
             max_steps,
             session_id=session_id or getattr(self, "session_id", None),
-            reasoning_effort=reasoning_effort,
-            stream_output=False,
-            sandbox=sandbox,
         )
 
     def _session_row(self, session_id: str | None = None) -> dict:
@@ -192,7 +189,9 @@ class IntegrationTestCase(unittest.TestCase):
         problem: str,
         topo_size: str = "",
     ) -> dict[str, str]:
-        from tests.nika.workflows.benchmark.helpers import inject_params_from_benchmark_yaml
+        from tests.nika.workflows.benchmark.helpers import (
+            inject_params_from_benchmark_yaml,
+        )
 
         return inject_params_from_benchmark_yaml(scenario, problem, topo_size)
 

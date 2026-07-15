@@ -30,7 +30,7 @@ from nika.service.containerlab import (
     create_host_api,
 )
 from tests.support.api_smoke import ApiSmokeMixin, assert_json_payload
-from tests.support.prerequisites import min3clos_prerequisites
+from tests.support.prerequisites import containerlab_prerequisites
 from tests.support.integration_base import SharedSessionTestCase
 
 CLIENT_INTF = "eth1"
@@ -38,7 +38,7 @@ LEAF_INTF = "e1-1"
 
 
 @unittest.skipUnless(
-    min3clos_prerequisites(), "containerlab, gnmic, or Docker not available"
+    containerlab_prerequisites(), "containerlab, gnmic, or Docker not available"
 )
 class ContainerlabApiSmokeTest(SharedSessionTestCase, ApiSmokeMixin):
     SCENARIO = "min3clos"

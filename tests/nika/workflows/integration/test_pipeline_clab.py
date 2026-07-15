@@ -11,13 +11,13 @@ from langchain_mcp_adapters.client import MultiServerMCPClient
 from agent.utils.mcp_servers import MCPServerConfig
 from nika.service.mcp_gateway.lifecycle import mcp_gateway_for_session
 from tests.nika.workflows.integration import pipeline_case
-from tests.support.integration_pipeline import _min3clos_prerequisites
+from tests.support.prerequisites import containerlab_prerequisites
 
 MIN3CLOS_NODES = frozenset({"leaf1", "leaf2", "spine", "client1", "client2"})
 
 
 @unittest.skipUnless(
-    _min3clos_prerequisites(), "containerlab, gnmic, or Docker not available"
+    containerlab_prerequisites(), "containerlab, gnmic, or Docker not available"
 )
 class ClabPipelineIntegrationTest(pipeline_case.PipelineCaseBase):
     SCENARIO = "min3clos"
@@ -40,9 +40,9 @@ class ClabPipelineIntegrationTest(pipeline_case.PipelineCaseBase):
             self.session_id,
             scenario_name=self.SCENARIO,
         ):
-            diagnosis_config = MCPServerConfig(session_id=self.session_id).load_http_config(
-                self.DIAGNOSIS_MCP_SERVERS
-            )
+            diagnosis_config = MCPServerConfig(
+                session_id=self.session_id
+            ).load_http_config(self.DIAGNOSIS_MCP_SERVERS)
 
             async def _run() -> dict:
                 client = MultiServerMCPClient(connections=diagnosis_config)
@@ -55,7 +55,9 @@ class ClabPipelineIntegrationTest(pipeline_case.PipelineCaseBase):
                     {"host_name": self.EXEC_PROBE_HOST, "command": self.EXEC_PROBE_CMD}
                 )
                 bgp_as = await tools["srl_get_bgp_as"].ainvoke({"device_name": "leaf1"})
-                routes = await tools["srl_show_ip_route"].ainvoke({"device_name": "leaf1"})
+                routes = await tools["srl_show_ip_route"].ainvoke(
+                    {"device_name": "leaf1"}
+                )
                 return {
                     "reachability": str(reach),
                     "host_net_config": str(host_cfg),

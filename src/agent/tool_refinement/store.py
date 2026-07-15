@@ -14,8 +14,6 @@ from agent.extensions.config import TOOL_REFINEMENT_DIR
 from agent.utils.atomic import atomic_write_text
 
 from agent.tool_refinement.models import (
-    ComprehensionGap,
-    DocumentationRevision,
     DraftToolState,
     ToolDocumentation,
     ToolTrial,
@@ -144,22 +142,6 @@ class ToolRefinementStore:
             if added:
                 self.save(state)
         return added
-
-    def record_gap(self, gap: ComprehensionGap) -> None:
-        with self.exclusive():
-            state = self.load()
-            if not any(item.gap_id == gap.gap_id for item in state.gaps):
-                state.gaps.append(gap)
-                self.save(state)
-
-    def record_revision(self, revision: DocumentationRevision) -> None:
-        with self.exclusive():
-            state = self.load()
-            if not any(
-                item.revision_id == revision.revision_id for item in state.revisions
-            ):
-                state.revisions.append(revision)
-                self.save(state)
 
     def stats(self) -> dict:
         state = self.load()
