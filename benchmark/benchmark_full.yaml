@@ -1,4 +1,9 @@
+benchmark_role: evaluation
 seed: 42
+counts:
+  total: 702
+  fault: 702
+  no_fault: 0
 cases:
 - scenario: dc_clos_service
   topo_size: s

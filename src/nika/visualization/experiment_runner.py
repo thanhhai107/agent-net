@@ -37,7 +37,12 @@ MODULE_CONFIG_SNAPSHOT_FILENAME = "modules.yaml"
 RESOLVED_MODULE_DEFAULTS = module_defaults()
 BASELINE_DEFAULTS = RESOLVED_MODULE_DEFAULTS.baseline
 TOOL_MODULE_DEFAULTS = RESOLVED_MODULE_DEFAULTS.tool_refinement
-DEFAULT_STUDIO_BENCHMARK = str(BENCHMARK_DIR / BASELINE_DEFAULTS.benchmark)
+DEFAULT_STUDIO_LEARNING_BENCHMARK = str(
+    BENCHMARK_DIR / BASELINE_DEFAULTS.learning_benchmark
+)
+DEFAULT_STUDIO_EVALUATE_BENCHMARK = str(
+    BENCHMARK_DIR / BASELINE_DEFAULTS.evaluate_benchmark
+)
 DEFAULT_STUDIO_MAX_STEPS = BASELINE_DEFAULTS.max_steps
 TOOL_REFINEMENT_DEFAULTS = ToolRefinementConfig()
 PROCEDURAL_MEMORY_DEFAULTS = ProceduralMemoryConfig()
@@ -118,11 +123,24 @@ def _benchmark_command(config: dict[str, Any]) -> list[str]:
         sys.executable,
         "-m",
         "nika.extensions.benchmark",
-        "--config",
-        _str(config.get("benchmark_file"), DEFAULT_STUDIO_BENCHMARK),
+        "--evaluate-benchmark",
+        _str(
+            config.get("evaluate_benchmark_file"),
+            DEFAULT_STUDIO_EVALUATE_BENCHMARK,
+        ),
         *_common_agent_args(config),
         *_judge_args(config),
     ]
+    if selected_modules(config):
+        command.extend(
+            [
+                "--learning-benchmark",
+                _str(
+                    config.get("learning_benchmark_file"),
+                    DEFAULT_STUDIO_LEARNING_BENCHMARK,
+                ),
+            ]
+        )
     if config.get("result_root"):
         command.extend(["--result-dir", str(config["result_root"])])
     if config.get("resume"):
@@ -147,7 +165,10 @@ def _command_experiment_id(config: dict[str, Any]) -> str:
     if configured:
         return configured
     return next_experiment_id(
-        _str(config.get("benchmark_file"), DEFAULT_STUDIO_BENCHMARK)
+        _str(
+            config.get("evaluate_benchmark_file"),
+            DEFAULT_STUDIO_EVALUATE_BENCHMARK,
+        )
     )
 
 
@@ -357,9 +378,6 @@ def build_experiment_command(config: dict[str, Any]) -> list[str]:
                 ),
             ]
         )
-    evolve_until = config.get("evolve_until")
-    if evolve_until is not None:
-        command.extend(["--evolve-until", str(_int(evolve_until, 0))])
     return command
 
 
@@ -377,27 +395,24 @@ def build_command_plan(config: dict[str, Any]) -> list[CommandPlan]:
 
 def prepare_experiment_config(config: dict[str, Any]) -> dict[str, Any]:
     prepared = dict(config)
-    legacy_memory_mode = str(prepared.pop("procedural_memory_mode", "")).lower()
-    if "evolve_until" not in prepared:
-        legacy_evolve_until = prepared.get(
-            "learning_evolve_until",
-            prepared.get("procedural_memory_evolve_until"),
-        )
-        if legacy_evolve_until is not None:
-            prepared["evolve_until"] = legacy_evolve_until
-    prepared.pop("learning_evolve_until", None)
-    prepared.pop("procedural_memory_evolve_until", None)
     prepared["agent_type"] = agent_type(prepared)
-    benchmark_file = _str(prepared.get("benchmark_file"), DEFAULT_STUDIO_BENCHMARK)
+    learning_benchmark_file = _str(
+        prepared.get("learning_benchmark_file"),
+        DEFAULT_STUDIO_LEARNING_BENCHMARK,
+    )
+    evaluate_benchmark_file = _str(
+        prepared.get("evaluate_benchmark_file"),
+        DEFAULT_STUDIO_EVALUATE_BENCHMARK,
+    )
+    prepared["learning_benchmark_file"] = learning_benchmark_file
+    prepared["evaluate_benchmark_file"] = evaluate_benchmark_file
     run_id = _str(prepared.get("experiment_id"), "")
     if not run_id:
-        run_id = next_experiment_id(benchmark_file)
+        run_id = next_experiment_id(evaluate_benchmark_file)
     prepared["experiment_id"] = run_id
     if not str(prepared.get("result_root") or "").strip():
         prepared["result_root"] = str(RESULTS_DIR / run_id)
     modules = selected_modules(prepared)
-    if legacy_memory_mode == "read" and "procedural_memory" in modules:
-        prepared["evolve_until"] = 0
     if (
         "tool_refinement" in modules
         and not str(prepared.get("tool_library_id") or "").strip()
@@ -419,6 +434,14 @@ def prepare_resume_config(
     config = dict(source_spec.get("config") or {})
     if not config:
         raise ValueError("Selected run does not have a resumable config.")
+    if not all(
+        str(config.get(key) or "").strip()
+        for key in ("learning_benchmark_file", "evaluate_benchmark_file")
+    ):
+        raise ValueError(
+            "Selected run predates the two-benchmark Studio schema and cannot "
+            "be resumed. Start a new run instead."
+        )
     source_run_id = str(
         source_spec.get("run_id") or config.get("experiment_id") or ""
     ).strip()
@@ -892,8 +915,23 @@ def parse_progress_events(log_text: str) -> list[dict[str, str]]:
         "benchmark_progress ",
         "benchmark_done ",
         "benchmark_failed ",
+        "benchmark_aborted ",
         "benchmark_summary ",
+        "benchmark_stage_start ",
+        "benchmark_stage_done ",
+        "learning_barrier_created ",
+        "learning_barrier_reused ",
+        "benchmark_pipeline_blocked ",
+        "benchmark_pipeline_done ",
     )
+    json_events = {
+        "benchmark_stage_start",
+        "benchmark_stage_done",
+        "learning_barrier_created",
+        "learning_barrier_reused",
+        "benchmark_pipeline_blocked",
+        "benchmark_pipeline_done",
+    }
     rows: list[dict[str, str]] = []
     for line in log_text.splitlines():
         prefix = next((item for item in prefixes if line.startswith(item)), None)
@@ -902,7 +940,7 @@ def parse_progress_events(log_text: str) -> list[dict[str, str]]:
         event = prefix.strip()
         rest = line[len(prefix) :]
         row: dict[str, str] = {"event": event, "raw": line}
-        if prefix.startswith("ui_"):
+        if prefix.startswith("ui_") or event in json_events:
             row.update(
                 {
                     key: str(value)

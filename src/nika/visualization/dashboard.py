@@ -292,10 +292,7 @@ def _module_labels(meta: dict[str, Any]) -> list[str]:
     labels: list[str] = []
     if meta.get("tool_refinement_enabled"):
         labels.append("Tool Refinement")
-    if (
-        meta.get("procedural_memory_mode")
-        and meta.get("procedural_memory_mode") != "off"
-    ):
+    if meta.get("procedural_memory_enabled"):
         labels.append("Procedural Memory")
     return labels or ["-"]
 
@@ -446,7 +443,7 @@ def _render_dashboard() -> None:
         )
 
     with col3:
-        if st.button("↻  Refresh", use_container_width=True):
+        if st.button("↻  Refresh", width="stretch"):
             st.rerun()
 
     assert selected_id is not None

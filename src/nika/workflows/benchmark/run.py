@@ -31,7 +31,7 @@ from nika.problems.prob_pool import get_problem_instance
 from nika.workflows.agent.run import start_agent
 from nika.workflows.benchmark.load_config import (
     is_no_fault_problem,
-    load_benchmark_yaml,
+    load_benchmark_manifest,
 )
 from nika.workflows.benchmark.resume import (
     benchmark_row_fingerprint,
@@ -236,7 +236,10 @@ def run_single_case(
     session_tag: str | None = None,
     emit_completion_event: bool = True,
     benchmark_index: int | None = None,
-    benchmark_phase: str | None = None,
+    benchmark_role: str | None = None,
+    benchmark_total: int | None = None,
+    benchmark_file: str | None = None,
+    benchmark_manifest_hash: str | None = None,
 ) -> tuple[str, Path]:
     """Run one benchmark case (env → inject → agent → eval).
 
@@ -270,12 +273,20 @@ def run_single_case(
         )
         session_dir = Path(SessionStore().get_session(session_id)["session_dir"])
         session = None
-        if no_fault or benchmark_index is not None or benchmark_phase:
+        if no_fault or benchmark_index is not None or benchmark_role:
             session = Session().load_running_session(session_id=session_id)
             if benchmark_index is not None:
                 session.update_session("benchmark_index", benchmark_index)
-            if benchmark_phase:
-                session.update_session("benchmark_phase", benchmark_phase)
+            if benchmark_role:
+                session.update_session("benchmark_role", benchmark_role)
+            if benchmark_total is not None:
+                session.update_session("benchmark_total", benchmark_total)
+            if benchmark_file:
+                session.update_session("benchmark_file", benchmark_file)
+            if benchmark_manifest_hash:
+                session.update_session(
+                    "benchmark_manifest_hash", benchmark_manifest_hash
+                )
         if no_fault:
             assert session is not None
             prepare_no_fault_case(session)
@@ -355,7 +366,8 @@ def run_benchmark_from_yaml(
             "sequentially"
         )
 
-    rows = load_benchmark_yaml(benchmark_file)
+    manifest = load_benchmark_manifest(benchmark_file, expected_role="evaluation")
+    rows = manifest.cases
 
     if not rows:
         print(f"No benchmark rows found in {benchmark_file}")
@@ -390,5 +402,10 @@ def run_benchmark_from_yaml(
             scenario=row["scenario"],
             topo_size=row.get("topo_size") or "",
             inject_params=row["inject"],
+            benchmark_index=index + 1,
+            benchmark_role="evaluation",
+            benchmark_total=len(rows),
+            benchmark_file=str(manifest.path),
+            benchmark_manifest_hash=manifest.fingerprint,
             **_shared_kwargs,
         )

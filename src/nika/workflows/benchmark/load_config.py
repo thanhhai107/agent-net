@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -14,28 +17,46 @@ def is_no_fault_problem(problem: str) -> bool:
     return problem.strip().lower() == "no_fault"
 
 
-def load_benchmark_evolve_first_cases(path: str | Path) -> int | None:
-    """Return the optional evolve/read curriculum boundary from a benchmark."""
+@dataclass(frozen=True)
+class BenchmarkManifest:
+    """Validated benchmark manifest plus a stable resume fingerprint."""
 
-    data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
-    if not isinstance(data, dict) or "cases" not in data:
-        raise ValueError(f"Invalid benchmark YAML (missing top-level 'cases'): {path}")
-    cases = data["cases"]
-    if not isinstance(cases, list):
-        raise ValueError(f"Invalid benchmark YAML ('cases' must be a list): {path}")
-    cutoff = data.get("evolve_first_cases")
-    if cutoff is None:
-        return None
-    if isinstance(cutoff, bool) or not isinstance(cutoff, int):
-        raise ValueError(
-            f"Invalid benchmark YAML ('evolve_first_cases' must be an integer): {path}"
-        )
-    if not 0 <= cutoff <= len(cases):
-        raise ValueError(
-            "Invalid benchmark YAML ('evolve_first_cases' must be between 0 "
-            f"and {len(cases)}): {path}"
-        )
-    return cutoff
+    path: Path
+    role: str
+    seed: int | None
+    counts: dict[str, int]
+    cases: list[dict[str, Any]]
+    fingerprint: str
+
+
+def benchmark_case_identity(row: dict[str, Any]) -> tuple[str, str, str]:
+    """Return the scenario/topology/problem identity used for leakage checks."""
+
+    return (
+        str(row["scenario"]),
+        str(row.get("topo_size") or ""),
+        str(row["problem"]),
+    )
+
+
+def _manifest_fingerprint(
+    *,
+    role: str,
+    seed: int | None,
+    cases: list[dict[str, Any]],
+) -> str:
+    payload = {
+        "benchmark_role": role,
+        "seed": seed,
+        "cases": cases,
+    }
+    encoded = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def load_benchmark_yaml(path: str | Path) -> list[dict[str, Any]]:
@@ -86,3 +107,88 @@ def load_benchmark_yaml(path: str | Path) -> list[dict[str, Any]]:
             }
         )
     return normalized
+
+
+def load_benchmark_manifest(
+    path: str | Path,
+    *,
+    expected_role: str | None = None,
+) -> BenchmarkManifest:
+    """Load a benchmark with role/count metadata for experiment pipelines.
+
+    Custom manifests may omit ``benchmark_role`` and ``counts``. When a caller
+    supplies ``expected_role``, the missing role is filled from that execution
+    context; an explicitly conflicting role is always rejected.
+    """
+
+    source = Path(path)
+    data = yaml.safe_load(source.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError(f"Invalid benchmark YAML (expected a mapping): {source}")
+    cases = load_benchmark_yaml(source)
+    if not cases:
+        raise ValueError(f"Benchmark YAML has no cases: {source}")
+
+    declared_role = str(data.get("benchmark_role") or "").strip().lower()
+    if declared_role and declared_role not in {"learning", "evaluation"}:
+        raise ValueError(
+            "Invalid benchmark YAML ('benchmark_role' must be learning or "
+            f"evaluation): {source}"
+        )
+    if expected_role not in {None, "learning", "evaluation"}:
+        raise ValueError(f"Invalid expected benchmark role: {expected_role!r}")
+    if declared_role and expected_role and declared_role != expected_role:
+        raise ValueError(
+            f"Benchmark role mismatch for {source}: expected {expected_role}, "
+            f"found {declared_role}"
+        )
+    role = declared_role or expected_role or "evaluation"
+
+    seed_value = data.get("seed")
+    if seed_value is not None and (
+        isinstance(seed_value, bool) or not isinstance(seed_value, int)
+    ):
+        raise ValueError(
+            f"Invalid benchmark YAML ('seed' must be an integer): {source}"
+        )
+    seed = seed_value if isinstance(seed_value, int) else None
+
+    no_fault = sum(is_no_fault_problem(row["problem"]) for row in cases)
+    actual_counts = {
+        "total": len(cases),
+        "fault": len(cases) - no_fault,
+        "no_fault": no_fault,
+    }
+    raw_counts = data.get("counts")
+    if raw_counts is not None:
+        if not isinstance(raw_counts, dict):
+            raise ValueError(
+                f"Invalid benchmark YAML ('counts' must be a mapping): {source}"
+            )
+        declared_counts: dict[str, int] = {}
+        for name in ("total", "fault", "no_fault"):
+            value = raw_counts.get(name)
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise ValueError(
+                    f"Invalid benchmark YAML ('counts.{name}' must be an integer): "
+                    f"{source}"
+                )
+            declared_counts[name] = value
+        if declared_counts != actual_counts:
+            raise ValueError(
+                f"Benchmark counts mismatch for {source}: declared "
+                f"{declared_counts}, actual {actual_counts}"
+            )
+
+    identities = [benchmark_case_identity(row) for row in cases]
+    if len(set(identities)) != len(identities):
+        raise ValueError(f"Benchmark contains duplicate case identities: {source}")
+
+    return BenchmarkManifest(
+        path=source.resolve(),
+        role=role,
+        seed=seed,
+        counts=actual_counts,
+        cases=cases,
+        fingerprint=_manifest_fingerprint(role=role, seed=seed, cases=cases),
+    )

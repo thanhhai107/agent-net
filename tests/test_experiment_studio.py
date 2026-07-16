@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 from unittest.mock import Mock
 
+import pytest
+
 from agent.module_config import load_module_defaults
 from agent.extensions.config import (
     DEFAULT_LLM_PROVIDER as DEFAULT_LLM_BACKEND,
@@ -13,7 +15,8 @@ from agent.extensions.config import (
 import nika.visualization.experiment_runner as experiment_runner
 from nika.cli.commands import studio as studio_command_module
 from nika.visualization.experiment_runner import (
-    DEFAULT_STUDIO_BENCHMARK,
+    DEFAULT_STUDIO_EVALUATE_BENCHMARK,
+    DEFAULT_STUDIO_LEARNING_BENCHMARK,
     DEFAULT_STUDIO_MAX_STEPS,
     build_experiment_command,
     build_command_plan,
@@ -26,7 +29,8 @@ from nika.visualization.experiment_runner import (
 
 def _config(**overrides: object) -> dict[str, object]:
     config: dict[str, object] = {
-        "benchmark_file": "benchmark/benchmark_test.yaml",
+        "learning_benchmark_file": "benchmark/benchmark_learning_test.yaml",
+        "evaluate_benchmark_file": "benchmark/benchmark_test.yaml",
         "modules": [],
         "agent_type": "react",
         "llm_backend": "custom",
@@ -41,7 +45,6 @@ def _config(**overrides: object) -> dict[str, object]:
         "tool_analyzer_model": "analyzer-model",
         "tool_rewriter_model": "rewriter-model",
         "procedural_memory_bank": "procedural-memory-test",
-        "evolve_until": 12,
         "procedural_memory_token_budget": 1500,
         "procedural_memory_max_skill_age": 6,
         "procedural_memory_pool_size": 24,
@@ -64,10 +67,11 @@ def test_baseline_command_uses_default_sequential_execution() -> None:
     command = build_experiment_command(_config())
 
     assert command[:3] == [sys.executable, "-m", "nika.extensions.benchmark"]
-    assert command[3] == "--config"
-    assert "benchmark/benchmark_test.yaml" in command
+    assert command[3] == "--evaluate-benchmark"
+    assert command[4] == "benchmark/benchmark_test.yaml"
+    assert "--learning-benchmark" not in command
     assert command[command.index("--max-steps") + 1] == "100"
-    assert command[command.index("--evolve-until") + 1] == "12"
+    assert "--evolve-until" not in command
     assert "-j" not in command
     assert "--parallel" not in command
 
@@ -77,11 +81,15 @@ def test_empty_studio_config_uses_yaml_defaults() -> None:
     command = build_experiment_command(
         {
             "modules": ["tool_refinement", "procedural_memory"],
-            "evolve_until": 75,
         }
     )
 
-    assert command[command.index("--config") + 1] == DEFAULT_STUDIO_BENCHMARK
+    assert command[command.index("--learning-benchmark") + 1] == (
+        DEFAULT_STUDIO_LEARNING_BENCHMARK
+    )
+    assert command[command.index("--evaluate-benchmark") + 1] == (
+        DEFAULT_STUDIO_EVALUATE_BENCHMARK
+    )
     assert command[command.index("--max-steps") + 1] == "50"
     assert command[command.index("--tool-refinement-explorer-model") + 1] == (
         "openai/gpt-oss-120b"
@@ -89,7 +97,7 @@ def test_empty_studio_config_uses_yaml_defaults() -> None:
     assert command[command.index("--procedural-memory-evolver-model") + 1] == (
         "openai/gpt-oss-120b"
     )
-    assert command[command.index("--evolve-until") + 1] == "75"
+    assert "--evolve-until" not in command
     assert command[command.index("--tool-refinement-update-interval") + 1] == "6"
     assert command[command.index("--procedural-memory-verifier") + 1] == (
         "behavioral_replay"
@@ -150,7 +158,11 @@ def test_create_run_snapshots_module_config(monkeypatch, tmp_path: Path) -> None
     )
 
     run_dir = experiment_runner.create_run(
-        {"benchmark_file": DEFAULT_STUDIO_BENCHMARK, "modules": []}
+        {
+            "learning_benchmark_file": DEFAULT_STUDIO_LEARNING_BENCHMARK,
+            "evaluate_benchmark_file": DEFAULT_STUDIO_EVALUATE_BENCHMARK,
+            "modules": [],
+        }
     )
     spec = json.loads((run_dir / "spec.json").read_text(encoding="utf-8"))
     snapshot = Path(spec["config"]["module_config_snapshot"])
@@ -364,10 +376,7 @@ def test_clean_control_composite_requires_false_detection_and_empty_sets() -> No
 
 
 def test_studio_counts_benchmark_with_clean_controls(tmp_path: Path) -> None:
-    from nika.visualization.experiment_dashboard import (
-        _count_rows,
-        _default_evolve_cases,
-    )
+    from nika.visualization.experiment_dashboard import _count_rows
 
     benchmark = tmp_path / "clean-controls.yaml"
     benchmark.write_text(
@@ -376,28 +385,33 @@ def test_studio_counts_benchmark_with_clean_controls(tmp_path: Path) -> None:
     )
 
     assert _count_rows(benchmark) == 1
-    assert _default_evolve_cases(benchmark, row_count=1) == 1
 
 
-def test_evolve_benchmark_declares_curriculum_cutoff() -> None:
+def test_studio_defaults_use_separate_learning_and_evaluation_benchmarks() -> None:
     from nika.visualization.experiment_dashboard import (
-        DEFAULT_STUDIO_BENCHMARK,
+        DEFAULT_STUDIO_EVALUATE_BENCHMARK,
+        DEFAULT_STUDIO_LEARNING_BENCHMARK,
         _count_rows,
-        _default_evolve_cases,
     )
 
-    benchmark = Path(DEFAULT_STUDIO_BENCHMARK)
-    row_count = _count_rows(benchmark)
+    learning = Path(DEFAULT_STUDIO_LEARNING_BENCHMARK)
+    evaluation = Path(DEFAULT_STUDIO_EVALUATE_BENCHMARK)
 
-    assert row_count == 125
-    assert benchmark.name == "benchmark_evolve.yaml"
-    assert _default_evolve_cases(benchmark, row_count=row_count) == 75
+    assert _count_rows(learning) == 100
+    assert learning.name == "benchmark_learning.yaml"
+    assert evaluation.name == "benchmark_selected.yaml"
 
 
 def test_command_fallbacks_match_studio_defaults(monkeypatch) -> None:
     monkeypatch.setenv("NIKA_MAX_STEPS", "20")
     config = _config()
-    for key in ("benchmark_file", "llm_backend", "model", "max_steps"):
+    for key in (
+        "learning_benchmark_file",
+        "evaluate_benchmark_file",
+        "llm_backend",
+        "model",
+        "max_steps",
+    ):
         config.pop(key)
 
     command = build_experiment_command(config)
@@ -405,7 +419,10 @@ def test_command_fallbacks_match_studio_defaults(monkeypatch) -> None:
     assert command[command.index("--provider") + 1] == DEFAULT_LLM_BACKEND
     assert command[command.index("--model") + 1] == DEFAULT_MODEL
     assert command[command.index("--max-steps") + 1] == str(DEFAULT_STUDIO_MAX_STEPS)
-    assert command[command.index("--config") + 1] == DEFAULT_STUDIO_BENCHMARK
+    assert command[command.index("--evaluate-benchmark") + 1] == (
+        DEFAULT_STUDIO_EVALUATE_BENCHMARK
+    )
+    assert "--learning-benchmark" not in command
 
 
 def test_learning_role_models_default_to_agent_model() -> None:
@@ -488,20 +505,10 @@ def test_tool_and_memory_modules_share_one_sequential_command() -> None:
     assert command[command.index("--procedural-memory-policy-scorer-model") + 1] == (
         "policy-model"
     )
-    assert command[command.index("--evolve-until") + 1] == "12"
-
-
-def test_legacy_procedural_memory_read_mode_uses_standard_memory_flag() -> None:
-    command = build_experiment_command(
-        _config(
-            modules=["procedural_memory"],
-            procedural_memory_mode="read",
-        )
+    assert command[command.index("--learning-benchmark") + 1] == (
+        "benchmark/benchmark_learning_test.yaml"
     )
-
-    assert "--procedural-memory" in command
-    assert "--procedural-memory-read" not in command
-    assert command[command.index("--evolve-until") + 1] == "12"
+    assert "--evolve-until" not in command
 
 
 def test_command_plan_for_memory_has_no_service_prerequisite() -> None:
@@ -514,8 +521,9 @@ def test_command_plan_for_memory_has_no_service_prerequisite() -> None:
     assert len(plan) == 1
     assert plan[0].variant == "benchmark"
     assert plan[0].name == "ReAct + Procedural Memory"
-    assert "--evolve-until" in plan[0].command
-    assert plan[0].command[plan[0].command.index("--evolve-until") + 1] == "12"
+    assert "--learning-benchmark" in plan[0].command
+    assert "--evaluate-benchmark" in plan[0].command
+    assert "--evolve-until" not in plan[0].command
 
 
 def test_prepare_experiment_config_uses_one_sequential_name_for_outputs(
@@ -545,74 +553,45 @@ def test_prepare_experiment_config_uses_one_sequential_name_for_outputs(
     assert command[command.index("--procedural-memory") + 1] == "experiment-07"
 
 
-def test_prepare_experiment_config_normalizes_legacy_evolve_until(
-    monkeypatch,
-) -> None:
-    monkeypatch.setattr(
-        experiment_runner,
-        "next_experiment_id",
-        lambda _benchmark: "experiment-07",
-    )
+def test_prepare_resume_config_rejects_pre_two_benchmark_specs() -> None:
+    source_spec = {
+        "run_id": "old-run",
+        "config": {
+            "modules": ["procedural_memory"],
+            "agent_type": "react",
+        },
+    }
 
-    legacy = _config(
-        procedural_memory_evolve_until=12,
-        learning_evolve_until=10,
-    )
-    legacy.pop("evolve_until")
-
-    prepared = prepare_experiment_config(legacy)
-
-    assert prepared["evolve_until"] == 10
-    assert "procedural_memory_evolve_until" not in prepared
-    assert "learning_evolve_until" not in prepared
-
-
-def test_prepare_experiment_config_migrates_legacy_memory_read_mode(
-    monkeypatch,
-) -> None:
-    monkeypatch.setattr(
-        experiment_runner,
-        "next_experiment_id",
-        lambda _benchmark: "experiment-07",
-    )
-    legacy = _config(
-        modules=["procedural_memory"],
-        procedural_memory_mode="read",
-        evolve_until=12,
-    )
-
-    prepared = prepare_experiment_config(legacy)
-
-    assert prepared["evolve_until"] == 0
-    assert "procedural_memory_mode" not in prepared
+    with pytest.raises(ValueError, match="two-benchmark Studio schema"):
+        experiment_runner.prepare_resume_config(source_spec)
 
 
 def test_resume_command_uses_existing_result_root() -> None:
     command = build_experiment_command(
         _config(
-            experiment_id="benchmark_evaluate-0001",
-            result_root="/tmp/results/benchmark_evaluate-0001",
+            experiment_id="benchmark_selected-0001",
+            result_root="/tmp/results/benchmark_selected-0001",
             resume=True,
         )
     )
 
     assert (
         command[command.index("--result-dir") + 1]
-        == "/tmp/results/benchmark_evaluate-0001"
+        == "/tmp/results/benchmark_selected-0001"
     )
     assert "--resume" in command
 
 
 def test_resume_run_reuses_selected_run_directory(monkeypatch, tmp_path) -> None:
     runs_dir = tmp_path / "runs"
-    run_dir = runs_dir / "benchmark_evaluate-0001"
+    run_dir = runs_dir / "benchmark_selected-0001"
     run_dir.mkdir(parents=True)
-    result_root = tmp_path / "results" / "benchmark_evaluate-0001"
+    result_root = tmp_path / "results" / "benchmark_selected-0001"
     spec = {
-        "run_id": "benchmark_evaluate-0001",
+        "run_id": "benchmark_selected-0001",
         "created_at": "2026-07-03T22:18:00+00:00",
         "config": _config(
-            experiment_id="benchmark_evaluate-0001",
+            experiment_id="benchmark_selected-0001",
             result_root=str(result_root),
         ),
         "commands": [],
@@ -622,7 +601,7 @@ def test_resume_run_reuses_selected_run_directory(monkeypatch, tmp_path) -> None
     )
     (run_dir / "meta.json").write_text(
         experiment_runner.json.dumps(
-            {"run_id": "benchmark_evaluate-0001", "status": "running", "pid": 1}
+            {"run_id": "benchmark_selected-0001", "status": "running", "pid": 1}
         ),
         encoding="utf-8",
     )
@@ -654,11 +633,11 @@ def test_resume_run_reuses_selected_run_directory(monkeypatch, tmp_path) -> None
     resumed = resume_run(run_dir)
 
     assert resumed == run_dir
-    assert not (runs_dir / "benchmark_evaluate-0001-resume").exists()
+    assert not (runs_dir / "benchmark_selected-0001-resume").exists()
     updated_spec = experiment_runner.read_run_spec(run_dir)
     command = updated_spec["commands"][0]["command"]
-    assert updated_spec["run_id"] == "benchmark_evaluate-0001"
-    assert updated_spec["config"]["experiment_id"] == "benchmark_evaluate-0001"
+    assert updated_spec["run_id"] == "benchmark_selected-0001"
+    assert updated_spec["config"]["experiment_id"] == "benchmark_selected-0001"
     assert updated_spec["config"]["result_root"] == str(result_root)
     assert "--resume" in command
     assert command[command.index("--result-dir") + 1] == str(result_root)
@@ -671,16 +650,16 @@ def test_resume_run_reuses_selected_run_directory(monkeypatch, tmp_path) -> None
 
 
 def test_run_status_ignores_old_done_after_resume_marker(monkeypatch, tmp_path) -> None:
-    run_dir = tmp_path / "runs" / "benchmark_evaluate-0001"
+    run_dir = tmp_path / "runs" / "benchmark_selected-0001"
     run_dir.mkdir(parents=True)
     (run_dir / "meta.json").write_text(
         experiment_runner.json.dumps(
-            {"run_id": "benchmark_evaluate-0001", "status": "running", "pid": 4242}
+            {"run_id": "benchmark_selected-0001", "status": "running", "pid": 4242}
         ),
         encoding="utf-8",
     )
     (run_dir / "run.log").write_text(
-        'ui_run_done {"exit_code": 1}\nui_run_resumed {"run_id": "benchmark_evaluate-0001"}\n',
+        'ui_run_done {"exit_code": 1}\nui_run_resumed {"run_id": "benchmark_selected-0001"}\n',
         encoding="utf-8",
     )
 
@@ -727,6 +706,29 @@ def test_parse_progress_events_reads_benchmark_and_ui_events() -> None:
     assert rows[4]["topo_size"] == "m"
     assert rows[5]["reason"] == "user_stop"
     assert rows[6]["exit_code"] == "0"
+
+
+def test_parse_progress_events_reads_pipeline_stage_events() -> None:
+    rows = parse_progress_events(
+        "\n".join(
+            [
+                'benchmark_stage_start {"role": "learning", "total": 100, "pending": 100}',
+                'learning_barrier_created {"path": "/tmp/learning_barrier.json"}',
+                'benchmark_stage_done {"role": "learning", "total": 100, "completed": 100, "failed": 0}',
+                'benchmark_pipeline_done {"exit_code": 0, "learning_cases": 100, "evaluation_cases": 56}',
+            ]
+        )
+    )
+
+    assert [row["event"] for row in rows] == [
+        "benchmark_stage_start",
+        "learning_barrier_created",
+        "benchmark_stage_done",
+        "benchmark_pipeline_done",
+    ]
+    assert rows[0]["role"] == "learning"
+    assert rows[0]["total"] == "100"
+    assert rows[-1]["evaluation_cases"] == "56"
 
 
 def test_result_aggregation_excludes_clean_controls_from_localization_and_rca(
@@ -781,16 +783,16 @@ def test_result_aggregation_excludes_clean_controls_from_localization_and_rca(
     assert row["rca_f1"] == "0.80"
 
 
-def test_result_aggregation_uses_read_phase_as_primary_endpoint(
+def test_result_aggregation_uses_evaluation_role_as_primary_endpoint(
     monkeypatch, tmp_path: Path
 ) -> None:
     from nika.visualization import experiment_dashboard as dashboard
 
     results = tmp_path / "results"
-    root = results / "benchmark_evolve-0001"
-    for name, mode, score in (
-        ("train", "evolve", 1.0),
-        ("evaluation", "read", 0.4),
+    root = results / "benchmark_selected-0001"
+    for name, role, score in (
+        ("train", "learning", 1.0),
+        ("evaluation", "evaluation", 0.4),
     ):
         session = root / name
         session.mkdir(parents=True)
@@ -801,7 +803,8 @@ def test_result_aggregation_uses_read_phase_as_primary_endpoint(
                     "status": "finished",
                     "agent_type": "react",
                     "model": "openai/gpt-oss-120b",
-                    "procedural_memory_mode": mode,
+                    "procedural_memory_enabled": True,
+                    "benchmark_role": role,
                     "benchmark_fingerprint": f"case-{name}",
                 }
             ),
@@ -824,22 +827,23 @@ def test_result_aggregation_uses_read_phase_as_primary_endpoint(
         )
 
     monkeypatch.setattr(dashboard, "RESULTS_DIR", results)
-    row = dashboard._result_rows(benchmark_name="benchmark_evolve")[0]
+    row = dashboard._result_rows(benchmark_name="benchmark_selected")[0]
 
     assert row["detection_score"] == "0.40"
     assert row["evaluation_cases"] == 1
+    assert row["learning_cases"] == 1
 
 
-def test_result_aggregation_uses_generic_phase_without_modules(
+def test_result_aggregation_uses_roles_without_modules(
     monkeypatch, tmp_path: Path
 ) -> None:
     from nika.visualization import experiment_dashboard as dashboard
 
     results = tmp_path / "results"
-    root = results / "benchmark_evolve-0001"
-    for name, phase, score in (
-        ("train", "evolve", 1.0),
-        ("evaluation", "read", 0.4),
+    root = results / "benchmark_selected-0001"
+    for name, role, score in (
+        ("train", "learning", 1.0),
+        ("evaluation", "evaluation", 0.4),
     ):
         session = root / name
         session.mkdir(parents=True)
@@ -850,8 +854,9 @@ def test_result_aggregation_uses_generic_phase_without_modules(
                     "status": "finished",
                     "agent_type": "react",
                     "model": "openai/gpt-oss-120b",
-                    "procedural_memory_mode": "off",
-                    "benchmark_phase": phase,
+                    "procedural_memory_enabled": False,
+                    "tool_refinement_enabled": False,
+                    "benchmark_role": role,
                     "benchmark_fingerprint": f"case-{name}",
                 }
             ),
@@ -874,7 +879,7 @@ def test_result_aggregation_uses_generic_phase_without_modules(
         )
 
     monkeypatch.setattr(dashboard, "RESULTS_DIR", results)
-    row = dashboard._result_rows(benchmark_name="benchmark_evolve")[0]
+    row = dashboard._result_rows(benchmark_name="benchmark_selected")[0]
 
     assert row["detection_score"] == "0.40"
     assert row["evaluation_cases"] == 1

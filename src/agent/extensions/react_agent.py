@@ -77,7 +77,7 @@ class LearningDiagnosisPhase(DiagnosisPhase):
             explorer_model = self.config.tool_refinement.explorer_model.strip()
             explorer_llm = (
                 self.llm
-                if self.config.tool_refinement.learning_mode == "evolve"
+                if self.config.allow_learning_updates
                 and self.config.tool_refinement.update_due
                 else None
             )
@@ -94,6 +94,8 @@ class LearningDiagnosisPhase(DiagnosisPhase):
                 session=self.session,
                 primitive_tools=self.tools or [],
                 library_id=self.config.tool_refinement.library_id,
+                state_path=self.config.tool_refinement.state_path,
+                allow_learning_updates=self.config.allow_learning_updates,
                 tool_doc_chars=self.config.tool_refinement.tool_doc_chars,
                 explorer_llm=explorer_llm,
                 llm_backend=self.config.llm_provider,
@@ -125,6 +127,7 @@ class LearningDiagnosisPhase(DiagnosisPhase):
             bank_id=procedural_memory_config.bank,
             llm_backend=self.config.llm_provider,
             model=self.config.model,
+            store_path=procedural_memory_config.store_path,
             pool_size=procedural_memory_config.pool_size,
             evolution_threshold=procedural_memory_config.evolution_threshold,
             best_of_n=procedural_memory_config.best_of_n,
@@ -140,10 +143,11 @@ class LearningDiagnosisPhase(DiagnosisPhase):
             min_positive_advantage=(procedural_memory_config.min_positive_advantage),
             evolver_model=procedural_memory_config.evolver_model,
             policy_scorer_model=procedural_memory_config.policy_scorer_model,
+            read_only=not self.config.allow_learning_updates,
         )
         self.skill_tool_runtime = SkillToolRuntime(
             procedural_memory=procedural_memory,
-            procedural_memory_mode=procedural_memory_config.mode,
+            allow_learning_updates=self.config.allow_learning_updates,
             session=self.session,
             task_description=task_description,
             tools=list(self._base_tools),
@@ -218,8 +222,11 @@ class LearningReActAgent(BasicReActAgent):
 
     def _install_exploring_runner(self) -> None:
         runtime = self._learning_phase.tool_refinement_runtime
-        if runtime is not None and not isinstance(
-            self._diagnosis_runner, _ExploringDiagnosisRunner
+        if (
+            runtime is not None
+            and self.extension_config.allow_learning_updates
+            and self.extension_config.tool_refinement.update_due
+            and not isinstance(self._diagnosis_runner, _ExploringDiagnosisRunner)
         ):
             self._diagnosis_runner = _ExploringDiagnosisRunner(
                 self._diagnosis_runner,

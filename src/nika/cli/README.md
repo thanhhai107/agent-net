@@ -17,6 +17,8 @@ Runtime paths (`runtime/`, `results/`, `benchmark/`) resolve from the repository
 | `nika agent` | Run a troubleshooting agent on one selected session task |
 | `nika eval` | Metrics, LLM judge, and offline summary CSV for closed sessions |
 | `nika benchmark` | Full pipeline for benchmark YAML rows or a single `(scenario, problem)` case |
+| `nika procedural-memory` | Learn on one benchmark, freeze a skill bank, then evaluate it |
+| `nika tool-refinement` | Inspect and manage refined tool-documentation libraries |
 | `nika traffic` | Synthetic traffic (`od`, `web`) against the running lab |
 | `nika studio` | Streamlit Experiment Studio (`uv sync --extra studio`) |
 
@@ -209,6 +211,13 @@ nika benchmark run --result_dir results/list1 --batch-size 4   # resume skips co
 | `topo_size` | Size `s`, `m`, or `l`; **null/empty** for scenarios without sizes |
 | `inject` | Map of `--set key=value` pairs passed to `nika failure inject` |
 
+Repository manifests also declare `benchmark_role` (`learning` or `evaluation`),
+seed, and exact total/fault/no-fault counts. The canonical files are:
+
+- `benchmark_learning.yaml`: 100 cases (90 fault + 10 no-fault)
+- `benchmark_selected.yaml`: 56-case evaluation set and default evaluation input
+- `benchmark_full.yaml`: 702-case full evaluation set
+
 Agent and judge options use the same flags as below; choose `react`, `plan-execute`, or `reflexion` with `-a`.
 
 ### Single-case mode
@@ -224,6 +233,30 @@ nika benchmark run dc_clos_bgp --problem bgp_asn_misconfig -s s \
 - **`-s` / `--size`**: required only when `SCENARIO` is scalable.
 - **`--judge`**: optional; without it, only metrics run after the agent finishes.
 - Each benchmark case gets its own lab; the lab is torn down when the session closes (before evaluation).
+
+---
+
+## `nika procedural-memory`
+
+Run the complete learning/evaluation pipeline with one skill bank:
+
+```shell
+nika procedural-memory run \
+  --learning-benchmark benchmark/benchmark_learning.yaml \
+  --evaluate-benchmark benchmark/benchmark_selected.yaml \
+  --bank my-experiment
+```
+
+The two benchmark options default to the paths shown above. Every Learning
+Benchmark case may update the bank. After all learning cases complete, NIKA
+freezes a snapshot and runs the Evaluate Benchmark without further updates.
+There is no index cutoff or selectable execution mode; the stage order is fixed.
+Use `--reset-bank` for a fresh experiment (the default); `--keep-bank` is
+reserved for resuming the same fingerprinted pipeline.
+
+Use `nika procedural-memory inspect`, `health`, `snapshot`, and `clear` to
+inspect or manage persisted banks. Experiment Studio exposes the same Learning
+Benchmark and Evaluate Benchmark inputs.
 
 ---
 

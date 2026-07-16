@@ -8,6 +8,7 @@ works with typed extension config.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from agent.module_config import module_defaults
 
@@ -18,8 +19,8 @@ LANGGRAPH_DIAGNOSIS_AGENT_TYPES = frozenset({"react", "plan-execute", "reflexion
 class ToolRefinementConfig:
     enabled: bool = False
     library_id: str = "default"
-    learning_mode: str = "evolve"
     update_due: bool = True
+    state_path: Path | None = None
     tool_doc_chars: int = field(
         default_factory=lambda: module_defaults().tool_refinement.tool_doc_chars
     )
@@ -55,8 +56,9 @@ class ToolRefinementConfig:
 
 @dataclass(frozen=True)
 class ProceduralMemoryConfig:
-    mode: str = "off"
+    enabled: bool = False
     bank: str = "default"
+    store_path: Path | None = None
     token_budget: int = field(
         default_factory=lambda: module_defaults().procedural_memory.token_budget
     )
@@ -110,10 +112,6 @@ class ProceduralMemoryConfig:
         default_factory=lambda: module_defaults().procedural_memory.skill_logprob_model
     )
 
-    @property
-    def enabled(self) -> bool:
-        return self.mode != "off"
-
 
 @dataclass(frozen=True)
 class AgentRunConfig:
@@ -129,6 +127,9 @@ class AgentRunConfig:
     procedural_memory: ProceduralMemoryConfig = field(
         default_factory=ProceduralMemoryConfig
     )
+    # Stage policy supplied by the benchmark runner. Disabled evaluation stages
+    # may consume learned artifacts but must not mutate either learning store.
+    allow_learning_updates: bool = False
 
     @property
     def normalized_agent_type(self) -> str:
@@ -169,8 +170,6 @@ def validate_agent_extensions(config: AgentRunConfig) -> None:
         raise ValueError("Tool Refinement exploration similarity must be in [0, 1]")
     if config.tool_refinement.explorer_reflection_limit < 0:
         raise ValueError("Tool Refinement reflection limit must be >= 0")
-    if config.tool_refinement.learning_mode not in {"evolve", "read"}:
-        raise ValueError("Tool Refinement learning mode must be evolve or read")
     if (
         min(
             config.tool_refinement.update_interval,
@@ -182,8 +181,6 @@ def validate_agent_extensions(config: AgentRunConfig) -> None:
         raise ValueError("Tool Refinement update controls must be >= 1")
     if not 0 <= config.tool_refinement.publish_min_utility <= 1:
         raise ValueError("Tool Refinement publication utility must be in [0, 1]")
-    if config.procedural_memory.mode not in {"off", "read", "evolve"}:
-        raise ValueError("Procedural Memory mode must be one of: off, read, evolve")
     if config.procedural_memory.token_budget < 100:
         raise ValueError("Procedural Memory token budget must be >= 100")
     if config.procedural_memory.max_skill_age < 1:

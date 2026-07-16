@@ -80,24 +80,25 @@ uv run nika eval summary
 
 Benchmark definitions live in [`benchmark/`](benchmark/):
 
-- `benchmark_selected.yaml`: small selected set
-- `benchmark_evaluate.yaml`: evaluation set
-- `benchmark_evolve.yaml`: learning curriculum with evolve/read-only phases
-- `benchmark_full.yaml`: full benchmark set
+- `benchmark_learning.yaml`: 100 learning cases (90 fault + 10 no-fault)
+- `benchmark_selected.yaml`: small 56-case evaluation set
+- `benchmark_full.yaml`: full 702-case evaluation set
 
 Run a benchmark directly:
 
 ```bash
 uv run nika benchmark run \
-  --config benchmark/benchmark_evaluate.yaml \
+  --config benchmark/benchmark_selected.yaml \
   --agent react \
   --provider custom \
   --model openai/gpt-oss-120b \
   --max-steps 50
 ```
 
-Learning experiments are composed by `nika.extensions.benchmark`; the Studio stores
-the complete command and configuration with each run.
+Learning experiments run `benchmark_learning.yaml` before the chosen evaluation
+benchmark. The learned module is frozen at that barrier, and evaluation cannot
+update it. Experiment Studio stores both benchmark paths with the complete command
+and configuration for each run.
 
 ## Configuration
 
@@ -117,10 +118,9 @@ Candidate verification is an offline admissibility prescreen: the gate measures
 the clipped-surrogate improvement over the parent policy, then publishes passing
 candidates as `probationary`. Only candidates with positive conservative gain from
 later NIKA episodes become `validated`; unresolved probationary skills are retired
-when the bank is frozen at the evolve/read boundary. Benchmarks that declare
-`evolve_first_cases` (including `benchmark_evolve.yaml`) apply that cutoff in both
-Studio and the extension CLI, and Studio reports read-only cases as the primary
-endpoint while retaining evolve-phase learning diagnostics separately.
+when the bank is frozen after the Learning Benchmark. Studio reports Evaluate
+Benchmark cases as the primary endpoint while retaining learning diagnostics
+separately.
 
 CLI and Studio values override these defaults per experiment. `.env` is reserved for
 API connection details and credentials.

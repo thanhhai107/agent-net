@@ -122,7 +122,11 @@ class ExtensionWorkflowBase:
     async def explore_tools(self, task_description: str) -> dict[str, Any]:
         diagnosis_phase = getattr(self, "diagnosis_phase", None)
         runtime = getattr(diagnosis_phase, "tool_refinement_runtime", None)
-        if runtime is None:
+        if (
+            runtime is None
+            or not self.config.allow_learning_updates
+            or not self.config.tool_refinement.update_due
+        ):
             return {}
         return await runtime.explore(task_description)
 

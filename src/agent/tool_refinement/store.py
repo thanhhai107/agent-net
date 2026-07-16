@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import fcntl
 import re
@@ -33,17 +34,40 @@ class ToolRefinementStore:
         self,
         library_id: str = "default",
         root: str | Path | None = None,
+        state_path: str | Path | None = None,
+        read_only: bool = False,
     ) -> None:
         self.library_id = safe_library_id(library_id)
-        self.root = Path(root) if root is not None else TOOL_REFINEMENT_DIR
-        self.library_dir = self.root / self.library_id
-        self.state_path = self.library_dir / "state.json"
-        self.lock_path = self.library_dir / ".lock"
+        self.read_only = bool(read_only)
+        if state_path is not None:
+            self.state_path = Path(state_path)
+            self.library_dir = self.state_path.parent
+            self.root = self.library_dir
+            self.lock_path = self.library_dir / f".{self.state_path.name}.lock"
+        else:
+            self.root = Path(root) if root is not None else TOOL_REFINEMENT_DIR
+            self.library_dir = self.root / self.library_id
+            self.state_path = self.library_dir / "state.json"
+            self.lock_path = self.library_dir / ".lock"
+
+    def as_read_only(self) -> "ToolRefinementStore":
+        """Return a read-only view over the exact same persisted state."""
+
+        return ToolRefinementStore(
+            self.library_id,
+            state_path=self.state_path,
+            read_only=True,
+        )
+
+    def _require_writable(self) -> None:
+        if self.read_only:
+            raise PermissionError("Tool Refinement store is read-only")
 
     @contextmanager
     def exclusive(self):
         """Serialize read-modify-write learning cycles for one library."""
 
+        self._require_writable()
         self.library_dir.mkdir(parents=True, exist_ok=True)
         with self.lock_path.open("a+", encoding="utf-8") as lock_file:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
@@ -100,12 +124,14 @@ class ToolRefinementStore:
         return state
 
     def save(self, state: DraftToolState) -> DraftToolState:
+        self._require_writable()
         state.library_id = self.library_id
         state.updated_at = utc_now()
         atomic_write_text(self.state_path, state.model_dump_json(indent=2))
         return state
 
     def clear(self) -> None:
+        self._require_writable()
         with self.exclusive():
             for path in self.library_dir.iterdir():
                 if path == self.lock_path:
@@ -116,6 +142,7 @@ class ToolRefinementStore:
                     path.unlink(missing_ok=True)
 
     def upsert_document(self, doc: ToolDocumentation) -> ToolDocumentation:
+        self._require_writable()
         with self.exclusive():
             state = self.load()
             state.documents[doc.name] = doc
@@ -126,6 +153,7 @@ class ToolRefinementStore:
         return self.load().documents.get(tool_name)
 
     def record_trials(self, trials: Iterable[ToolTrial]) -> int:
+        self._require_writable()
         incoming = list(trials)
         if not incoming:
             return 0
@@ -194,3 +222,22 @@ class ToolRefinementStore:
 
     def as_json(self) -> str:
         return json.dumps(self.load().model_dump(), ensure_ascii=False, indent=2)
+
+    def state_hash(self) -> str:
+        """Hash the persisted state bytes for barrier/invariance checks."""
+
+        if not self.state_path.exists():
+            return ""
+        return hashlib.sha256(self.state_path.read_bytes()).hexdigest()
+
+    def snapshot(self, output_path: str | Path) -> Path:
+        """Copy the current state atomically to a standalone frozen artifact."""
+
+        destination = Path(output_path)
+        payload = (
+            self.state_path.read_text(encoding="utf-8")
+            if self.state_path.exists()
+            else DraftToolState(library_id=self.library_id).model_dump_json(indent=2)
+        )
+        atomic_write_text(destination, payload)
+        return destination

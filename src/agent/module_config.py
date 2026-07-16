@@ -66,6 +66,8 @@ class ProceduralMemoryDefaults:
 @dataclass(frozen=True)
 class BaselineDefaults:
     benchmark: str
+    learning_benchmark: str
+    evaluate_benchmark: str
     agent_type: str
     llm_provider: str
     model: str
@@ -187,6 +189,8 @@ def load_module_defaults(path: str | Path | None = None) -> ModuleDefaults:
         ),
         baseline=BaselineDefaults(
             benchmark=_str(baseline, "benchmark"),
+            learning_benchmark=_str(baseline, "learning_benchmark"),
+            evaluate_benchmark=_str(baseline, "evaluate_benchmark"),
             agent_type=_str(baseline, "agent_type"),
             llm_provider=_str(baseline, "llm_provider"),
             model=_str(baseline, "model"),

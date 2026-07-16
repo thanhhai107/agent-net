@@ -1,4 +1,9 @@
+benchmark_role: evaluation
 seed: 42
+counts:
+  total: 56
+  fault: 56
+  no_fault: 0
 cases:
 - scenario: ospf_enterprise_dhcp
   topo_size: s

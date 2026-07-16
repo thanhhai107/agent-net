@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from argparse import Namespace
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -26,13 +25,13 @@ from nika.workflows.benchmark import run as benchmark_run
 from nika.workflows.benchmark.run import validate_inject_params
 
 
-def _config(*, procedural_memory_mode: str = "off") -> AgentRunConfig:
+def _config(*, procedural_memory_enabled: bool = False) -> AgentRunConfig:
     return AgentRunConfig(
         agent_type="react",
         llm_provider="custom",
         model="openai/gpt-oss-120b",
         max_steps=20,
-        procedural_memory=ProceduralMemoryConfig(mode=procedural_memory_mode),
+        procedural_memory=ProceduralMemoryConfig(enabled=procedural_memory_enabled),
     )
 
 
@@ -124,8 +123,9 @@ def test_learning_module_failure_does_not_block_other_update(
         llm_provider="custom",
         model="openai/gpt-oss-120b",
         max_steps=20,
+        allow_learning_updates=True,
         tool_refinement=ToolRefinementConfig(enabled=True),
-        procedural_memory=ProceduralMemoryConfig(mode="evolve"),
+        procedural_memory=ProceduralMemoryConfig(enabled=True),
     )
 
     benchmark_extension._update_learning("session-1", config)
@@ -253,7 +253,9 @@ def test_extension_parser_uses_canonical_feature_terms() -> None:
     parser = benchmark_extension.build_parser()
     canonical = parser.parse_args(
         [
-            "--config",
+            "--learning-benchmark",
+            "learning.yaml",
+            "--evaluate-benchmark",
             "benchmark.yaml",
             "--tool-refinement",
             "refinement-bank",
@@ -273,7 +275,7 @@ def test_extension_parser_uses_canonical_feature_terms() -> None:
     assert canonical.tool_refinement_explorer_reflection_limit == 3
     assert canonical.procedural_memory_experience_pool_size == 256
     assert canonical.procedural_memory_baseline_ema_alpha == 0.1
-    assert canonical.procedural_memory_selection_epsilon_decay_cases == 75
+    assert canonical.procedural_memory_selection_epsilon_decay_cases == 100
     assert canonical.procedural_memory_acceptance_margin == 0.01
     assert canonical.tool_refinement_explorer_model == ""
     assert canonical.tool_refinement_analyzer_model == ""
@@ -283,7 +285,10 @@ def test_extension_parser_uses_canonical_feature_terms() -> None:
     help_text = parser.format_help()
     assert "--tool-refinement" in help_text
     assert "--procedural-memory" in help_text
-    assert "--procedural-memory-read" not in help_text
+    assert "--learning-benchmark" in help_text
+    assert "--evaluate-benchmark" in help_text
+    assert "--config" not in help_text
+    assert "--evolve-until" not in help_text
 
 
 def test_clean_control_scores_false_and_empty_submission_as_fully_correct() -> None:
@@ -470,7 +475,7 @@ def test_clean_control_path_never_injects_and_normalizes_before_learning(
     monkeypatch.setattr(
         benchmark_extension,
         "_update_learning",
-        lambda *_args: calls.append("learn"),
+        lambda *_args: calls.append("learn") or {},
     )
 
     benchmark_extension.run_extended_case(
@@ -515,10 +520,10 @@ def test_procedural_memory_command_routes_through_extension_benchmark(
     )
 
     procedural_memory_command.procedural_memory_run(
-        file=benchmark,
-        limit=None,
-        evolve_until=2,
+        learning_benchmark=benchmark,
+        evaluate_benchmark=benchmark,
         bank="test-bank",
+        result_dir=tmp_path / "results",
         reset_bank=False,
         llm_backend="custom",
         model="openai/gpt-oss-120b",
@@ -543,8 +548,11 @@ def test_procedural_memory_command_routes_through_extension_benchmark(
 
     command = calls[0]
     assert command[1:3] == ["-m", "nika.extensions.benchmark"]
+    assert command[command.index("--learning-benchmark") + 1] == str(benchmark)
+    assert command[command.index("--evaluate-benchmark") + 1] == str(benchmark)
+    assert command[command.index("--result-dir") + 1] == str(tmp_path / "results")
+    assert "--resume" in command
     assert command[command.index("--procedural-memory") + 1] == "test-bank"
-    assert "--procedural-memory-read" not in command
     assert command[command.index("--provider") + 1] == "custom"
     assert command[command.index("--procedural-memory-token-budget") + 1] == "1200"
     assert command[command.index("--procedural-memory-max-skill-age") + 1] == "6"
@@ -577,7 +585,7 @@ def test_procedural_memory_command_routes_through_extension_benchmark(
     assert command[command.index("--procedural-memory-policy-scorer-model") + 1] == (
         "policy-model"
     )
-    assert command[command.index("--evolve-until") + 1] == "2"
+    assert "--evolve-until" not in command
 
 
 def test_baseline_fault_row_routes_to_upstream_single_case(
@@ -585,7 +593,7 @@ def test_baseline_fault_row_routes_to_upstream_single_case(
 ) -> None:
     benchmark = tmp_path / "benchmark.yaml"
     benchmark.write_text(
-        "evolve_first_cases: 1\n"
+        "benchmark_role: evaluation\n"
         "cases:\n"
         "  - scenario: simple_bgp\n"
         "    problem: link_down\n"
@@ -606,119 +614,199 @@ def test_baseline_fault_row_routes_to_upstream_single_case(
         lambda **kwargs: calls.append(kwargs) or ("session-1", tmp_path / "session-1"),
     )
 
-    result = benchmark_extension.run_batch(
-        Namespace(
-            config=str(benchmark),
-            provider="custom",
-            model="openai/gpt-oss-120b",
-            max_steps=20,
-            result_dir=str(tmp_path / "results"),
-            resume=False,
-            judge=False,
-            judge_provider=None,
-            judge_model=None,
-            tool_refinement=None,
-            tool_refinement_doc_chars=500,
-            tool_refinement_convergence_threshold=0.75,
-            procedural_memory=None,
-            procedural_memory_tokens=1500,
-            procedural_memory_max_skill_age=4,
-            procedural_memory_pool_size=32,
-            procedural_memory_update_threshold=3,
-            procedural_memory_best_of_n=3,
-            procedural_memory_ppo_epsilon=0.2,
-        )
+    args = benchmark_extension.build_parser().parse_args(
+        [
+            "--evaluate-benchmark",
+            str(benchmark),
+            "--provider",
+            "custom",
+            "--model",
+            "openai/gpt-oss-120b",
+            "--max-steps",
+            "20",
+            "--result-dir",
+            str(tmp_path / "results"),
+        ]
     )
+    result = benchmark_extension.run_batch(args)
 
     assert result == 0
     assert calls[0]["agent_type"] == "react"
     assert calls[0]["llm_provider"] == "custom"
     assert calls[0]["benchmark_index"] == 1
-    assert calls[0]["benchmark_phase"] == "evolve"
+    assert calls[0]["benchmark_role"] == "evaluation"
 
 
-def test_benchmark_switches_both_modules_to_read_after_evolve_cutoff(
+def test_learning_barrier_contains_loadable_immutable_snapshots(
     monkeypatch, tmp_path: Path
 ) -> None:
-    benchmark = tmp_path / "benchmark.yaml"
-    benchmark.write_text(
-        "evolve_first_cases: 2\n"
+    from agent.procedural_memory import store as memory_store_module
+    from agent.tool_refinement import store as tool_store_module
+
+    monkeypatch.setattr(
+        memory_store_module,
+        "PROCEDURAL_MEMORY_DIR",
+        tmp_path / "live-memory",
+    )
+    monkeypatch.setattr(
+        tool_store_module,
+        "TOOL_REFINEMENT_DIR",
+        tmp_path / "live-tools",
+    )
+    memory = benchmark_extension.ProceduralMemoryModule(bank_id="barrier-bank")
+    memory_state = memory.store.load()
+    memory_state.iteration = 3
+    memory.store.save(memory_state)
+    tool_store = benchmark_extension.ToolRefinementStore("barrier-tools")
+    tool_store.save(tool_store.load())
+
+    learning_path = tmp_path / "learning.yaml"
+    learning_path.write_text(
+        "benchmark_role: learning\n"
         "cases:\n"
-        "  - {scenario: simple_bgp, problem: no_fault, inject: {}}\n"
-        "  - {scenario: simple_bgp, problem: no_fault, inject: {}}\n"
         "  - {scenario: simple_bgp, problem: no_fault, inject: {}}\n",
         encoding="utf-8",
     )
-    modes: list[tuple[str, str, bool]] = []
+    evaluation_path = tmp_path / "evaluation.yaml"
+    evaluation_path.write_text(
+        "benchmark_role: evaluation\n"
+        "cases:\n"
+        "  - {scenario: p4_mpls, problem: no_fault, inject: {}}\n",
+        encoding="utf-8",
+    )
+    learning_manifest = benchmark_extension.load_benchmark_manifest(
+        learning_path,
+        expected_role="learning",
+    )
+    evaluation_manifest = benchmark_extension.load_benchmark_manifest(
+        evaluation_path,
+        expected_role="evaluation",
+    )
+    config = AgentRunConfig(
+        agent_type="react",
+        llm_provider="custom",
+        model="openai/gpt-oss-120b",
+        max_steps=20,
+        allow_learning_updates=True,
+        procedural_memory=ProceduralMemoryConfig(
+            enabled=True,
+            bank="barrier-bank",
+        ),
+        tool_refinement=ToolRefinementConfig(
+            enabled=True,
+            library_id="barrier-tools",
+        ),
+    )
+
+    barrier = benchmark_extension._freeze_learning_modules(
+        config=config,
+        results_root=tmp_path / "results",
+        learning_manifest=learning_manifest,
+        evaluation_manifest=evaluation_manifest,
+        config_fingerprint="config-hash",
+    )
+
+    memory_snapshot = Path(barrier["procedural_memory"]["snapshot_path"])
+    tool_snapshot = Path(barrier["tool_refinement"]["snapshot_path"])
+    frozen_memory = benchmark_extension.ProceduralMemoryModule(
+        bank_id="barrier-bank",
+        store_path=memory_snapshot,
+        read_only=True,
+    )
+    frozen_tools = benchmark_extension.ToolRefinementStore(
+        "barrier-tools",
+        state_path=tool_snapshot,
+        read_only=True,
+    )
+
+    assert frozen_memory.store.load().iteration == 3
+    assert frozen_tools.load().library_id == "barrier-tools"
+    benchmark_extension._validate_learning_barrier(
+        barrier,
+        learning_manifest=learning_manifest,
+        evaluation_manifest=evaluation_manifest,
+        config_fingerprint="config-hash",
+        config=config,
+    )
+    benchmark_extension._verify_frozen_modules(barrier=barrier, config=config)
+    with pytest.raises(PermissionError):
+        frozen_memory.store.save(frozen_memory.store.load())
+    with pytest.raises(PermissionError):
+        frozen_tools.save(frozen_tools.load())
+
+    memory_snapshot.write_text("{}", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="frozen snapshot changed"):
+        benchmark_extension._verify_frozen_modules(barrier=barrier, config=config)
+
+
+def test_benchmark_pipeline_enables_updates_only_for_learning_stage(
+    monkeypatch, tmp_path: Path
+) -> None:
+    learning = tmp_path / "learning.yaml"
+    learning.write_text(
+        "benchmark_role: learning\n"
+        "cases:\n"
+        "  - {scenario: simple_bgp, problem: no_fault, inject: {}}\n"
+        "  - {scenario: ospf_enterprise_dhcp, topo_size: s, problem: no_fault, inject: {}}\n",
+        encoding="utf-8",
+    )
+    evaluation = tmp_path / "evaluation.yaml"
+    evaluation.write_text(
+        "benchmark_role: evaluation\n"
+        "cases:\n"
+        "  - {scenario: simple_bgp, problem: no_fault, inject: {}}\n",
+        encoding="utf-8",
+    )
+    stages: list[tuple[bool, bool, bool, bool, str]] = []
     monkeypatch.setattr(
         benchmark_extension,
         "scan_benchmark_cases",
-        lambda **_kwargs: (tmp_path, [1, 2]),
+        lambda **kwargs: (tmp_path, list(range(len(kwargs["rows"])))),
     )
 
-    def run_case(_row, *, config, **_kwargs):
-        modes.append(
+    def run_case(_row, *, config, benchmark_role, **_kwargs):
+        stages.append(
             (
-                config.procedural_memory.mode,
-                config.tool_refinement.learning_mode,
+                config.allow_learning_updates,
+                config.procedural_memory.enabled,
+                config.tool_refinement.enabled,
                 config.tool_refinement.update_due,
+                benchmark_role,
             )
         )
-        index = len(modes)
+        index = len(stages)
         return f"session-{index}", tmp_path / f"session-{index}"
 
     monkeypatch.setattr(benchmark_extension, "run_extended_case", run_case)
-
-    class FakeMemory:
-        def __init__(self, *, bank_id):
-            self.bank_id = bank_id
-
-        def freeze_for_evaluation(self, *, output_path):
-            output_path.write_text("snapshot\n", encoding="utf-8")
-            return {
-                "bank_id": self.bank_id,
-                "iteration": 2,
-                "state_hash": "frozen-hash",
-                "snapshot_path": str(output_path),
-                "retired_probationary_skill_ids": [],
-                "validated_skill_ids": [],
-            }
-
-        def bank_state_hash(self):
-            return "frozen-hash"
-
-    monkeypatch.setattr(benchmark_extension, "ProceduralMemoryModule", FakeMemory)
-
-    result = benchmark_extension.run_batch(
-        Namespace(
-            config=str(benchmark),
-            agent="react",
-            provider="custom",
-            model="openai/gpt-oss-120b",
-            max_steps=20,
-            max_attempts=3,
-            result_dir=str(tmp_path / "results"),
-            resume=True,
-            judge=False,
-            judge_provider=None,
-            judge_model=None,
-            tool_refinement="shared-tools",
-            tool_refinement_doc_chars=500,
-            tool_refinement_convergence_threshold=0.75,
-            procedural_memory="shared-bank",
-            evolve_until=None,
-            procedural_memory_tokens=1500,
-            procedural_memory_max_skill_age=8,
-            procedural_memory_pool_size=32,
-            procedural_memory_update_threshold=6,
-            procedural_memory_best_of_n=3,
-            procedural_memory_ppo_epsilon=0.2,
-            procedural_memory_selection_epsilon=0.3,
-        )
+    monkeypatch.setattr(
+        benchmark_extension,
+        "_freeze_learning_modules",
+        lambda **_kwargs: {},
     )
+    monkeypatch.setattr(
+        benchmark_extension,
+        "_verify_frozen_modules",
+        lambda **_kwargs: None,
+    )
+    args = benchmark_extension.build_parser().parse_args(
+        [
+            "--learning-benchmark",
+            str(learning),
+            "--evaluate-benchmark",
+            str(evaluation),
+            "--result-dir",
+            str(tmp_path / "results"),
+            "--tool-refinement",
+            "shared-tools",
+            "--procedural-memory",
+            "shared-bank",
+        ]
+    )
+    result = benchmark_extension.run_batch(args)
 
     assert result == 0
-    assert modes == [
-        ("evolve", "evolve", True),
-        ("read", "read", False),
+    assert stages == [
+        (True, True, True, False, "learning"),
+        (True, True, True, True, "learning"),
+        (False, True, True, False, "evaluation"),
     ]

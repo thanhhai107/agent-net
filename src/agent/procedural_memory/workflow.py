@@ -75,9 +75,7 @@ def _extract_runtime_skill_steps(entries: list[dict[str, Any]]) -> list[SkillSte
                 policy_state=str(entry.get("policy_state") or ""),
                 policy_context=str(entry.get("policy_context") or ""),
                 policy_token_budget=int(entry.get("policy_token_budget") or 0),
-                selection_probability=float(
-                    entry.get("selection_probability") or 0.0
-                ),
+                selection_probability=float(entry.get("selection_probability") or 0.0),
                 activation_id=str(entry.get("activation_id") or ""),
             )
         )
@@ -123,6 +121,15 @@ def _float_meta(run_meta: dict[str, Any], key: str, default: float) -> float:
         return default
 
 
+def _bool_meta(run_meta: dict[str, Any], key: str, default: bool = False) -> bool:
+    value = run_meta.get(key)
+    if value is None:
+        return default
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
 def _strip_integrated_guidance(value: Any) -> str:
     return strip_integrated_learning_guidance(value)
 
@@ -141,8 +148,10 @@ async def update_procedural_memory_from_session(
     session_dir: str | Path,
 ) -> dict[str, Any]:
     defaults = module_defaults().procedural_memory
-    if run_meta.get("procedural_memory_mode", "off") != "evolve":
-        return {"status": "skipped", "reason": "procedural_memory_mode is not evolve"}
+    if not _bool_meta(run_meta, "procedural_memory_enabled"):
+        return {"status": "skipped", "reason": "procedural memory is disabled"}
+    if not _bool_meta(run_meta, "allow_learning_updates"):
+        return {"status": "skipped", "reason": "learning updates are disabled"}
     session_path = Path(session_dir)
     bank_id = str(run_meta.get("procedural_memory_bank") or "default")
     gt = _load_json(session_path / "ground_truth.json")

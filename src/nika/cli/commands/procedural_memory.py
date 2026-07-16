@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import json
-import re
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
+from uuid import uuid4
 
 import typer
-import yaml
 
 from agent.module_config import module_defaults
 from agent.extensions.config import (
@@ -18,10 +18,9 @@ from agent.extensions.config import (
 )
 from nika.utils.agent_config import resolve_max_steps
 from agent.procedural_memory.service import ProceduralMemoryModule
+from agent.procedural_memory.store import safe_bank_id
 from agent.extensions.config import PROCEDURAL_MEMORY_DIR
-from nika.config import BENCHMARK_DIR
-from nika.extensions.benchmark import load_custom_benchmark
-from nika.workflows.benchmark.load_config import load_benchmark_evolve_first_cases
+from nika.config import BENCHMARK_DIR, RESULTS_DIR
 
 procedural_memory_app = typer.Typer(help="Manage Skill-Pro Procedural Memory banks.")
 PROCEDURAL_MEMORY_DEFAULTS = module_defaults().procedural_memory
@@ -35,51 +34,25 @@ def _safe_error(exc: Exception) -> str:
     return str(exc)
 
 
-def _limited_yaml_path(source: Path, *, limit: int | None, bank: str) -> Path:
-    if limit is None:
-        return source
-    if limit < 1:
-        raise typer.BadParameter("--limit must be >= 1")
-    rows = load_custom_benchmark(source)[:limit]
-    if not rows:
-        raise typer.BadParameter(f"{source} has no benchmark cases")
-    safe_bank = re.sub(r"[^A-Za-z0-9_.-]+", "_", bank).strip("._") or "default"
-    target_dir = Path(PROCEDURAL_MEMORY_DIR) / "runs"
-    target_dir.mkdir(parents=True, exist_ok=True)
-    target = target_dir / f"{safe_bank}.first-{len(rows)}.yaml"
-    payload: dict[str, object] = {"cases": rows}
-    evolve_first_cases = load_benchmark_evolve_first_cases(source)
-    if evolve_first_cases is not None:
-        payload["evolve_first_cases"] = min(evolve_first_cases, len(rows))
-    target.write_text(
-        yaml.dump(payload, sort_keys=False, allow_unicode=True),
-        encoding="utf-8",
-    )
-    return target
-
-
 @procedural_memory_app.command("run")
 def procedural_memory_run(
-    file: Path = typer.Option(
-        BENCHMARK_DIR / "benchmark_evolve.yaml",
-        "-f",
-        "--file",
-        help="Shared Procedural Memory/Tool Refinement benchmark YAML. Defaults to benchmark/benchmark_evolve.yaml.",
+    learning_benchmark: Path = typer.Option(
+        BENCHMARK_DIR / "benchmark_learning.yaml",
+        "--learning-benchmark",
+        help="Benchmark used to update Procedural Memory.",
     ),
-    limit: int | None = typer.Option(
-        None,
-        "--limit",
-        min=1,
-        help="Run only the first N rows for a quick Procedural Memory smoke test.",
-    ),
-    evolve_until: int | None = typer.Option(
-        None,
-        "--evolve-until",
-        min=0,
-        help="Index Evaluate: evolve the first N cases, then evaluate read-only. Use 0 with --keep-bank to evaluate an existing bank.",
+    evaluate_benchmark: Path = typer.Option(
+        BENCHMARK_DIR / "benchmark_selected.yaml",
+        "--evaluate-benchmark",
+        help="Benchmark used to evaluate the frozen Procedural Memory snapshot.",
     ),
     bank: str = typer.Option(
         "procedural-memory-smoke", "--bank", help="Procedural Memory bank id."
+    ),
+    result_dir: Path | None = typer.Option(
+        None,
+        "--result-dir",
+        help="Output directory for learning, evaluation, and barrier artifacts.",
     ),
     reset_bank: bool = typer.Option(
         True,
@@ -197,9 +170,11 @@ def procedural_memory_run(
         help="Behavioral or log-prob verification model.",
     ),
 ) -> None:
-    """Run a Skill-Pro Procedural Memory benchmark with concise defaults."""
-    if not file.exists():
-        raise typer.BadParameter(f"YAML does not exist: {file}")
+    """Learn on one benchmark, then evaluate the frozen memory snapshot."""
+    if not learning_benchmark.exists():
+        raise typer.BadParameter(f"YAML does not exist: {learning_benchmark}")
+    if not evaluate_benchmark.exists():
+        raise typer.BadParameter(f"YAML does not exist: {evaluate_benchmark}")
     supported_verifiers = {
         "behavioral_replay",
         "structured_replay",
@@ -217,30 +192,38 @@ def procedural_memory_run(
         raise typer.BadParameter(
             "--min-positive-advantage must not exceed --holdout-size"
         )
-    if evolve_until == 0 and reset_bank:
-        raise typer.BadParameter(
-            "--evolve-until 0 evaluates an existing bank; pass --keep-bank to avoid clearing it"
-        )
-
+    if not reset_bank and result_dir is None:
+        raise typer.BadParameter("--keep-bank requires an explicit --result-dir")
     if reset_bank:
         _module(bank).clear()
         typer.echo(
             f"Reset Procedural Memory bank and rebuilt Skill-Pro seed pool: {bank}"
         )
     resolved_max_steps = resolve_max_steps(max_steps)
+    resolved_result_dir = result_dir
+    if resolved_result_dir is None:
+        run_id = (
+            datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            + "-"
+            + uuid4().hex[:8]
+        )
+        resolved_result_dir = (
+            RESULTS_DIR / "procedural-memory" / safe_bank_id(bank) / run_id
+        )
 
-    selected_yaml = _limited_yaml_path(file, limit=limit, bank=bank)
     typer.echo(
-        "Running Procedural Memory benchmark: "
-        f"yaml={selected_yaml} bank={bank} index_evaluate={evolve_until} "
-        f"backend={llm_backend} model={model}"
+        "Running Procedural Memory learning/evaluation pipeline: "
+        f"learning={learning_benchmark} evaluation={evaluate_benchmark} bank={bank} "
+        f"result_dir={resolved_result_dir} backend={llm_backend} model={model}"
     )
     command = [
         sys.executable,
         "-m",
         "nika.extensions.benchmark",
-        "--config",
-        str(selected_yaml),
+        "--learning-benchmark",
+        str(learning_benchmark),
+        "--evaluate-benchmark",
+        str(evaluate_benchmark),
         "--provider",
         llm_backend,
         "--model",
@@ -282,8 +265,8 @@ def procedural_memory_run(
         "--procedural-memory-policy-scorer-model",
         policy_scorer_model,
     ]
-    if evolve_until is not None:
-        command.extend(["--evolve-until", str(evolve_until)])
+    command.extend(["--result-dir", str(resolved_result_dir)])
+    command.append("--no-resume" if reset_bank else "--resume")
     try:
         subprocess.run(command, check=True)
     except subprocess.CalledProcessError as exc:

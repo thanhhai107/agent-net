@@ -14,7 +14,7 @@ def test_module_defaults_are_shared_by_composition_and_cli() -> None:
     tool = ToolRefinementConfig()
     memory = ProceduralMemoryConfig()
     parser = build_parser()
-    args = parser.parse_args(["--config", "benchmark/example.yaml"])
+    args = parser.parse_args(["--evaluate-benchmark", "benchmark/example.yaml"])
 
     assert tool.tool_doc_chars == defaults.tool_refinement.tool_doc_chars
     assert tool.convergence_threshold == defaults.tool_refinement.convergence_threshold
@@ -43,17 +43,30 @@ def test_module_defaults_are_shared_by_composition_and_cli() -> None:
     assert args.max_attempts == defaults.baseline.max_attempts
 
     canonical_budget = parser.parse_args(
-        ["--config", "benchmark.yaml", "--procedural-memory-token-budget", "777"]
+        [
+            "--evaluate-benchmark",
+            "benchmark.yaml",
+            "--procedural-memory-token-budget",
+            "777",
+        ]
     )
     legacy_budget = parser.parse_args(
-        ["--config", "benchmark.yaml", "--procedural-memory-tokens", "888"]
+        [
+            "--evaluate-benchmark",
+            "benchmark.yaml",
+            "--procedural-memory-tokens",
+            "888",
+        ]
     )
     assert canonical_budget.procedural_memory_tokens == 777
     assert legacy_budget.procedural_memory_tokens == 888
     assert args.judge == defaults.baseline.judge_evaluation
     assert args.judge_provider == defaults.baseline.judge_provider
     assert args.judge_model == defaults.baseline.judge_model
-    assert defaults.baseline.benchmark == "benchmark_evolve.yaml"
+    assert defaults.baseline.benchmark == "benchmark_selected.yaml"
+    assert defaults.baseline.learning_benchmark == "benchmark_learning.yaml"
+    assert defaults.baseline.evaluate_benchmark == "benchmark_selected.yaml"
+    assert defaults.procedural_memory.selection_epsilon_decay_cases == 100
     assert defaults.baseline.max_steps == 50
     assert defaults.baseline.judge_provider == "custom"
     assert defaults.baseline.judge_model == "openai/gpt-oss-120b"

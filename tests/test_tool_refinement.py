@@ -44,6 +44,48 @@ from nika.workflows.eval.session import run_eval_metrics
 
 
 class DraftToolRefinementTest(unittest.TestCase):
+    def test_evaluation_runtime_is_read_only_and_explorer_is_not_started(self) -> None:
+        def ping(host: str) -> str:
+            return host
+
+        tool = StructuredTool.from_function(
+            ping,
+            name="ping_host",
+            description="Ping one host.",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            store = ToolRefinementStore("frozen", root=Path(tmp) / "library")
+            learning = ToolRefinementRuntime(
+                session=SimpleNamespace(session_id="learning"),
+                primitive_tools=[tool],
+                library_id="frozen",
+                store=store,
+                allow_learning_updates=True,
+            )
+            before = store.state_hash()
+            evaluation = ToolRefinementRuntime(
+                session=SimpleNamespace(session_id="evaluation"),
+                primitive_tools=[tool],
+                library_id="frozen",
+                store=store,
+                explorer_llm=object(),
+                allow_learning_updates=False,
+            )
+            report = asyncio.run(evaluation.explore("Inspect reachability."))
+            after = store.state_hash()
+            snapshot = evaluation.snapshot()
+
+            with self.assertRaises(PermissionError):
+                evaluation.store.save(evaluation.store.load())
+
+        self.assertIsNotNone(learning)
+        self.assertEqual(report["status"], "skipped")
+        self.assertIn("disabled", report["reason"])
+        self.assertEqual(before, after)
+        self.assertTrue(snapshot["store_read_only"])
+        self.assertTrue(snapshot["state_unchanged"])
+        self.assertEqual(snapshot["state_hash"], before)
+
     def test_store_serializes_concurrent_trial_updates(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "library"
@@ -1250,7 +1292,8 @@ class DraftToolRefinementTest(unittest.TestCase):
                     self.session_dir = str(session_dir)
                     self.session_id = "s-draft"
                     self.tool_refinement_enabled = True
-                    self.procedural_memory_mode = "off"
+                    self.procedural_memory_enabled = False
+                    self.allow_learning_updates = False
                     self.store = None
 
                 def load_closed_session(self, *, session_id=None) -> None:
@@ -2020,6 +2063,7 @@ class DraftToolRefinementTest(unittest.TestCase):
                     self.session_id = session_id
                     self.session_dir = str(session_dirs[session_id])
                     self.tool_library_id = "checkpoint"
+                    self.allow_learning_updates = True
                     self.task_description = "Inspect route state."
                     self.llm_backend = ""
                     self.model = ""
@@ -2052,6 +2096,52 @@ class DraftToolRefinementTest(unittest.TestCase):
         self.assertEqual(updated["draft_selected_tools"], ["show_route"])
         self.assertEqual(updated["draft_pending_trials"], 0)
         self.assertEqual(len(state.processed_trial_ids), 2)
+
+    def test_evaluation_finalizer_skips_without_mutating_library(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            session_dir = root / "evaluation"
+            session_dir.mkdir()
+            self._trace(
+                str(session_dir),
+                [
+                    ("tool_start", "1", "show_route", "{'router': 'r1'}", ""),
+                    ("tool_end", "1", "show_route", "", "route present"),
+                ],
+            )
+            store = ToolRefinementStore("frozen", root=root / "library")
+            state = store.load()
+            state.documents["show_route"] = ToolDocumentation(
+                name="show_route",
+                description="Show routes.",
+            )
+            store.save(state)
+            before = store.state_hash()
+
+            class FakeSession:
+                def load_closed_session(self, *, session_id):
+                    self.session_id = session_id
+                    self.session_dir = str(session_dir)
+                    self.tool_library_id = "frozen"
+                    self.allow_learning_updates = False
+                    return self
+
+            with (
+                patch("agent.tool_refinement.curator.Session", FakeSession),
+                patch(
+                    "agent.tool_refinement.curator.ToolRefinementStore",
+                    return_value=store,
+                ),
+            ):
+                report = finalize_tool_refinement_session(
+                    session_id="evaluation",
+                    metrics={"rca_f1": 1.0},
+                )
+
+            after = store.state_hash()
+
+        self.assertEqual(report["status"], "skipped")
+        self.assertEqual(before, after)
 
     def test_stable_published_document_skips_redundant_success_rewrite(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2088,6 +2178,7 @@ class DraftToolRefinementTest(unittest.TestCase):
                     self.session_id = session_id
                     self.session_dir = str(session_dir)
                     self.tool_library_id = "stable"
+                    self.allow_learning_updates = True
                     self.task_description = "Inspect route state."
                     self.llm_backend = ""
                     self.model = ""

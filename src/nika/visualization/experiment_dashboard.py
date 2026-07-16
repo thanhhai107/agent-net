@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import streamlit as st
-import yaml
+from yaml import YAMLError
 
 from agent.composition import ProceduralMemoryConfig, ToolRefinementConfig
 from agent.module_config import module_defaults
@@ -19,7 +19,6 @@ from agent.extensions.config import (
     DEFAULT_MODEL,
 )
 from nika.config import BENCHMARK_DIR, RESULTS_DIR
-from nika.extensions.benchmark import load_custom_benchmark
 from nika.visualization.experiment_runner import (
     build_command_plan,
     create_run,
@@ -32,13 +31,22 @@ from nika.visualization.experiment_runner import (
     run_status,
     stop_run,
 )
+from nika.workflows.benchmark.load_config import (
+    benchmark_case_identity,
+    load_benchmark_manifest,
+)
 
 
 TOOL_REFINEMENT_DEFAULTS = ToolRefinementConfig()
 PROCEDURAL_MEMORY_DEFAULTS = ProceduralMemoryConfig()
 MODULE_DEFAULTS = module_defaults()
 BASELINE_DEFAULTS = MODULE_DEFAULTS.baseline
-DEFAULT_STUDIO_BENCHMARK = str(BENCHMARK_DIR / BASELINE_DEFAULTS.benchmark)
+DEFAULT_STUDIO_LEARNING_BENCHMARK = str(
+    BENCHMARK_DIR / BASELINE_DEFAULTS.learning_benchmark
+)
+DEFAULT_STUDIO_EVALUATE_BENCHMARK = str(
+    BENCHMARK_DIR / BASELINE_DEFAULTS.evaluate_benchmark
+)
 DEFAULT_STUDIO_MAX_STEPS = BASELINE_DEFAULTS.max_steps
 
 
@@ -307,8 +315,8 @@ st.markdown(
 )
 
 
-def _benchmark_path_from_name(value: str) -> Path:
-    raw = value.strip() or Path(DEFAULT_STUDIO_BENCHMARK).stem
+def _benchmark_path_from_name(value: str, *, default: str) -> Path:
+    raw = value.strip() or Path(default).stem
     path = Path(raw).expanduser()
     if path.is_absolute() or path.parent != Path("."):
         return path if path.suffix in {".yaml", ".yml"} else path.with_suffix(".yaml")
@@ -316,17 +324,8 @@ def _benchmark_path_from_name(value: str) -> Path:
     return BENCHMARK_DIR / f"{name}.yaml"
 
 
-def _count_rows(path: Path) -> int:
-    return len(load_custom_benchmark(path))
-
-
-def _default_evolve_cases(path: Path, *, row_count: int) -> int:
-    data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    configured = data.get("evolve_first_cases") if isinstance(data, dict) else None
-    if isinstance(configured, int) and not isinstance(configured, bool):
-        if 0 <= configured <= row_count:
-            return configured
-    return row_count
+def _count_rows(path: Path, *, expected_role: str | None = None) -> int:
+    return len(load_benchmark_manifest(path, expected_role=expected_role).cases)
 
 
 def _selected_run_dir() -> Path | None:
@@ -529,8 +528,8 @@ def _result_column_label(column: str) -> str:
         "procedural_memory_reward": "Memory Reward",
         "procedural_memory_advantage": "Memory Advantage",
         "procedural_memory_success": "Memory Success",
-        "evaluation_cases": "Read/evaluation cases",
-        "learning_cases": "Evolve cases",
+        "evaluation_cases": "Evaluate cases",
+        "learning_cases": "Learning cases",
     }
     return labels.get(column, column.replace("_", " ").title())
 
@@ -605,18 +604,14 @@ def _case_key(meta: dict) -> object:
 
 
 def _is_baseline_meta(meta: dict) -> bool:
-    return (
-        not bool(meta.get("tool_refinement_enabled"))
-        and str(meta.get("procedural_memory_mode") or "off") == "off"
+    return not bool(meta.get("tool_refinement_enabled")) and not bool(
+        meta.get("procedural_memory_enabled")
     )
 
 
-def _benchmark_phase(meta: dict) -> str:
-    phase = str(meta.get("benchmark_phase") or "").strip().lower()
-    if phase in {"evolve", "read"}:
-        return phase
-    memory_mode = str(meta.get("procedural_memory_mode") or "").strip().lower()
-    return memory_mode if memory_mode in {"evolve", "read"} else ""
+def _benchmark_role(meta: dict) -> str:
+    role = str(meta.get("benchmark_role") or "").strip().lower()
+    return role if role in {"learning", "evaluation"} else ""
 
 
 def _metric_total(metrics: dict, *, is_anomaly: bool) -> float | None:
@@ -632,9 +627,13 @@ def _metric_total(metrics: dict, *, is_anomaly: bool) -> float | None:
 
 
 def _root_case_map(run_paths: list[Path]) -> dict[object, dict[str, object]]:
+    roles = [_benchmark_role(_read_json(path)) for path in run_paths]
+    has_evaluation_role = "evaluation" in roles
     cases: dict[object, dict[str, object]] = {}
     for run_path in run_paths:
         meta = _read_json(run_path)
+        if has_evaluation_role and _benchmark_role(meta) != "evaluation":
+            continue
         metrics = _read_json(run_path.parent / "eval_metrics.json")
         ground_truth = _read_json(run_path.parent / "ground_truth.json")
         key = _case_key(meta)
@@ -649,17 +648,12 @@ def _root_case_map(run_paths: list[Path]) -> dict[object, dict[str, object]]:
 
 
 def _primary_result_paths(run_paths: list[Path]) -> list[Path]:
-    """Use read-phase cases when a curriculum run contains both phases."""
+    """Use evaluation cases as the experiment's primary endpoint."""
 
-    read_paths: list[Path] = []
-    has_evolve = False
-    for path in run_paths:
-        phase = _benchmark_phase(_read_json(path))
-        if phase == "read":
-            read_paths.append(path)
-        elif phase == "evolve":
-            has_evolve = True
-    return read_paths if read_paths and has_evolve else run_paths
+    roles = [_benchmark_role(_read_json(path)) for path in run_paths]
+    if any(roles):
+        return [path for path, role in zip(run_paths, roles) if role == "evaluation"]
+    return run_paths
 
 
 def _paired_stats(
@@ -792,8 +786,8 @@ def _result_rows(*, benchmark_name: str | None = None) -> list[dict[str, object]
         submitted = 0
         finished = 0
         failed = 0
-        evolve_cases = 0
-        read_cases = 0
+        learning_cases = 0
+        evaluation_cases = 0
         result_modules: set[str] = set()
         agents: set[str] = set()
         models: set[str] = set()
@@ -802,11 +796,11 @@ def _result_rows(*, benchmark_name: str | None = None) -> list[dict[str, object]
         for run_path in run_paths:
             session_dir = run_path.parent
             meta = _read_json(run_path)
-            phase = _benchmark_phase(meta)
-            if phase == "evolve":
-                evolve_cases += 1
-            elif phase == "read":
-                read_cases += 1
+            role = _benchmark_role(meta)
+            if role == "learning":
+                learning_cases += 1
+            elif role == "evaluation":
+                evaluation_cases += 1
             metrics = _read_json(session_dir / "eval_metrics.json")
             ground_truth = _read_json(session_dir / "ground_truth.json")
             is_anomaly = bool(ground_truth.get("is_anomaly", True))
@@ -877,10 +871,7 @@ def _result_rows(*, benchmark_name: str | None = None) -> list[dict[str, object]
 
             if meta.get("tool_refinement_enabled"):
                 result_modules.add("Tool Refinement")
-            if (
-                meta.get("procedural_memory_mode")
-                and meta.get("procedural_memory_mode") != "off"
-            ):
+            if meta.get("procedural_memory_enabled"):
                 result_modules.add("Procedural Memory")
             if meta.get("agent_type"):
                 agent_name = str(meta["agent_type"])
@@ -894,13 +885,11 @@ def _result_rows(*, benchmark_name: str | None = None) -> list[dict[str, object]
             "result_root": display_name,
             "cases": len(run_paths),
             "evaluation_cases": (
-                read_cases if evolve_cases or read_cases else len(metric_paths)
+                evaluation_cases
+                if learning_cases or evaluation_cases
+                else len(metric_paths)
             ),
-            "learning_cases": (
-                evolve_cases
-                if evolve_cases or read_cases
-                else len(procedural_memory_rewards)
-            ),
+            "learning_cases": learning_cases,
             "finished": finished,
             "failed": failed,
             "submitted": submitted,
@@ -977,11 +966,13 @@ def _case_event_html(
     color: str,
 ) -> str:
     index = html.escape(str(ev.get("index") or "?"))
+    role = str(ev.get("role") or "").strip().lower()
+    case_label = f"{role.title()} case" if role else "Case"
     case_summary = _event_case_summary(ev)
     inject_summary = _event_inject_summary(ev)
     return (
         f"<div style='{style}; color: {color};'>"
-        f"<b>[Case {index}]</b> {verb}: "
+        f"<b>[{html.escape(case_label)} {index}]</b> {verb}: "
         f"<code style='font-size: 0.75rem; background: var(--nika-secondary); "
         f"padding: 2px 4px; border-radius: 4px;'>{case_summary}</code>"
         f"<span style='margin-left: 0.5rem; color: var(--nika-muted);'>&nbsp;inject: "
@@ -991,6 +982,15 @@ def _case_event_html(
 
 
 st.markdown('<div class="section-title">Studio</div>', unsafe_allow_html=True)
+
+st.session_state.setdefault(
+    "studio_learning_benchmark",
+    Path(DEFAULT_STUDIO_LEARNING_BENCHMARK).stem,
+)
+st.session_state.setdefault(
+    "studio_evaluate_benchmark",
+    Path(DEFAULT_STUDIO_EVALUATE_BENCHMARK).stem,
+)
 
 baseline_settings = st.expander("Experimental Setting", expanded=False)
 baseline_settings.__enter__()
@@ -1022,43 +1022,56 @@ if baseline_settings is not None:
         max_steps_str = st.text_input("Steps", value=str(default_max_steps))
         max_steps = int(max_steps_str) if max_steps_str.isdigit() else default_max_steps
     with b_col5:
-        benchmark_name = st.text_input(
-            "Benchmark",
-            value=Path(DEFAULT_STUDIO_BENCHMARK).stem,
+        learning_benchmark_name = st.text_input(
+            "Learning Benchmark",
+            key="studio_learning_benchmark",
+            help="Cases used to update enabled learning modules.",
         )
-        benchmark_path = _benchmark_path_from_name(benchmark_name)
-        benchmark_error: str | None = None
+    with b_col6:
+        evaluate_benchmark_name = st.text_input(
+            "Evaluate Benchmark",
+            key="studio_evaluate_benchmark",
+            help="Cases used to score the frozen module snapshot.",
+        )
+    learning_benchmark_path = _benchmark_path_from_name(
+        learning_benchmark_name,
+        default=DEFAULT_STUDIO_LEARNING_BENCHMARK,
+    )
+    evaluate_benchmark_path = _benchmark_path_from_name(
+        evaluate_benchmark_name,
+        default=DEFAULT_STUDIO_EVALUATE_BENCHMARK,
+    )
+    benchmark_errors: list[str] = []
+    benchmark_warnings: list[str] = []
+    benchmark_manifests: dict[str, Any] = {}
+    for role, path in (
+        ("learning", learning_benchmark_path),
+        ("evaluation", evaluate_benchmark_path),
+    ):
         try:
-            row_count = _count_rows(benchmark_path)
-            default_evolve_cases = _default_evolve_cases(
-                benchmark_path,
-                row_count=row_count,
+            benchmark_manifests[role] = load_benchmark_manifest(
+                path,
+                expected_role=role,
             )
         except FileNotFoundError:
-            row_count = None
-            default_evolve_cases = 0
-            benchmark_error = f"Benchmark YAML not found: {benchmark_path}"
+            benchmark_errors.append(f"{role.title()} benchmark not found: {path}")
         except OSError as exc:
-            row_count = None
-            default_evolve_cases = 0
-            benchmark_error = f"Cannot read benchmark YAML: {exc}"
-        except ValueError as exc:
-            row_count = None
-            default_evolve_cases = 0
-            benchmark_error = f"Invalid benchmark YAML: {exc}"
-    with b_col6:
-        evolve_until = st.number_input(
-            "Index Evaluate",
-            min_value=0,
-            max_value=max(int(row_count or 0), 1),
-            value=int(default_evolve_cases),
-            step=1,
-            help=(
-                "Cases 1..Index Evaluate are tagged evolve; later cases are "
-                "tagged read/evaluation. The split is recorded even when no "
-                "learning module is enabled."
-            ),
-        )
+            benchmark_errors.append(f"Cannot read {role} benchmark: {exc}")
+        except (ValueError, YAMLError) as exc:
+            benchmark_errors.append(f"Invalid {role} benchmark: {exc}")
+    learning_manifest = benchmark_manifests.get("learning")
+    evaluation_manifest = benchmark_manifests.get("evaluation")
+    if learning_manifest is not None and evaluation_manifest is not None:
+        learning_ids = {benchmark_case_identity(row) for row in learning_manifest.cases}
+        evaluation_ids = {
+            benchmark_case_identity(row) for row in evaluation_manifest.cases
+        }
+        overlap = learning_ids & evaluation_ids
+        if overlap:
+            benchmark_warnings.append(
+                f"Learning and evaluation benchmarks overlap on {len(overlap)} "
+                "case identities; evaluation is not fully held out."
+            )
     if agent_type == "reflexion":
         attempts_col, _ = st.columns([1, 5], gap="small")
         with attempts_col:
@@ -1141,8 +1154,8 @@ with st.container():
             placeholder="auto",
             disabled=not procedural_memory_selected,
             help=(
-                "Studio evolves this bank through Index Evaluate, then reuses "
-                "the frozen bank read-only."
+                "Studio updates this bank on the Learning Benchmark, then "
+                "evaluates an immutable snapshot on the Evaluate Benchmark."
             ),
         )
         m_col1, m_col2, m_col5 = st.columns(3, gap="small")
@@ -1489,7 +1502,8 @@ if procedural_memory_selected:
     modules.append("procedural_memory")
 
 config = {
-    "benchmark_file": str(benchmark_path),
+    "learning_benchmark_file": str(learning_benchmark_path),
+    "evaluate_benchmark_file": str(evaluate_benchmark_path),
     "modules": modules,
     "agent_type": agent_type,
     "llm_backend": llm_backend,
@@ -1512,7 +1526,6 @@ config = {
     "tool_max_tools_per_update": int(tool_max_tools_per_update),
     "tool_publish_min_utility": float(tool_publish_min_utility),
     "procedural_memory_bank": procedural_memory_bank,
-    "evolve_until": int(evolve_until),
     "procedural_memory_token_budget": int(procedural_memory_token_budget),
     "procedural_memory_max_skill_age": int(procedural_memory_max_skill_age),
     "procedural_memory_pool_size": int(procedural_memory_pool_size),
@@ -1583,7 +1596,7 @@ if has_active_queue:
         "Add Queue",
         key="studio_queue_button",
         type="secondary",
-        disabled=row_count is None,
+        disabled=bool(benchmark_errors),
         width="stretch",
     ):
         run_dir = create_run(prepared_config)
@@ -1594,14 +1607,16 @@ else:
         "Run",
         key="studio_run_button",
         type="primary",
-        disabled=row_count is None,
+        disabled=bool(benchmark_errors),
         width="stretch",
     ):
         run_dir = create_run(prepared_config)
         st.session_state["active_run_dir"] = str(run_dir)
         st.rerun()
-if benchmark_error is not None:
+for benchmark_error in benchmark_errors:
     st.error(benchmark_error)
+for benchmark_warning in benchmark_warnings:
+    st.warning(benchmark_warning)
 
 runs = list_runs()
 run_statuses = {path: run_status(path) for path in runs}
@@ -1747,6 +1762,50 @@ def format_event_message_html(ev: dict) -> str | None:
     elif event == "benchmark_failed":
         return _case_event_html(
             ev, style=style, verb="Failed", color="var(--nika-danger)"
+        )
+    elif event == "benchmark_aborted":
+        return _case_event_html(
+            ev, style=style, verb="Aborted", color="var(--nika-danger)"
+        )
+    elif event == "benchmark_stage_start":
+        role = html.escape(str(ev.get("role") or "benchmark").title())
+        total = html.escape(str(ev.get("total") or "?"))
+        pending = html.escape(str(ev.get("pending") or total))
+        return (
+            f"<div style='{style}; color: var(--nika-accent-text);'>"
+            f"<b>{role} benchmark started</b> · {pending}/{total} cases pending"
+            "</div>"
+        )
+    elif event == "benchmark_stage_done":
+        role = html.escape(str(ev.get("role") or "benchmark").title())
+        completed = html.escape(str(ev.get("completed") or "0"))
+        total = html.escape(str(ev.get("total") or "?"))
+        failed = html.escape(str(ev.get("failed") or "0"))
+        return (
+            f"<div style='{style}; color: var(--nika-success);'>"
+            f"<b>{role} benchmark completed</b> · {completed}/{total} finished, "
+            f"{failed} failed</div>"
+        )
+    elif event in {"learning_barrier_created", "learning_barrier_reused"}:
+        verb = "created" if event.endswith("created") else "reused"
+        return (
+            f"<div style='{style}; color: var(--nika-accent-text);'>"
+            f"<b>Learning snapshot {verb}</b> · evaluation will use the frozen "
+            "module state.</div>"
+        )
+    elif event == "benchmark_pipeline_blocked":
+        reason = html.escape(str(ev.get("reason") or "learning incomplete"))
+        return (
+            f"<div style='{style}; color: var(--nika-danger);'>"
+            f"<b>Evaluation blocked</b> · {reason}</div>"
+        )
+    elif event == "benchmark_pipeline_done":
+        learning = html.escape(str(ev.get("learning_cases") or "0"))
+        evaluation = html.escape(str(ev.get("evaluation_cases") or "0"))
+        return (
+            f"<div style='{style}; color: var(--nika-success);'>"
+            f"<b>Benchmark pipeline completed</b> · {learning} learning cases, "
+            f"{evaluation} evaluation cases</div>"
         )
     return None
 

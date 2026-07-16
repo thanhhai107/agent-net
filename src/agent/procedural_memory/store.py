@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import fcntl
 import re
@@ -35,8 +36,10 @@ class ProceduralMemoryStore:
         bank_id: str = "default",
         root: str | Path | None = None,
         state_path: str | Path | None = None,
+        read_only: bool = False,
     ) -> None:
         self.bank_id = safe_bank_id(bank_id)
+        self.read_only = bool(read_only)
         self._explicit_state_path = Path(state_path) if state_path is not None else None
         self._legacy_state_path: Path | None = None
         if self._explicit_state_path is not None:
@@ -53,10 +56,24 @@ class ProceduralMemoryStore:
             self.state_path = self.bank_dir / "skills.json"
             self.lock_path = self.bank_dir / ".lock"
 
+    def as_read_only(self) -> "ProceduralMemoryStore":
+        """Return a read-only view over the exact same persisted state."""
+
+        return ProceduralMemoryStore(
+            bank_id=self.bank_id,
+            state_path=self.state_path,
+            read_only=True,
+        )
+
+    def _require_writable(self) -> None:
+        if self.read_only:
+            raise PermissionError("Procedural Memory store is read-only")
+
     @contextmanager
     def exclusive(self):
         """Serialize one bank's read-modify-write learning cycle."""
 
+        self._require_writable()
         self.bank_dir.mkdir(parents=True, exist_ok=True)
         with self.lock_path.open("a+", encoding="utf-8") as lock_file:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
@@ -88,12 +105,14 @@ class ProceduralMemoryStore:
         )
 
     def save(self, state: ProceduralMemoryState) -> ProceduralMemoryState:
+        self._require_writable()
         state.bank_id = self.bank_id
         state.updated_at = utc_now()
         atomic_write_text(self.state_path, state.model_dump_json(indent=2))
         return state
 
     def clear(self) -> None:
+        self._require_writable()
         with self.exclusive():
             if self._explicit_state_path is not None:
                 self.state_path.unlink(missing_ok=True)
@@ -175,3 +194,31 @@ class ProceduralMemoryStore:
             for experience in state.experiences
         )
         return [json.dumps(row, ensure_ascii=False, default=str) for row in rows]
+
+    def _active_state_path(self) -> Path | None:
+        if self.state_path.exists():
+            return self.state_path
+        if self._legacy_state_path is not None and self._legacy_state_path.exists():
+            return self._legacy_state_path
+        return None
+
+    def state_hash(self) -> str:
+        """Hash the persisted bank bytes for barrier/invariance checks."""
+
+        source = self._active_state_path()
+        if source is None:
+            return ""
+        return hashlib.sha256(source.read_bytes()).hexdigest()
+
+    def snapshot(self, output_path: str | Path) -> Path:
+        """Copy the current bank atomically to a standalone frozen artifact."""
+
+        destination = Path(output_path)
+        source = self._active_state_path()
+        payload = (
+            source.read_text(encoding="utf-8")
+            if source is not None
+            else ProceduralMemoryState(bank_id=self.bank_id).model_dump_json(indent=2)
+        )
+        atomic_write_text(destination, payload)
+        return destination

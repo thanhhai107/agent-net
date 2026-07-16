@@ -94,7 +94,7 @@ class SkillToolRuntime:
         self,
         *,
         procedural_memory: ProceduralMemoryModule,
-        procedural_memory_mode: str,
+        allow_learning_updates: bool,
         session: Any,
         task_description: str,
         tools: list[BaseTool],
@@ -106,7 +106,8 @@ class SkillToolRuntime:
         meta_controller_llm: Any | None = None,
     ) -> None:
         self.procedural_memory = procedural_memory
-        self.procedural_memory_mode = procedural_memory_mode
+        self.allow_learning_updates = bool(allow_learning_updates)
+        self._initial_state_hash = self.procedural_memory.store.state_hash()
         self.session = session
         self.task_description = task_description
         self.tool_names = [tool.name for tool in tools]
@@ -392,8 +393,12 @@ class SkillToolRuntime:
             bool(item.get("active_skill_id")) for item in self.recent_transitions
         )
         transition_count = len(self.recent_transitions)
+        state_hash = self.procedural_memory.store.state_hash()
         return {
-            "procedural_memory_mode": self.procedural_memory_mode,
+            "allow_learning_updates": self.allow_learning_updates,
+            "initial_state_hash": self._initial_state_hash,
+            "state_hash": state_hash,
+            "state_unchanged": state_hash == self._initial_state_hash,
             "bank_id": self.procedural_memory.bank_id,
             "active_skill_id": self.active_skill.skill.skill_id
             if self.active_skill
@@ -408,7 +413,11 @@ class SkillToolRuntime:
             "selector_none": self.selector_none,
             "termination_calls": self.termination_calls,
             "termination_errors": self.termination_errors,
-            "selection_policy": "llm_direct_epsilon_greedy",
+            "selection_policy": (
+                "llm_direct_epsilon_greedy"
+                if self.allow_learning_updates
+                else "llm_direct"
+            ),
             "selection_epsilon_initial": self.selection_epsilon,
             "meta_controller_available": self.meta_controller_llm is not None,
             "config": {
@@ -676,18 +685,23 @@ class SkillToolRuntime:
     ) -> None:
         session_id = str(getattr(self.session, "session_id", "") or "")
         exploration_key = f"{session_id}:{self.selection_count}"
-        epsilon = (
-            self.procedural_memory.decayed_selection_epsilon(self.selection_epsilon)
-            if self.procedural_memory_mode == "evolve"
-            else 0.0
-        )
-        explored, selected = self.procedural_memory.exploration_selection(
-            epsilon=epsilon,
-            key=exploration_key,
-            query=query,
-            record_reuse=self.procedural_memory_mode == "evolve",
-            exclude_skill_ids=self.skill_cooldowns,
-        )
+        epsilon = 0.0
+        explored = False
+        selected = None
+        if self.allow_learning_updates:
+            epsilon = self.procedural_memory.decayed_selection_epsilon(
+                self.selection_epsilon
+            )
+            explored, selected = self.procedural_memory.exploration_selection(
+                epsilon=epsilon,
+                key=exploration_key,
+                query=query,
+                record_reuse=True,
+                exclude_skill_ids=self.skill_cooldowns,
+            )
+        else:
+            self.procedural_memory.last_exploration_probability = 0.0
+            self.procedural_memory.last_exploration_arm = "llm_controller"
         self.active_skill = selected if explored else self._select_skill_with_llm(query)
         self._active_selection_probability = (
             self.procedural_memory.last_exploration_probability
@@ -716,13 +730,15 @@ class SkillToolRuntime:
                 "activation_id": self.active_activation_id,
                 "skill_age": self.skill_age,
                 "cooldown_exclusions": sorted(self.skill_cooldowns),
-                "selection_policy": "llm_direct_epsilon_greedy",
+                "selection_policy": (
+                    "llm_direct_epsilon_greedy"
+                    if self.allow_learning_updates
+                    else "llm_direct"
+                ),
                 "selection_epsilon": round(epsilon, 6),
                 "explored": explored,
                 "selection_source": "contextual_exploration" if explored else "llm",
-                "selection_probability": round(
-                    self._active_selection_probability, 8
-                ),
+                "selection_probability": round(self._active_selection_probability, 8),
                 "selection_arm": self.procedural_memory.last_exploration_arm,
             },
         )
@@ -734,7 +750,7 @@ class SkillToolRuntime:
         query: ProceduralMemoryQuery,
     ) -> SkillRetrieval | None:
         candidates = self.procedural_memory.selection_candidates(
-            include_probationary=self.procedural_memory_mode == "evolve",
+            include_probationary=self.allow_learning_updates,
             exclude_skill_ids=self.skill_cooldowns,
         )
         if not candidates or self.meta_controller_llm is None:
@@ -769,8 +785,8 @@ class SkillToolRuntime:
             )
             selected = self.procedural_memory.activate_skill(
                 draft.skill_id.strip(),
-                record_reuse=self.procedural_memory_mode == "evolve",
-                include_probationary=self.procedural_memory_mode == "evolve",
+                record_reuse=self.allow_learning_updates,
+                include_probationary=self.allow_learning_updates,
                 exclude_skill_ids=self.skill_cooldowns,
             )
             if selected is None:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import time
+from pathlib import Path
 from typing import Any
 
 from langchain_core.tools import BaseTool
@@ -127,6 +128,8 @@ class ToolRefinementRuntime:
         primitive_tools: list[BaseTool],
         library_id: str,
         store: ToolRefinementStore | None = None,
+        state_path: str | Path | None = None,
+        allow_learning_updates: bool | None = None,
         tool_doc_chars: int = _DEFAULTS.tool_doc_chars,
         explorer_llm: Any | None = None,
         llm_backend: str = "",
@@ -142,7 +145,24 @@ class ToolRefinementRuntime:
         self.session = session
         self.primitive_tools = list(primitive_tools)
         self.library_id = library_id
-        self.store = store or ToolRefinementStore(library_id)
+        self.allow_learning_updates = (
+            state_path is None and not bool(getattr(store, "read_only", False))
+            if allow_learning_updates is None
+            else bool(allow_learning_updates)
+        )
+        if store is None:
+            self.store = ToolRefinementStore(
+                library_id,
+                state_path=state_path,
+                read_only=not self.allow_learning_updates,
+            )
+        else:
+            self.store = (
+                store
+                if self.allow_learning_updates or store.read_only
+                else store.as_read_only()
+            )
+        self._initial_state_hash = self.store.state_hash()
         self.tool_doc_chars = max(100, int(tool_doc_chars))
         self.explorer_llm = explorer_llm
         self.llm_backend = llm_backend
@@ -159,8 +179,28 @@ class ToolRefinementRuntime:
         self._base_descriptions = {
             tool.name: _primitive_description(tool) for tool in self.primitive_tools
         }
-        self._docs = self._ensure_primitive_documents()
+        self._docs = (
+            self._ensure_primitive_documents()
+            if self.allow_learning_updates
+            else self._load_primitive_documents_read_only()
+        )
         self._guidance_limits = self._allocate_guidance_limits()
+
+    def _load_primitive_documents_read_only(self) -> dict[str, ToolDocumentation]:
+        """Load only contract-compatible learned docs without repairing state."""
+
+        persisted = self.store.load().documents
+        documents: dict[str, ToolDocumentation] = {}
+        for tool in self.primitive_tools:
+            existing = persisted.get(tool.name)
+            if existing is None:
+                continue
+            if existing.source_contract_version < SOURCE_CONTRACT_VERSION:
+                continue
+            if existing.source_signature != _tool_source_signature(tool):
+                continue
+            documents[tool.name] = existing
+        return documents
 
     def _allocate_guidance_limits(self) -> dict[str, int]:
         """Bound DRAFT additions across the whole tool catalog.
@@ -293,6 +333,12 @@ class ToolRefinementRuntime:
     async def explore(self, task_description: str) -> dict[str, Any]:
         """Run the self-driven DRAFT Explorer before the submission phase."""
 
+        if not self.allow_learning_updates:
+            self._explorer_report = {
+                "status": "skipped",
+                "reason": "learning updates are disabled",
+            }
+            return self._explorer_report
         if self.explorer_llm is None:
             self._explorer_report = {
                 "status": "skipped",
@@ -311,6 +357,7 @@ class ToolRefinementRuntime:
                 store=self.store,
                 llm=self.explorer_llm,
                 model=self.model,
+                allow_learning_updates=self.allow_learning_updates,
                 exploration_similarity_threshold=(
                     self.exploration_similarity_threshold
                 ),
@@ -361,8 +408,14 @@ class ToolRefinementRuntime:
 
     def snapshot(self) -> dict[str, Any]:
         state = self.store.load()
+        state_hash = self.store.state_hash()
         return {
             "library_id": self.library_id,
+            "allow_learning_updates": self.allow_learning_updates,
+            "store_read_only": self.store.read_only,
+            "initial_state_hash": self._initial_state_hash,
+            "state_hash": state_hash,
+            "state_unchanged": state_hash == self._initial_state_hash,
             "available_documents": sorted(self._docs),
             "library_usage_description": state.library_usage_description,
             "tool_stats": {

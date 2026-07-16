@@ -74,6 +74,13 @@ def _short_text(value: Any, *, limit: int = 700) -> str:
     return text.strip()
 
 
+def _learning_updates_allowed(session: Any) -> bool:
+    value = getattr(session, "allow_learning_updates", False)
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
 def _trim_text(value: Any, *, limit: int = DRAFT_PROMPT_TEXT_LIMIT) -> str:
     text = str(value or "").strip()
     if len(text) > limit:
@@ -1659,6 +1666,7 @@ def finalize_tool_refinement_session(
     *,
     session_id: str,
     metrics: dict[str, Any],
+    allow_learning_updates: bool | None = None,
     rewrite: bool = True,
     min_new_trials: int = _DEFAULTS.min_new_trials,
     max_tools_per_update: int = _DEFAULTS.max_tools_per_update,
@@ -1666,6 +1674,29 @@ def finalize_tool_refinement_session(
 ) -> dict[str, Any]:
     session = Session()
     session.load_closed_session(session_id=session_id)
+    updates_allowed = (
+        _learning_updates_allowed(session)
+        if allow_learning_updates is None
+        else bool(allow_learning_updates)
+    )
+    if not updates_allowed:
+        report = {
+            "status": "skipped",
+            "reason": "learning updates are disabled",
+            "method": "DRAFT",
+            "library_id": getattr(session, "tool_library_id", "default"),
+            "draft_trials": 0,
+            "draft_trials_added": 0,
+            "draft_document_revisions": 0,
+        }
+        raw_session_dir = str(getattr(session, "session_dir", "") or "")
+        if raw_session_dir:
+            session_dir = Path(raw_session_dir)
+            (session_dir / "tool_refinement.json").write_text(
+                json.dumps(report, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        return report
     library_id = getattr(session, "tool_library_id", "default")
     raw_convergence_threshold = getattr(
         session,

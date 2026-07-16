@@ -309,6 +309,7 @@ async def run_active_exploration(
     store: ToolRefinementStore,
     llm: Any,
     model: str,
+    allow_learning_updates: bool = True,
     exploration_similarity_threshold: float = DRAFT_EXPLORATION_SIMILARITY_THRESHOLD,
     explorer_reflection_limit: int = DRAFT_EXPLORER_REFLECTION_LIMIT,
     max_tools: int = 4,
@@ -316,6 +317,12 @@ async def run_active_exploration(
     rewriter_model: str | None = None,
 ) -> dict[str, Any]:
     """Run one DRAFT exploration episode for each used, unfrozen tool."""
+
+    if not allow_learning_updates:
+        return {
+            "status": "skipped",
+            "reason": "learning updates are disabled",
+        }
 
     trace_path = Path(session_dir) / MESSAGES_FILENAME
     passive_trials, _ = extract_tool_trials(

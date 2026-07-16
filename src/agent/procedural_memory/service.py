@@ -330,6 +330,7 @@ class ProceduralMemoryModule:
         evolver_model: str = "",
         policy_scorer_model: str = "",
         policy_scorer: PolicyScorer | None = None,
+        read_only: bool = False,
     ) -> None:
         self.bank_id = bank_id
         self.llm_backend = llm_backend
@@ -360,8 +361,10 @@ class ProceduralMemoryModule:
         self.store = ProceduralMemoryStore(
             bank_id=bank_id,
             state_path=store_path,
+            read_only=read_only,
         )
-        self._ensure_seed_skills()
+        if not read_only:
+            self._ensure_seed_skills()
 
     def _default_policy_scorer(self) -> PolicyScorer:
         selected_model = self._selected_policy_scorer_model()
@@ -1310,9 +1313,7 @@ class ProceduralMemoryModule:
             raise RuntimeError(
                 "Procedural Memory semantic-gradient LLM is not configured."
             )
-        experience_by_session = {
-            item.session_id: item for item in (experiences or [])
-        }
+        experience_by_session = {item.session_id: item for item in (experiences or [])}
         gradient_payload = []
         for gradient in gradients:
             sample = experience_by_session.get(gradient.source_session_id)
@@ -1545,9 +1546,7 @@ class ProceduralMemoryModule:
         structured_baseline = sum(
             item.baseline_alignment for item in structured_check.scores
         ) / max(len(structured_check.scores), 1)
-        structured_no_regression = (
-            structured_candidate + margin >= structured_baseline
-        )
+        structured_no_regression = structured_candidate + margin >= structured_baseline
         no_alignment_regression = structured_no_regression and (
             replay_no_alignment_regression
             if verification_method != "policy_logprob"
@@ -2160,9 +2159,7 @@ class ProceduralMemoryModule:
         valid_steps = [
             step
             for step in tool_steps
-            if step.skill_id
-            and step.activation_id
-            and step.skill_id in state.skills
+            if step.skill_id and step.activation_id and step.skill_id in state.skills
         ]
         activations = {(step.skill_id, step.activation_id) for step in valid_steps}
         return Counter(skill_id for skill_id, _ in activations)
@@ -2303,9 +2300,7 @@ class ProceduralMemoryModule:
         same trajectory and must not count as independent evolution samples.
         """
 
-        sanitized_steps = [
-            _sanitize_skill_step(step, evidence) for step in tool_steps
-        ]
+        sanitized_steps = [_sanitize_skill_step(step, evidence) for step in tool_steps]
         all_transitions = self._transitions_from_steps(
             evidence=evidence,
             tool_steps=sanitized_steps,
@@ -2351,8 +2346,7 @@ class ProceduralMemoryModule:
                 skill_ids=[skill_id],
                 success=success,
                 transitions=transitions,
-                credit_weight=activation_counts.get(skill_id, 1)
-                / total_activations,
+                credit_weight=activation_counts.get(skill_id, 1) / total_activations,
             )
             for skill_id, (steps, transitions) in grouped.items()
         }
@@ -2661,9 +2655,8 @@ class ProceduralMemoryModule:
     def _update_baseline(self, state, scenario: str, reward: float) -> None:
         old = state.baselines.get(scenario, 0.0)
         state.baselines[scenario] = (
-            (1 - self.baseline_ema_alpha) * old
-            + self.baseline_ema_alpha * reward
-        )
+            1 - self.baseline_ema_alpha
+        ) * old + self.baseline_ema_alpha * reward
 
     def _skill_effective_score(self, skill: ProceduralSkill) -> float:
         prior = skill.prior_score or max(skill.score, 0.0)
@@ -2705,8 +2698,7 @@ class ProceduralMemoryModule:
         for skill in active:
             if skill.status == "probationary" and skill.frequency >= probation_support:
                 probation_lcb = skill.avg_gain - 0.10 * math.sqrt(
-                    math.log1p(max(current_iteration, 1))
-                    / max(skill.frequency, 1)
+                    math.log1p(max(current_iteration, 1)) / max(skill.frequency, 1)
                 )
                 if (
                     probation_lcb > self.acceptance_margin

@@ -13,8 +13,15 @@ from nika.workflows.agent.run import start_agent as start_nika_agent
 
 
 def _write_extension_metadata(session: Session, config: AgentRunConfig) -> None:
-    session.update_session("procedural_memory_mode", config.procedural_memory.mode)
+    session.update_session(
+        "procedural_memory_enabled", config.procedural_memory.enabled
+    )
+    session.update_session("allow_learning_updates", config.allow_learning_updates)
     session.update_session("procedural_memory_bank", config.procedural_memory.bank)
+    session.update_session(
+        "procedural_memory_store_path",
+        str(config.procedural_memory.store_path or ""),
+    )
     session.update_session(
         "procedural_memory_token_budget", config.procedural_memory.token_budget
     )
@@ -74,7 +81,7 @@ def _write_extension_metadata(session: Session, config: AgentRunConfig) -> None:
     )
     session.update_session("tool_refinement_enabled", config.tool_refinement.enabled)
     session.update_session(
-        "tool_refinement_learning_mode", config.tool_refinement.learning_mode
+        "tool_refinement_state_path", str(config.tool_refinement.state_path or "")
     )
     session.update_session(
         "tool_refinement_update_due", config.tool_refinement.update_due
@@ -134,6 +141,7 @@ def start_agent(config: AgentRunConfig, *, session_id: str | None = None) -> Non
         session_id=session.session_id,
         tool_refinement=config.tool_refinement,
         procedural_memory=config.procedural_memory,
+        allow_learning_updates=config.allow_learning_updates,
     )
     validate_agent_composition(config)
     session.update_session("agent_type", config.normalized_agent_type)
@@ -152,7 +160,8 @@ def start_agent(config: AgentRunConfig, *, session_id: str | None = None) -> Non
         session_id=session.session_id,
         agent_type=config.normalized_agent_type,
         model=config.model,
-        procedural_memory=config.procedural_memory.mode,
+        procedural_memory=config.procedural_memory.enabled,
+        allow_learning_updates=config.allow_learning_updates,
         tool_refinement=config.tool_refinement.enabled,
     )
     with mcp_gateway_for_session(

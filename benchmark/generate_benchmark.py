@@ -1,12 +1,16 @@
-"""Generate benchmark_full.yaml and benchmark_selected.yaml from prob_pool and net_env_pool."""
+"""Generate the learning, selected, and full benchmark manifests."""
 
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import os
 import sys
-from collections import Counter
+from collections import Counter, defaultdict
+from copy import deepcopy
 from pathlib import Path
+from typing import Any, Mapping, Sequence
 
 import yaml
 
@@ -81,6 +85,27 @@ SELECTED_SCENARIO_FOR_PROBLEM: dict[str, str] = {
     "web_dos_attack": "ospf_enterprise_dhcp",
 }
 
+LEARNING_FAULT_CASES = 90
+LEARNING_NO_FAULT_CASES = 10
+EVALUATION_ONLY_PROBLEMS = frozenset(
+    {
+        "mpls_label_limit_exceeded",
+        "p4_aggressive_detection_thresholds",
+    }
+)
+NO_FAULT_CONTROLS: tuple[tuple[str, str | None], ...] = (
+    ("p4_mpls", None),
+    ("sdn_clos", "s"),
+    ("ospf_enterprise_dhcp", "s"),
+    ("dc_clos_service", "m"),
+    ("simple_bgp", None),
+    ("rip_small_internet_vpn", "s"),
+    ("dc_clos_service", "l"),
+    ("ospf_enterprise_static", "l"),
+    ("sdn_clos", "l"),
+    ("dc_clos_bgp", "l"),
+)
+
 
 def _topo_sizes_for_scenario(scenario: str) -> list[str]:
     if scenario_requires_topo_size(scenario):
@@ -135,6 +160,188 @@ def iter_selected_cases(*, seed: int) -> list[dict]:
     return rows
 
 
+def normalize_topo_size(value: object) -> str:
+    """Return the canonical topology-size component used in case identities."""
+
+    if value in (None, "", "-"):
+        return ""
+    return str(value)
+
+
+def case_identity(row: Mapping[str, Any]) -> tuple[str, str, str]:
+    """Return the leakage identity shared by generated benchmark manifests."""
+
+    return (
+        str(row["scenario"]),
+        normalize_topo_size(row.get("topo_size")),
+        str(row["problem"]),
+    )
+
+
+def _stable_rank(seed: int, namespace: str, value: object) -> str:
+    payload = json.dumps(
+        [seed, namespace, value],
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _fault_learning_cases(
+    full_cases: Sequence[Mapping[str, Any]],
+    selected_cases: Sequence[Mapping[str, Any]],
+    *,
+    seed: int,
+) -> list[dict[str, Any]]:
+    """Select 90 deterministic, evaluation-disjoint fault cases.
+
+    The first pass covers every transferable root cause. The remaining cases
+    favor under-represented scenarios and topology sizes. Hash ranks make every
+    tie-break stable across Python processes and input dictionary ordering.
+    """
+
+    selected_identities = {case_identity(row) for row in selected_cases}
+    selected_problems = {str(row["problem"]) for row in selected_cases}
+    transferable_problems = selected_problems - EVALUATION_ONLY_PROBLEMS
+    if len(transferable_problems) != 54:
+        raise ValueError(
+            "Expected 54 transferable problems after reserving the two "
+            f"evaluation-only problems, found {len(transferable_problems)}"
+        )
+
+    unique_full: dict[tuple[str, str, str], Mapping[str, Any]] = {}
+    for row in full_cases:
+        identity = case_identity(row)
+        if identity in unique_full:
+            raise ValueError(f"Duplicate full benchmark identity: {identity!r}")
+        unique_full[identity] = row
+
+    nonoverlap = {
+        identity: row
+        for identity, row in unique_full.items()
+        if identity not in selected_identities
+    }
+    unexpected_singleton_variants = sorted(
+        problem
+        for problem in EVALUATION_ONLY_PROBLEMS
+        if any(str(row["problem"]) == problem for row in nonoverlap.values())
+    )
+    if unexpected_singleton_variants:
+        raise ValueError(
+            "Evaluation-only problems unexpectedly have transferable variants: "
+            + ", ".join(unexpected_singleton_variants)
+        )
+
+    candidates = [
+        row
+        for row in nonoverlap.values()
+        if str(row["problem"]) in transferable_problems
+    ]
+    by_problem: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
+    for row in candidates:
+        by_problem[str(row["problem"])].append(row)
+    missing = sorted(transferable_problems - by_problem.keys())
+    if missing:
+        raise ValueError("No learning candidate for: " + ", ".join(missing))
+
+    scenario_counts: Counter[str] = Counter()
+    topology_counts: Counter[str] = Counter()
+    chosen: list[dict[str, Any]] = []
+    chosen_identities: set[tuple[str, str, str]] = set()
+
+    def candidate_key(row: Mapping[str, Any]) -> tuple[int, int, str]:
+        scenario = str(row["scenario"])
+        topology = normalize_topo_size(row.get("topo_size"))
+        canonical_row = {
+            "scenario": scenario,
+            "topo_size": topology,
+            "problem": str(row["problem"]),
+            "inject": row.get("inject", {}),
+        }
+        return (
+            scenario_counts[scenario],
+            topology_counts[topology],
+            _stable_rank(seed, "learning-case", canonical_row),
+        )
+
+    def choose(row: Mapping[str, Any]) -> None:
+        identity = case_identity(row)
+        if identity in chosen_identities:
+            raise ValueError(f"Learning identity selected twice: {identity!r}")
+        chosen.append(deepcopy(dict(row)))
+        chosen_identities.add(identity)
+        scenario_counts[str(row["scenario"])] += 1
+        topology_counts[normalize_topo_size(row.get("topo_size"))] += 1
+
+    problem_order = sorted(
+        transferable_problems,
+        key=lambda problem: (_stable_rank(seed, "learning-problem", problem), problem),
+    )
+    for problem in problem_order:
+        choose(min(by_problem[problem], key=candidate_key))
+
+    remaining = [
+        row for row in candidates if case_identity(row) not in chosen_identities
+    ]
+    while len(chosen) < LEARNING_FAULT_CASES:
+        if not remaining:
+            raise ValueError(
+                f"Only {len(chosen)} disjoint learning fault cases are available"
+            )
+        next_row = min(remaining, key=candidate_key)
+        choose(next_row)
+        next_identity = case_identity(next_row)
+        remaining = [row for row in remaining if case_identity(row) != next_identity]
+
+    return chosen
+
+
+def select_learning_cases(
+    full_cases: Sequence[Mapping[str, Any]],
+    selected_cases: Sequence[Mapping[str, Any]],
+    *,
+    seed: int,
+) -> list[dict[str, Any]]:
+    """Build the deterministic 90-fault/10-control learning curriculum."""
+
+    fault_cases = _fault_learning_cases(full_cases, selected_cases, seed=seed)
+    rows: list[dict[str, Any]] = []
+    for control_index, control in enumerate(NO_FAULT_CONTROLS):
+        start = control_index * 9
+        rows.extend(fault_cases[start : start + 9])
+        scenario, topo_size = control
+        rows.append(
+            {
+                "scenario": scenario,
+                "topo_size": topo_size,
+                "problem": "no_fault",
+                "inject": {},
+            }
+        )
+    if len(rows) != LEARNING_FAULT_CASES + LEARNING_NO_FAULT_CASES:
+        raise AssertionError(f"Unexpected learning case count: {len(rows)}")
+    return rows
+
+
+def benchmark_manifest(
+    role: str, rows: Sequence[Mapping[str, Any]], *, seed: int
+) -> dict[str, Any]:
+    """Wrap cases in the common manifest metadata."""
+
+    no_fault = sum(str(row["problem"]) == "no_fault" for row in rows)
+    return {
+        "benchmark_role": role,
+        "seed": seed,
+        "counts": {
+            "total": len(rows),
+            "fault": len(rows) - no_fault,
+            "no_fault": no_fault,
+        },
+        "cases": list(rows),
+    }
+
+
 def _print_stats(label: str, rows: list[dict]) -> None:
     by_scenario = Counter(r["scenario"] for r in rows)
     by_problem = Counter(r["problem"] for r in rows)
@@ -145,22 +352,27 @@ def _print_stats(label: str, rows: list[dict]) -> None:
         print(f"  {scenario}: {count}")
 
 
-def generate_benchmark(*, seed: int = DEFAULT_SEED) -> tuple[list[dict], list[dict]]:
+def generate_benchmark(
+    *, seed: int = DEFAULT_SEED
+) -> tuple[list[dict], list[dict], list[dict]]:
     full_rows = iter_full_cases(seed=seed)
     selected_rows = iter_selected_cases(seed=seed)
+    learning_rows = select_learning_cases(full_rows, selected_rows, seed=seed)
 
+    _print_stats("benchmark_learning.yaml", learning_rows)
     _print_stats("benchmark_full.yaml", full_rows)
     _print_stats("benchmark_selected.yaml", selected_rows)
 
     benchmark_dir = Path(cur_path)
-    for name, rows in (
-        ("benchmark_full.yaml", full_rows),
-        ("benchmark_selected.yaml", selected_rows),
+    for name, role, rows in (
+        ("benchmark_learning.yaml", "learning", learning_rows),
+        ("benchmark_selected.yaml", "evaluation", selected_rows),
+        ("benchmark_full.yaml", "evaluation", full_rows),
     ):
         out_path = benchmark_dir / name
         out_path.write_text(
             yaml.dump(
-                {"seed": seed, "cases": rows},
+                benchmark_manifest(role, rows, seed=seed),
                 sort_keys=False,
                 allow_unicode=True,
             ),
@@ -168,7 +380,7 @@ def generate_benchmark(*, seed: int = DEFAULT_SEED) -> tuple[list[dict], list[di
         )
         print(f"Wrote {len(rows)} cases to {out_path} (seed={seed})")
 
-    return full_rows, selected_rows
+    return full_rows, selected_rows, learning_rows
 
 
 def _parse_args() -> argparse.Namespace:

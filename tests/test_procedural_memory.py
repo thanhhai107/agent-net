@@ -129,6 +129,40 @@ class _FakeEvolutionModel:
 
 
 class SkillProProceduralMemoryTest(unittest.TestCase):
+    def test_evaluation_runtime_does_not_mutate_frozen_bank(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_path = Path(tmp) / "skills.json"
+            learning = ProceduralMemoryModule(
+                bank_id="frozen",
+                store_path=state_path,
+            )
+            before = learning.store.state_hash()
+            evaluation_module = ProceduralMemoryModule(
+                bank_id="frozen",
+                store_path=state_path,
+                read_only=True,
+            )
+            controller = _FakeSkillController(["seed_react_decision"])
+            runtime = SkillToolRuntime(
+                procedural_memory=evaluation_module,
+                allow_learning_updates=False,
+                session=SimpleNamespace(session_id="evaluation"),
+                task_description="Inspect current reachability.",
+                tools=[],
+                meta_controller_llm=controller,
+            )
+            runtime.prompt_suffix()
+            after = learning.store.state_hash()
+            snapshot = runtime.snapshot()
+
+            with self.assertRaises(PermissionError):
+                evaluation_module.store.save(evaluation_module.store.load())
+
+        self.assertEqual(before, after)
+        self.assertTrue(snapshot["state_unchanged"])
+        self.assertFalse(snapshot["allow_learning_updates"])
+        self.assertEqual(snapshot["selection_policy"], "llm_direct")
+
     @staticmethod
     def _enable_fake_evolution(module: ProceduralMemoryModule) -> None:
         model = _FakeEvolutionModel()
@@ -245,7 +279,7 @@ class SkillProProceduralMemoryTest(unittest.TestCase):
             controller = _FakeSkillController(["seed_react_decision"])
             runtime = SkillToolRuntime(
                 procedural_memory=module,
-                procedural_memory_mode="read",
+                allow_learning_updates=False,
                 session=SimpleNamespace(session_id="runtime-context-1"),
                 task_description="Inspect current reachability.",
                 tools=[],
@@ -1579,7 +1613,7 @@ class SkillProProceduralMemoryTest(unittest.TestCase):
             )
             runtime = SkillToolRuntime(
                 procedural_memory=module,
-                procedural_memory_mode="read",
+                allow_learning_updates=False,
                 session=SimpleNamespace(),
                 task_description="Inspect current connectivity.",
                 tools=[primitive],
@@ -3392,7 +3426,7 @@ class SkillProProceduralMemoryTest(unittest.TestCase):
             )
             runtime = SkillToolRuntime(
                 procedural_memory=module,
-                procedural_memory_mode="read",
+                allow_learning_updates=False,
                 session=SimpleNamespace(
                     session_id="s2",
                     scenario_name="simple_bgp",
@@ -3433,7 +3467,7 @@ class SkillProProceduralMemoryTest(unittest.TestCase):
             )
             runtime = SkillToolRuntime(
                 procedural_memory=module,
-                procedural_memory_mode="read",
+                allow_learning_updates=False,
                 session=SimpleNamespace(
                     session_id="s2",
                     scenario_name="simple_bgp",
@@ -3454,7 +3488,7 @@ class SkillProProceduralMemoryTest(unittest.TestCase):
         self.assertEqual(snapshot["config"]["max_skill_age"], 8)
         self.assertEqual(
             snapshot["selection_policy"],
-            "llm_direct_epsilon_greedy",
+            "llm_direct",
         )
         self.assertEqual(snapshot["tool_description_added_tokens"], 0)
         self.assertEqual(snapshot["prompt_injection_count"], 1)
@@ -3589,7 +3623,7 @@ class SkillProProceduralMemoryTest(unittest.TestCase):
             module.store.save(state)
             runtime = SkillToolRuntime(
                 procedural_memory=module,
-                procedural_memory_mode="read",
+                allow_learning_updates=False,
                 session=SimpleNamespace(
                     session_id="s2",
                     scenario_name="simple_bgp",
@@ -3672,7 +3706,7 @@ class SkillProProceduralMemoryTest(unittest.TestCase):
             meta = FakeMetaController()
             runtime = SkillToolRuntime(
                 procedural_memory=module,
-                procedural_memory_mode="read",
+                allow_learning_updates=False,
                 session=SimpleNamespace(
                     session_id="s2",
                     scenario_name="simple_bgp",
@@ -3756,7 +3790,7 @@ class SkillProProceduralMemoryTest(unittest.TestCase):
             meta = FakeMetaController()
             runtime = SkillToolRuntime(
                 procedural_memory=module,
-                procedural_memory_mode="read",
+                allow_learning_updates=False,
                 session=SimpleNamespace(
                     session_id="s2",
                     scenario_name="simple_bgp",
@@ -3831,7 +3865,7 @@ class SkillProProceduralMemoryTest(unittest.TestCase):
             module.store.save(state)
             runtime = SkillToolRuntime(
                 procedural_memory=module,
-                procedural_memory_mode="read",
+                allow_learning_updates=False,
                 session=SimpleNamespace(
                     session_id="s2",
                     scenario_name="simple_bgp",
@@ -3893,7 +3927,7 @@ class SkillProProceduralMemoryTest(unittest.TestCase):
             )
             runtime = SkillToolRuntime(
                 procedural_memory=module,
-                procedural_memory_mode="read",
+                allow_learning_updates=False,
                 session=SimpleNamespace(
                     session_id="s2",
                     scenario_name="simple_bgp",
@@ -3968,7 +4002,7 @@ class SkillProProceduralMemoryTest(unittest.TestCase):
             module.store.save(state)
             runtime = SkillToolRuntime(
                 procedural_memory=module,
-                procedural_memory_mode="read",
+                allow_learning_updates=False,
                 session=SimpleNamespace(
                     session_id="s2",
                     scenario_name="simple_bgp",
@@ -4026,7 +4060,7 @@ class SkillProProceduralMemoryTest(unittest.TestCase):
             module.store.save(state)
             runtime = SkillToolRuntime(
                 procedural_memory=module,
-                procedural_memory_mode="read",
+                allow_learning_updates=False,
                 session=SimpleNamespace(
                     session_id="s2",
                     scenario_name="simple_bgp",
@@ -4110,7 +4144,7 @@ class SkillProProceduralMemoryTest(unittest.TestCase):
             module.store.save(state)
             runtime = SkillToolRuntime(
                 procedural_memory=module,
-                procedural_memory_mode="read",
+                allow_learning_updates=False,
                 session=SimpleNamespace(
                     session_id="s2",
                     scenario_name="simple_bgp",
@@ -4224,7 +4258,7 @@ class SkillProProceduralMemoryTest(unittest.TestCase):
             module.store.save(state)
             runtime = SkillToolRuntime(
                 procedural_memory=module,
-                procedural_memory_mode="read",
+                allow_learning_updates=False,
                 session=SimpleNamespace(
                     session_id="s2",
                     scenario_name="simple_bgp",
@@ -4323,7 +4357,7 @@ class SkillProProceduralMemoryTest(unittest.TestCase):
             module.store.save(state)
             runtime = SkillToolRuntime(
                 procedural_memory=module,
-                procedural_memory_mode="read",
+                allow_learning_updates=False,
                 session=SimpleNamespace(
                     session_id="s2",
                     scenario_name="simple_bgp",
@@ -4397,7 +4431,7 @@ class SkillProProceduralMemoryTest(unittest.TestCase):
             )
             runtime = SkillToolRuntime(
                 procedural_memory=module,
-                procedural_memory_mode="read",
+                allow_learning_updates=False,
                 session=SimpleNamespace(
                     session_id="s2",
                     scenario_name="simple_bgp",
@@ -4761,7 +4795,8 @@ class SkillProProceduralMemoryTest(unittest.TestCase):
                         "scenario_topo_size": "small",
                         "problem_names": ["dns_record_error"],
                         "root_cause_name": "dns_record_error",
-                        "procedural_memory_mode": "evolve",
+                        "procedural_memory_enabled": True,
+                        "allow_learning_updates": True,
                         "procedural_memory_bank": "skill",
                     }
                 ),
@@ -4810,7 +4845,8 @@ class SkillProProceduralMemoryTest(unittest.TestCase):
                 report = asyncio.run(
                     update_procedural_memory_from_session(
                         run_meta={
-                            "procedural_memory_mode": "evolve",
+                            "procedural_memory_enabled": True,
+                            "allow_learning_updates": True,
                             "procedural_memory_bank": "skill",
                             "procedural_memory_pool_size": 24,
                             "procedural_memory_update_threshold": 2,
@@ -4843,10 +4879,24 @@ class SkillProProceduralMemoryTest(unittest.TestCase):
             report["procedural_memory_config"]["selection_policy"],
             "llm_direct_epsilon_greedy",
         )
-        self.assertEqual(
-            report["procedural_memory_config"]["selection_epsilon"], 0.25
-        )
+        self.assertEqual(report["procedural_memory_config"]["selection_epsilon"], 0.25)
         self.assertEqual(report["total_added_tokens"], 100)
         self.assertEqual(report["delta_prompt_tokens_per_step"], 25.0)
         self.assertEqual(report["prompt_added_tokens"], 80)
         self.assertEqual(report["tool_description_added_tokens"], 20)
+
+    def test_evaluation_workflow_skips_memory_update(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            report = asyncio.run(
+                update_procedural_memory_from_session(
+                    run_meta={
+                        "procedural_memory_enabled": True,
+                        "allow_learning_updates": False,
+                    },
+                    metrics={},
+                    session_dir=tmp,
+                )
+            )
+
+        self.assertEqual(report["status"], "skipped")
+        self.assertIn("disabled", report["reason"])
