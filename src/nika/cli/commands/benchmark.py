@@ -157,8 +157,8 @@ def benchmark_run(
 
     if batch_size != 1:
         raise typer.BadParameter(
-            "Only --batch-size 1 is supported because each case cleans the entire "
-            "emulation environment."
+            "Only --batch-size 1 is supported because benchmark cases currently "
+            "execute sequentially."
         )
 
     single_mode = scenario is not None

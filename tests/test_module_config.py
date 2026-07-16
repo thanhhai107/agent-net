@@ -13,7 +13,8 @@ def test_module_defaults_are_shared_by_composition_and_cli() -> None:
     defaults = load_module_defaults()
     tool = ToolRefinementConfig()
     memory = ProceduralMemoryConfig()
-    args = build_parser().parse_args(["--config", "benchmark/example.yaml"])
+    parser = build_parser()
+    args = parser.parse_args(["--config", "benchmark/example.yaml"])
 
     assert tool.tool_doc_chars == defaults.tool_refinement.tool_doc_chars
     assert tool.convergence_threshold == defaults.tool_refinement.convergence_threshold
@@ -23,6 +24,8 @@ def test_module_defaults_are_shared_by_composition_and_cli() -> None:
     assert memory.pool_size == defaults.procedural_memory.pool_size
     assert memory.verifier == "behavioral_replay"
     assert memory.holdout_size == defaults.procedural_memory.holdout_size
+    assert memory.evolver_model == defaults.procedural_memory.llm_model
+    assert memory.policy_scorer_model == defaults.procedural_memory.skill_logprob_model
     assert args.tool_refinement_doc_chars == defaults.tool_refinement.tool_doc_chars
     assert args.procedural_memory_tokens == defaults.procedural_memory.token_budget
     assert args.procedural_memory_pool_size == defaults.procedural_memory.pool_size
@@ -30,9 +33,23 @@ def test_module_defaults_are_shared_by_composition_and_cli() -> None:
         args.tool_refinement_update_interval == defaults.tool_refinement.update_interval
     )
     assert args.procedural_memory_verifier == defaults.procedural_memory.verifier
+    assert args.procedural_memory_evolver_model == defaults.procedural_memory.llm_model
+    assert (
+        args.procedural_memory_policy_scorer_model
+        == defaults.procedural_memory.skill_logprob_model
+    )
     assert args.agent == defaults.baseline.agent_type
     assert args.max_steps == defaults.baseline.max_steps
     assert args.max_attempts == defaults.baseline.max_attempts
+
+    canonical_budget = parser.parse_args(
+        ["--config", "benchmark.yaml", "--procedural-memory-token-budget", "777"]
+    )
+    legacy_budget = parser.parse_args(
+        ["--config", "benchmark.yaml", "--procedural-memory-tokens", "888"]
+    )
+    assert canonical_budget.procedural_memory_tokens == 777
+    assert legacy_budget.procedural_memory_tokens == 888
     assert args.judge == defaults.baseline.judge_evaluation
     assert args.judge_provider == defaults.baseline.judge_provider
     assert args.judge_model == defaults.baseline.judge_model

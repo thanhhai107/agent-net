@@ -107,6 +107,21 @@ the complete command and configuration with each run.
 - `procedural_memory`: retrieval, evolution, verification and policy parameters
 - `tool_refinement`: exploration, analysis, rewriting and publication parameters
 
+Procedural Memory defaults to `behavioral_replay`, a provider-compatible
+verification fallback. `policy_logprob` more closely follows Skill-Pro's PPO Gate
+when a completion endpoint with echoed prompt log-probabilities is configured, but
+it replays the Skill system prompt and serialized action rather than provider-side
+chat history and tool schemas.
+
+Candidate verification is an offline admissibility prescreen: the gate measures
+the clipped-surrogate improvement over the parent policy, then publishes passing
+candidates as `probationary`. Only candidates with positive conservative gain from
+later NIKA episodes become `validated`; unresolved probationary skills are retired
+when the bank is frozen at the evolve/read boundary. Benchmarks that declare
+`evolve_first_cases` (including `benchmark_evolve.yaml`) apply that cutoff in both
+Studio and the extension CLI, and Studio reports read-only cases as the primary
+endpoint while retaining evolve-phase learning diagnostics separately.
+
 CLI and Studio values override these defaults per experiment. `.env` is reserved for
 API connection details and credentials.
 

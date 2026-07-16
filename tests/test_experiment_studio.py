@@ -41,9 +41,8 @@ def _config(**overrides: object) -> dict[str, object]:
         "tool_analyzer_model": "analyzer-model",
         "tool_rewriter_model": "rewriter-model",
         "procedural_memory_bank": "procedural-memory-test",
-        "procedural_memory_mode": "evolve",
         "evolve_until": 12,
-        "procedural_memory_tokens": 1500,
+        "procedural_memory_token_budget": 1500,
         "procedural_memory_max_skill_age": 6,
         "procedural_memory_pool_size": 24,
         "procedural_memory_update_threshold": 2,
@@ -68,11 +67,13 @@ def test_baseline_command_uses_default_sequential_execution() -> None:
     assert command[3] == "--config"
     assert "benchmark/benchmark_test.yaml" in command
     assert command[command.index("--max-steps") + 1] == "100"
+    assert command[command.index("--evolve-until") + 1] == "12"
     assert "-j" not in command
     assert "--parallel" not in command
 
 
 def test_empty_studio_config_uses_yaml_defaults() -> None:
+    memory_defaults = load_module_defaults().procedural_memory
     command = build_experiment_command(
         {
             "modules": ["tool_refinement", "procedural_memory"],
@@ -93,7 +94,43 @@ def test_empty_studio_config_uses_yaml_defaults() -> None:
     assert command[command.index("--procedural-memory-verifier") + 1] == (
         "behavioral_replay"
     )
+    expected_memory_options = {
+        "--procedural-memory-token-budget": memory_defaults.token_budget,
+        "--procedural-memory-max-skill-age": memory_defaults.max_skill_age,
+        "--procedural-memory-pool-size": memory_defaults.pool_size,
+        "--procedural-memory-update-threshold": memory_defaults.evolution_threshold,
+        "--procedural-memory-best-of-n": memory_defaults.best_of_n,
+        "--procedural-memory-ppo-epsilon": memory_defaults.ppo_epsilon,
+        "--procedural-memory-selection-epsilon": memory_defaults.selection_epsilon,
+        "--procedural-memory-experience-pool-size": (
+            memory_defaults.experience_pool_size
+        ),
+        "--procedural-memory-baseline-ema-alpha": (memory_defaults.baseline_ema_alpha),
+        "--procedural-memory-selection-epsilon-decay-cases": (
+            memory_defaults.selection_epsilon_decay_cases
+        ),
+        "--procedural-memory-acceptance-margin": memory_defaults.acceptance_margin,
+        "--procedural-memory-verifier": memory_defaults.verifier,
+        "--procedural-memory-holdout-size": memory_defaults.holdout_size,
+        "--procedural-memory-min-positive-advantage": (
+            memory_defaults.min_positive_advantage
+        ),
+        "--procedural-memory-evolver-model": memory_defaults.llm_model,
+        "--procedural-memory-policy-scorer-model": (
+            memory_defaults.skill_logprob_model
+        ),
+    }
+    for option, expected in expected_memory_options.items():
+        assert command[command.index(option) + 1] == str(expected)
     assert "--procedural-memory-k" not in command
+
+
+def test_studio_runner_accepts_legacy_procedural_memory_token_key() -> None:
+    config = _config(modules=["procedural_memory"], procedural_memory_tokens=987)
+    config.pop("procedural_memory_token_budget")
+    command = build_experiment_command(config)
+
+    assert command[command.index("--procedural-memory-token-budget") + 1] == "987"
 
 
 def test_create_run_snapshots_module_config(monkeypatch, tmp_path: Path) -> None:
@@ -147,7 +184,8 @@ def test_stop_run_sends_one_sigterm_and_waits_for_cleanup(
     run_dir = tmp_path / "experiment-01"
     run_dir.mkdir()
     signals: list[int] = []
-    states = iter((True, False, False))
+    states = iter((True, False, False, False))
+    global_cleanup = Mock()
 
     monkeypatch.setattr(
         experiment_runner,
@@ -167,12 +205,15 @@ def test_stop_run_sends_one_sigterm_and_waits_for_cleanup(
         lambda _pid: next(states),
     )
     monkeypatch.setattr(experiment_runner.time, "sleep", lambda _seconds: None)
-    monkeypatch.setattr(experiment_runner, "clean_emulation_environment", lambda: None)
+    monkeypatch.setattr(
+        experiment_runner, "clean_emulation_environment", global_cleanup
+    )
     monkeypatch.setattr(experiment_runner, "check_and_start_next_queued", lambda: None)
 
     experiment_runner.stop_run(run_dir)
 
     assert signals == [experiment_runner.signal.SIGTERM]
+    global_cleanup.assert_not_called()
 
 
 def test_stop_run_does_not_start_queue_when_cleanup_fails(
@@ -195,8 +236,16 @@ def test_stop_run_does_not_start_queue_when_cleanup_fails(
     )
     monkeypatch.setattr(experiment_runner, "_append_run_log", lambda *_a: None)
     monkeypatch.setattr(experiment_runner.os, "killpg", lambda *_a: None)
-    monkeypatch.setattr(experiment_runner, "_process_group_running", lambda _pid: False)
+    states = iter((True, True, False, False))
+    monkeypatch.setattr(
+        experiment_runner,
+        "_process_group_running",
+        lambda _pid: next(states),
+    )
     monkeypatch.setattr(experiment_runner, "_pid_running", lambda _pid: False)
+    monkeypatch.setattr(experiment_runner, "_STOP_GRACE_SECONDS", 0.2)
+    monkeypatch.setattr(experiment_runner, "_STOP_KILL_GRACE_SECONDS", 0.2)
+    monkeypatch.setattr(experiment_runner.time, "sleep", lambda _seconds: None)
     monkeypatch.setattr(
         experiment_runner,
         "clean_emulation_environment",
@@ -208,6 +257,64 @@ def test_stop_run_does_not_start_queue_when_cleanup_fails(
 
     assert written[-1]["status"] == "failed"
     assert "cleanup failed" in written[-1]["cleanup_error"]
+    start_next.assert_not_called()
+
+
+def test_stop_requested_run_remains_busy_for_queue_scheduler(
+    monkeypatch, tmp_path: Path
+) -> None:
+    run_dir = tmp_path / "experiment-01"
+    run_dir.mkdir()
+    monkeypatch.setattr(
+        experiment_runner,
+        "_read_json",
+        lambda _path: {"pid": 123, "status": "running", "stop_requested": True},
+    )
+
+    status = experiment_runner.run_status(run_dir)
+
+    assert status["status"] == "running"
+
+
+def test_runner_does_not_start_queue_after_stop_signal(
+    monkeypatch, tmp_path: Path
+) -> None:
+    spec_path = tmp_path / "spec.json"
+    spec_path.write_text(
+        json.dumps(
+            {
+                "commands": [{"name": "ReAct", "command": ["nika", "benchmark"]}],
+                "config": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    signal_handler = None
+
+    def install_signal(_signal, handler):
+        nonlocal signal_handler
+        if callable(handler):
+            signal_handler = handler
+        return experiment_runner.signal.SIG_DFL
+
+    class StopStream:
+        def __iter__(self):
+            assert signal_handler is not None
+            signal_handler(experiment_runner.signal.SIGTERM, None)
+            return iter(())
+
+    process = Mock(stdout=StopStream())
+    process.wait.return_value = 130
+    start_next = Mock()
+    monkeypatch.setattr(experiment_runner.signal, "signal", install_signal)
+    monkeypatch.setattr(
+        experiment_runner.subprocess, "Popen", Mock(return_value=process)
+    )
+    monkeypatch.setattr(experiment_runner, "check_and_start_next_queued", start_next)
+
+    exit_code = experiment_runner.run_spec_file(spec_path)
+
+    assert exit_code == 130
     start_next.assert_not_called()
 
 
@@ -384,7 +491,7 @@ def test_tool_and_memory_modules_share_one_sequential_command() -> None:
     assert command[command.index("--evolve-until") + 1] == "12"
 
 
-def test_procedural_memory_read_mode_uses_read_only_flag() -> None:
+def test_legacy_procedural_memory_read_mode_uses_standard_memory_flag() -> None:
     command = build_experiment_command(
         _config(
             modules=["procedural_memory"],
@@ -392,9 +499,9 @@ def test_procedural_memory_read_mode_uses_read_only_flag() -> None:
         )
     )
 
-    assert "--procedural-memory-read" in command
-    assert "--procedural-memory" not in command
-    assert "--evolve-until" not in command
+    assert "--procedural-memory" in command
+    assert "--procedural-memory-read" not in command
+    assert command[command.index("--evolve-until") + 1] == "12"
 
 
 def test_command_plan_for_memory_has_no_service_prerequisite() -> None:
@@ -458,6 +565,26 @@ def test_prepare_experiment_config_normalizes_legacy_evolve_until(
     assert prepared["evolve_until"] == 10
     assert "procedural_memory_evolve_until" not in prepared
     assert "learning_evolve_until" not in prepared
+
+
+def test_prepare_experiment_config_migrates_legacy_memory_read_mode(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        experiment_runner,
+        "next_experiment_id",
+        lambda _benchmark: "experiment-07",
+    )
+    legacy = _config(
+        modules=["procedural_memory"],
+        procedural_memory_mode="read",
+        evolve_until=12,
+    )
+
+    prepared = prepare_experiment_config(legacy)
+
+    assert prepared["evolve_until"] == 0
+    assert "procedural_memory_mode" not in prepared
 
 
 def test_resume_command_uses_existing_result_root() -> None:
@@ -652,3 +779,112 @@ def test_result_aggregation_excludes_clean_controls_from_localization_and_rca(
     assert row["detection_score"] == "1.00"
     assert row["localization_f1"] == "1.00"
     assert row["rca_f1"] == "0.80"
+
+
+def test_result_aggregation_uses_read_phase_as_primary_endpoint(
+    monkeypatch, tmp_path: Path
+) -> None:
+    from nika.visualization import experiment_dashboard as dashboard
+
+    results = tmp_path / "results"
+    root = results / "benchmark_evolve-0001"
+    for name, mode, score in (
+        ("train", "evolve", 1.0),
+        ("evaluation", "read", 0.4),
+    ):
+        session = root / name
+        session.mkdir(parents=True)
+        (session / "run.json").write_text(
+            json.dumps(
+                {
+                    "session_id": name,
+                    "status": "finished",
+                    "agent_type": "react",
+                    "model": "openai/gpt-oss-120b",
+                    "procedural_memory_mode": mode,
+                    "benchmark_fingerprint": f"case-{name}",
+                }
+            ),
+            encoding="utf-8",
+        )
+        (session / "ground_truth.json").write_text(
+            json.dumps({"is_anomaly": True}), encoding="utf-8"
+        )
+        (session / "eval_metrics.json").write_text(
+            json.dumps(
+                {
+                    "detection_score": score,
+                    "localization_f1": score,
+                    "rca_f1": score,
+                    "tool_calls": 2,
+                    "tool_errors": 0,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    monkeypatch.setattr(dashboard, "RESULTS_DIR", results)
+    row = dashboard._result_rows(benchmark_name="benchmark_evolve")[0]
+
+    assert row["detection_score"] == "0.40"
+    assert row["evaluation_cases"] == 1
+
+
+def test_result_aggregation_uses_generic_phase_without_modules(
+    monkeypatch, tmp_path: Path
+) -> None:
+    from nika.visualization import experiment_dashboard as dashboard
+
+    results = tmp_path / "results"
+    root = results / "benchmark_evolve-0001"
+    for name, phase, score in (
+        ("train", "evolve", 1.0),
+        ("evaluation", "read", 0.4),
+    ):
+        session = root / name
+        session.mkdir(parents=True)
+        (session / "run.json").write_text(
+            json.dumps(
+                {
+                    "session_id": name,
+                    "status": "finished",
+                    "agent_type": "react",
+                    "model": "openai/gpt-oss-120b",
+                    "procedural_memory_mode": "off",
+                    "benchmark_phase": phase,
+                    "benchmark_fingerprint": f"case-{name}",
+                }
+            ),
+            encoding="utf-8",
+        )
+        (session / "ground_truth.json").write_text(
+            json.dumps({"is_anomaly": True}), encoding="utf-8"
+        )
+        (session / "eval_metrics.json").write_text(
+            json.dumps(
+                {
+                    "detection_score": score,
+                    "localization_f1": score,
+                    "rca_f1": score,
+                    "tool_calls": 2,
+                    "tool_errors": 0,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    monkeypatch.setattr(dashboard, "RESULTS_DIR", results)
+    row = dashboard._result_rows(benchmark_name="benchmark_evolve")[0]
+
+    assert row["detection_score"] == "0.40"
+    assert row["evaluation_cases"] == 1
+    assert row["learning_cases"] == 1
+
+
+def test_case_key_prefers_benchmark_fingerprint() -> None:
+    from nika.visualization.experiment_dashboard import _case_key
+
+    assert (
+        _case_key({"benchmark_fingerprint": "case-hash", "benchmark_index": 1})
+        == "case-hash"
+    )

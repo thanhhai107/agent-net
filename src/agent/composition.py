@@ -103,8 +103,12 @@ class ProceduralMemoryConfig:
             module_defaults().procedural_memory.min_positive_advantage
         )
     )
-    evolver_model: str = ""
-    policy_scorer_model: str = ""
+    evolver_model: str = field(
+        default_factory=lambda: module_defaults().procedural_memory.llm_model
+    )
+    policy_scorer_model: str = field(
+        default_factory=lambda: module_defaults().procedural_memory.skill_logprob_model
+    )
 
     @property
     def enabled(self) -> bool:

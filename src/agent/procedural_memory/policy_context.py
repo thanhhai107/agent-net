@@ -74,3 +74,23 @@ def build_skill_policy_prefix(
     skill: ProceduralSkill | None,
 ) -> str:
     return OVERALL_DIAGNOSIS_PROMPT + build_skill_policy_suffix(state, skill)
+
+
+def build_runtime_skill_policy_prefix(
+    skill: ProceduralSkill | None,
+    *,
+    max_tokens: int,
+) -> str:
+    """Render the exact system prompt installed by the Skill runtime.
+
+    Observable state and chat/tool messages are carried separately by LangGraph;
+    this helper deliberately reproduces only the system-prompt portion that the
+    completions log-prob endpoint can replay.
+    """
+
+    return OVERALL_DIAGNOSIS_PROMPT + build_skill_policy_suffix(
+        "",
+        skill,
+        max_tokens=max_tokens,
+        include_state=False,
+    )

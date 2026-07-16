@@ -31,13 +31,27 @@ def safe_bank_id(bank_id: str) -> str:
 
 class ProceduralMemoryStore:
     def __init__(
-        self, bank_id: str = "default", root: str | Path | None = None
+        self,
+        bank_id: str = "default",
+        root: str | Path | None = None,
+        state_path: str | Path | None = None,
     ) -> None:
         self.bank_id = safe_bank_id(bank_id)
-        self.root = Path(root) if root is not None else PROCEDURAL_MEMORY_DIR
-        self.bank_dir = self.root / self.bank_id
-        self.state_path = self.bank_dir / "skills.json"
-        self.lock_path = self.bank_dir / ".lock"
+        self._explicit_state_path = Path(state_path) if state_path is not None else None
+        self._legacy_state_path: Path | None = None
+        if self._explicit_state_path is not None:
+            self.state_path = self._explicit_state_path
+            self.bank_dir = self.state_path.parent
+            self.root = self.bank_dir
+            self.lock_path = self.bank_dir / f".{self.state_path.name}.lock"
+            legacy_path = self.state_path.parent / self.bank_id / "skills.json"
+            if legacy_path != self.state_path:
+                self._legacy_state_path = legacy_path
+        else:
+            self.root = Path(root) if root is not None else PROCEDURAL_MEMORY_DIR
+            self.bank_dir = self.root / self.bank_id
+            self.state_path = self.bank_dir / "skills.json"
+            self.lock_path = self.bank_dir / ".lock"
 
     @contextmanager
     def exclusive(self):
@@ -52,10 +66,25 @@ class ProceduralMemoryStore:
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
     def load(self) -> ProceduralMemoryState:
-        if not self.state_path.exists():
+        source_path = self.state_path
+        if (
+            not source_path.exists()
+            and self._legacy_state_path is not None
+            and self._legacy_state_path.exists()
+        ):
+            source_path = self._legacy_state_path
+        if not source_path.exists():
             return ProceduralMemoryState(bank_id=self.bank_id)
         return ProceduralMemoryState.model_validate_json(
-            self.state_path.read_text(encoding="utf-8")
+            source_path.read_text(encoding="utf-8")
+        )
+
+    @property
+    def needs_migration(self) -> bool:
+        return bool(
+            self._legacy_state_path is not None
+            and self._legacy_state_path.exists()
+            and not self.state_path.exists()
         )
 
     def save(self, state: ProceduralMemoryState) -> ProceduralMemoryState:
@@ -66,6 +95,11 @@ class ProceduralMemoryStore:
 
     def clear(self) -> None:
         with self.exclusive():
+            if self._explicit_state_path is not None:
+                self.state_path.unlink(missing_ok=True)
+                if self._legacy_state_path is not None:
+                    self._legacy_state_path.unlink(missing_ok=True)
+                return
             for path in self.bank_dir.iterdir():
                 if path == self.lock_path:
                     continue

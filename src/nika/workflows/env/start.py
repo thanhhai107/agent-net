@@ -127,10 +127,11 @@ def start_net_env(
 
     phase = "deploy"
     try:
-        if net_env.lab_exists() and redeploy:
+        lab_exists = net_env.lab_exists()
+        if lab_exists and redeploy:
             net_env.undeploy()
             net_env.deploy()
-        elif not net_env.lab_exists():
+        elif not lab_exists:
             net_env.deploy()
 
         phase = "verify"

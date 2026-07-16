@@ -17,7 +17,10 @@ import requests
 from pydantic import BaseModel, Field
 
 from agent.procedural_memory.models import ProceduralSkill, SkillExperience
-from agent.procedural_memory.policy_context import build_skill_policy_prefix
+from agent.procedural_memory.policy_context import (
+    build_runtime_skill_policy_prefix,
+    build_skill_policy_prefix,
+)
 
 
 class PolicyReplayItem(BaseModel):
@@ -71,7 +74,17 @@ class PolicyLogprobScorer:
         self.timeout = timeout
 
     @staticmethod
-    def _prefix(state: str, skill: ProceduralSkill | None) -> str:
+    def _prefix(
+        state: str,
+        skill: ProceduralSkill | None,
+        *,
+        policy_token_budget: int = 0,
+    ) -> str:
+        if policy_token_budget > 0:
+            return build_runtime_skill_policy_prefix(
+                skill,
+                max_tokens=policy_token_budget,
+            )
         return build_skill_policy_prefix(state, skill)
 
     def _score_targets(
@@ -128,7 +141,10 @@ class PolicyLogprobScorer:
                 raise ValueError(
                     f"logprob API could not align target at prompt index {index}"
                 )
-            scores.append(sum(target_scores))
+            # Match Skill-Pro's target-token normalization. Summing here makes
+            # PPO ratios depend on serialized action length and over-clips long
+            # tool calls even when their mean token likelihood is unchanged.
+            scores.append(sum(target_scores) / len(target_scores))
         return scores
 
     def score_batch(
@@ -167,7 +183,14 @@ class PolicyLogprobScorer:
                     "historical transition has no pre-action policy context"
                 )
         candidate_rows = [
-            (self._prefix(transition.state, candidate), transition.action)
+            (
+                self._prefix(
+                    transition.state,
+                    candidate,
+                    policy_token_budget=transition.policy_token_budget,
+                ),
+                transition.action,
+            )
             for _, _, transition in indexed
         ]
         baseline_rows = [

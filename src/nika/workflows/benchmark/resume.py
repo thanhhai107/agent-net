@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from nika.config import SESSIONS_DIR, resolve_results_root
+from nika.runtime.factory import runtime_for_session
 from nika.utils.session_artifacts import RUN_FILENAME, iter_session_dirs
 from nika.utils.session_index import SessionIndex
 from nika.utils.session_store import SessionStore
@@ -73,22 +74,35 @@ def cleanup_benchmark_session(
     session_dir: str | Path | None,
 ) -> None:
     """Remove a partial or failed benchmark session and any runtime state."""
+    result_path = Path(session_dir) if session_dir else None
+    persisted_meta = _read_run_meta(result_path) if result_path else None
+    session_closed = False
+    indexed_meta: dict[str, Any] | None = None
     if session_id:
         try:
-            meta = SessionStore().get_session(session_id)
-            if meta.get("status") == "running":
+            indexed_meta = SessionStore().get_session(session_id)
+            if indexed_meta.get("status") == "running":
                 close_session(session_id=session_id, undeploy=True)
+                session_closed = True
         except FileNotFoundError:
             pass
+
+        cleanup_meta = persisted_meta or indexed_meta
+        if (
+            not session_closed
+            and cleanup_meta
+            and cleanup_meta.get("lab_name")
+            and cleanup_meta.get("scenario_name")
+        ):
+            runtime_for_session(cleanup_meta).destroy()
+
         SessionIndex().purge(session_id)
         runtime_path = Path(SESSIONS_DIR) / f"{session_id}.json"
         if runtime_path.exists():
             runtime_path.unlink()
 
-    if session_dir:
-        path = Path(session_dir)
-        if path.exists():
-            shutil.rmtree(path)
+    if result_path and result_path.exists():
+        shutil.rmtree(result_path)
 
 
 def _sessions_under_root(results_root: Path) -> list[tuple[Path, dict[str, Any]]]:

@@ -41,10 +41,7 @@ from nika.workflows.benchmark.resume import (
 from nika.workflows.env.start import start_net_env
 from nika.workflows.eval.session import eval_results
 from nika.workflows.failure.inject import inject_failure
-from nika.workflows.session.close import (
-    clean_emulation_environment,
-    close_session_after_failure,
-)
+from nika.workflows.session.close import close_session_after_failure
 
 _BENCHMARK_DONE_PREFIX = "benchmark_done "
 _BENCHMARK_DONE_RE = re.compile(
@@ -238,6 +235,8 @@ def run_single_case(
     result_dir: str | None = None,
     session_tag: str | None = None,
     emit_completion_event: bool = True,
+    benchmark_index: int | None = None,
+    benchmark_phase: str | None = None,
 ) -> tuple[str, Path]:
     """Run one benchmark case (env → inject → agent → eval).
 
@@ -260,7 +259,6 @@ def run_single_case(
     validate_inject_params(problem, scenario, topo_size or "", inject_params)
     params = dict(inject_params)
 
-    clean_emulation_environment()
     session_id: str | None = None
     try:
         session_id = start_net_env(
@@ -271,8 +269,16 @@ def run_single_case(
             session_tag=session_tag,
         )
         session_dir = Path(SessionStore().get_session(session_id)["session_dir"])
+        session = None
+        if no_fault or benchmark_index is not None or benchmark_phase:
+            session = Session().load_running_session(session_id=session_id)
+            if benchmark_index is not None:
+                session.update_session("benchmark_index", benchmark_index)
+            if benchmark_phase:
+                session.update_session("benchmark_phase", benchmark_phase)
         if no_fault:
-            prepare_no_fault_case(Session().load_running_session(session_id=session_id))
+            assert session is not None
+            prepare_no_fault_case(session)
         else:
             inject_failure(
                 problem_names=[problem], session_id=session_id, param_overrides=params
@@ -311,9 +317,6 @@ def run_single_case(
             if cleanup_error is not None:
                 raise cleanup_error from exc
         raise
-    finally:
-        clean_emulation_environment()
-
     if emit_completion_event:
         print(
             f"{_BENCHMARK_DONE_PREFIX}session_id={session_id} scenario={scenario} "
@@ -348,8 +351,8 @@ def run_benchmark_from_yaml(
     """
     if batch_size != 1:
         raise ValueError(
-            "batch_size must be 1 because each case exclusively owns and cleans "
-            "the emulation environment"
+            "batch_size must be 1 because benchmark cases currently execute "
+            "sequentially"
         )
 
     rows = load_benchmark_yaml(benchmark_file)

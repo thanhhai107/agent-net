@@ -17,7 +17,9 @@ from typer.testing import CliRunner
 
 from nika.cli.main import app
 
-_REPO_ROOT = Path(__file__).resolve().parents[2]
+# test_cli_smoke.py lives under tests/nika/cli; parents[2] is tests/, whose
+# nika/ directory shadows the installed src/nika package in subprocesses.
+_REPO_ROOT = Path(__file__).resolve().parents[3]
 _RUNNER = CliRunner()
 
 # Modules imported at load time by ``nika.cli.commands.*``.

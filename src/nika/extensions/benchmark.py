@@ -21,6 +21,7 @@ from agent.extensions.config import default_llm_provider, default_model
 from agent.module_config import module_defaults
 from agent.extensions.react_agent import configure_custom_provider_environment
 from agent.extensions.run import start_agent
+from agent.procedural_memory.service import ProceduralMemoryModule
 from agent.procedural_memory.workflow import update_procedural_memory_from_session
 from agent.tool_refinement.curator import finalize_tool_refinement_session
 from nika.evaluator.result_log import EVAL_METRICS_FILENAME
@@ -37,6 +38,7 @@ from nika.workflows.benchmark.resume import (
 )
 from nika.workflows.benchmark.load_config import (
     is_no_fault_problem,
+    load_benchmark_evolve_first_cases,
     load_benchmark_yaml,
 )
 from nika.workflows.benchmark.run import (
@@ -47,10 +49,7 @@ from nika.workflows.benchmark.run import (
 from nika.workflows.env.start import start_net_env
 from nika.workflows.eval.session import eval_results
 from nika.workflows.failure.inject import inject_failure
-from nika.workflows.session.close import (
-    clean_emulation_environment,
-    close_session_after_failure,
-)
+from nika.workflows.session.close import close_session_after_failure
 
 
 def is_no_fault(problem: str) -> bool:
@@ -104,13 +103,23 @@ def _update_learning(session_id: str, config: AgentRunConfig) -> dict[str, float
     if config.procedural_memory.mode == "evolve":
         started = time.perf_counter()
         try:
-            asyncio.run(
+            memory_report = asyncio.run(
                 update_procedural_memory_from_session(
                     run_meta=run_meta,
                     metrics=metrics,
                     session_dir=session_dir,
                 )
             )
+            metrics["procedural_memory"] = memory_report
+            metrics_path = session_dir / EVAL_METRICS_FILENAME
+            metrics_path.write_text(
+                json.dumps(metrics, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            try:
+                session.update_run_meta("eval_metrics", metrics)
+            except (AttributeError, FileNotFoundError, ValueError):
+                pass
         except Exception as exc:
             errors.append(
                 {
@@ -154,6 +163,8 @@ def run_extended_case(
     run_judge: bool = False,
     judge_provider: str | None = None,
     judge_model: str | None = None,
+    benchmark_index: int | None = None,
+    benchmark_phase: str | None = None,
 ) -> tuple[str, Path]:
     """Run a clean control or a learning-enabled row on upstream primitives."""
     scenario = row["scenario"]
@@ -164,7 +175,6 @@ def run_extended_case(
     if not scenario_requires_topo_size(scenario):
         size = None
 
-    clean_emulation_environment()
     session_id: str | None = None
     try:
         session_id = start_net_env(
@@ -175,6 +185,10 @@ def run_extended_case(
         )
         session = Session().load_running_session(session_id=session_id)
         session_dir = Path(SessionStore().get_session(session_id)["session_dir"])
+        if benchmark_index is not None:
+            session.update_session("benchmark_index", benchmark_index)
+        if benchmark_phase:
+            session.update_session("benchmark_phase", benchmark_phase)
         if is_no_fault(row["problem"]):
             prepare_no_fault_case(session)
         else:
@@ -236,8 +250,6 @@ def run_extended_case(
             if cleanup_error is not None:
                 raise cleanup_error from exc
         raise
-    finally:
-        clean_emulation_environment()
     return session_id, session_dir
 
 
@@ -247,17 +259,13 @@ def run_batch(args: argparse.Namespace) -> int:
     memory_defaults = ProceduralMemoryConfig()
     rows = load_custom_benchmark(args.config)
     evolve_until = getattr(args, "evolve_until", None)
+    if evolve_until is None:
+        evolve_until = load_benchmark_evolve_first_cases(args.config)
     if evolve_until is not None and not 0 <= evolve_until <= len(rows):
         raise ValueError(
             f"--evolve-until must be between 0 and the benchmark size ({len(rows)})"
         )
-    procedural_memory_mode = (
-        "evolve"
-        if args.procedural_memory
-        else "read"
-        if args.procedural_memory_read
-        else "off"
-    )
+    procedural_memory_mode = "evolve" if args.procedural_memory else "off"
     config = AgentRunConfig(
         agent_type=getattr(args, "agent", baseline_defaults.agent_type),
         llm_provider=args.provider,
@@ -266,7 +274,7 @@ def run_batch(args: argparse.Namespace) -> int:
         max_attempts=getattr(args, "max_attempts", baseline_defaults.max_attempts),
         procedural_memory=ProceduralMemoryConfig(
             mode=procedural_memory_mode,
-            bank=args.procedural_memory or args.procedural_memory_read or "default",
+            bank=args.procedural_memory or "default",
             token_budget=args.procedural_memory_tokens,
             max_skill_age=args.procedural_memory_max_skill_age,
             pool_size=args.procedural_memory_pool_size,
@@ -309,9 +317,15 @@ def run_batch(args: argparse.Namespace) -> int:
                 "procedural_memory_min_positive_advantage",
                 memory_defaults.min_positive_advantage,
             ),
-            evolver_model=getattr(args, "procedural_memory_evolver_model", ""),
+            evolver_model=getattr(
+                args,
+                "procedural_memory_evolver_model",
+                memory_defaults.evolver_model,
+            ),
             policy_scorer_model=getattr(
-                args, "procedural_memory_policy_scorer_model", ""
+                args,
+                "procedural_memory_policy_scorer_model",
+                memory_defaults.policy_scorer_model,
             ),
         ),
         tool_refinement=ToolRefinementConfig(
@@ -355,17 +369,62 @@ def run_batch(args: argparse.Namespace) -> int:
         ),
     )
     validate_agent_extensions(config)
-    _root, pending = scan_benchmark_cases(
+    results_root, pending = scan_benchmark_cases(
         rows=rows,
         result_dir=args.result_dir,
         resume=args.resume,
     )
+    frozen_memory_hash = ""
+    memory_freezer: ProceduralMemoryModule | None = None
+    freeze_manifest_path = results_root / "procedural_memory_freeze.json"
+    if config.procedural_memory.mode == "evolve" and evolve_until is not None:
+        memory_freezer = ProceduralMemoryModule(bank_id=config.procedural_memory.bank)
+        training_pending = any(index < evolve_until for index in pending)
+        read_pending = any(index >= evolve_until for index in pending)
+        if read_pending and not training_pending and freeze_manifest_path.exists():
+            previous_manifest = _read_json(freeze_manifest_path)
+            expected_hash = str(previous_manifest.get("state_hash") or "")
+            current_hash = memory_freezer.bank_state_hash()
+            if expected_hash and current_hash != expected_hash:
+                raise ValueError(
+                    "Procedural Memory bank differs from the frozen resume snapshot: "
+                    f"expected {expected_hash}, got {current_hash}"
+                )
+            frozen_memory_hash = expected_hash
+
+    def freeze_memory_bank() -> str:
+        if memory_freezer is None:
+            return ""
+        manifest = memory_freezer.freeze_for_evaluation(
+            output_path=results_root / "procedural_memory_frozen_bank.jsonl"
+        )
+        freeze_manifest_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        print(
+            "procedural_memory_frozen "
+            f"bank={manifest['bank_id']} iteration={manifest['iteration']} "
+            f"state_hash={manifest['state_hash']}",
+            flush=True,
+        )
+        return str(manifest["state_hash"])
+
     failed = 0
     completed = len(rows) - len(pending)
     for index in pending:
         row = rows[index]
         case_config = config
         learning_phase_end = evolve_until if evolve_until is not None else len(rows)
+        benchmark_phase = None
+        if evolve_until is not None:
+            benchmark_phase = "evolve" if index < evolve_until else "read"
+        if (
+            memory_freezer is not None
+            and index >= learning_phase_end
+            and not frozen_memory_hash
+        ):
+            frozen_memory_hash = freeze_memory_bank()
         tool_learning_enabled = (
             config.tool_refinement.enabled and index < learning_phase_end
         )
@@ -395,6 +454,8 @@ def run_batch(args: argparse.Namespace) -> int:
             f"index={index + 1}/{len(rows)} scenario={row['scenario']} "
             f"topo_size={row.get('topo_size') or '-'} problem={row['problem']}"
         )
+        if benchmark_phase:
+            label += f" benchmark_phase={benchmark_phase}"
         if case_config.procedural_memory.enabled:
             label += f" procedural_memory_mode={case_config.procedural_memory.mode}"
         if case_config.tool_refinement.enabled:
@@ -419,6 +480,8 @@ def run_batch(args: argparse.Namespace) -> int:
                     run_judge=args.judge,
                     judge_provider=args.judge_provider,
                     judge_model=args.judge_model,
+                    benchmark_index=index + 1,
+                    benchmark_phase=benchmark_phase,
                 )
             else:
                 session_id, session_dir = run_single_case(
@@ -435,7 +498,27 @@ def run_batch(args: argparse.Namespace) -> int:
                     judge_model=args.judge_model,
                     result_dir=args.result_dir,
                     emit_completion_event=False,
+                    benchmark_index=index + 1,
+                    benchmark_phase=benchmark_phase,
                 )
+            if case_config.procedural_memory.mode == "read" and frozen_memory_hash:
+                current_hash = (
+                    memory_freezer.bank_state_hash() if memory_freezer else ""
+                )
+                if current_hash != frozen_memory_hash:
+                    raise RuntimeError(
+                        "Procedural Memory bank changed during read-only evaluation: "
+                        f"expected {frozen_memory_hash}, got {current_hash}"
+                    )
+                try:
+                    Session().load_closed_session(
+                        session_id=session_id
+                    ).update_run_meta(
+                        "procedural_memory_frozen_state_hash",
+                        frozen_memory_hash,
+                    )
+                except (AttributeError, FileNotFoundError, ValueError):
+                    pass
             completed += 1
             print(
                 f"benchmark_done {label} session_id={session_id} session_dir={session_dir}",
@@ -540,20 +623,19 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--tool-refinement-rewriter-model", default="")
     parser.add_argument("--procedural-memory", metavar="BANK_ID")
     parser.add_argument(
-        "--procedural-memory-read", dest="procedural_memory_read", metavar="BANK_ID"
-    )
-    parser.add_argument(
         "--evolve-until",
         dest="evolve_until",
         type=int,
         metavar="CASE_COUNT",
         help=(
-            "Evolve enabled learning modules on the first CASE_COUNT benchmark "
-            "cases, then reuse their artifacts read-only. Zero reads for all cases."
+            "Tag the first CASE_COUNT benchmark cases as evolve and later cases "
+            "as read/evaluation. Enabled learning modules evolve before the "
+            "boundary and run read-only after it. Zero reads for all cases."
         ),
     )
     parser.add_argument(
         "--procedural-memory-tokens",
+        "--procedural-memory-token-budget",
         dest="procedural_memory_tokens",
         type=int,
         default=memory_defaults.token_budget,
@@ -640,24 +722,20 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=memory_defaults.min_positive_advantage,
     )
-    parser.add_argument("--procedural-memory-evolver-model", default="")
-    parser.add_argument("--procedural-memory-policy-scorer-model", default="")
+    parser.add_argument(
+        "--procedural-memory-evolver-model",
+        default=memory_defaults.evolver_model,
+    )
+    parser.add_argument(
+        "--procedural-memory-policy-scorer-model",
+        default=memory_defaults.policy_scorer_model,
+    )
     return parser
 
 
 def main() -> None:
     configure_custom_provider_environment()
     args = build_parser().parse_args()
-    if args.procedural_memory and args.procedural_memory_read:
-        raise SystemExit(
-            "Use either --procedural-memory or --procedural-memory-read, not both"
-        )
-    if (
-        args.evolve_until is not None
-        and not args.procedural_memory
-        and not args.tool_refinement
-    ):
-        raise SystemExit("--evolve-until requires an evolving learning module")
     if args.judge and (not args.judge_provider or not args.judge_model):
         raise SystemExit("--judge-provider and --judge-model are required with --judge")
 
@@ -671,10 +749,7 @@ def main() -> None:
         print("benchmark_stopped reason=signal", flush=True)
         exit_code = 130
     finally:
-        try:
-            clean_emulation_environment()
-        finally:
-            signal.signal(signal.SIGTERM, previous_sigterm)
+        signal.signal(signal.SIGTERM, previous_sigterm)
     raise SystemExit(exit_code)
 
 

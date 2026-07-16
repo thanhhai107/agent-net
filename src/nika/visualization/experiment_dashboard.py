@@ -394,6 +394,8 @@ RESULT_SUMMARY_COLUMNS = [
 RESULT_DETAIL_COLUMNS = [
     "result_root",
     "progress",
+    "evaluation_cases",
+    "learning_cases",
     "detection_score",
     "incident_success",
     "localization_f1",
@@ -450,6 +452,8 @@ RESULT_NUMERIC_COLUMNS = {
 
 RESULT_INTEGER_COLUMNS = {
     "cases",
+    "evaluation_cases",
+    "learning_cases",
     "finished",
     "failed",
     "submitted",
@@ -525,6 +529,8 @@ def _result_column_label(column: str) -> str:
         "procedural_memory_reward": "Memory Reward",
         "procedural_memory_advantage": "Memory Advantage",
         "procedural_memory_success": "Memory Success",
+        "evaluation_cases": "Read/evaluation cases",
+        "learning_cases": "Evolve cases",
     }
     return labels.get(column, column.replace("_", " ").title())
 
@@ -584,6 +590,9 @@ def _top_result_root(run_path: Path) -> Path:
 
 
 def _case_key(meta: dict) -> object:
+    fingerprint = str(meta.get("benchmark_fingerprint") or "").strip()
+    if fingerprint:
+        return fingerprint
     if meta.get("benchmark_index") is not None:
         return meta.get("benchmark_index")
     problem_names = meta.get("problem_names") or []
@@ -600,6 +609,14 @@ def _is_baseline_meta(meta: dict) -> bool:
         not bool(meta.get("tool_refinement_enabled"))
         and str(meta.get("procedural_memory_mode") or "off") == "off"
     )
+
+
+def _benchmark_phase(meta: dict) -> str:
+    phase = str(meta.get("benchmark_phase") or "").strip().lower()
+    if phase in {"evolve", "read"}:
+        return phase
+    memory_mode = str(meta.get("procedural_memory_mode") or "").strip().lower()
+    return memory_mode if memory_mode in {"evolve", "read"} else ""
 
 
 def _metric_total(metrics: dict, *, is_anomaly: bool) -> float | None:
@@ -629,6 +646,20 @@ def _root_case_map(run_paths: list[Path]) -> dict[object, dict[str, object]]:
             "is_anomaly": bool(ground_truth.get("is_anomaly", True)),
         }
     return cases
+
+
+def _primary_result_paths(run_paths: list[Path]) -> list[Path]:
+    """Use read-phase cases when a curriculum run contains both phases."""
+
+    read_paths: list[Path] = []
+    has_evolve = False
+    for path in run_paths:
+        phase = _benchmark_phase(_read_json(path))
+        if phase == "read":
+            read_paths.append(path)
+        elif phase == "evolve":
+            has_evolve = True
+    return read_paths if read_paths and has_evolve else run_paths
 
 
 def _paired_stats(
@@ -715,8 +746,11 @@ def _result_rows(*, benchmark_name: str | None = None) -> list[dict[str, object]
         group_key = root
         grouped.setdefault(group_key, []).append(run_path)
 
+    primary_paths = {
+        root: _primary_result_paths(run_paths) for root, run_paths in grouped.items()
+    }
     root_cases = {
-        root: _root_case_map(run_paths) for root, run_paths in grouped.items()
+        root: _root_case_map(run_paths) for root, run_paths in primary_paths.items()
     }
     baseline_roots = [
         root
@@ -758,16 +792,25 @@ def _result_rows(*, benchmark_name: str | None = None) -> list[dict[str, object]
         submitted = 0
         finished = 0
         failed = 0
+        evolve_cases = 0
+        read_cases = 0
         result_modules: set[str] = set()
         agents: set[str] = set()
         models: set[str] = set()
 
+        metric_paths = set(primary_paths[gkey])
         for run_path in run_paths:
             session_dir = run_path.parent
             meta = _read_json(run_path)
+            phase = _benchmark_phase(meta)
+            if phase == "evolve":
+                evolve_cases += 1
+            elif phase == "read":
+                read_cases += 1
             metrics = _read_json(session_dir / "eval_metrics.json")
             ground_truth = _read_json(session_dir / "ground_truth.json")
             is_anomaly = bool(ground_truth.get("is_anomaly", True))
+            include_primary_metrics = run_path in metric_paths
             if meta.get("status") == "finished":
                 finished += 1
             has_eval = (session_dir / "eval_metrics.json").exists()
@@ -793,18 +836,25 @@ def _result_rows(*, benchmark_name: str | None = None) -> list[dict[str, object]
                     ]
                 )
             for key, target in metric_targets:
+                if not include_primary_metrics:
+                    continue
                 value = _float(metrics.get(key))
                 if value is not None:
                     target.append(value)
 
-            incident_score = _metric_total(metrics, is_anomaly=is_anomaly)
+            incident_score = (
+                _metric_total(metrics, is_anomaly=is_anomaly)
+                if include_primary_metrics
+                else None
+            )
             if incident_score is not None:
                 incident_successes.append(1.0 if incident_score >= 1.0 else 0.0)
 
-            detection_tp += _float(metrics.get("detection_tp")) or 0.0
-            detection_tn += _float(metrics.get("detection_tn")) or 0.0
-            detection_fp += _float(metrics.get("detection_fp")) or 0.0
-            detection_fn += _float(metrics.get("detection_fn")) or 0.0
+            if include_primary_metrics:
+                detection_tp += _float(metrics.get("detection_tp")) or 0.0
+                detection_tn += _float(metrics.get("detection_tn")) or 0.0
+                detection_fp += _float(metrics.get("detection_fp")) or 0.0
+                detection_fn += _float(metrics.get("detection_fn")) or 0.0
 
             procedural_memory_update = metrics.get("procedural_memory") or {}
             if isinstance(procedural_memory_update, dict):
@@ -822,7 +872,7 @@ def _result_rows(*, benchmark_name: str | None = None) -> list[dict[str, object]
                         1.0 if procedural_memory_update.get("episode_success") else 0.0
                     )
             dur = _parse_duration(meta)
-            if dur is not None:
+            if include_primary_metrics and dur is not None:
                 durations.append(dur)
 
             if meta.get("tool_refinement_enabled"):
@@ -843,6 +893,14 @@ def _result_rows(*, benchmark_name: str | None = None) -> list[dict[str, object]
         row = {
             "result_root": display_name,
             "cases": len(run_paths),
+            "evaluation_cases": (
+                read_cases if evolve_cases or read_cases else len(metric_paths)
+            ),
+            "learning_cases": (
+                evolve_cases
+                if evolve_cases or read_cases
+                else len(procedural_memory_rewards)
+            ),
             "finished": finished,
             "failed": failed,
             "submitted": submitted,
@@ -937,7 +995,10 @@ st.markdown('<div class="section-title">Studio</div>', unsafe_allow_html=True)
 baseline_settings = st.expander("Experimental Setting", expanded=False)
 baseline_settings.__enter__()
 if baseline_settings is not None:
-    b_col1, b_col2, b_col3, b_col4 = st.columns([1.1, 1, 1.5, 1.5], gap="small")
+    b_col1, b_col2, b_col3, b_col4, b_col5, b_col6 = st.columns(
+        [1.05, 1.05, 1.8, 0.75, 1.45, 1.0],
+        gap="small",
+    )
     with b_col1:
         agent_options = ["react", "plan-execute", "reflexion"]
         agent_type = st.selectbox(
@@ -957,6 +1018,10 @@ if baseline_settings is not None:
     with b_col3:
         model = st.text_input("Model", value=DEFAULT_MODEL)
     with b_col4:
+        default_max_steps = DEFAULT_STUDIO_MAX_STEPS
+        max_steps_str = st.text_input("Steps", value=str(default_max_steps))
+        max_steps = int(max_steps_str) if max_steps_str.isdigit() else default_max_steps
+    with b_col5:
         benchmark_name = st.text_input(
             "Benchmark",
             value=Path(DEFAULT_STUDIO_BENCHMARK).stem,
@@ -981,41 +1046,30 @@ if baseline_settings is not None:
             row_count = None
             default_evolve_cases = 0
             benchmark_error = f"Invalid benchmark YAML: {exc}"
-    evolve_module_enabled = bool(
-        st.session_state.get("tool_refinement_enabled", False)
-        or st.session_state.get("procedural_memory_enabled", False)
-    )
-    baseline_controls = st.columns(
-        4 if agent_type == "reflexion" else 3,
-        gap="small",
-    )
-    with baseline_controls[0]:
-        default_max_steps = DEFAULT_STUDIO_MAX_STEPS
-        max_steps_str = st.text_input("Steps", value=str(default_max_steps))
-        max_steps = int(max_steps_str) if max_steps_str.isdigit() else default_max_steps
-    control_index = 1
+    with b_col6:
+        evolve_until = st.number_input(
+            "Index Evaluate",
+            min_value=0,
+            max_value=max(int(row_count or 0), 1),
+            value=int(default_evolve_cases),
+            step=1,
+            help=(
+                "Cases 1..Index Evaluate are tagged evolve; later cases are "
+                "tagged read/evaluation. The split is recorded even when no "
+                "learning module is enabled."
+            ),
+        )
     if agent_type == "reflexion":
-        with baseline_controls[control_index]:
+        attempts_col, _ = st.columns([1, 5], gap="small")
+        with attempts_col:
             max_attempts = st.number_input(
                 "Attempts",
                 min_value=1,
                 max_value=10,
                 value=BASELINE_DEFAULTS.max_attempts,
             )
-        control_index += 1
     else:
         max_attempts = BASELINE_DEFAULTS.max_attempts
-    evolve_until = int(default_evolve_cases)
-    if evolve_module_enabled:
-        with baseline_controls[control_index]:
-            evolve_until = st.number_input(
-                "Learning cases before read-only",
-                min_value=0,
-                max_value=max(int(row_count or 0), 1),
-                value=int(default_evolve_cases),
-                step=1,
-                help="Applies only while Tool Refinement or Procedural Memory is enabled.",
-            )
     run_judge = BASELINE_DEFAULTS.judge_evaluation
     judge_backend = BASELINE_DEFAULTS.judge_provider
     judge_model = BASELINE_DEFAULTS.judge_model
@@ -1044,7 +1098,7 @@ tool_min_new_trials = TOOL_REFINEMENT_DEFAULTS.min_new_trials
 tool_max_tools_per_update = TOOL_REFINEMENT_DEFAULTS.max_tools_per_update
 tool_publish_min_utility = TOOL_REFINEMENT_DEFAULTS.publish_min_utility
 procedural_memory_bank = ""
-procedural_memory_tokens = PROCEDURAL_MEMORY_DEFAULTS.token_budget
+procedural_memory_token_budget = PROCEDURAL_MEMORY_DEFAULTS.token_budget
 procedural_memory_max_skill_age = PROCEDURAL_MEMORY_DEFAULTS.max_skill_age
 procedural_memory_pool_size = PROCEDURAL_MEMORY_DEFAULTS.pool_size
 procedural_memory_update_threshold = PROCEDURAL_MEMORY_DEFAULTS.evolution_threshold
@@ -1058,20 +1112,21 @@ procedural_memory_epsilon_decay_cases = (
 procedural_memory_baseline_ema_alpha = PROCEDURAL_MEMORY_DEFAULTS.baseline_ema_alpha
 procedural_memory_acceptance_margin = PROCEDURAL_MEMORY_DEFAULTS.acceptance_margin
 procedural_memory_verifier = PROCEDURAL_MEMORY_DEFAULTS.verifier
-procedural_memory_evolver_model = MODULE_DEFAULTS.procedural_memory.llm_model
-procedural_memory_policy_scorer_model = (
-    MODULE_DEFAULTS.procedural_memory.skill_logprob_model
-)
+procedural_memory_evolver_model = PROCEDURAL_MEMORY_DEFAULTS.evolver_model
+procedural_memory_policy_scorer_model = PROCEDURAL_MEMORY_DEFAULTS.policy_scorer_model
 procedural_memory_holdout_size = PROCEDURAL_MEMORY_DEFAULTS.holdout_size
 procedural_memory_min_positive_advantage = (
     PROCEDURAL_MEMORY_DEFAULTS.min_positive_advantage
 )
 
 with st.container():
-    memory_header, memory_toggle_col = st.columns([3, 1], vertical_alignment="center")
-    with memory_header:
+    with st.container(
+        horizontal=True,
+        horizontal_alignment="distribute",
+        vertical_alignment="center",
+        gap="small",
+    ):
         st.markdown("Enable Procedural Memory")
-    with memory_toggle_col:
         procedural_memory_selected = st.toggle(
             "Enabled",
             value=False,
@@ -1080,16 +1135,19 @@ with st.container():
             help="Enable Procedural Memory",
         )
     if procedural_memory_selected:
-        m_col1, m_col2, m_col5, m_col6 = st.columns(4, gap="small")
+        procedural_memory_bank = st.text_input(
+            "Procedural Memory bank",
+            value="",
+            placeholder="auto",
+            disabled=not procedural_memory_selected,
+            help=(
+                "Studio evolves this bank through Index Evaluate, then reuses "
+                "the frozen bank read-only."
+            ),
+        )
+        m_col1, m_col2, m_col5 = st.columns(3, gap="small")
         with m_col1:
-            procedural_memory_bank = st.text_input(
-                "Procedural Memory bank",
-                value="",
-                placeholder="auto",
-                disabled=not procedural_memory_selected,
-            )
-        with m_col2:
-            procedural_memory_tokens = st.number_input(
+            procedural_memory_token_budget = st.number_input(
                 "Skill context budget",
                 min_value=100,
                 max_value=8000,
@@ -1099,7 +1157,7 @@ with st.container():
                 help="Upper budget used to derive the bounded active-skill policy context.",
             )
 
-        with m_col5:
+        with m_col2:
             procedural_memory_max_skill_age = st.number_input(
                 "Max actions / activation",
                 min_value=1,
@@ -1108,7 +1166,7 @@ with st.container():
                 disabled=not procedural_memory_selected,
             )
 
-        with m_col6:
+        with m_col5:
             procedural_memory_pool_size = st.number_input(
                 "Skill pool capacity",
                 min_value=1,
@@ -1116,7 +1174,6 @@ with st.container():
                 value=PROCEDURAL_MEMORY_DEFAULTS.pool_size,
                 disabled=not procedural_memory_selected,
             )
-
         m_col10, m_col11, m_col12, m_col13 = st.columns(4, gap="small")
         with m_col10:
             procedural_memory_update_threshold = st.number_input(
@@ -1209,8 +1266,14 @@ with st.container():
                 format_func=lambda value: {
                     "behavioral_replay": "Behavioral replay (LLM)",
                     "structured_replay": "Structured replay",
-                    "policy_logprob": "Policy log-prob (exact PPO)",
+                    "policy_logprob": "Policy log-prob (completion replay)",
                 }[value],
+                help=(
+                    "Policy log-prob uses a completion endpoint to replay the exact "
+                    "Skill system prompt and serialized historical action. Chat "
+                    "messages and tool schemas remain provider-side context and "
+                    "cannot be replayed by this endpoint."
+                ),
                 disabled=not procedural_memory_selected,
             )
 
@@ -1218,13 +1281,13 @@ with st.container():
         with m_col19:
             procedural_memory_evolver_model = st.text_input(
                 "Semantic-gradient / Evolver model",
-                value=MODULE_DEFAULTS.procedural_memory.llm_model,
+                value=PROCEDURAL_MEMORY_DEFAULTS.evolver_model,
                 disabled=not procedural_memory_selected,
             )
         with m_col20:
             procedural_memory_policy_scorer_model = st.text_input(
                 "Verifier model",
-                value=MODULE_DEFAULTS.procedural_memory.skill_logprob_model,
+                value=PROCEDURAL_MEMORY_DEFAULTS.policy_scorer_model,
                 disabled=(
                     not procedural_memory_selected
                     or procedural_memory_verifier == "structured_replay"
@@ -1279,10 +1342,13 @@ with st.container():
 st.markdown('<div class="module-expander-gap"></div>', unsafe_allow_html=True)
 
 with st.container():
-    tool_header, tool_toggle_col = st.columns([3, 1], vertical_alignment="center")
-    with tool_header:
+    with st.container(
+        horizontal=True,
+        horizontal_alignment="distribute",
+        vertical_alignment="center",
+        gap="small",
+    ):
         st.markdown("Enable Tool Refinement")
-    with tool_toggle_col:
         tool_selected = st.toggle(
             "Enabled",
             value=False,
@@ -1395,10 +1461,13 @@ with st.container():
 
 st.markdown('<div class="module-expander-gap"></div>', unsafe_allow_html=True)
 with st.container():
-    judge_header, judge_toggle_col = st.columns([3, 1], vertical_alignment="center")
-    with judge_header:
+    with st.container(
+        horizontal=True,
+        horizontal_alignment="distribute",
+        vertical_alignment="center",
+        gap="small",
+    ):
         st.markdown("Enable LLM Judge")
-    with judge_toggle_col:
         run_judge = st.toggle(
             "Enabled",
             value=BASELINE_DEFAULTS.judge_evaluation,
@@ -1444,7 +1513,7 @@ config = {
     "tool_publish_min_utility": float(tool_publish_min_utility),
     "procedural_memory_bank": procedural_memory_bank,
     "evolve_until": int(evolve_until),
-    "procedural_memory_tokens": int(procedural_memory_tokens),
+    "procedural_memory_token_budget": int(procedural_memory_token_budget),
     "procedural_memory_max_skill_age": int(procedural_memory_max_skill_age),
     "procedural_memory_pool_size": int(procedural_memory_pool_size),
     "procedural_memory_update_threshold": int(procedural_memory_update_threshold),
@@ -1620,8 +1689,7 @@ if selected is not None:
             disabled=not can_stop,
             width="stretch",
         ):
-            with st.spinner("Stopping selected run and wiping Kathara containers..."):
-                stop_run(selected)
+            stop_run(selected)
             st.rerun()
 
 

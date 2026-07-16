@@ -14,6 +14,30 @@ def is_no_fault_problem(problem: str) -> bool:
     return problem.strip().lower() == "no_fault"
 
 
+def load_benchmark_evolve_first_cases(path: str | Path) -> int | None:
+    """Return the optional evolve/read curriculum boundary from a benchmark."""
+
+    data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(data, dict) or "cases" not in data:
+        raise ValueError(f"Invalid benchmark YAML (missing top-level 'cases'): {path}")
+    cases = data["cases"]
+    if not isinstance(cases, list):
+        raise ValueError(f"Invalid benchmark YAML ('cases' must be a list): {path}")
+    cutoff = data.get("evolve_first_cases")
+    if cutoff is None:
+        return None
+    if isinstance(cutoff, bool) or not isinstance(cutoff, int):
+        raise ValueError(
+            f"Invalid benchmark YAML ('evolve_first_cases' must be an integer): {path}"
+        )
+    if not 0 <= cutoff <= len(cases):
+        raise ValueError(
+            "Invalid benchmark YAML ('evolve_first_cases' must be between 0 "
+            f"and {len(cases)}): {path}"
+        )
+    return cutoff
+
+
 def load_benchmark_yaml(path: str | Path) -> list[dict[str, Any]]:
     """Load benchmark cases from a YAML file.
 

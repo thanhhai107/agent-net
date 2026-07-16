@@ -52,6 +52,8 @@ class SkillStep(BaseModel):
     rationale: str = ""
     policy_state: str = ""
     policy_context: str = ""
+    policy_token_budget: int = 0
+    selection_probability: float = 0.0
     activation_id: str = ""
 
 
@@ -125,6 +127,8 @@ class SkillTransition(BaseModel):
     status: Literal["success", "error", "unknown"] = "unknown"
     done: bool = False
     policy_context: str = ""
+    policy_token_budget: int = 0
+    selection_probability: float = 0.0
     activation_id: str = ""
 
 
@@ -137,6 +141,8 @@ class SkillExperience(BaseModel):
     skill_ids: list[str] = Field(default_factory=list)
     trajectory: str = ""
     scenario: str = ""
+    topology_class: str = ""
+    credit_weight: float = 1.0
     metrics: dict[str, float] = Field(default_factory=dict)
     transitions: list[SkillTransition] = Field(default_factory=list)
     step_count: int = 0
@@ -166,6 +172,8 @@ class ProceduralSkill(BaseModel):
     score: float = 0.0
     prior_score: float = 0.0
     frequency: int = 0
+    episode_exposures: int = 0
+    activation_count: int = 0
     total_gain: float = 0.0
     avg_gain: float = 0.0
     maturity: int = 0
@@ -198,9 +206,13 @@ class ProceduralSkill(BaseModel):
         skill_call_count: int = 1,
     ) -> None:
         advantage = reward - baseline
-        per_call_gain = advantage / max(total_skill_calls, 1)
-        self.total_gain += skill_call_count * per_call_gain
-        self.frequency += skill_call_count
+        credit_weight = skill_call_count / max(total_skill_calls, 1)
+        self.total_gain += advantage * credit_weight
+        # Confidence is based on independent episode exposure. Re-entering the
+        # same option several times in one episode is correlated evidence.
+        self.frequency += 1
+        self.episode_exposures += 1
+        self.activation_count += skill_call_count
         self.avg_gain = self.total_gain / max(self.frequency, 1)
         if advantage > 0:
             self.success_count += 1
@@ -240,6 +252,8 @@ class PPOGateDecision(BaseModel):
     candidate_skill_id: str = ""
     parent_skill_id: str = ""
     j_score: float = 0.0
+    parent_j_score: float = 0.0
+    delta_j_score: float = 0.0
     candidate_alignment: float = 0.0
     baseline_alignment: float = 0.0
     sample_count: int = 0

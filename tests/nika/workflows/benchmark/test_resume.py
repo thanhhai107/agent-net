@@ -130,8 +130,39 @@ class BenchmarkResumeTestCase(unittest.TestCase):
         cleanup_benchmark_session("20260101-120000-bad111", session_dir)
         self.assertFalse(session_dir.exists())
 
-    def test_case_cleans_environment_before_and_after_failure(self) -> None:
-        clean = Mock()
+    def test_cleanup_undeploys_lab_from_persisted_failed_session(self) -> None:
+        session_id = "20260101-120000-failed"
+        session_dir = self.results_root / session_id
+        session_dir.mkdir(parents=True)
+        run_meta = {
+            "session_id": session_id,
+            "status": "failed",
+            "scenario_name": "simple_bgp",
+            "lab_name": "simple_bgp__old-case",
+            "backend": "kathara",
+        }
+        (session_dir / RUN_FILENAME).write_text(json.dumps(run_meta), encoding="utf-8")
+        runtime = Mock()
+        store = Mock()
+        store.get_session.side_effect = FileNotFoundError
+
+        with (
+            patch("nika.workflows.benchmark.resume.SessionStore", return_value=store),
+            patch("nika.workflows.benchmark.resume.SessionIndex") as index,
+            patch(
+                "nika.workflows.benchmark.resume.runtime_for_session",
+                return_value=runtime,
+            ) as runtime_factory,
+        ):
+            cleanup_benchmark_session(session_id, session_dir)
+
+        runtime_factory.assert_called_once_with(run_meta)
+        runtime.destroy.assert_called_once_with()
+        index.return_value.purge.assert_called_once_with(session_id)
+        self.assertFalse(session_dir.exists())
+
+    def test_case_uses_session_scoped_cleanup_after_failure(self) -> None:
+        close_failed_case = Mock(return_value=None)
         store = Mock()
         store.get_session.return_value = {"session_dir": str(self.results_root)}
 
@@ -142,7 +173,6 @@ class BenchmarkResumeTestCase(unittest.TestCase):
                 return_value=False,
             ),
             patch.object(benchmark_run, "validate_inject_params"),
-            patch.object(benchmark_run, "clean_emulation_environment", clean),
             patch.object(benchmark_run, "start_net_env", return_value="session-1"),
             patch.object(benchmark_run, "SessionStore", return_value=store),
             patch.object(
@@ -153,7 +183,7 @@ class BenchmarkResumeTestCase(unittest.TestCase):
             patch.object(
                 benchmark_run,
                 "close_session_after_failure",
-                return_value=None,
+                close_failed_case,
             ),
         ):
             with self.assertRaisesRegex(RuntimeError, "inject failed"):
@@ -168,7 +198,8 @@ class BenchmarkResumeTestCase(unittest.TestCase):
                     inject_params={"host_name": "pc1", "intf_name": "eth0"},
                 )
 
-        self.assertEqual(clean.call_count, 2)
+        close_failed_case.assert_called_once()
+        self.assertEqual(close_failed_case.call_args.args[0], "session-1")
 
 
 if __name__ == "__main__":

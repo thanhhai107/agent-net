@@ -102,6 +102,7 @@ def test_learning_module_failure_does_not_block_other_update(
 
     async def update_memory(**_kwargs):
         memory_updates.append("updated")
+        return {"status": "deferred", "episode_reward": 0.5}
 
     def fail_refinement(**_kwargs):
         raise RuntimeError("refinement unavailable")
@@ -131,6 +132,10 @@ def test_learning_module_failure_does_not_block_other_update(
 
     errors = json.loads((tmp_path / "learning_errors.json").read_text(encoding="utf-8"))
     assert memory_updates == ["updated"]
+    saved_metrics = json.loads(
+        (tmp_path / "eval_metrics.json").read_text(encoding="utf-8")
+    )
+    assert saved_metrics["procedural_memory"]["episode_reward"] == 0.5
     assert errors[0]["module"] == "tool_refinement"
     assert "refinement unavailable" in errors[0]["error"]
 
@@ -263,21 +268,22 @@ def test_extension_parser_uses_canonical_feature_terms() -> None:
     )
     assert canonical.procedural_memory_max_skill_age == 8
     assert canonical.procedural_memory_update_threshold == 6
-    assert canonical.procedural_memory_selection_epsilon == 0.3
+    assert canonical.procedural_memory_selection_epsilon == 0.25
     assert canonical.tool_refinement_exploration_similarity_threshold == 0.9
     assert canonical.tool_refinement_explorer_reflection_limit == 3
-    assert canonical.procedural_memory_experience_pool_size == 1000
+    assert canonical.procedural_memory_experience_pool_size == 256
     assert canonical.procedural_memory_baseline_ema_alpha == 0.1
-    assert canonical.procedural_memory_selection_epsilon_decay_cases == 500
-    assert canonical.procedural_memory_acceptance_margin == 0.001
+    assert canonical.procedural_memory_selection_epsilon_decay_cases == 75
+    assert canonical.procedural_memory_acceptance_margin == 0.01
     assert canonical.tool_refinement_explorer_model == ""
     assert canonical.tool_refinement_analyzer_model == ""
     assert canonical.tool_refinement_rewriter_model == ""
-    assert canonical.procedural_memory_evolver_model == ""
-    assert canonical.procedural_memory_policy_scorer_model == ""
+    assert canonical.procedural_memory_evolver_model == "openai/gpt-oss-120b"
+    assert canonical.procedural_memory_policy_scorer_model == "openai/gpt-oss-120b"
     help_text = parser.format_help()
     assert "--tool-refinement" in help_text
     assert "--procedural-memory" in help_text
+    assert "--procedural-memory-read" not in help_text
 
 
 def test_clean_control_scores_false_and_empty_submission_as_fully_correct() -> None:
@@ -438,11 +444,6 @@ def test_clean_control_path_never_injects_and_normalizes_before_learning(
     monkeypatch.setattr(benchmark_extension, "SessionStore", FakeStore)
     monkeypatch.setattr(
         benchmark_extension,
-        "clean_emulation_environment",
-        lambda: None,
-    )
-    monkeypatch.setattr(
-        benchmark_extension,
         "prepare_no_fault_case",
         lambda _session: calls.append("prepare_clean"),
     )
@@ -516,8 +517,8 @@ def test_procedural_memory_command_routes_through_extension_benchmark(
     procedural_memory_command.procedural_memory_run(
         file=benchmark,
         limit=None,
+        evolve_until=2,
         bank="test-bank",
-        read=False,
         reset_bank=False,
         llm_backend="custom",
         model="openai/gpt-oss-120b",
@@ -529,18 +530,54 @@ def test_procedural_memory_command_routes_through_extension_benchmark(
         best_of_n=5,
         ppo_epsilon=0.15,
         selection_epsilon=0.25,
+        experience_pool_size=900,
+        baseline_ema_alpha=0.2,
+        selection_epsilon_decay_cases=300,
+        acceptance_margin=0.005,
+        verifier="structured_replay",
+        holdout_size=1,
+        min_positive_advantage=1,
+        evolver_model="evolver-model",
+        policy_scorer_model="policy-model",
     )
 
     command = calls[0]
     assert command[1:3] == ["-m", "nika.extensions.benchmark"]
     assert command[command.index("--procedural-memory") + 1] == "test-bank"
+    assert "--procedural-memory-read" not in command
     assert command[command.index("--provider") + 1] == "custom"
+    assert command[command.index("--procedural-memory-token-budget") + 1] == "1200"
     assert command[command.index("--procedural-memory-max-skill-age") + 1] == "6"
     assert command[command.index("--procedural-memory-pool-size") + 1] == "24"
     assert command[command.index("--procedural-memory-update-threshold") + 1] == "2"
     assert command[command.index("--procedural-memory-best-of-n") + 1] == "5"
     assert command[command.index("--procedural-memory-ppo-epsilon") + 1] == "0.15"
     assert command[command.index("--procedural-memory-selection-epsilon") + 1] == "0.25"
+    assert (
+        command[command.index("--procedural-memory-experience-pool-size") + 1] == "900"
+    )
+    assert command[command.index("--procedural-memory-baseline-ema-alpha") + 1] == "0.2"
+    assert (
+        command[command.index("--procedural-memory-selection-epsilon-decay-cases") + 1]
+        == "300"
+    )
+    assert command[command.index("--procedural-memory-verifier") + 1] == (
+        "structured_replay"
+    )
+    assert command[command.index("--procedural-memory-holdout-size") + 1] == "1"
+    assert command[command.index("--procedural-memory-acceptance-margin") + 1] == (
+        "0.005"
+    )
+    assert (
+        command[command.index("--procedural-memory-min-positive-advantage") + 1] == "1"
+    )
+    assert command[command.index("--procedural-memory-evolver-model") + 1] == (
+        "evolver-model"
+    )
+    assert command[command.index("--procedural-memory-policy-scorer-model") + 1] == (
+        "policy-model"
+    )
+    assert command[command.index("--evolve-until") + 1] == "2"
 
 
 def test_baseline_fault_row_routes_to_upstream_single_case(
@@ -548,6 +585,7 @@ def test_baseline_fault_row_routes_to_upstream_single_case(
 ) -> None:
     benchmark = tmp_path / "benchmark.yaml"
     benchmark.write_text(
+        "evolve_first_cases: 1\n"
         "cases:\n"
         "  - scenario: simple_bgp\n"
         "    problem: link_down\n"
@@ -583,7 +621,6 @@ def test_baseline_fault_row_routes_to_upstream_single_case(
             tool_refinement_doc_chars=500,
             tool_refinement_convergence_threshold=0.75,
             procedural_memory=None,
-            procedural_memory_read=None,
             procedural_memory_tokens=1500,
             procedural_memory_max_skill_age=4,
             procedural_memory_pool_size=32,
@@ -596,6 +633,8 @@ def test_baseline_fault_row_routes_to_upstream_single_case(
     assert result == 0
     assert calls[0]["agent_type"] == "react"
     assert calls[0]["llm_provider"] == "custom"
+    assert calls[0]["benchmark_index"] == 1
+    assert calls[0]["benchmark_phase"] == "evolve"
 
 
 def test_benchmark_switches_both_modules_to_read_after_evolve_cutoff(
@@ -603,6 +642,7 @@ def test_benchmark_switches_both_modules_to_read_after_evolve_cutoff(
 ) -> None:
     benchmark = tmp_path / "benchmark.yaml"
     benchmark.write_text(
+        "evolve_first_cases: 2\n"
         "cases:\n"
         "  - {scenario: simple_bgp, problem: no_fault, inject: {}}\n"
         "  - {scenario: simple_bgp, problem: no_fault, inject: {}}\n"
@@ -629,6 +669,26 @@ def test_benchmark_switches_both_modules_to_read_after_evolve_cutoff(
 
     monkeypatch.setattr(benchmark_extension, "run_extended_case", run_case)
 
+    class FakeMemory:
+        def __init__(self, *, bank_id):
+            self.bank_id = bank_id
+
+        def freeze_for_evaluation(self, *, output_path):
+            output_path.write_text("snapshot\n", encoding="utf-8")
+            return {
+                "bank_id": self.bank_id,
+                "iteration": 2,
+                "state_hash": "frozen-hash",
+                "snapshot_path": str(output_path),
+                "retired_probationary_skill_ids": [],
+                "validated_skill_ids": [],
+            }
+
+        def bank_state_hash(self):
+            return "frozen-hash"
+
+    monkeypatch.setattr(benchmark_extension, "ProceduralMemoryModule", FakeMemory)
+
     result = benchmark_extension.run_batch(
         Namespace(
             config=str(benchmark),
@@ -646,8 +706,7 @@ def test_benchmark_switches_both_modules_to_read_after_evolve_cutoff(
             tool_refinement_doc_chars=500,
             tool_refinement_convergence_threshold=0.75,
             procedural_memory="shared-bank",
-            procedural_memory_read=None,
-            evolve_until=2,
+            evolve_until=None,
             procedural_memory_tokens=1500,
             procedural_memory_max_skill_age=8,
             procedural_memory_pool_size=32,

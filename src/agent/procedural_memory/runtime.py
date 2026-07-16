@@ -25,7 +25,7 @@ from agent.procedural_memory.models import (
     SkillSelectionDraft,
 )
 from agent.procedural_memory.policy_context import (
-    build_skill_policy_prefix,
+    build_runtime_skill_policy_prefix,
     build_skill_policy_suffix,
 )
 from agent.procedural_memory.safety import redact_oracle_markers
@@ -145,6 +145,7 @@ class SkillToolRuntime:
         self._last_meta_controller_reason = ""
         self._decision_policy_state = ""
         self._decision_policy_context = ""
+        self._active_selection_probability = 0.0
         self._lock = Lock()
         self._metrics_lock = Lock()
         self.prompt_added_tokens = 0
@@ -234,6 +235,8 @@ class SkillToolRuntime:
                 else "",
                 "policy_state": self._decision_policy_state,
                 "policy_context": self._decision_policy_context,
+                "policy_token_budget": str(self.policy_token_budget),
+                "selection_probability": str(self._active_selection_probability),
                 "activation_id": self.active_activation_id,
             }
             self.inflight_tool_calls += 1
@@ -299,6 +302,12 @@ class SkillToolRuntime:
                 "observation_summary": text,
                 "policy_state": str(decision_snapshot.get("policy_state") or ""),
                 "policy_context": str(decision_snapshot.get("policy_context") or ""),
+                "policy_token_budget": int(
+                    decision_snapshot.get("policy_token_budget") or 0
+                ),
+                "selection_probability": float(
+                    decision_snapshot.get("selection_probability") or 0.0
+                ),
                 "activation_id": str(decision_snapshot.get("activation_id") or ""),
             }
             self.recent_transitions.append(transition)
@@ -314,6 +323,8 @@ class SkillToolRuntime:
                     "observation_summary": text,
                     "policy_state": transition["policy_state"],
                     "policy_context": transition["policy_context"],
+                    "policy_token_budget": transition["policy_token_budget"],
+                    "selection_probability": transition["selection_probability"],
                     "activation_id": transition["activation_id"],
                 },
             )
@@ -350,6 +361,8 @@ class SkillToolRuntime:
                 "observation_summary": "",
                 "policy_state": self._decision_policy_state,
                 "policy_context": self._decision_policy_context,
+                "policy_token_budget": self.policy_token_budget,
+                "selection_probability": self._active_selection_probability,
                 "activation_id": self.active_activation_id,
             }
             self.recent_transitions.append(transition)
@@ -369,7 +382,10 @@ class SkillToolRuntime:
             )
         skill = self.active_skill.skill if self.active_skill else None
         self._decision_policy_state = state
-        self._decision_policy_context = build_skill_policy_prefix(state, skill)
+        self._decision_policy_context = build_runtime_skill_policy_prefix(
+            skill,
+            max_tokens=self.policy_token_budget,
+        )
 
     def snapshot(self) -> dict[str, Any]:
         attributed_transitions = sum(
@@ -668,10 +684,14 @@ class SkillToolRuntime:
         explored, selected = self.procedural_memory.exploration_selection(
             epsilon=epsilon,
             key=exploration_key,
+            query=query,
             record_reuse=self.procedural_memory_mode == "evolve",
             exclude_skill_ids=self.skill_cooldowns,
         )
         self.active_skill = selected if explored else self._select_skill_with_llm(query)
+        self._active_selection_probability = (
+            self.procedural_memory.last_exploration_probability
+        )
         self.selection_count += 1
         self.active_activation_id = (
             f"{session_id}:{self.selection_count}"
@@ -697,6 +717,13 @@ class SkillToolRuntime:
                 "skill_age": self.skill_age,
                 "cooldown_exclusions": sorted(self.skill_cooldowns),
                 "selection_policy": "llm_direct_epsilon_greedy",
+                "selection_epsilon": round(epsilon, 6),
+                "explored": explored,
+                "selection_source": "contextual_exploration" if explored else "llm",
+                "selection_probability": round(
+                    self._active_selection_probability, 8
+                ),
+                "selection_arm": self.procedural_memory.last_exploration_arm,
             },
         )
         selected_id = self.active_skill.skill.skill_id if self.active_skill else ""

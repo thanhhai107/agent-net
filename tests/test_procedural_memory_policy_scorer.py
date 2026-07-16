@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from agent.procedural_memory.models import (
     ProceduralSkill,
@@ -14,7 +14,10 @@ from agent.procedural_memory.policy_scorer import (
     PolicyReplayItem,
     StructuredReplayPolicyScorer,
 )
-from agent.procedural_memory.policy_context import build_skill_policy_prefix
+from agent.procedural_memory.policy_context import (
+    build_runtime_skill_policy_prefix,
+    build_skill_policy_prefix,
+)
 
 
 def _skill(skill_id: str, tool: str) -> ProceduralSkill:
@@ -122,6 +125,66 @@ class PolicyScorerTest(unittest.TestCase):
         self.assertEqual(result.step_logprobs[0].candidate_logprob, -1.0)
         self.assertEqual(result.step_logprobs[0].baseline_logprob, -2.0)
         self.assertEqual(request.call_count, 2)
+
+    def test_policy_logprob_averages_target_token_scores(self) -> None:
+        class Response:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {
+                    "choices": [
+                        {
+                            "index": 0,
+                            "logprobs": {
+                                "text_offset": [0, 7, 8],
+                                "token_logprobs": [None, -1.0, -3.0],
+                            },
+                        }
+                    ]
+                }
+
+        scorer = PolicyLogprobScorer(
+            base_url="https://example.test/v1",
+            api_key="test-key",
+            model="test-model",
+        )
+        with patch(
+            "agent.procedural_memory.policy_scorer.requests.post",
+            return_value=Response(),
+        ):
+            scores = scorer._score_targets([("prefix ", "two tokens")])
+
+        self.assertEqual(scores, [-2.0])
+
+    def test_policy_logprob_replays_runtime_prompt_with_recorded_budget(self) -> None:
+        experience = _experience().model_copy(deep=True)
+        experience.transitions[0].policy_token_budget = 120
+        experience.transitions[0].policy_context = build_runtime_skill_policy_prefix(
+            _skill("baseline", "cat_file"),
+            max_tokens=120,
+        )
+        scorer = PolicyLogprobScorer(
+            base_url="https://example.test/v1",
+            api_key="test-key",
+            model="test-model",
+        )
+        scorer._score_targets = MagicMock(side_effect=[[-1.0], [-2.0]])
+
+        scorer.score_batch(
+            candidate=_skill("candidate", "ping_pair"),
+            baseline=_skill("baseline", "cat_file"),
+            experiences=[experience],
+        )
+
+        candidate_prefix = scorer._score_targets.call_args_list[0].args[0][0][0]
+        self.assertEqual(
+            candidate_prefix,
+            build_runtime_skill_policy_prefix(
+                _skill("candidate", "ping_pair"),
+                max_tokens=120,
+            ),
+        )
 
     def test_structured_replay_prefers_matching_tool_policy(self) -> None:
         result = StructuredReplayPolicyScorer().score_batch(

@@ -37,11 +37,13 @@ MODULE_CONFIG_SNAPSHOT_FILENAME = "modules.yaml"
 RESOLVED_MODULE_DEFAULTS = module_defaults()
 BASELINE_DEFAULTS = RESOLVED_MODULE_DEFAULTS.baseline
 TOOL_MODULE_DEFAULTS = RESOLVED_MODULE_DEFAULTS.tool_refinement
-MEMORY_MODULE_DEFAULTS = RESOLVED_MODULE_DEFAULTS.procedural_memory
 DEFAULT_STUDIO_BENCHMARK = str(BENCHMARK_DIR / BASELINE_DEFAULTS.benchmark)
 DEFAULT_STUDIO_MAX_STEPS = BASELINE_DEFAULTS.max_steps
 TOOL_REFINEMENT_DEFAULTS = ToolRefinementConfig()
 PROCEDURAL_MEMORY_DEFAULTS = ProceduralMemoryConfig()
+_STOP_GRACE_SECONDS = 120.0
+_STOP_KILL_GRACE_SECONDS = 10.0
+_STOP_POLL_SECONDS = 0.2
 
 MODULE_LABELS = {
     "tool_refinement": "Tool Refinement",
@@ -165,9 +167,6 @@ def build_experiment_command(config: dict[str, Any]) -> list[str]:
     modules = selected_modules(config)
     tool_enabled = "tool_refinement" in modules
     procedural_memory_enabled = "procedural_memory" in modules
-    procedural_memory_mode = str(
-        config.get("procedural_memory_mode") or "evolve"
-    ).lower()
     default_library_id = _command_experiment_id(config)
 
     command = _benchmark_command(config)
@@ -250,17 +249,18 @@ def build_experiment_command(config: dict[str, Any]) -> list[str]:
     if procedural_memory_enabled:
         command.extend(
             [
-                "--procedural-memory-read"
-                if procedural_memory_mode == "read"
-                else "--procedural-memory",
+                "--procedural-memory",
                 _str(
                     config.get("procedural_memory_bank"),
                     default_library_id,
                 ),
-                "--procedural-memory-tokens",
+                "--procedural-memory-token-budget",
                 str(
                     _int(
-                        config.get("procedural_memory_tokens"),
+                        config.get(
+                            "procedural_memory_token_budget",
+                            config.get("procedural_memory_tokens"),
+                        ),
                         PROCEDURAL_MEMORY_DEFAULTS.token_budget,
                     )
                 ),
@@ -329,12 +329,12 @@ def build_experiment_command(config: dict[str, Any]) -> list[str]:
                 "--procedural-memory-evolver-model",
                 _str(
                     config.get("procedural_memory_evolver_model"),
-                    MEMORY_MODULE_DEFAULTS.llm_model,
+                    PROCEDURAL_MEMORY_DEFAULTS.evolver_model,
                 ),
                 "--procedural-memory-policy-scorer-model",
                 _str(
                     config.get("procedural_memory_policy_scorer_model"),
-                    MEMORY_MODULE_DEFAULTS.skill_logprob_model,
+                    PROCEDURAL_MEMORY_DEFAULTS.policy_scorer_model,
                 ),
                 "--procedural-memory-verifier",
                 _str(
@@ -358,11 +358,7 @@ def build_experiment_command(config: dict[str, Any]) -> list[str]:
             ]
         )
     evolve_until = config.get("evolve_until")
-    if (
-        evolve_until is not None
-        and (tool_enabled or procedural_memory_mode != "read")
-        and (tool_enabled or procedural_memory_enabled)
-    ):
+    if evolve_until is not None:
         command.extend(["--evolve-until", str(_int(evolve_until, 0))])
     return command
 
@@ -381,6 +377,7 @@ def build_command_plan(config: dict[str, Any]) -> list[CommandPlan]:
 
 def prepare_experiment_config(config: dict[str, Any]) -> dict[str, Any]:
     prepared = dict(config)
+    legacy_memory_mode = str(prepared.pop("procedural_memory_mode", "")).lower()
     if "evolve_until" not in prepared:
         legacy_evolve_until = prepared.get(
             "learning_evolve_until",
@@ -399,6 +396,8 @@ def prepare_experiment_config(config: dict[str, Any]) -> dict[str, Any]:
     if not str(prepared.get("result_root") or "").strip():
         prepared["result_root"] = str(RESULTS_DIR / run_id)
     modules = selected_modules(prepared)
+    if legacy_memory_mode == "read" and "procedural_memory" in modules:
+        prepared["evolve_until"] = 0
     if (
         "tool_refinement" in modules
         and not str(prepared.get("tool_library_id") or "").strip()
@@ -701,6 +700,8 @@ def run_status(run_dir: Path) -> dict[str, Any]:
     meta = _read_json(run_dir / META_FILENAME)
     if meta.get("status") == "queued":
         return {**meta, "status": "queued", "exit_code": None}
+    if meta.get("stop_requested"):
+        return {**meta, "status": "running", "exit_code": None}
     if meta.get("status") == "stopped":
         return {**meta, "status": "stopped", "exit_code": None}
     if meta.get("status") == "failed":
@@ -797,45 +798,77 @@ def stop_run(run_dir: Path) -> None:
     pid = _int(meta.get("pid"), 0)
     if not pid:
         return
-    meta["status"] = "stopped"
-    meta["stopped_at"] = datetime.now(timezone.utc).isoformat()
+    meta["stop_requested"] = True
+    meta["stop_requested_at"] = datetime.now(timezone.utc).isoformat()
     _write_run_meta(run_dir, meta)
-    _append_run_log(
-        run_dir,
-        "ui_run_stopped " + json.dumps({"reason": "user_stop"}, ensure_ascii=False),
-    )
     try:
         os.killpg(pid, signal.SIGTERM)
     except ProcessLookupError:
         pass
-    for _ in range(150):
+    grace_polls = max(1, int(_STOP_GRACE_SECONDS / _STOP_POLL_SECONDS))
+    for _ in range(grace_polls):
         _pid_running(pid)
         if not _process_group_running(pid):
             break
-        time.sleep(0.2)
+        time.sleep(_STOP_POLL_SECONDS)
     _pid_running(pid)
+    forced = False
     if _process_group_running(pid):
+        forced = True
         try:
             os.killpg(pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
+        kill_polls = max(1, int(_STOP_KILL_GRACE_SECONDS / _STOP_POLL_SECONDS))
+        for _ in range(kill_polls):
+            _pid_running(pid)
+            if not _process_group_running(pid):
+                break
+            time.sleep(_STOP_POLL_SECONDS)
 
-    try:
-        clean_emulation_environment()
-    except Exception as exc:
+    if _process_group_running(pid):
         meta["status"] = "failed"
-        meta["cleanup_error"] = f"{type(exc).__name__}: {exc}"
+        meta["cleanup_error"] = "Process group did not exit after SIGKILL"
         _write_run_meta(run_dir, meta)
         _append_run_log(
             run_dir,
             "ui_cleanup_failed "
             + json.dumps(
-                {"error_type": type(exc).__name__, "error": str(exc)},
+                {
+                    "error_type": "ProcessExitError",
+                    "error": meta["cleanup_error"],
+                },
                 ensure_ascii=False,
             ),
         )
         return
 
+    if forced:
+        try:
+            clean_emulation_environment()
+        except Exception as exc:
+            meta["status"] = "failed"
+            meta["cleanup_error"] = f"{type(exc).__name__}: {exc}"
+            _write_run_meta(run_dir, meta)
+            _append_run_log(
+                run_dir,
+                "ui_cleanup_failed "
+                + json.dumps(
+                    {"error_type": type(exc).__name__, "error": str(exc)},
+                    ensure_ascii=False,
+                ),
+            )
+            return
+
+    meta["status"] = "stopped"
+    meta["stopped_at"] = datetime.now(timezone.utc).isoformat()
+    meta.pop("stop_requested", None)
+    _write_run_meta(run_dir, meta)
+    _append_run_log(
+        run_dir,
+        "ui_run_stopped "
+        + json.dumps({"reason": "user_stop", "forced": forced}, ensure_ascii=False),
+    )
     check_and_start_next_queued()
 
 
@@ -898,7 +931,13 @@ def run_spec_file(spec_path: str | Path) -> int:
     config = spec.get("config") or {}
     exit_code = 0
     total = len(commands)
-    previous_sigterm = signal.signal(signal.SIGTERM, lambda _signum, _frame: None)
+    stop_requested = False
+
+    def _request_stop(_signum, _frame) -> None:
+        nonlocal stop_requested
+        stop_requested = True
+
+    previous_sigterm = signal.signal(signal.SIGTERM, _request_stop)
     try:
         for index, item in enumerate(commands, start=1):
             name = str(item.get("name") or f"step-{index}")
@@ -962,10 +1001,11 @@ def run_spec_file(spec_path: str | Path) -> int:
         "ui_run_done " + json.dumps({"exit_code": exit_code}, ensure_ascii=False),
         flush=True,
     )
-    try:
-        check_and_start_next_queued()
-    except Exception as e:
-        print(f"Error starting next queued run: {e}", flush=True)
+    if not stop_requested:
+        try:
+            check_and_start_next_queued()
+        except Exception as e:
+            print(f"Error starting next queued run: {e}", flush=True)
     return exit_code
 
 

@@ -74,6 +74,10 @@ def _extract_runtime_skill_steps(entries: list[dict[str, Any]]) -> list[SkillSte
                 # serialization of provider-specific chat/tool payloads.
                 policy_state=str(entry.get("policy_state") or ""),
                 policy_context=str(entry.get("policy_context") or ""),
+                policy_token_budget=int(entry.get("policy_token_budget") or 0),
+                selection_probability=float(
+                    entry.get("selection_probability") or 0.0
+                ),
                 activation_id=str(entry.get("activation_id") or ""),
             )
         )
@@ -190,9 +194,12 @@ async def update_procedural_memory_from_session(
             "procedural_memory_min_positive_advantage",
             defaults.min_positive_advantage,
         ),
-        evolver_model=str(run_meta.get("procedural_memory_evolver_model") or ""),
+        evolver_model=str(
+            run_meta.get("procedural_memory_evolver_model") or defaults.llm_model
+        ),
         policy_scorer_model=str(
-            run_meta.get("procedural_memory_policy_scorer_model") or ""
+            run_meta.get("procedural_memory_policy_scorer_model")
+            or defaults.skill_logprob_model
         ),
     )
     evidence = EvaluationEvidence(
@@ -243,7 +250,9 @@ async def update_procedural_memory_from_session(
                 ),
                 "meta_controller": "llm_with_runtime_guards",
                 "max_skill_age": _int_meta(
-                    run_meta, "procedural_memory_max_skill_age", 8
+                    run_meta,
+                    "procedural_memory_max_skill_age",
+                    defaults.max_skill_age,
                 ),
                 "pool_size": module.pool_size,
                 "evolution_threshold": module.evolution_threshold,
@@ -254,6 +263,8 @@ async def update_procedural_memory_from_session(
                 "selection_epsilon_decay_cases": (module.selection_epsilon_decay_cases),
                 "acceptance_margin": module.acceptance_margin,
                 "verifier": module.verifier,
+                "verification_role": "offline_admissibility_prescreen",
+                "publication_policy": "online_probation_lcb",
                 "holdout_size": module.holdout_size,
                 "min_positive_advantage": module.min_positive_advantage,
                 "evolver_model": module._selected_evolver_model(),

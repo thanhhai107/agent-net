@@ -2,7 +2,6 @@
 
 import shutil
 import subprocess
-import time
 from datetime import datetime
 from pathlib import Path
 
@@ -18,6 +17,7 @@ from nika.config import (
 from nika.net_env.net_env_pool import get_net_env_instance
 from nika.runtime.base import LabCleanupError
 from nika.runtime.factory import resolve_backend, runtime_for_session
+from nika.runtime.kathara.cleanup import wipe_kathara_user_labs
 from nika.runtime.meta import meta_get, meta_path
 from nika.utils.logger import bind_session_dir, log_error_event, log_event
 from nika.utils.session import Session
@@ -107,18 +107,10 @@ def wipe_runtime_artifacts(
 def clean_emulation_environment() -> None:
     """Remove all Kathara and Containerlab labs owned by this benchmark host."""
     errors: list[str] = []
-    kathara_error: Exception | None = None
-    for attempt in range(3):
-        try:
-            Kathara.get_instance().wipe(all_users=False)
-            kathara_error = None
-            break
-        except Exception as exc:
-            kathara_error = exc
-            if attempt < 2:
-                time.sleep(1)
-    if kathara_error is not None:
-        errors.append(f"Kathara cleanup failed after 3 attempts: {kathara_error}")
+    try:
+        wipe_kathara_user_labs(Kathara.get_instance())
+    except Exception as exc:
+        errors.append(str(exc))
 
     if shutil.which("clab") is not None:
         result = subprocess.run(
@@ -186,25 +178,7 @@ def _stop_session_record(
         raise ValueError(f"Session '{session.session_id}' has no session_dir.")
     bind_session_dir(session_dir)
 
-    try:
-        lab_exists = net_env.lab_exists() if undeploy else False
-    except Exception as exc:
-        log_error_event(
-            "env_stop_failed",
-            f"Failed to inspect network environment before cleanup: {scenario} "
-            f"({session.session_id}): {exc}",
-            scenario=scenario,
-            session_id=session.session_id,
-            backend=backend,
-            error=str(exc),
-            error_type=type(exc).__name__,
-        )
-        raise LabCleanupError(
-            f"Failed to inspect lab {session.lab_name!r} before cleanup"
-        ) from exc
-
-    should_undeploy = undeploy and (lab_exists or backend == "containerlab")
-    if should_undeploy:
+    if undeploy:
         try:
             net_env.undeploy()
         except Exception as exc:
@@ -223,14 +197,6 @@ def _stop_session_record(
         log_event(
             "env_stop",
             f"Stopped network environment: {scenario} ({session.session_id})",
-            scenario=scenario,
-            session_id=session.session_id,
-            backend=backend,
-        )
-    elif undeploy:
-        log_event(
-            "env_stop_skipped",
-            f"Network environment {scenario} ({session.session_id}) is not deployed.",
             scenario=scenario,
             session_id=session.session_id,
             backend=backend,
@@ -276,25 +242,63 @@ def close_session(
     running = store.list_running_sessions()
 
     if stop_all:
-        try:
-            for session_meta in running:
+        record_failures: list[tuple[dict, Exception]] = []
+        errors: list[str] = []
+        for session_meta in running:
+            full_meta: dict | None = None
+            try:
                 full_meta = store.get_session(session_meta["session_id"])
                 _stop_session_record(
                     full_meta,
                     undeploy=undeploy,
                     final_status=final_status,
                 )
-        finally:
-            if undeploy:
+            except Exception as exc:
+                if full_meta is not None:
+                    record_failures.append((full_meta, exc))
+                else:
+                    errors.append(f"session {session_meta.get('session_id')}: {exc}")
+
+        global_cleanup_error: Exception | None = None
+        if undeploy:
+            try:
                 clean_emulation_environment()
-                removed = wipe_runtime_artifacts()
-                if removed:
-                    log_event(
-                        "runtime_artifacts_wiped",
-                        f"Removed {removed} leftover runtime entr"
-                        f"{'y' if removed == 1 else 'ies'}",
-                        count=removed,
+            except Exception as exc:
+                global_cleanup_error = exc
+
+        if global_cleanup_error is None:
+            for full_meta, first_error in record_failures:
+                try:
+                    _stop_session_record(
+                        full_meta,
+                        undeploy=undeploy,
+                        final_status=final_status,
                     )
+                except Exception as exc:
+                    errors.append(
+                        f"session {full_meta.get('session_id')}: {exc} "
+                        f"(initial error: {first_error})"
+                    )
+
+        if global_cleanup_error is not None:
+            errors.extend(
+                f"session {meta.get('session_id')}: {error}"
+                for meta, error in record_failures
+            )
+            errors.append(f"global cleanup: {global_cleanup_error}")
+
+        if undeploy and not errors:
+            removed = wipe_runtime_artifacts()
+            if removed:
+                log_event(
+                    "runtime_artifacts_wiped",
+                    f"Removed {removed} leftover runtime entr"
+                    f"{'y' if removed == 1 else 'ies'}",
+                    count=removed,
+                )
+
+        if errors:
+            raise LabCleanupError("; ".join(errors))
         return
 
     if not running:

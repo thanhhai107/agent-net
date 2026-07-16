@@ -9,6 +9,7 @@ import nika.runtime.kathara.patch  # noqa: F401
 from Kathara.manager.Kathara import Kathara
 
 from nika.runtime.base import LabRuntime
+from nika.runtime.kathara.cleanup import undeploy_kathara_lab
 from nika.runtime.docker_ops import pause_container, unpause_container
 from nika.runtime.exec_utils import exec_with_timeout
 from nika.service.shell import ShellResolver
@@ -82,14 +83,12 @@ class KatharaRuntime(LabRuntime):
         time.sleep(5)
 
     def destroy(self) -> None:
-        self._instance.undeploy_lab(lab_name=self.lab_name)
+        undeploy_kathara_lab(self._instance, lab_name=self.lab_name)
 
     def exists(self) -> bool:
-        tmp_lab = self._instance.get_lab_from_api(lab_name=self.lab_name)
-        if tmp_lab is None:
-            return False
-        tmp_machines = tmp_lab.machines
-        return tmp_machines is not None and len(tmp_machines) > 0
+        machines = self._instance.get_machines_api_objects(lab_name=self.lab_name)
+        links = self._instance.get_links_api_objects(lab_name=self.lab_name)
+        return bool(machines or links)
 
     def inspect(self) -> list[dict[str, Any]]:
         return list_lab_containers(lab_name=self.lab_name)

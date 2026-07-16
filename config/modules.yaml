@@ -34,15 +34,15 @@ procedural_memory:
   max_retries: 0
   token_budget: 1500
   max_skill_age: 8
-  pool_size: 32
+  pool_size: 16
   evolution_threshold: 6
-  best_of_n: 3
+  best_of_n: 2
   ppo_epsilon: 0.2
-  selection_epsilon: 0.3
-  experience_pool_size: 1000
+  selection_epsilon: 0.25
+  experience_pool_size: 256
   baseline_ema_alpha: 0.1
-  selection_epsilon_decay_cases: 500
-  acceptance_margin: 0.001
+  selection_epsilon_decay_cases: 75
+  acceptance_margin: 0.01
   verifier: behavioral_replay
   holdout_size: 2
   min_positive_advantage: 1
