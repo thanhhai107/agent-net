@@ -538,7 +538,7 @@ def _render_dashboard() -> None:
             "Agent Configuration",
             [
                 ("Agent Baseline", _agent_label(meta)),
-                ("Learning Modules", _module_labels(meta)),
+                ("Training Modules", _module_labels(meta)),
                 ("LLM Backend Provider", meta.get("llm_backend")),
                 ("LLM Model Name", meta.get("model")),
                 ("Execution Started", _fmt_time(meta.get("start_time"))),

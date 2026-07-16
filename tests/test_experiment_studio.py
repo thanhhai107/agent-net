@@ -16,7 +16,7 @@ import nika.visualization.experiment_runner as experiment_runner
 from nika.cli.commands import studio as studio_command_module
 from nika.visualization.experiment_runner import (
     DEFAULT_STUDIO_EVALUATE_BENCHMARK,
-    DEFAULT_STUDIO_LEARNING_BENCHMARK,
+    DEFAULT_STUDIO_TRAINING_BENCHMARK,
     DEFAULT_STUDIO_MAX_STEPS,
     build_experiment_command,
     build_command_plan,
@@ -29,7 +29,7 @@ from nika.visualization.experiment_runner import (
 
 def _config(**overrides: object) -> dict[str, object]:
     config: dict[str, object] = {
-        "learning_benchmark_file": "benchmark/benchmark_learning_test.yaml",
+        "training_benchmark_file": "benchmark/benchmark_training_test.yaml",
         "evaluate_benchmark_file": "benchmark/benchmark_test.yaml",
         "modules": [],
         "agent_type": "react",
@@ -69,7 +69,7 @@ def test_baseline_command_uses_default_sequential_execution() -> None:
     assert command[:3] == [sys.executable, "-m", "nika.extensions.benchmark"]
     assert command[3] == "--evaluate-benchmark"
     assert command[4] == "benchmark/benchmark_test.yaml"
-    assert "--learning-benchmark" not in command
+    assert "--training-benchmark" not in command
     assert command[command.index("--max-steps") + 1] == "100"
     assert "--evolve-until" not in command
     assert "-j" not in command
@@ -84,8 +84,8 @@ def test_empty_studio_config_uses_yaml_defaults() -> None:
         }
     )
 
-    assert command[command.index("--learning-benchmark") + 1] == (
-        DEFAULT_STUDIO_LEARNING_BENCHMARK
+    assert command[command.index("--training-benchmark") + 1] == (
+        DEFAULT_STUDIO_TRAINING_BENCHMARK
     )
     assert command[command.index("--evaluate-benchmark") + 1] == (
         DEFAULT_STUDIO_EVALUATE_BENCHMARK
@@ -159,7 +159,7 @@ def test_create_run_snapshots_module_config(monkeypatch, tmp_path: Path) -> None
 
     run_dir = experiment_runner.create_run(
         {
-            "learning_benchmark_file": DEFAULT_STUDIO_LEARNING_BENCHMARK,
+            "training_benchmark_file": DEFAULT_STUDIO_TRAINING_BENCHMARK,
             "evaluate_benchmark_file": DEFAULT_STUDIO_EVALUATE_BENCHMARK,
             "modules": [],
         }
@@ -387,18 +387,18 @@ def test_studio_counts_benchmark_with_clean_controls(tmp_path: Path) -> None:
     assert _count_rows(benchmark) == 1
 
 
-def test_studio_defaults_use_separate_learning_and_evaluation_benchmarks() -> None:
+def test_studio_defaults_use_separate_training_and_evaluation_benchmarks() -> None:
     from nika.visualization.experiment_dashboard import (
         DEFAULT_STUDIO_EVALUATE_BENCHMARK,
-        DEFAULT_STUDIO_LEARNING_BENCHMARK,
+        DEFAULT_STUDIO_TRAINING_BENCHMARK,
         _count_rows,
     )
 
-    learning = Path(DEFAULT_STUDIO_LEARNING_BENCHMARK)
+    training = Path(DEFAULT_STUDIO_TRAINING_BENCHMARK)
     evaluation = Path(DEFAULT_STUDIO_EVALUATE_BENCHMARK)
 
-    assert _count_rows(learning) == 100
-    assert learning.name == "benchmark_learning.yaml"
+    assert _count_rows(training) == 100
+    assert training.name == "benchmark_training.yaml"
     assert evaluation.name == "benchmark_selected.yaml"
 
 
@@ -406,7 +406,7 @@ def test_command_fallbacks_match_studio_defaults(monkeypatch) -> None:
     monkeypatch.setenv("NIKA_MAX_STEPS", "20")
     config = _config()
     for key in (
-        "learning_benchmark_file",
+        "training_benchmark_file",
         "evaluate_benchmark_file",
         "llm_backend",
         "model",
@@ -422,10 +422,10 @@ def test_command_fallbacks_match_studio_defaults(monkeypatch) -> None:
     assert command[command.index("--evaluate-benchmark") + 1] == (
         DEFAULT_STUDIO_EVALUATE_BENCHMARK
     )
-    assert "--learning-benchmark" not in command
+    assert "--training-benchmark" not in command
 
 
-def test_learning_role_models_default_to_agent_model() -> None:
+def test_training_role_models_default_to_agent_model() -> None:
     config = _config(modules=["tool_refinement", "procedural_memory"])
     config.pop("model")
     for key in (
@@ -505,8 +505,8 @@ def test_tool_and_memory_modules_share_one_sequential_command() -> None:
     assert command[command.index("--procedural-memory-policy-scorer-model") + 1] == (
         "policy-model"
     )
-    assert command[command.index("--learning-benchmark") + 1] == (
-        "benchmark/benchmark_learning_test.yaml"
+    assert command[command.index("--training-benchmark") + 1] == (
+        "benchmark/benchmark_training_test.yaml"
     )
     assert "--evolve-until" not in command
 
@@ -521,7 +521,7 @@ def test_command_plan_for_memory_has_no_service_prerequisite() -> None:
     assert len(plan) == 1
     assert plan[0].variant == "benchmark"
     assert plan[0].name == "ReAct + Procedural Memory"
-    assert "--learning-benchmark" in plan[0].command
+    assert "--training-benchmark" in plan[0].command
     assert "--evaluate-benchmark" in plan[0].command
     assert "--evolve-until" not in plan[0].command
 
@@ -675,6 +675,45 @@ def test_run_status_ignores_old_done_after_resume_marker(monkeypatch, tmp_path) 
     assert status["exit_code"] == 0
 
 
+def test_run_status_persists_failed_state_for_dead_runner(
+    monkeypatch, tmp_path: Path
+) -> None:
+    run_dir = tmp_path / "runs" / "experiment-01"
+    run_dir.mkdir(parents=True)
+    result_root = tmp_path / "results" / "experiment-01"
+    session_dir = result_root / "evaluation" / "session-1"
+    session_dir.mkdir(parents=True)
+    (session_dir / "run.json").write_text(
+        json.dumps({"session_id": "session-1", "status": "running"}),
+        encoding="utf-8",
+    )
+    (run_dir / "spec.json").write_text(
+        json.dumps({"config": {"result_root": str(result_root)}}),
+        encoding="utf-8",
+    )
+    (run_dir / "meta.json").write_text(
+        json.dumps({"run_id": "experiment-01", "status": "running", "pid": 4242}),
+        encoding="utf-8",
+    )
+    (run_dir / "run.log").write_text("benchmark_start index=2/56\n", encoding="utf-8")
+    monkeypatch.setattr(experiment_runner, "_pid_running", lambda _pid: False)
+
+    status = run_status(run_dir)
+
+    persisted = json.loads((run_dir / "meta.json").read_text(encoding="utf-8"))
+    assert status["status"] == "failed"
+    assert persisted["status"] == "failed"
+    assert persisted["failure_reason"] == (
+        "runner process exited without a terminal event"
+    )
+    assert "ui_run_done" in (run_dir / "run.log").read_text(encoding="utf-8")
+    session_meta = json.loads((session_dir / "run.json").read_text(encoding="utf-8"))
+    assert session_meta["status"] == "failed"
+    assert "RunnerProcessExited" in (session_dir / "events.jsonl").read_text(
+        encoding="utf-8"
+    )
+
+
 def test_parse_progress_events_reads_benchmark_and_ui_events() -> None:
     rows = parse_progress_events(
         "\n".join(
@@ -712,21 +751,21 @@ def test_parse_progress_events_reads_pipeline_stage_events() -> None:
     rows = parse_progress_events(
         "\n".join(
             [
-                'benchmark_stage_start {"role": "learning", "total": 100, "pending": 100}',
-                'learning_barrier_created {"path": "/tmp/learning_barrier.json"}',
-                'benchmark_stage_done {"role": "learning", "total": 100, "completed": 100, "failed": 0}',
-                'benchmark_pipeline_done {"exit_code": 0, "learning_cases": 100, "evaluation_cases": 56}',
+                'benchmark_stage_start {"role": "training", "total": 100, "pending": 100}',
+                'training_barrier_created {"path": "/tmp/training_barrier.json"}',
+                'benchmark_stage_done {"role": "training", "total": 100, "completed": 100, "failed": 0}',
+                'benchmark_pipeline_done {"exit_code": 0, "training_cases": 100, "evaluation_cases": 56}',
             ]
         )
     )
 
     assert [row["event"] for row in rows] == [
         "benchmark_stage_start",
-        "learning_barrier_created",
+        "training_barrier_created",
         "benchmark_stage_done",
         "benchmark_pipeline_done",
     ]
-    assert rows[0]["role"] == "learning"
+    assert rows[0]["role"] == "training"
     assert rows[0]["total"] == "100"
     assert rows[-1]["evaluation_cases"] == "56"
 
@@ -791,7 +830,7 @@ def test_result_aggregation_uses_evaluation_role_as_primary_endpoint(
     results = tmp_path / "results"
     root = results / "benchmark_selected-0001"
     for name, role, score in (
-        ("train", "learning", 1.0),
+        ("train", "training", 1.0),
         ("evaluation", "evaluation", 0.4),
     ):
         session = root / name
@@ -831,7 +870,7 @@ def test_result_aggregation_uses_evaluation_role_as_primary_endpoint(
 
     assert row["detection_score"] == "0.40"
     assert row["evaluation_cases"] == 1
-    assert row["learning_cases"] == 1
+    assert row["training_cases"] == 1
 
 
 def test_result_aggregation_uses_roles_without_modules(
@@ -842,7 +881,7 @@ def test_result_aggregation_uses_roles_without_modules(
     results = tmp_path / "results"
     root = results / "benchmark_selected-0001"
     for name, role, score in (
-        ("train", "learning", 1.0),
+        ("train", "training", 1.0),
         ("evaluation", "evaluation", 0.4),
     ):
         session = root / name
@@ -883,7 +922,7 @@ def test_result_aggregation_uses_roles_without_modules(
 
     assert row["detection_score"] == "0.40"
     assert row["evaluation_cases"] == 1
-    assert row["learning_cases"] == 1
+    assert row["training_cases"] == 1
 
 
 def test_case_key_prefers_benchmark_fingerprint() -> None:

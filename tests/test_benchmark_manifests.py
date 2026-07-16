@@ -11,7 +11,7 @@ from benchmark.generate_benchmark import (
     EVALUATION_ONLY_PROBLEMS,
     NO_FAULT_CONTROLS,
     case_identity,
-    select_learning_cases,
+    select_training_cases,
 )
 
 
@@ -48,11 +48,11 @@ def _assert_manifest_counts(
 
 
 def test_canonical_manifest_names_and_counts() -> None:
-    learning = _load("benchmark_learning.yaml")
+    training = _load("benchmark_training.yaml")
     selected = _load("benchmark_selected.yaml")
     full = _load("benchmark_full.yaml")
 
-    _assert_manifest_counts(learning, role="learning", total=100, fault=90, no_fault=10)
+    _assert_manifest_counts(training, role="training", total=100, fault=90, no_fault=10)
     _assert_manifest_counts(selected, role="evaluation", total=56, fault=56, no_fault=0)
     _assert_manifest_counts(full, role="evaluation", total=702, fault=702, no_fault=0)
 
@@ -63,8 +63,8 @@ def test_canonical_manifest_names_and_counts() -> None:
     assert all(not (BENCHMARK_DIR / name).exists() for name in legacy_names)
 
 
-def test_learning_controls_are_interleaved_and_empty() -> None:
-    cases = _load("benchmark_learning.yaml")["cases"]
+def test_training_controls_are_interleaved_and_empty() -> None:
+    cases = _load("benchmark_training.yaml")["cases"]
     controls = [row for row in cases if row["problem"] == "no_fault"]
 
     assert [
@@ -78,46 +78,46 @@ def test_learning_controls_are_interleaved_and_empty() -> None:
     assert all(row["inject"] == {} for row in controls)
 
 
-def test_learning_faults_are_unique_and_evaluation_disjoint() -> None:
-    learning_cases = _load("benchmark_learning.yaml")["cases"]
+def test_training_faults_are_unique_and_evaluation_disjoint() -> None:
+    training_cases = _load("benchmark_training.yaml")["cases"]
     selected_cases = _load("benchmark_selected.yaml")["cases"]
     full_cases = _load("benchmark_full.yaml")["cases"]
 
-    learning_identities = [case_identity(row) for row in learning_cases]
+    training_identities = [case_identity(row) for row in training_cases]
     selected_identities = {case_identity(row) for row in selected_cases}
     full_identities = {case_identity(row) for row in full_cases}
-    learning_fault_identities = {
-        case_identity(row) for row in learning_cases if row["problem"] != "no_fault"
+    training_fault_identities = {
+        case_identity(row) for row in training_cases if row["problem"] != "no_fault"
     }
-    assert len(learning_identities) == len(set(learning_identities))
-    assert set(learning_identities).isdisjoint(selected_identities)
-    assert learning_fault_identities.issubset(full_identities)
+    assert len(training_identities) == len(set(training_identities))
+    assert set(training_identities).isdisjoint(selected_identities)
+    assert training_fault_identities.issubset(full_identities)
 
-    learning_fault_problems = {
-        row["problem"] for row in learning_cases if row["problem"] != "no_fault"
+    training_fault_problems = {
+        row["problem"] for row in training_cases if row["problem"] != "no_fault"
     }
     selected_problems = {row["problem"] for row in selected_cases}
-    assert learning_fault_problems == selected_problems - EVALUATION_ONLY_PROBLEMS
-    assert len(learning_fault_problems) == 54
+    assert training_fault_problems == selected_problems - EVALUATION_ONLY_PROBLEMS
+    assert len(training_fault_problems) == 54
 
     for problem in EVALUATION_ONLY_PROBLEMS:
         full_variants = [row for row in full_cases if row["problem"] == problem]
         assert len(full_variants) == 1
         assert case_identity(full_variants[0]) in selected_identities
-        assert problem not in learning_fault_problems
+        assert problem not in training_fault_problems
 
 
-def test_learning_selection_is_pure_and_deterministic() -> None:
-    learning_cases = _load("benchmark_learning.yaml")["cases"]
+def test_training_selection_is_pure_and_deterministic() -> None:
+    training_cases = _load("benchmark_training.yaml")["cases"]
     selected_cases = _load("benchmark_selected.yaml")["cases"]
     full_cases = _load("benchmark_full.yaml")["cases"]
 
-    assert select_learning_cases(full_cases, selected_cases, seed=42) == learning_cases
+    assert select_training_cases(full_cases, selected_cases, seed=42) == training_cases
     assert (
-        select_learning_cases(
+        select_training_cases(
             list(reversed(full_cases)),
             list(reversed(selected_cases)),
             seed=42,
         )
-        == learning_cases
+        == training_cases
     )

@@ -1,6 +1,6 @@
 baseline:
   benchmark: benchmark_selected.yaml
-  learning_benchmark: benchmark_learning.yaml
+  training_benchmark: benchmark_training.yaml
   evaluate_benchmark: benchmark_selected.yaml
   agent_type: react
   llm_provider: custom
@@ -37,7 +37,11 @@ procedural_memory:
   token_budget: 1500
   max_skill_age: 8
   pool_size: 16
-  evolution_threshold: 6
+  # Keep training reachable on the 100-case benchmark while preserving a
+  # disjoint verification trajectory for every candidate attempt.  Keep
+  # best-of-N at two until verifier quality is measured; increasing it would
+  # multiply the provider calls that dominated experiment-02 runtime.
+  evolution_threshold: 3
   best_of_n: 2
   ppo_epsilon: 0.2
   selection_epsilon: 0.25
@@ -46,7 +50,7 @@ procedural_memory:
   selection_epsilon_decay_cases: 100
   acceptance_margin: 0.01
   verifier: behavioral_replay
-  holdout_size: 2
+  holdout_size: 1
   min_positive_advantage: 1
   policy_token_budget_min: 120
   policy_token_budget_max: 350

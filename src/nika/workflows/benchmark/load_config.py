@@ -130,12 +130,12 @@ def load_benchmark_manifest(
         raise ValueError(f"Benchmark YAML has no cases: {source}")
 
     declared_role = str(data.get("benchmark_role") or "").strip().lower()
-    if declared_role and declared_role not in {"learning", "evaluation"}:
+    if declared_role and declared_role not in {"training", "evaluation"}:
         raise ValueError(
-            "Invalid benchmark YAML ('benchmark_role' must be learning or "
+            "Invalid benchmark YAML ('benchmark_role' must be training or "
             f"evaluation): {source}"
         )
-    if expected_role not in {None, "learning", "evaluation"}:
+    if expected_role not in {None, "training", "evaluation"}:
         raise ValueError(f"Invalid expected benchmark role: {expected_role!r}")
     if declared_role and expected_role and declared_role != expected_role:
         raise ValueError(

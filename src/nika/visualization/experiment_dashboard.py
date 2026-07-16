@@ -41,8 +41,8 @@ TOOL_REFINEMENT_DEFAULTS = ToolRefinementConfig()
 PROCEDURAL_MEMORY_DEFAULTS = ProceduralMemoryConfig()
 MODULE_DEFAULTS = module_defaults()
 BASELINE_DEFAULTS = MODULE_DEFAULTS.baseline
-DEFAULT_STUDIO_LEARNING_BENCHMARK = str(
-    BENCHMARK_DIR / BASELINE_DEFAULTS.learning_benchmark
+DEFAULT_STUDIO_TRAINING_BENCHMARK = str(
+    BENCHMARK_DIR / BASELINE_DEFAULTS.training_benchmark
 )
 DEFAULT_STUDIO_EVALUATE_BENCHMARK = str(
     BENCHMARK_DIR / BASELINE_DEFAULTS.evaluate_benchmark
@@ -394,7 +394,7 @@ RESULT_DETAIL_COLUMNS = [
     "result_root",
     "progress",
     "evaluation_cases",
-    "learning_cases",
+    "training_cases",
     "detection_score",
     "incident_success",
     "localization_f1",
@@ -452,7 +452,7 @@ RESULT_NUMERIC_COLUMNS = {
 RESULT_INTEGER_COLUMNS = {
     "cases",
     "evaluation_cases",
-    "learning_cases",
+    "training_cases",
     "finished",
     "failed",
     "submitted",
@@ -529,7 +529,7 @@ def _result_column_label(column: str) -> str:
         "procedural_memory_advantage": "Memory Advantage",
         "procedural_memory_success": "Memory Success",
         "evaluation_cases": "Evaluate cases",
-        "learning_cases": "Learning cases",
+        "training_cases": "Training cases",
     }
     return labels.get(column, column.replace("_", " ").title())
 
@@ -538,6 +538,11 @@ def _result_cell_text(column: str, value: object) -> str:
     display_value = _result_display_value(column, value)
     if display_value is None:
         return "-"
+    if column == "stage":
+        return {"training": "Train", "evaluation": "Eval", "all": "Baseline"}.get(
+            str(display_value),
+            str(display_value),
+        )
     if column in RESULT_INTEGER_COLUMNS:
         return str(int(display_value))
     if column in RESULT_NUMERIC_COLUMNS:
@@ -611,7 +616,7 @@ def _is_baseline_meta(meta: dict) -> bool:
 
 def _benchmark_role(meta: dict) -> str:
     role = str(meta.get("benchmark_role") or "").strip().lower()
-    return role if role in {"learning", "evaluation"} else ""
+    return role if role in {"training", "evaluation"} else ""
 
 
 def _metric_total(metrics: dict, *, is_anomaly: bool) -> float | None:
@@ -727,7 +732,11 @@ def _avg_float(values: list[float]) -> float | None:
     return None if not values else sum(values) / len(values)
 
 
-def _result_rows(*, benchmark_name: str | None = None) -> list[dict[str, object]]:
+def _result_rows(
+    *,
+    benchmark_name: str | None = None,
+    stage: str | None = None,
+) -> list[dict[str, object]]:
     if not RESULTS_DIR.exists():
         return []
     grouped: dict[Path, list[Path]] = {}
@@ -763,6 +772,14 @@ def _result_rows(*, benchmark_name: str | None = None) -> list[dict[str, object]
         key=lambda item: item[0].stat().st_mtime if item[0].exists() else 0,
         reverse=True,
     ):
+        if stage in {"training", "evaluation"}:
+            run_paths = [
+                path
+                for path in run_paths
+                if _benchmark_role(_read_json(path)) == stage
+            ]
+            if not run_paths:
+                continue
         detections: list[float] = []
         incident_successes: list[float] = []
         localization_f1s: list[float] = []
@@ -786,19 +803,19 @@ def _result_rows(*, benchmark_name: str | None = None) -> list[dict[str, object]
         submitted = 0
         finished = 0
         failed = 0
-        learning_cases = 0
+        training_cases = 0
         evaluation_cases = 0
         result_modules: set[str] = set()
         agents: set[str] = set()
         models: set[str] = set()
 
-        metric_paths = set(primary_paths[gkey])
+        metric_paths = set(primary_paths[gkey]).intersection(run_paths)
         for run_path in run_paths:
             session_dir = run_path.parent
             meta = _read_json(run_path)
             role = _benchmark_role(meta)
-            if role == "learning":
-                learning_cases += 1
+            if role == "training":
+                training_cases += 1
             elif role == "evaluation":
                 evaluation_cases += 1
             metrics = _read_json(session_dir / "eval_metrics.json")
@@ -880,16 +897,21 @@ def _result_rows(*, benchmark_name: str | None = None) -> list[dict[str, object]
                 models.add(str(meta["model"]))
 
         display_name = gkey.name
+        if stage == "training":
+            display_name = f"{display_name}-train"
+        elif stage == "evaluation":
+            display_name = f"{display_name}-eval"
 
         row = {
             "result_root": display_name,
+            "stage": stage or "all",
             "cases": len(run_paths),
             "evaluation_cases": (
                 evaluation_cases
-                if learning_cases or evaluation_cases
+                if training_cases or evaluation_cases
                 else len(metric_paths)
             ),
-            "learning_cases": learning_cases,
+            "training_cases": training_cases,
             "finished": finished,
             "failed": failed,
             "submitted": submitted,
@@ -984,8 +1006,8 @@ def _case_event_html(
 st.markdown('<div class="section-title">Studio</div>', unsafe_allow_html=True)
 
 st.session_state.setdefault(
-    "studio_learning_benchmark",
-    Path(DEFAULT_STUDIO_LEARNING_BENCHMARK).stem,
+    "studio_training_benchmark",
+    Path(DEFAULT_STUDIO_TRAINING_BENCHMARK).stem,
 )
 st.session_state.setdefault(
     "studio_evaluate_benchmark",
@@ -1022,10 +1044,10 @@ if baseline_settings is not None:
         max_steps_str = st.text_input("Steps", value=str(default_max_steps))
         max_steps = int(max_steps_str) if max_steps_str.isdigit() else default_max_steps
     with b_col5:
-        learning_benchmark_name = st.text_input(
-            "Learning Benchmark",
-            key="studio_learning_benchmark",
-            help="Cases used to update enabled learning modules.",
+        training_benchmark_name = st.text_input(
+            "Training Benchmark",
+            key="studio_training_benchmark",
+            help="Cases used to update enabled training modules.",
         )
     with b_col6:
         evaluate_benchmark_name = st.text_input(
@@ -1033,9 +1055,9 @@ if baseline_settings is not None:
             key="studio_evaluate_benchmark",
             help="Cases used to score the frozen module snapshot.",
         )
-    learning_benchmark_path = _benchmark_path_from_name(
-        learning_benchmark_name,
-        default=DEFAULT_STUDIO_LEARNING_BENCHMARK,
+    training_benchmark_path = _benchmark_path_from_name(
+        training_benchmark_name,
+        default=DEFAULT_STUDIO_TRAINING_BENCHMARK,
     )
     evaluate_benchmark_path = _benchmark_path_from_name(
         evaluate_benchmark_name,
@@ -1045,7 +1067,7 @@ if baseline_settings is not None:
     benchmark_warnings: list[str] = []
     benchmark_manifests: dict[str, Any] = {}
     for role, path in (
-        ("learning", learning_benchmark_path),
+        ("training", training_benchmark_path),
         ("evaluation", evaluate_benchmark_path),
     ):
         try:
@@ -1059,17 +1081,17 @@ if baseline_settings is not None:
             benchmark_errors.append(f"Cannot read {role} benchmark: {exc}")
         except (ValueError, YAMLError) as exc:
             benchmark_errors.append(f"Invalid {role} benchmark: {exc}")
-    learning_manifest = benchmark_manifests.get("learning")
+    training_manifest = benchmark_manifests.get("training")
     evaluation_manifest = benchmark_manifests.get("evaluation")
-    if learning_manifest is not None and evaluation_manifest is not None:
-        learning_ids = {benchmark_case_identity(row) for row in learning_manifest.cases}
+    if training_manifest is not None and evaluation_manifest is not None:
+        training_ids = {benchmark_case_identity(row) for row in training_manifest.cases}
         evaluation_ids = {
             benchmark_case_identity(row) for row in evaluation_manifest.cases
         }
-        overlap = learning_ids & evaluation_ids
+        overlap = training_ids & evaluation_ids
         if overlap:
             benchmark_warnings.append(
-                f"Learning and evaluation benchmarks overlap on {len(overlap)} "
+                f"Training and evaluation benchmarks overlap on {len(overlap)} "
                 "case identities; evaluation is not fully held out."
             )
     if agent_type == "reflexion":
@@ -1154,7 +1176,7 @@ with st.container():
             placeholder="auto",
             disabled=not procedural_memory_selected,
             help=(
-                "Studio updates this bank on the Learning Benchmark, then "
+                "Studio updates this bank on the Training Benchmark, then "
                 "evaluates an immutable snapshot on the Evaluate Benchmark."
             ),
         )
@@ -1502,7 +1524,7 @@ if procedural_memory_selected:
     modules.append("procedural_memory")
 
 config = {
-    "learning_benchmark_file": str(learning_benchmark_path),
+    "training_benchmark_file": str(training_benchmark_path),
     "evaluate_benchmark_file": str(evaluate_benchmark_path),
     "modules": modules,
     "agent_type": agent_type,
@@ -1768,7 +1790,12 @@ def format_event_message_html(ev: dict) -> str | None:
             ev, style=style, verb="Aborted", color="var(--nika-danger)"
         )
     elif event == "benchmark_stage_start":
-        role = html.escape(str(ev.get("role") or "benchmark").title())
+        role_name = str(ev.get("role") or "benchmark").strip().lower()
+        role = {"training": "Train", "evaluation": "Eval"}.get(
+            role_name,
+            role_name.title(),
+        )
+        role = html.escape(role)
         total = html.escape(str(ev.get("total") or "?"))
         pending = html.escape(str(ev.get("pending") or total))
         return (
@@ -1777,7 +1804,12 @@ def format_event_message_html(ev: dict) -> str | None:
             "</div>"
         )
     elif event == "benchmark_stage_done":
-        role = html.escape(str(ev.get("role") or "benchmark").title())
+        role_name = str(ev.get("role") or "benchmark").strip().lower()
+        role = {"training": "Train", "evaluation": "Eval"}.get(
+            role_name,
+            role_name.title(),
+        )
+        role = html.escape(role)
         completed = html.escape(str(ev.get("completed") or "0"))
         total = html.escape(str(ev.get("total") or "?"))
         failed = html.escape(str(ev.get("failed") or "0"))
@@ -1786,25 +1818,25 @@ def format_event_message_html(ev: dict) -> str | None:
             f"<b>{role} benchmark completed</b> · {completed}/{total} finished, "
             f"{failed} failed</div>"
         )
-    elif event in {"learning_barrier_created", "learning_barrier_reused"}:
+    elif event in {"training_barrier_created", "training_barrier_reused"}:
         verb = "created" if event.endswith("created") else "reused"
         return (
             f"<div style='{style}; color: var(--nika-accent-text);'>"
-            f"<b>Learning snapshot {verb}</b> · evaluation will use the frozen "
+            f"<b>Training snapshot {verb}</b> · evaluation will use the frozen "
             "module state.</div>"
         )
     elif event == "benchmark_pipeline_blocked":
-        reason = html.escape(str(ev.get("reason") or "learning incomplete"))
+        reason = html.escape(str(ev.get("reason") or "training incomplete"))
         return (
             f"<div style='{style}; color: var(--nika-danger);'>"
             f"<b>Evaluation blocked</b> · {reason}</div>"
         )
     elif event == "benchmark_pipeline_done":
-        learning = html.escape(str(ev.get("learning_cases") or "0"))
+        training = html.escape(str(ev.get("training_cases") or "0"))
         evaluation = html.escape(str(ev.get("evaluation_cases") or "0"))
         return (
             f"<div style='{style}; color: var(--nika-success);'>"
-            f"<b>Benchmark pipeline completed</b> · {learning} learning cases, "
+            f"<b>Benchmark pipeline completed</b> · {training} training cases, "
             f"{evaluation} evaluation cases</div>"
         )
     return None
@@ -1854,18 +1886,37 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-result_rows = _result_rows(benchmark_name=None)
+all_rows = _result_rows(benchmark_name=None)
+training_rows = _result_rows(benchmark_name=None, stage="training")
+evaluation_rows = _result_rows(benchmark_name=None, stage="evaluation")
+standalone_rows = [row for row in all_rows if row.get("stage") == "all"]
+training_experiments = {
+    str(row.get("result_root") or "").removesuffix("-train")
+    for row in training_rows
+}
+evaluation_rows = [
+    row
+    for row in evaluation_rows
+    if str(row.get("result_root") or "").removesuffix("-eval")
+    in training_experiments
+]
+result_rows = standalone_rows + training_rows + evaluation_rows
 summary_tab, detail_tab = st.tabs(["Summary", "Details"])
-display_result_rows = _summary_result_rows(result_rows)
 
 with summary_tab:
     st.html(
-        _results_table_html(display_result_rows, RESULT_SUMMARY_COLUMNS),
+        _results_table_html(
+            _summary_result_rows(result_rows),
+            RESULT_SUMMARY_COLUMNS,
+        ),
         width="stretch",
     )
 
 with detail_tab:
     st.html(
-        _results_table_html(display_result_rows, RESULT_DETAIL_COLUMNS),
+        _results_table_html(
+            _summary_result_rows(result_rows),
+            RESULT_DETAIL_COLUMNS,
+        ),
         width="stretch",
     )

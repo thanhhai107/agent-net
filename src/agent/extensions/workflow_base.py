@@ -13,7 +13,7 @@ from langgraph.errors import GraphRecursionError
 from agent.byo.langgraph.phases.submission import SubmissionPhase
 from agent.composition import AgentRunConfig
 from agent.extensions.react_agent import (
-    LearningDiagnosisPhase,
+    TrainingDiagnosisPhase,
     configure_custom_provider_environment,
 )
 from agent.tool_refinement.integration import write_tool_refinement_session
@@ -54,7 +54,7 @@ class ExtensionWorkflowBase:
         self.session = Session().load_running_session(session_id=config.session_id)
         self.session_id = self.session.session_id
         self.session_dir = self.session.session_dir
-        self.diagnosis_phase = LearningDiagnosisPhase(config)
+        self.diagnosis_phase = TrainingDiagnosisPhase(config)
         asyncio.run(self.diagnosis_phase.load_tools())
         self.llm = self.diagnosis_phase.llm
 
@@ -124,7 +124,7 @@ class ExtensionWorkflowBase:
         runtime = getattr(diagnosis_phase, "tool_refinement_runtime", None)
         if (
             runtime is None
-            or not self.config.allow_learning_updates
+            or not self.config.allow_training_updates
             or not self.config.tool_refinement.update_due
         ):
             return {}

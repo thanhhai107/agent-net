@@ -1,4 +1,4 @@
-"""Execution boundary for optional learning extensions."""
+"""Execution boundary for optional training extensions."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ def _write_extension_metadata(session: Session, config: AgentRunConfig) -> None:
     session.update_session(
         "procedural_memory_enabled", config.procedural_memory.enabled
     )
-    session.update_session("allow_learning_updates", config.allow_learning_updates)
+    session.update_session("allow_training_updates", config.allow_training_updates)
     session.update_session("procedural_memory_bank", config.procedural_memory.bank)
     session.update_session(
         "procedural_memory_store_path",
@@ -120,7 +120,7 @@ def _write_extension_metadata(session: Session, config: AgentRunConfig) -> None:
 
 
 def start_agent(config: AgentRunConfig, *, session_id: str | None = None) -> None:
-    """Use upstream execution unchanged unless a learning module is enabled."""
+    """Use upstream execution unchanged unless a training module is enabled."""
     if config.normalized_agent_type == "react" and not config.extensions_enabled:
         start_nika_agent(
             agent_type="react",
@@ -141,12 +141,12 @@ def start_agent(config: AgentRunConfig, *, session_id: str | None = None) -> Non
         session_id=session.session_id,
         tool_refinement=config.tool_refinement,
         procedural_memory=config.procedural_memory,
-        allow_learning_updates=config.allow_learning_updates,
+        allow_training_updates=config.allow_training_updates,
     )
     validate_agent_composition(config)
     session.update_session("agent_type", config.normalized_agent_type)
     session.update_session("llm_provider", config.llm_provider)
-    # Preserve the compatibility key consumed by existing learning artifacts.
+    # Preserve the compatibility key consumed by existing training artifacts.
     session.update_session("llm_backend", config.llm_provider)
     session.update_session("model", config.model)
     session.update_session("max_attempts", config.max_attempts)
@@ -161,7 +161,7 @@ def start_agent(config: AgentRunConfig, *, session_id: str | None = None) -> Non
         agent_type=config.normalized_agent_type,
         model=config.model,
         procedural_memory=config.procedural_memory.enabled,
-        allow_learning_updates=config.allow_learning_updates,
+        allow_training_updates=config.allow_training_updates,
         tool_refinement=config.tool_refinement.enabled,
     )
     with mcp_gateway_for_session(

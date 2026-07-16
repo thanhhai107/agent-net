@@ -9,7 +9,7 @@ from typing import Any
 from agent.module_config import module_defaults
 from agent.procedural_memory.models import EvaluationEvidence, SkillStep
 from agent.procedural_memory.runtime import (
-    strip_integrated_learning_guidance,
+    strip_integrated_training_guidance,
 )
 from agent.procedural_memory.service import ProceduralMemoryModule, _metric_success
 from nika.evaluator.result_log import MESSAGES_FILENAME
@@ -88,6 +88,91 @@ def _load_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+_INFRASTRUCTURE_EVENTS = frozenset(
+    {
+        "benchmark_aborted",
+        "env_start_cleanup_failed",
+        "lab_cleanup_failed",
+        "ui_cleanup_failed",
+        "gateway_unavailable",
+        "provider_error",
+    }
+)
+_INFRASTRUCTURE_MARKERS = (
+    "cleanup_error",
+    "lab_cleanup",
+    "docker network",
+    "gateway unavailable",
+    "provider timeout",
+)
+
+
+def _training_infrastructure_failure(
+    *,
+    session_path: Path,
+    run_meta: dict[str, Any],
+) -> str:
+    """Return a reason when an episode is not safe training data.
+
+    Diagnosis/tool failures remain valid training evidence.  We only exclude
+    sessions whose lifecycle or provider failed, because assigning those
+    failures to a Skill would train the memory against infrastructure noise.
+    Missing ``run.json``/``events.jsonl`` is allowed for unit-level callers and
+    older sessions.
+    """
+
+    persisted = _load_json(session_path / "run.json")
+    metadata = {**persisted, **run_meta}
+    status = str(metadata.get("status") or "").strip().lower()
+    if status in {"failed", "aborted", "running", "cancelled", "canceled"}:
+        return f"session lifecycle status={status}"
+    for key in ("error", "cleanup_error", "startup_error", "provider_error"):
+        value = metadata.get(key)
+        if value:
+            return f"{key}={str(value)[:240]}"
+    events_path = session_path / "events.jsonl"
+    if not events_path.exists():
+        return ""
+    try:
+        lines = events_path.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        return f"events_read_error={type(exc).__name__}: {exc}"
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        event_name = str(event.get("event") or "").strip().lower()
+        message = " ".join(
+            (
+                str(event.get("message") or ""),
+                json.dumps(
+                    event.get("data") or {},
+                    ensure_ascii=False,
+                    default=str,
+                ),
+            )
+        ).strip().lower()
+        if event_name in _INFRASTRUCTURE_EVENTS:
+            return f"event={event_name}"
+        failure_words = ("error", "failed", "failure", "aborted", "unable")
+        if any(word in message for word in failure_words):
+            for marker in _INFRASTRUCTURE_MARKERS:
+                if marker in message:
+                    return f"event={event_name or 'unknown'} marker={marker}"
+    return ""
+
+
+def _write_skip_report(session_path: Path, report: dict[str, Any]) -> dict[str, Any]:
+    (session_path / "procedural_memory_update.json").write_text(
+        json.dumps(report, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return report
+
+
 def _runtime_overhead_metrics(runtime_snapshot: dict[str, Any]) -> dict[str, int]:
     fields = (
         "prompt_added_tokens",
@@ -131,7 +216,7 @@ def _bool_meta(run_meta: dict[str, Any], key: str, default: bool = False) -> boo
 
 
 def _strip_integrated_guidance(value: Any) -> str:
-    return strip_integrated_learning_guidance(value)
+    return strip_integrated_training_guidance(value)
 
 
 def _short_text(value: Any, *, limit: int = 900) -> str:
@@ -150,9 +235,26 @@ async def update_procedural_memory_from_session(
     defaults = module_defaults().procedural_memory
     if not _bool_meta(run_meta, "procedural_memory_enabled"):
         return {"status": "skipped", "reason": "procedural memory is disabled"}
-    if not _bool_meta(run_meta, "allow_learning_updates"):
-        return {"status": "skipped", "reason": "learning updates are disabled"}
+    if not _bool_meta(run_meta, "allow_training_updates"):
+        return {"status": "skipped", "reason": "training updates are disabled"}
     session_path = Path(session_dir)
+    infrastructure_failure = _training_infrastructure_failure(
+        session_path=session_path,
+        run_meta=run_meta,
+    )
+    if infrastructure_failure:
+        return _write_skip_report(
+            session_path,
+            {
+                "status": "skipped",
+                "training_status": "skipped_infrastructure_failure",
+                "reason": (
+                    "training data excluded after infrastructure failure: "
+                    f"{infrastructure_failure}"
+                ),
+                "bank_id": str(run_meta.get("procedural_memory_bank") or "default"),
+            },
+        )
     bank_id = str(run_meta.get("procedural_memory_bank") or "default")
     gt = _load_json(session_path / "ground_truth.json")
     runtime_snapshot = _load_json(

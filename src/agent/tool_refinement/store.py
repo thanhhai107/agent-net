@@ -65,7 +65,7 @@ class ToolRefinementStore:
 
     @contextmanager
     def exclusive(self):
-        """Serialize read-modify-write learning cycles for one library."""
+        """Serialize read-modify-write training cycles for one library."""
 
         self._require_writable()
         self.library_dir.mkdir(parents=True, exist_ok=True)

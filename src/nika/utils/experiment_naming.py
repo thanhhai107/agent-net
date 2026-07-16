@@ -1,4 +1,4 @@
-"""Shared sequential names for experiments and learning libraries."""
+"""Shared sequential names for experiments and training libraries."""
 
 from __future__ import annotations
 

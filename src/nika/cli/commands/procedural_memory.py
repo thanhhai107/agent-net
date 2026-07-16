@@ -36,9 +36,9 @@ def _safe_error(exc: Exception) -> str:
 
 @procedural_memory_app.command("run")
 def procedural_memory_run(
-    learning_benchmark: Path = typer.Option(
-        BENCHMARK_DIR / "benchmark_learning.yaml",
-        "--learning-benchmark",
+    training_benchmark: Path = typer.Option(
+        BENCHMARK_DIR / "benchmark_training.yaml",
+        "--training-benchmark",
         help="Benchmark used to update Procedural Memory.",
     ),
     evaluate_benchmark: Path = typer.Option(
@@ -52,7 +52,7 @@ def procedural_memory_run(
     result_dir: Path | None = typer.Option(
         None,
         "--result-dir",
-        help="Output directory for learning, evaluation, and barrier artifacts.",
+        help="Output directory for training, evaluation, and barrier artifacts.",
     ),
     reset_bank: bool = typer.Option(
         True,
@@ -171,8 +171,8 @@ def procedural_memory_run(
     ),
 ) -> None:
     """Learn on one benchmark, then evaluate the frozen memory snapshot."""
-    if not learning_benchmark.exists():
-        raise typer.BadParameter(f"YAML does not exist: {learning_benchmark}")
+    if not training_benchmark.exists():
+        raise typer.BadParameter(f"YAML does not exist: {training_benchmark}")
     if not evaluate_benchmark.exists():
         raise typer.BadParameter(f"YAML does not exist: {evaluate_benchmark}")
     supported_verifiers = {
@@ -212,16 +212,16 @@ def procedural_memory_run(
         )
 
     typer.echo(
-        "Running Procedural Memory learning/evaluation pipeline: "
-        f"learning={learning_benchmark} evaluation={evaluate_benchmark} bank={bank} "
+        "Running Procedural Memory training/evaluation pipeline: "
+        f"training={training_benchmark} evaluation={evaluate_benchmark} bank={bank} "
         f"result_dir={resolved_result_dir} backend={llm_backend} model={model}"
     )
     command = [
         sys.executable,
         "-m",
         "nika.extensions.benchmark",
-        "--learning-benchmark",
-        str(learning_benchmark),
+        "--training-benchmark",
+        str(training_benchmark),
         "--evaluate-benchmark",
         str(evaluate_benchmark),
         "--provider",

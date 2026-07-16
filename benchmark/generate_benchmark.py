@@ -1,4 +1,4 @@
-"""Generate the learning, selected, and full benchmark manifests."""
+"""Generate the training, selected, and full benchmark manifests."""
 
 from __future__ import annotations
 
@@ -85,8 +85,8 @@ SELECTED_SCENARIO_FOR_PROBLEM: dict[str, str] = {
     "web_dos_attack": "ospf_enterprise_dhcp",
 }
 
-LEARNING_FAULT_CASES = 90
-LEARNING_NO_FAULT_CASES = 10
+TRAINING_FAULT_CASES = 90
+TRAINING_NO_FAULT_CASES = 10
 EVALUATION_ONLY_PROBLEMS = frozenset(
     {
         "mpls_label_limit_exceeded",
@@ -188,7 +188,7 @@ def _stable_rank(seed: int, namespace: str, value: object) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def _fault_learning_cases(
+def _fault_training_cases(
     full_cases: Sequence[Mapping[str, Any]],
     selected_cases: Sequence[Mapping[str, Any]],
     *,
@@ -243,7 +243,7 @@ def _fault_learning_cases(
         by_problem[str(row["problem"])].append(row)
     missing = sorted(transferable_problems - by_problem.keys())
     if missing:
-        raise ValueError("No learning candidate for: " + ", ".join(missing))
+        raise ValueError("No training candidate for: " + ", ".join(missing))
 
     scenario_counts: Counter[str] = Counter()
     topology_counts: Counter[str] = Counter()
@@ -262,13 +262,13 @@ def _fault_learning_cases(
         return (
             scenario_counts[scenario],
             topology_counts[topology],
-            _stable_rank(seed, "learning-case", canonical_row),
+            _stable_rank(seed, "training-case", canonical_row),
         )
 
     def choose(row: Mapping[str, Any]) -> None:
         identity = case_identity(row)
         if identity in chosen_identities:
-            raise ValueError(f"Learning identity selected twice: {identity!r}")
+            raise ValueError(f"Training identity selected twice: {identity!r}")
         chosen.append(deepcopy(dict(row)))
         chosen_identities.add(identity)
         scenario_counts[str(row["scenario"])] += 1
@@ -276,7 +276,7 @@ def _fault_learning_cases(
 
     problem_order = sorted(
         transferable_problems,
-        key=lambda problem: (_stable_rank(seed, "learning-problem", problem), problem),
+        key=lambda problem: (_stable_rank(seed, "training-problem", problem), problem),
     )
     for problem in problem_order:
         choose(min(by_problem[problem], key=candidate_key))
@@ -284,10 +284,10 @@ def _fault_learning_cases(
     remaining = [
         row for row in candidates if case_identity(row) not in chosen_identities
     ]
-    while len(chosen) < LEARNING_FAULT_CASES:
+    while len(chosen) < TRAINING_FAULT_CASES:
         if not remaining:
             raise ValueError(
-                f"Only {len(chosen)} disjoint learning fault cases are available"
+                f"Only {len(chosen)} disjoint training fault cases are available"
             )
         next_row = min(remaining, key=candidate_key)
         choose(next_row)
@@ -297,15 +297,15 @@ def _fault_learning_cases(
     return chosen
 
 
-def select_learning_cases(
+def select_training_cases(
     full_cases: Sequence[Mapping[str, Any]],
     selected_cases: Sequence[Mapping[str, Any]],
     *,
     seed: int,
 ) -> list[dict[str, Any]]:
-    """Build the deterministic 90-fault/10-control learning curriculum."""
+    """Build the deterministic 90-fault/10-control training curriculum."""
 
-    fault_cases = _fault_learning_cases(full_cases, selected_cases, seed=seed)
+    fault_cases = _fault_training_cases(full_cases, selected_cases, seed=seed)
     rows: list[dict[str, Any]] = []
     for control_index, control in enumerate(NO_FAULT_CONTROLS):
         start = control_index * 9
@@ -319,8 +319,8 @@ def select_learning_cases(
                 "inject": {},
             }
         )
-    if len(rows) != LEARNING_FAULT_CASES + LEARNING_NO_FAULT_CASES:
-        raise AssertionError(f"Unexpected learning case count: {len(rows)}")
+    if len(rows) != TRAINING_FAULT_CASES + TRAINING_NO_FAULT_CASES:
+        raise AssertionError(f"Unexpected training case count: {len(rows)}")
     return rows
 
 
@@ -357,15 +357,15 @@ def generate_benchmark(
 ) -> tuple[list[dict], list[dict], list[dict]]:
     full_rows = iter_full_cases(seed=seed)
     selected_rows = iter_selected_cases(seed=seed)
-    learning_rows = select_learning_cases(full_rows, selected_rows, seed=seed)
+    training_rows = select_training_cases(full_rows, selected_rows, seed=seed)
 
-    _print_stats("benchmark_learning.yaml", learning_rows)
+    _print_stats("benchmark_training.yaml", training_rows)
     _print_stats("benchmark_full.yaml", full_rows)
     _print_stats("benchmark_selected.yaml", selected_rows)
 
     benchmark_dir = Path(cur_path)
     for name, role, rows in (
-        ("benchmark_learning.yaml", "learning", learning_rows),
+        ("benchmark_training.yaml", "training", training_rows),
         ("benchmark_selected.yaml", "evaluation", selected_rows),
         ("benchmark_full.yaml", "evaluation", full_rows),
     ):
@@ -380,7 +380,7 @@ def generate_benchmark(
         )
         print(f"Wrote {len(rows)} cases to {out_path} (seed={seed})")
 
-    return full_rows, selected_rows, learning_rows
+    return full_rows, selected_rows, training_rows
 
 
 def _parse_args() -> argparse.Namespace:

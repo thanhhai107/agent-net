@@ -153,7 +153,7 @@ class DraftRewriteProposal(BaseModel):
 
 
 class DraftRewriteDraft(BaseModel):
-    """Small DRAFT rewrite payload used for bounded learning LLM calls."""
+    """Small DRAFT rewrite payload used for bounded training LLM calls."""
 
     tool_name: str = ""
     description: str = ""

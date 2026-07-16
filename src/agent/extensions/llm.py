@@ -1,4 +1,4 @@
-"""LLM compatibility used only by local learning extensions.
+"""LLM compatibility used only by local training extensions.
 
 NIKA's original ``agent.llm.model_factory`` remains untouched. This adapter
 accepts the older ``llm_backend`` name and maps ``CUSTOM_API_URL`` to an

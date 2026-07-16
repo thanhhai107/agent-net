@@ -211,10 +211,10 @@ nika benchmark run --result_dir results/list1 --batch-size 4   # resume skips co
 | `topo_size` | Size `s`, `m`, or `l`; **null/empty** for scenarios without sizes |
 | `inject` | Map of `--set key=value` pairs passed to `nika failure inject` |
 
-Repository manifests also declare `benchmark_role` (`learning` or `evaluation`),
+Repository manifests also declare `benchmark_role` (`training` or `evaluation`),
 seed, and exact total/fault/no-fault counts. The canonical files are:
 
-- `benchmark_learning.yaml`: 100 cases (90 fault + 10 no-fault)
+- `benchmark_training.yaml`: 100 cases (90 fault + 10 no-fault)
 - `benchmark_selected.yaml`: 56-case evaluation set and default evaluation input
 - `benchmark_full.yaml`: 702-case full evaluation set
 
@@ -238,24 +238,24 @@ nika benchmark run dc_clos_bgp --problem bgp_asn_misconfig -s s \
 
 ## `nika procedural-memory`
 
-Run the complete learning/evaluation pipeline with one skill bank:
+Run the complete training/evaluation pipeline with one skill bank:
 
 ```shell
 nika procedural-memory run \
-  --learning-benchmark benchmark/benchmark_learning.yaml \
+  --training-benchmark benchmark/benchmark_training.yaml \
   --evaluate-benchmark benchmark/benchmark_selected.yaml \
   --bank my-experiment
 ```
 
-The two benchmark options default to the paths shown above. Every Learning
-Benchmark case may update the bank. After all learning cases complete, NIKA
+The two benchmark options default to the paths shown above. Every Training
+Benchmark case may update the bank. After all training cases complete, NIKA
 freezes a snapshot and runs the Evaluate Benchmark without further updates.
 There is no index cutoff or selectable execution mode; the stage order is fixed.
 Use `--reset-bank` for a fresh experiment (the default); `--keep-bank` is
 reserved for resuming the same fingerprinted pipeline.
 
 Use `nika procedural-memory inspect`, `health`, `snapshot`, and `clear` to
-inspect or manage persisted banks. Experiment Studio exposes the same Learning
+inspect or manage persisted banks. Experiment Studio exposes the same Training
 Benchmark and Evaluate Benchmark inputs.
 
 ---

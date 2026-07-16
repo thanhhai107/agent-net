@@ -4,9 +4,9 @@ NIKA exposes three public workflows through `nika agent run` and the Experiment
 Studio: `react`, `plan-execute`, and `reflexion`.
 
 The upstream ReAct baseline lives in `agent.byo.langgraph`. The extension layer in
-`agent.extensions` preserves that baseline path when learning modules are disabled
+`agent.extensions` preserves that baseline path when training modules are disabled
 and composes the same MCP diagnosis/submission contract with advanced workflows and
-learning modules when requested.
+training modules when requested.
 
 ## Layout
 

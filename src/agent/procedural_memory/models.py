@@ -76,7 +76,7 @@ class SemanticGradient(BaseModel):
 
 
 class SemanticGradientDraft(BaseModel):
-    """Small structured critic payload used for bounded learning LLM calls."""
+    """Small structured critic payload used for bounded training LLM calls."""
 
     source_session_id: str = ""
     critique: str = ""
@@ -148,6 +148,11 @@ class SkillExperience(BaseModel):
     step_count: int = 0
     total_added_tokens: int = 0
     used_for_evolution: bool = False
+    # A trajectory that has already served as verification evidence must not
+    # silently return to the generation pool.  Keeping this counter separate
+    # from ``used_for_evolution`` lets us audit the training split and migrate
+    # older banks without losing the original trajectory.
+    verification_attempts: int = 0
     success: bool = False
     ground_truth_is_anomaly: bool | None = None
     created_at: str = Field(default_factory=utc_now)
@@ -267,6 +272,12 @@ class PPOGateDecision(BaseModel):
     verified_success_count: int = 0
     positive_advantage_count: int = 0
     verification_error: str = ""
+    # Persist the individual checks instead of collapsing every failure into
+    # "alignment regression".  This is essential for distinguishing a weak
+    # candidate from a verifier disagreement.
+    gate_checks: dict[str, bool] = Field(default_factory=dict)
+    structured_candidate_alignment: float = 0.0
+    structured_baseline_alignment: float = 0.0
 
 
 class ProceduralMemoryState(BaseModel):
@@ -276,6 +287,11 @@ class ProceduralMemoryState(BaseModel):
     experiences: list[SkillExperience] = Field(default_factory=list)
     ppo_decisions: list[PPOGateDecision] = Field(default_factory=list)
     baselines: dict[str, float] = Field(default_factory=dict)
+    # Scheduling fairness is persisted separately from ``last_evolved``:
+    # rejected attempts must still count, otherwise one high-frequency parent
+    # can monopolize the evolution queue forever.
+    evolution_parent_attempt_counts: dict[str, int] = Field(default_factory=dict)
+    evolution_parent_last_attempt: dict[str, int] = Field(default_factory=dict)
     iteration: int = 0
     evolution_log: list[dict[str, Any]] = Field(default_factory=list)
     maintenance_log: list[dict[str, Any]] = Field(default_factory=list)

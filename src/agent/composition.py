@@ -1,4 +1,4 @@
-"""Agent composition config for optional learning modules.
+"""Agent composition config for optional training modules.
 
 This module is the boundary between benchmark-facing options and agent-side
 extensions. NIKA workflows can keep passing simple flags, while the registry
@@ -128,8 +128,8 @@ class AgentRunConfig:
         default_factory=ProceduralMemoryConfig
     )
     # Stage policy supplied by the benchmark runner. Disabled evaluation stages
-    # may consume learned artifacts but must not mutate either learning store.
-    allow_learning_updates: bool = False
+    # may consume learned artifacts but must not mutate either training store.
+    allow_training_updates: bool = False
 
     @property
     def normalized_agent_type(self) -> str:

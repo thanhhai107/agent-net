@@ -1,4 +1,4 @@
-"""Learning/evaluation benchmark pipeline for optional NIKA modules."""
+"""Training/evaluation benchmark pipeline for optional NIKA modules."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ import time
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
+
 
 from agent.composition import (
     AgentRunConfig,
@@ -71,10 +72,10 @@ def _read_json(path: Path) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
-def _update_learning(session_id: str, config: AgentRunConfig) -> dict[str, float]:
-    """Update enabled modules after one completed learning case."""
+def _update_training(session_id: str, config: AgentRunConfig) -> dict[str, float]:
+    """Update enabled modules after one completed training case."""
 
-    if not config.allow_learning_updates:
+    if not config.allow_training_updates:
         return {}
     session = Session().load_closed_session(session_id=session_id)
     session_dir = Path(session.session_dir)
@@ -82,7 +83,7 @@ def _update_learning(session_id: str, config: AgentRunConfig) -> dict[str, float
     run_meta = _read_json(session_dir / "run.json")
     errors: list[dict[str, str]] = []
     timings: dict[str, float] = {}
-    error_path = session_dir / "learning_errors.json"
+    error_path = session_dir / "training_errors.json"
 
     if config.tool_refinement.enabled:
         started = time.perf_counter()
@@ -90,7 +91,7 @@ def _update_learning(session_id: str, config: AgentRunConfig) -> dict[str, float
             finalize_tool_refinement_session(
                 session_id=session_id,
                 metrics=metrics,
-                allow_learning_updates=config.allow_learning_updates,
+                allow_training_updates=config.allow_training_updates,
                 rewrite=config.tool_refinement.update_due,
                 min_new_trials=config.tool_refinement.min_new_trials,
                 max_tools_per_update=config.tool_refinement.max_tools_per_update,
@@ -149,7 +150,7 @@ def _update_learning(session_id: str, config: AgentRunConfig) -> dict[str, float
         )
         for error in errors:
             log_event(
-                "learning_update_failed",
+                "training_update_failed",
                 f"{error['module']} update failed: {error['error']}",
                 session_id=session_id,
                 module=error["module"],
@@ -157,9 +158,9 @@ def _update_learning(session_id: str, config: AgentRunConfig) -> dict[str, float
             )
     else:
         error_path.unlink(missing_ok=True)
-    timings["learning_duration"] = round(sum(timings.values()), 6)
-    timings["learning_error_count"] = float(len(errors))
-    (session_dir / "learning_timing.json").write_text(
+    timings["training_duration"] = round(sum(timings.values()), 6)
+    timings["training_error_count"] = float(len(errors))
+    (session_dir / "training_timing.json").write_text(
         json.dumps(timings, indent=2),
         encoding="utf-8",
     )
@@ -234,7 +235,7 @@ def run_extended_case(
         evaluation_duration = time.perf_counter() - evaluation_started
         if is_no_fault(row["problem"]):
             normalize_no_fault_metrics(session_id, session_dir)
-        learning_timings = _update_learning(session_id, config)
+        training_timings = _update_training(session_id, config)
         tool_runtime = _read_json(session_dir / "tool_refinement_session.json")
         tool_exploration_duration = float(tool_runtime.get("explorer_duration") or 0.0)
         metrics_path = session_dir / EVAL_METRICS_FILENAME
@@ -244,12 +245,12 @@ def run_extended_case(
                 "agent_duration": round(agent_duration, 6),
                 "evaluation_duration": round(evaluation_duration, 6),
                 "tool_exploration_duration": round(tool_exploration_duration, 6),
-                "learning_overhead_duration": round(
-                    float(learning_timings.get("learning_duration") or 0.0)
+                "training_overhead_duration": round(
+                    float(training_timings.get("training_duration") or 0.0)
                     + tool_exploration_duration,
                     6,
                 ),
-                **learning_timings,
+                **training_timings,
             }
         )
         metrics_path.write_text(
@@ -278,14 +279,14 @@ class StageResult:
     total: int
     completed: int
     failed: int
-    learning_update_failures: int = 0
+    training_update_failures: int = 0
 
     @property
     def successful(self) -> bool:
         return (
             self.completed == self.total
             and self.failed == 0
-            and self.learning_update_failures == 0
+            and self.training_update_failures == 0
         )
 
 
@@ -300,10 +301,10 @@ def _tool_library_state_hash(library_id: str) -> str:
 def _pipeline_config_fingerprint(
     args: argparse.Namespace,
     *,
-    learning_manifest: BenchmarkManifest | None,
+    training_manifest: BenchmarkManifest | None,
     evaluation_manifest: BenchmarkManifest,
 ) -> str:
-    ignored = {"resume", "result_dir", "learning_benchmark", "evaluate_benchmark"}
+    ignored = {"resume", "result_dir", "training_benchmark", "evaluate_benchmark"}
     execution = {
         key: str(value) if isinstance(value, Path) else value
         for key, value in sorted(vars(args).items())
@@ -311,8 +312,8 @@ def _pipeline_config_fingerprint(
     }
     payload = {
         "version": 1,
-        "learning_manifest_hash": (
-            learning_manifest.fingerprint if learning_manifest else ""
+        "training_manifest_hash": (
+            training_manifest.fingerprint if training_manifest else ""
         ),
         "evaluation_manifest_hash": evaluation_manifest.fingerprint,
         "execution": execution,
@@ -330,7 +331,7 @@ def _pipeline_config_fingerprint(
 def _build_agent_config(
     args: argparse.Namespace,
     *,
-    allow_learning_updates: bool,
+    allow_training_updates: bool,
     memory_store_path: Path | None = None,
     tool_state_path: Path | None = None,
 ) -> AgentRunConfig:
@@ -343,7 +344,7 @@ def _build_agent_config(
         model=args.model,
         max_steps=args.max_steps,
         max_attempts=getattr(args, "max_attempts", baseline_defaults.max_attempts),
-        allow_learning_updates=allow_learning_updates,
+        allow_training_updates=allow_training_updates,
         procedural_memory=ProceduralMemoryConfig(
             enabled=bool(args.procedural_memory),
             bank=args.procedural_memory or "default",
@@ -450,11 +451,11 @@ def _build_agent_config(
     return config
 
 
-def _freeze_learning_modules(
+def _freeze_training_modules(
     *,
     config: AgentRunConfig,
     results_root: Path,
-    learning_manifest: BenchmarkManifest,
+    training_manifest: BenchmarkManifest,
     evaluation_manifest: BenchmarkManifest,
     config_fingerprint: str,
 ) -> dict[str, Any]:
@@ -493,25 +494,25 @@ def _freeze_learning_modules(
     barrier = {
         "version": 1,
         "status": "ready",
-        "learning_manifest_hash": learning_manifest.fingerprint,
+        "training_manifest_hash": training_manifest.fingerprint,
         "evaluation_manifest_hash": evaluation_manifest.fingerprint,
         "config_fingerprint": config_fingerprint,
-        "learning_cases": len(learning_manifest.cases),
+        "training_cases": len(training_manifest.cases),
         "evaluation_cases": len(evaluation_manifest.cases),
         "procedural_memory": memory_payload,
         "tool_refinement": tool_payload,
     }
-    barrier_path = results_root / "learning_barrier.json"
+    barrier_path = results_root / "training_barrier.json"
     barrier_path.write_text(
         json.dumps(barrier, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
     print(
-        "learning_barrier_created "
+        "training_barrier_created "
         + json.dumps(
             {
                 "path": str(barrier_path),
-                "learning_manifest_hash": learning_manifest.fingerprint,
+                "training_manifest_hash": training_manifest.fingerprint,
                 "procedural_memory_hash": memory_payload.get("state_hash", ""),
                 "tool_refinement_hash": tool_payload.get("state_hash", ""),
             },
@@ -554,7 +555,7 @@ def _verify_frozen_modules(
         ).bank_state_hash()
         if current != expected:
             raise RuntimeError(
-                "Procedural Memory changed after the learning barrier: "
+                "Procedural Memory changed after the training barrier: "
                 f"expected {expected}, got {current}"
             )
 
@@ -565,35 +566,35 @@ def _verify_frozen_modules(
         current = _tool_library_state_hash(config.tool_refinement.library_id)
         if current != expected:
             raise RuntimeError(
-                "Tool Refinement changed after the learning barrier: "
+                "Tool Refinement changed after the training barrier: "
                 f"expected {expected}, got {current}"
             )
 
 
-def _validate_learning_barrier(
+def _validate_training_barrier(
     barrier: dict[str, Any],
     *,
-    learning_manifest: BenchmarkManifest,
+    training_manifest: BenchmarkManifest,
     evaluation_manifest: BenchmarkManifest,
     config_fingerprint: str,
     config: AgentRunConfig,
 ) -> None:
     if barrier.get("version") != 1 or barrier.get("status") != "ready":
         raise ValueError(
-            "Learning barrier is incomplete or uses an unsupported version"
+            "Training barrier is incomplete or uses an unsupported version"
         )
     expected = {
-        "learning_manifest_hash": learning_manifest.fingerprint,
+        "training_manifest_hash": training_manifest.fingerprint,
         "evaluation_manifest_hash": evaluation_manifest.fingerprint,
         "config_fingerprint": config_fingerprint,
-        "learning_cases": len(learning_manifest.cases),
+        "training_cases": len(training_manifest.cases),
         "evaluation_cases": len(evaluation_manifest.cases),
     }
     for key, value in expected.items():
         actual = barrier.get(key)
         if actual != value:
             raise ValueError(
-                f"Learning barrier mismatch for {key}: expected {value}, "
+                f"Training barrier mismatch for {key}: expected {value}, "
                 f"found {actual!r}"
             )
     _verify_frozen_modules(barrier=barrier, config=config)
@@ -607,7 +608,7 @@ def _run_stage(
     results_root: Path,
     barrier: dict[str, Any] | None = None,
 ) -> StageResult:
-    allow_updates = role == "learning"
+    allow_updates = role == "training"
     memory_store_path: Path | None = None
     tool_state_path: Path | None = None
     if not allow_updates and barrier is not None:
@@ -619,7 +620,7 @@ def _run_stage(
             tool_state_path = Path(str(tool_info["snapshot_path"]))
     config = _build_agent_config(
         args,
-        allow_learning_updates=allow_updates,
+        allow_training_updates=allow_updates,
         memory_store_path=memory_store_path,
         tool_state_path=tool_state_path,
     )
@@ -726,7 +727,7 @@ def _run_stage(
                     ).hexdigest()
                     Session().load_closed_session(
                         session_id=session_id
-                    ).update_run_meta("learning_barrier_hash", barrier_hash)
+                    ).update_run_meta("training_barrier_hash", barrier_hash)
                 except (AttributeError, FileNotFoundError, ValueError):
                     pass
             completed += 1
@@ -749,14 +750,14 @@ def _run_stage(
                 break
 
     update_failures = (
-        sum(1 for _ in stage_root.rglob("learning_errors.json")) if allow_updates else 0
+        sum(1 for _ in stage_root.rglob("training_errors.json")) if allow_updates else 0
     )
     result = StageResult(
         role=role,
         total=len(rows),
         completed=completed,
         failed=failed,
-        learning_update_failures=update_failures,
+        training_update_failures=update_failures,
     )
     print(
         "benchmark_stage_done "
@@ -766,7 +767,7 @@ def _run_stage(
                 "total": result.total,
                 "completed": result.completed,
                 "failed": result.failed,
-                "learning_update_failures": result.learning_update_failures,
+                "training_update_failures": result.training_update_failures,
             },
             ensure_ascii=False,
         ),
@@ -776,68 +777,68 @@ def _run_stage(
 
 
 def run_batch(args: argparse.Namespace) -> int:
-    """Run Learning Benchmark, freeze modules, then run Evaluate Benchmark."""
+    """Run Training Benchmark, freeze modules, then run Evaluate Benchmark."""
 
     evaluation_manifest = load_benchmark_manifest(
         args.evaluate_benchmark,
         expected_role="evaluation",
     )
     modules_enabled = bool(args.procedural_memory or args.tool_refinement)
-    learning_manifest: BenchmarkManifest | None = None
+    training_manifest: BenchmarkManifest | None = None
     if modules_enabled:
-        if not args.learning_benchmark:
+        if not args.training_benchmark:
             raise ValueError(
-                "--learning-benchmark is required when a learning module is enabled"
+                "--training-benchmark is required when a training module is enabled"
             )
-        learning_manifest = load_benchmark_manifest(
-            args.learning_benchmark,
-            expected_role="learning",
+        training_manifest = load_benchmark_manifest(
+            args.training_benchmark,
+            expected_role="training",
         )
 
     results_root = resolve_results_root(args.result_dir)
     results_root.mkdir(parents=True, exist_ok=True)
     config_fingerprint = _pipeline_config_fingerprint(
         args,
-        learning_manifest=learning_manifest,
+        training_manifest=training_manifest,
         evaluation_manifest=evaluation_manifest,
     )
     barrier: dict[str, Any] | None = None
-    barrier_path = results_root / "learning_barrier.json"
+    barrier_path = results_root / "training_barrier.json"
 
-    if learning_manifest is not None:
-        learning_config = _build_agent_config(args, allow_learning_updates=True)
+    if training_manifest is not None:
+        training_config = _build_agent_config(args, allow_training_updates=True)
         if args.resume and barrier_path.exists():
             barrier = _read_json(barrier_path)
-            _validate_learning_barrier(
+            _validate_training_barrier(
                 barrier,
-                learning_manifest=learning_manifest,
+                training_manifest=training_manifest,
                 evaluation_manifest=evaluation_manifest,
                 config_fingerprint=config_fingerprint,
-                config=learning_config,
+                config=training_config,
             )
             print(
-                "learning_barrier_reused "
+                "training_barrier_reused "
                 + json.dumps({"path": str(barrier_path)}, ensure_ascii=False),
                 flush=True,
             )
         else:
-            learning_result = _run_stage(
+            training_result = _run_stage(
                 args=args,
-                manifest=learning_manifest,
-                role="learning",
+                manifest=training_manifest,
+                role="training",
                 results_root=results_root,
             )
-            if not learning_result.successful:
+            if not training_result.successful:
                 print(
                     "benchmark_pipeline_blocked "
                     + json.dumps(
                         {
-                            "reason": "learning_incomplete",
-                            "completed": learning_result.completed,
-                            "total": learning_result.total,
-                            "failed": learning_result.failed,
-                            "learning_update_failures": (
-                                learning_result.learning_update_failures
+                            "reason": "training_incomplete",
+                            "completed": training_result.completed,
+                            "total": training_result.total,
+                            "failed": training_result.failed,
+                            "training_update_failures": (
+                                training_result.training_update_failures
                             ),
                         },
                         ensure_ascii=False,
@@ -845,10 +846,10 @@ def run_batch(args: argparse.Namespace) -> int:
                     flush=True,
                 )
                 return 1
-            barrier = _freeze_learning_modules(
-                config=learning_config,
+            barrier = _freeze_training_modules(
+                config=training_config,
                 results_root=results_root,
-                learning_manifest=learning_manifest,
+                training_manifest=training_manifest,
                 evaluation_manifest=evaluation_manifest,
                 config_fingerprint=config_fingerprint,
             )
@@ -866,8 +867,8 @@ def run_batch(args: argparse.Namespace) -> int:
         + json.dumps(
             {
                 "exit_code": exit_code,
-                "learning_cases": (
-                    learning_manifest.counts["total"] if learning_manifest else 0
+                "training_cases": (
+                    training_manifest.counts["total"] if training_manifest else 0
                 ),
                 "evaluation_cases": evaluation_manifest.counts["total"],
             },
@@ -884,8 +885,8 @@ def build_parser() -> argparse.ArgumentParser:
     memory_defaults = ProceduralMemoryConfig()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--learning-benchmark",
-        help="Learning Benchmark YAML. Required when a learning module is enabled.",
+        "--training-benchmark",
+        help="Training Benchmark YAML. Required when a training module is enabled.",
     )
     parser.add_argument(
         "--evaluate-benchmark",

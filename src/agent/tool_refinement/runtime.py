@@ -24,7 +24,7 @@ def _primitive_description(tool: BaseTool) -> str:
     description = (getattr(tool, "description", "") or "").strip()
     for marker in (
         "\n\nDRAFT refined guidance:",
-        "\n\n[Integrated learning guidance - not evidence]",
+        "\n\n[Integrated training guidance - not evidence]",
     ):
         if marker in description:
             description = description.split(marker, 1)[0].strip()
@@ -129,7 +129,7 @@ class ToolRefinementRuntime:
         library_id: str,
         store: ToolRefinementStore | None = None,
         state_path: str | Path | None = None,
-        allow_learning_updates: bool | None = None,
+        allow_training_updates: bool | None = None,
         tool_doc_chars: int = _DEFAULTS.tool_doc_chars,
         explorer_llm: Any | None = None,
         llm_backend: str = "",
@@ -145,21 +145,21 @@ class ToolRefinementRuntime:
         self.session = session
         self.primitive_tools = list(primitive_tools)
         self.library_id = library_id
-        self.allow_learning_updates = (
+        self.allow_training_updates = (
             state_path is None and not bool(getattr(store, "read_only", False))
-            if allow_learning_updates is None
-            else bool(allow_learning_updates)
+            if allow_training_updates is None
+            else bool(allow_training_updates)
         )
         if store is None:
             self.store = ToolRefinementStore(
                 library_id,
                 state_path=state_path,
-                read_only=not self.allow_learning_updates,
+                read_only=not self.allow_training_updates,
             )
         else:
             self.store = (
                 store
-                if self.allow_learning_updates or store.read_only
+                if self.allow_training_updates or store.read_only
                 else store.as_read_only()
             )
         self._initial_state_hash = self.store.state_hash()
@@ -181,7 +181,7 @@ class ToolRefinementRuntime:
         }
         self._docs = (
             self._ensure_primitive_documents()
-            if self.allow_learning_updates
+            if self.allow_training_updates
             else self._load_primitive_documents_read_only()
         )
         self._guidance_limits = self._allocate_guidance_limits()
@@ -207,7 +207,7 @@ class ToolRefinementRuntime:
 
         Primitive descriptions remain available for every tool. Refined notes are
         reserved for the best-supported tools so they cannot crowd out runtime
-        evidence when both learning modules are enabled.
+        evidence when both training modules are enabled.
         """
 
         budget = min(
@@ -333,10 +333,10 @@ class ToolRefinementRuntime:
     async def explore(self, task_description: str) -> dict[str, Any]:
         """Run the self-driven DRAFT Explorer before the submission phase."""
 
-        if not self.allow_learning_updates:
+        if not self.allow_training_updates:
             self._explorer_report = {
                 "status": "skipped",
-                "reason": "learning updates are disabled",
+                "reason": "training updates are disabled",
             }
             return self._explorer_report
         if self.explorer_llm is None:
@@ -357,7 +357,7 @@ class ToolRefinementRuntime:
                 store=self.store,
                 llm=self.explorer_llm,
                 model=self.model,
-                allow_learning_updates=self.allow_learning_updates,
+                allow_training_updates=self.allow_training_updates,
                 exploration_similarity_threshold=(
                     self.exploration_similarity_threshold
                 ),
@@ -411,7 +411,7 @@ class ToolRefinementRuntime:
         state_hash = self.store.state_hash()
         return {
             "library_id": self.library_id,
-            "allow_learning_updates": self.allow_learning_updates,
+            "allow_training_updates": self.allow_training_updates,
             "store_read_only": self.store.read_only,
             "initial_state_hash": self._initial_state_hash,
             "state_hash": state_hash,

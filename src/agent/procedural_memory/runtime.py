@@ -49,7 +49,7 @@ def _short_text(value: Any, *, limit: int = 900) -> str:
     return text
 
 
-def strip_integrated_learning_guidance(value: Any) -> str:
+def strip_integrated_training_guidance(value: Any) -> str:
     text = str(value or "")
     if INTEGRATED_GUIDANCE_MARKER in text:
         text = text.split(INTEGRATED_GUIDANCE_MARKER, 1)[0]
@@ -94,7 +94,7 @@ class SkillToolRuntime:
         self,
         *,
         procedural_memory: ProceduralMemoryModule,
-        allow_learning_updates: bool,
+        allow_training_updates: bool,
         session: Any,
         task_description: str,
         tools: list[BaseTool],
@@ -106,7 +106,7 @@ class SkillToolRuntime:
         meta_controller_llm: Any | None = None,
     ) -> None:
         self.procedural_memory = procedural_memory
-        self.allow_learning_updates = bool(allow_learning_updates)
+        self.allow_training_updates = bool(allow_training_updates)
         self._initial_state_hash = self.procedural_memory.store.state_hash()
         self.session = session
         self.task_description = task_description
@@ -395,7 +395,7 @@ class SkillToolRuntime:
         transition_count = len(self.recent_transitions)
         state_hash = self.procedural_memory.store.state_hash()
         return {
-            "allow_learning_updates": self.allow_learning_updates,
+            "allow_training_updates": self.allow_training_updates,
             "initial_state_hash": self._initial_state_hash,
             "state_hash": state_hash,
             "state_unchanged": state_hash == self._initial_state_hash,
@@ -415,7 +415,7 @@ class SkillToolRuntime:
             "termination_errors": self.termination_errors,
             "selection_policy": (
                 "llm_direct_epsilon_greedy"
-                if self.allow_learning_updates
+                if self.allow_training_updates
                 else "llm_direct"
             ),
             "selection_epsilon_initial": self.selection_epsilon,
@@ -688,7 +688,7 @@ class SkillToolRuntime:
         epsilon = 0.0
         explored = False
         selected = None
-        if self.allow_learning_updates:
+        if self.allow_training_updates:
             epsilon = self.procedural_memory.decayed_selection_epsilon(
                 self.selection_epsilon
             )
@@ -732,7 +732,7 @@ class SkillToolRuntime:
                 "cooldown_exclusions": sorted(self.skill_cooldowns),
                 "selection_policy": (
                     "llm_direct_epsilon_greedy"
-                    if self.allow_learning_updates
+                    if self.allow_training_updates
                     else "llm_direct"
                 ),
                 "selection_epsilon": round(epsilon, 6),
@@ -750,7 +750,7 @@ class SkillToolRuntime:
         query: ProceduralMemoryQuery,
     ) -> SkillRetrieval | None:
         candidates = self.procedural_memory.selection_candidates(
-            include_probationary=self.allow_learning_updates,
+            include_probationary=self.allow_training_updates,
             exclude_skill_ids=self.skill_cooldowns,
         )
         if not candidates or self.meta_controller_llm is None:
@@ -785,8 +785,8 @@ class SkillToolRuntime:
             )
             selected = self.procedural_memory.activate_skill(
                 draft.skill_id.strip(),
-                record_reuse=self.allow_learning_updates,
-                include_probationary=self.allow_learning_updates,
+                record_reuse=self.allow_training_updates,
+                include_probationary=self.allow_training_updates,
                 exclude_skill_ids=self.skill_cooldowns,
             )
             if selected is None:
@@ -906,7 +906,7 @@ class SkillToolRuntime:
         }
         ranked: list[tuple[float, int, str]] = []
         for index, tool_name in enumerate(known_tools):
-            description = strip_integrated_learning_guidance(
+            description = strip_integrated_training_guidance(
                 self.tool_descriptions.get(tool_name, "")
             ).lower()
             tool_tokens = {

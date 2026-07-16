@@ -71,7 +71,7 @@ class ProceduralMemoryStore:
 
     @contextmanager
     def exclusive(self):
-        """Serialize one bank's read-modify-write learning cycle."""
+        """Serialize one bank's read-modify-write training cycle."""
 
         self._require_writable()
         self.bank_dir.mkdir(parents=True, exist_ok=True)
@@ -134,6 +134,39 @@ class ProceduralMemoryStore:
             gradient for skill in skills for gradient in skill.semantic_gradients
         ]
         last_decision = state.ppo_decisions[-1] if state.ppo_decisions else None
+        completed_evolution = [
+            event
+            for event in state.evolution_log
+            if event.get("action") in {"accepted", "rejected"}
+        ]
+        parent_attempt_counts = dict(state.evolution_parent_attempt_counts)
+        derived_parent_attempts: dict[str, int] = {}
+        for event in completed_evolution:
+            parent_id = str(event.get("parent") or "")
+            if parent_id:
+                derived_parent_attempts[parent_id] = (
+                    derived_parent_attempts.get(parent_id, 0) + 1
+                )
+        for parent_id, count in derived_parent_attempts.items():
+            parent_attempt_counts.setdefault(parent_id, count)
+        candidate_attempts = sum(
+            int(event.get("generated_candidate_count") or 0)
+            for event in state.evolution_log
+        )
+        gate_failures: dict[str, int] = {}
+        recorded_gate_checks = [
+            attempt.get("gate_checks") or {}
+            for event in state.evolution_log
+            for attempt in event.get("candidate_attempts", [])
+        ]
+        if not recorded_gate_checks:
+            recorded_gate_checks = [
+                decision.gate_checks for decision in state.ppo_decisions
+            ]
+        for checks in recorded_gate_checks:
+            for check, passed in checks.items():
+                if not passed:
+                    gate_failures[check] = gate_failures.get(check, 0) + 1
         return {
             "bank_id": state.bank_id,
             "skills": len(skills),
@@ -165,6 +198,10 @@ class ProceduralMemoryStore:
             ),
             "iteration": state.iteration,
             "evolution_events": len(state.evolution_log),
+            "completed_evolution_attempts": len(completed_evolution),
+            "candidate_attempts_generated": candidate_attempts,
+            "gate_failure_counts": gate_failures,
+            "evolution_parent_attempt_counts": parent_attempt_counts,
             "maintenance_events": len(state.maintenance_log),
             "semantic_gradients": len(gradients),
             "llm_semantic_gradients": sum(

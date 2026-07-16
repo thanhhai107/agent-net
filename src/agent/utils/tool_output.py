@@ -10,7 +10,7 @@ from typing import Any, Literal
 from langchain_core.messages import ToolMessage
 
 ToolOutcome = Literal["success", "error", "unknown"]
-INTEGRATED_GUIDANCE_MARKER = "[Integrated learning guidance - not evidence]"
+INTEGRATED_GUIDANCE_MARKER = "[Integrated training guidance - not evidence]"
 
 _ERROR_STATUS_VALUES = frozenset({"error", "failed", "failure", "timeout"})
 _UNKNOWN_STATUS_VALUES = frozenset({"unknown", "unavailable", "indeterminate"})
@@ -95,7 +95,7 @@ def classify_tool_outcome(
 
 
 def compact_tool_output(output: Any, *, limit: int = 700) -> str:
-    """Render primitive output text for learning traces without guidance wrappers."""
+    """Render primitive output text for training traces without guidance wrappers."""
 
     content = tool_output_content(output)
     if isinstance(content, str):

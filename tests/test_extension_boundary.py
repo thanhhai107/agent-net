@@ -17,7 +17,7 @@ from agent.composition import (
 )
 from agent.extensions import react_agent as react_extension
 from agent.extensions import run as extension_run
-from agent.extensions.react_agent import LearningReActAgent
+from agent.extensions.react_agent import TrainingReActAgent
 from nika.extensions import benchmark as benchmark_extension
 from nika.extensions.benchmark import load_custom_benchmark
 from nika.cli.commands import procedural_memory as procedural_memory_command
@@ -35,12 +35,12 @@ def _config(*, procedural_memory_enabled: bool = False) -> AgentRunConfig:
     )
 
 
-def test_learning_agent_inherits_original_execution_and_submission_methods() -> None:
-    assert LearningReActAgent._run_diagnosis is BasicReActAgent._run_diagnosis
-    assert LearningReActAgent._run_submission is BasicReActAgent._run_submission
+def test_training_agent_inherits_original_execution_and_submission_methods() -> None:
+    assert TrainingReActAgent._run_diagnosis is BasicReActAgent._run_diagnosis
+    assert TrainingReActAgent._run_submission is BasicReActAgent._run_submission
 
 
-def test_learning_phase_rebuilds_skill_prompt_for_every_model_call() -> None:
+def test_training_phase_rebuilds_skill_prompt_for_every_model_call() -> None:
     class Runtime:
         calls = 0
 
@@ -55,8 +55,8 @@ def test_learning_phase_rebuilds_skill_prompt_for_every_model_call() -> None:
             self.calls += 1
             return f"\nDynamic skill context {self.calls}"
 
-    phase = react_extension.LearningDiagnosisPhase.__new__(
-        react_extension.LearningDiagnosisPhase
+    phase = react_extension.TrainingDiagnosisPhase.__new__(
+        react_extension.TrainingDiagnosisPhase
     )
     phase.llm = object()
     phase.tools = []
@@ -88,7 +88,7 @@ def test_learning_phase_rebuilds_skill_prompt_for_every_model_call() -> None:
     assert prompts[1].endswith("Dynamic skill context 2")
 
 
-def test_learning_module_failure_does_not_block_other_update(
+def test_training_module_failure_does_not_block_other_update(
     tmp_path, monkeypatch
 ) -> None:
     (tmp_path / "eval_metrics.json").write_text("{}", encoding="utf-8")
@@ -123,14 +123,14 @@ def test_learning_module_failure_does_not_block_other_update(
         llm_provider="custom",
         model="openai/gpt-oss-120b",
         max_steps=20,
-        allow_learning_updates=True,
+        allow_training_updates=True,
         tool_refinement=ToolRefinementConfig(enabled=True),
         procedural_memory=ProceduralMemoryConfig(enabled=True),
     )
 
-    benchmark_extension._update_learning("session-1", config)
+    benchmark_extension._update_training("session-1", config)
 
-    errors = json.loads((tmp_path / "learning_errors.json").read_text(encoding="utf-8"))
+    errors = json.loads((tmp_path / "training_errors.json").read_text(encoding="utf-8"))
     assert memory_updates == ["updated"]
     saved_metrics = json.loads(
         (tmp_path / "eval_metrics.json").read_text(encoding="utf-8")
@@ -144,10 +144,10 @@ def test_learning_module_failure_does_not_block_other_update(
         "finalize_tool_refinement_session",
         lambda **_kwargs: {},
     )
-    benchmark_extension._update_learning("session-1", config)
+    benchmark_extension._update_training("session-1", config)
 
     assert memory_updates == ["updated", "updated"]
-    assert not (tmp_path / "learning_errors.json").exists()
+    assert not (tmp_path / "training_errors.json").exists()
 
 
 def test_baseline_factory_constructs_original_agent(monkeypatch) -> None:
@@ -253,8 +253,8 @@ def test_extension_parser_uses_canonical_feature_terms() -> None:
     parser = benchmark_extension.build_parser()
     canonical = parser.parse_args(
         [
-            "--learning-benchmark",
-            "learning.yaml",
+            "--training-benchmark",
+            "training.yaml",
             "--evaluate-benchmark",
             "benchmark.yaml",
             "--tool-refinement",
@@ -269,7 +269,7 @@ def test_extension_parser_uses_canonical_feature_terms() -> None:
         "procedural-bank",
     )
     assert canonical.procedural_memory_max_skill_age == 8
-    assert canonical.procedural_memory_update_threshold == 6
+    assert canonical.procedural_memory_update_threshold == 3
     assert canonical.procedural_memory_selection_epsilon == 0.25
     assert canonical.tool_refinement_exploration_similarity_threshold == 0.9
     assert canonical.tool_refinement_explorer_reflection_limit == 3
@@ -285,7 +285,7 @@ def test_extension_parser_uses_canonical_feature_terms() -> None:
     help_text = parser.format_help()
     assert "--tool-refinement" in help_text
     assert "--procedural-memory" in help_text
-    assert "--learning-benchmark" in help_text
+    assert "--training-benchmark" in help_text
     assert "--evaluate-benchmark" in help_text
     assert "--config" not in help_text
     assert "--evolve-until" not in help_text
@@ -355,7 +355,7 @@ def test_clean_control_ground_truth_uses_complete_empty_schema(monkeypatch) -> N
     ]
 
 
-def test_clean_control_normalization_updates_artifact_before_learning(
+def test_clean_control_normalization_updates_artifact_before_training(
     monkeypatch, tmp_path: Path
 ) -> None:
     submission = {
@@ -420,7 +420,7 @@ def test_clean_control_without_submission_keeps_upstream_missing_scores(
     assert benchmark_extension._read_json(metrics_path) == metrics
 
 
-def test_clean_control_path_never_injects_and_normalizes_before_learning(
+def test_clean_control_path_never_injects_and_normalizes_before_training(
     monkeypatch, tmp_path: Path
 ) -> None:
     calls: list[str] = []
@@ -474,7 +474,7 @@ def test_clean_control_path_never_injects_and_normalizes_before_learning(
     )
     monkeypatch.setattr(
         benchmark_extension,
-        "_update_learning",
+        "_update_training",
         lambda *_args: calls.append("learn") or {},
     )
 
@@ -520,7 +520,7 @@ def test_procedural_memory_command_routes_through_extension_benchmark(
     )
 
     procedural_memory_command.procedural_memory_run(
-        learning_benchmark=benchmark,
+        training_benchmark=benchmark,
         evaluate_benchmark=benchmark,
         bank="test-bank",
         result_dir=tmp_path / "results",
@@ -548,7 +548,7 @@ def test_procedural_memory_command_routes_through_extension_benchmark(
 
     command = calls[0]
     assert command[1:3] == ["-m", "nika.extensions.benchmark"]
-    assert command[command.index("--learning-benchmark") + 1] == str(benchmark)
+    assert command[command.index("--training-benchmark") + 1] == str(benchmark)
     assert command[command.index("--evaluate-benchmark") + 1] == str(benchmark)
     assert command[command.index("--result-dir") + 1] == str(tmp_path / "results")
     assert "--resume" in command
@@ -637,7 +637,7 @@ def test_baseline_fault_row_routes_to_upstream_single_case(
     assert calls[0]["benchmark_role"] == "evaluation"
 
 
-def test_learning_barrier_contains_loadable_immutable_snapshots(
+def test_training_barrier_contains_loadable_immutable_snapshots(
     monkeypatch, tmp_path: Path
 ) -> None:
     from agent.procedural_memory import store as memory_store_module
@@ -660,9 +660,9 @@ def test_learning_barrier_contains_loadable_immutable_snapshots(
     tool_store = benchmark_extension.ToolRefinementStore("barrier-tools")
     tool_store.save(tool_store.load())
 
-    learning_path = tmp_path / "learning.yaml"
-    learning_path.write_text(
-        "benchmark_role: learning\n"
+    training_path = tmp_path / "training.yaml"
+    training_path.write_text(
+        "benchmark_role: training\n"
         "cases:\n"
         "  - {scenario: simple_bgp, problem: no_fault, inject: {}}\n",
         encoding="utf-8",
@@ -674,9 +674,9 @@ def test_learning_barrier_contains_loadable_immutable_snapshots(
         "  - {scenario: p4_mpls, problem: no_fault, inject: {}}\n",
         encoding="utf-8",
     )
-    learning_manifest = benchmark_extension.load_benchmark_manifest(
-        learning_path,
-        expected_role="learning",
+    training_manifest = benchmark_extension.load_benchmark_manifest(
+        training_path,
+        expected_role="training",
     )
     evaluation_manifest = benchmark_extension.load_benchmark_manifest(
         evaluation_path,
@@ -687,7 +687,7 @@ def test_learning_barrier_contains_loadable_immutable_snapshots(
         llm_provider="custom",
         model="openai/gpt-oss-120b",
         max_steps=20,
-        allow_learning_updates=True,
+        allow_training_updates=True,
         procedural_memory=ProceduralMemoryConfig(
             enabled=True,
             bank="barrier-bank",
@@ -698,10 +698,10 @@ def test_learning_barrier_contains_loadable_immutable_snapshots(
         ),
     )
 
-    barrier = benchmark_extension._freeze_learning_modules(
+    barrier = benchmark_extension._freeze_training_modules(
         config=config,
         results_root=tmp_path / "results",
-        learning_manifest=learning_manifest,
+        training_manifest=training_manifest,
         evaluation_manifest=evaluation_manifest,
         config_fingerprint="config-hash",
     )
@@ -721,9 +721,9 @@ def test_learning_barrier_contains_loadable_immutable_snapshots(
 
     assert frozen_memory.store.load().iteration == 3
     assert frozen_tools.load().library_id == "barrier-tools"
-    benchmark_extension._validate_learning_barrier(
+    benchmark_extension._validate_training_barrier(
         barrier,
-        learning_manifest=learning_manifest,
+        training_manifest=training_manifest,
         evaluation_manifest=evaluation_manifest,
         config_fingerprint="config-hash",
         config=config,
@@ -739,12 +739,12 @@ def test_learning_barrier_contains_loadable_immutable_snapshots(
         benchmark_extension._verify_frozen_modules(barrier=barrier, config=config)
 
 
-def test_benchmark_pipeline_enables_updates_only_for_learning_stage(
+def test_benchmark_pipeline_enables_updates_only_for_training_stage(
     monkeypatch, tmp_path: Path
 ) -> None:
-    learning = tmp_path / "learning.yaml"
-    learning.write_text(
-        "benchmark_role: learning\n"
+    training = tmp_path / "training.yaml"
+    training.write_text(
+        "benchmark_role: training\n"
         "cases:\n"
         "  - {scenario: simple_bgp, problem: no_fault, inject: {}}\n"
         "  - {scenario: ospf_enterprise_dhcp, topo_size: s, problem: no_fault, inject: {}}\n",
@@ -767,7 +767,7 @@ def test_benchmark_pipeline_enables_updates_only_for_learning_stage(
     def run_case(_row, *, config, benchmark_role, **_kwargs):
         stages.append(
             (
-                config.allow_learning_updates,
+                config.allow_training_updates,
                 config.procedural_memory.enabled,
                 config.tool_refinement.enabled,
                 config.tool_refinement.update_due,
@@ -780,7 +780,7 @@ def test_benchmark_pipeline_enables_updates_only_for_learning_stage(
     monkeypatch.setattr(benchmark_extension, "run_extended_case", run_case)
     monkeypatch.setattr(
         benchmark_extension,
-        "_freeze_learning_modules",
+        "_freeze_training_modules",
         lambda **_kwargs: {},
     )
     monkeypatch.setattr(
@@ -790,8 +790,8 @@ def test_benchmark_pipeline_enables_updates_only_for_learning_stage(
     )
     args = benchmark_extension.build_parser().parse_args(
         [
-            "--learning-benchmark",
-            str(learning),
+            "--training-benchmark",
+            str(training),
             "--evaluate-benchmark",
             str(evaluation),
             "--result-dir",
@@ -806,7 +806,7 @@ def test_benchmark_pipeline_enables_updates_only_for_learning_stage(
 
     assert result == 0
     assert stages == [
-        (True, True, True, False, "learning"),
-        (True, True, True, True, "learning"),
+        (True, True, True, False, "training"),
+        (True, True, True, True, "training"),
         (False, True, True, False, "evaluation"),
     ]

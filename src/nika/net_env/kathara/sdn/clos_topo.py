@@ -222,7 +222,7 @@ class SDNClos(NetworkEnvBase):
             [
                 "ip addr add 20.0.0.100/24 dev eth0",
                 "ip link set eth0 up",
-                "python3 /pox/pox.py forwarding.l2_learning &",
+                "python3 /pox/pox.py forwarding.l2_training &",
             ],
             f"{controller.name}.startup",
         )

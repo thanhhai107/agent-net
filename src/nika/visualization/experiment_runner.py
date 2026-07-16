@@ -37,8 +37,8 @@ MODULE_CONFIG_SNAPSHOT_FILENAME = "modules.yaml"
 RESOLVED_MODULE_DEFAULTS = module_defaults()
 BASELINE_DEFAULTS = RESOLVED_MODULE_DEFAULTS.baseline
 TOOL_MODULE_DEFAULTS = RESOLVED_MODULE_DEFAULTS.tool_refinement
-DEFAULT_STUDIO_LEARNING_BENCHMARK = str(
-    BENCHMARK_DIR / BASELINE_DEFAULTS.learning_benchmark
+DEFAULT_STUDIO_TRAINING_BENCHMARK = str(
+    BENCHMARK_DIR / BASELINE_DEFAULTS.training_benchmark
 )
 DEFAULT_STUDIO_EVALUATE_BENCHMARK = str(
     BENCHMARK_DIR / BASELINE_DEFAULTS.evaluate_benchmark
@@ -134,10 +134,10 @@ def _benchmark_command(config: dict[str, Any]) -> list[str]:
     if selected_modules(config):
         command.extend(
             [
-                "--learning-benchmark",
+                "--training-benchmark",
                 _str(
-                    config.get("learning_benchmark_file"),
-                    DEFAULT_STUDIO_LEARNING_BENCHMARK,
+                    config.get("training_benchmark_file"),
+                    DEFAULT_STUDIO_TRAINING_BENCHMARK,
                 ),
             ]
         )
@@ -396,15 +396,15 @@ def build_command_plan(config: dict[str, Any]) -> list[CommandPlan]:
 def prepare_experiment_config(config: dict[str, Any]) -> dict[str, Any]:
     prepared = dict(config)
     prepared["agent_type"] = agent_type(prepared)
-    learning_benchmark_file = _str(
-        prepared.get("learning_benchmark_file"),
-        DEFAULT_STUDIO_LEARNING_BENCHMARK,
+    training_benchmark_file = _str(
+        prepared.get("training_benchmark_file"),
+        DEFAULT_STUDIO_TRAINING_BENCHMARK,
     )
     evaluate_benchmark_file = _str(
         prepared.get("evaluate_benchmark_file"),
         DEFAULT_STUDIO_EVALUATE_BENCHMARK,
     )
-    prepared["learning_benchmark_file"] = learning_benchmark_file
+    prepared["training_benchmark_file"] = training_benchmark_file
     prepared["evaluate_benchmark_file"] = evaluate_benchmark_file
     run_id = _str(prepared.get("experiment_id"), "")
     if not run_id:
@@ -436,7 +436,7 @@ def prepare_resume_config(
         raise ValueError("Selected run does not have a resumable config.")
     if not all(
         str(config.get(key) or "").strip()
-        for key in ("learning_benchmark_file", "evaluate_benchmark_file")
+        for key in ("training_benchmark_file", "evaluate_benchmark_file")
     ):
         raise ValueError(
             "Selected run predates the two-benchmark Studio schema and cannot "
@@ -719,6 +719,44 @@ def _process_group_running(pgid: int | None) -> bool:
     return True
 
 
+def _mark_orphaned_sessions_failed(run_dir: Path, reason: str) -> None:
+    """Close persisted case metadata left running after its runner disappeared."""
+
+    spec = read_run_spec(run_dir)
+    result_root_value = str((spec.get("config") or {}).get("result_root") or "")
+    if not result_root_value:
+        return
+    result_root = Path(result_root_value)
+    if not result_root.exists():
+        return
+    timestamp = datetime.now(timezone.utc).isoformat()
+    for run_path in result_root.rglob("run.json"):
+        session_meta = _read_json(run_path)
+        if session_meta.get("status") != "running":
+            continue
+        session_meta.update(
+            {
+                "status": "failed",
+                "updated_at": timestamp,
+                "failure_reason": reason,
+            }
+        )
+        run_path.write_text(json.dumps(session_meta, indent=2), encoding="utf-8")
+        event_path = run_path.parent / "events.jsonl"
+        with event_path.open("a", encoding="utf-8") as handle:
+            handle.write(
+                json.dumps(
+                    {
+                        "timestamp": timestamp,
+                        "event": "benchmark_failed",
+                        "error_type": "RunnerProcessExited",
+                        "error": reason,
+                    }
+                )
+                + "\n"
+            )
+
+
 def run_status(run_dir: Path) -> dict[str, Any]:
     meta = _read_json(run_dir / META_FILENAME)
     if meta.get("status") == "queued":
@@ -747,7 +785,29 @@ def run_status(run_dir: Path) -> dict[str, Any]:
     pid = _int(meta.get("pid"), 0)
     if _pid_running(pid):
         return {**meta, "status": "running", "exit_code": None}
-    return {**meta, "status": "stopped", "exit_code": None}
+    # A dead child without a terminal marker is an orphaned run, not an
+    # actively running one. Persist the terminal state so Studio does not
+    # keep showing a stale "running" experiment forever.
+    stale = {
+        **meta,
+        "status": "failed",
+        "exit_code": 1,
+        "finished_at": datetime.now(timezone.utc).isoformat(),
+        "failure_reason": "runner process exited without a terminal event",
+    }
+    _mark_orphaned_sessions_failed(run_dir, stale["failure_reason"])
+    _write_run_meta(run_dir, stale)
+    _append_run_log(
+        run_dir,
+        "ui_run_done "
+        + json.dumps(
+            {
+                "exit_code": 1,
+                "reason": "runner process exited without a terminal event",
+            }
+        ),
+    )
+    return stale
 
 
 def check_and_start_next_queued() -> None:
@@ -919,16 +979,16 @@ def parse_progress_events(log_text: str) -> list[dict[str, str]]:
         "benchmark_summary ",
         "benchmark_stage_start ",
         "benchmark_stage_done ",
-        "learning_barrier_created ",
-        "learning_barrier_reused ",
+        "training_barrier_created ",
+        "training_barrier_reused ",
         "benchmark_pipeline_blocked ",
         "benchmark_pipeline_done ",
     )
     json_events = {
         "benchmark_stage_start",
         "benchmark_stage_done",
-        "learning_barrier_created",
-        "learning_barrier_reused",
+        "training_barrier_created",
+        "training_barrier_reused",
         "benchmark_pipeline_blocked",
         "benchmark_pipeline_done",
     }

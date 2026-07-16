@@ -1,4 +1,4 @@
-"""Offline DRAFT learning hook.
+"""Offline DRAFT training hook.
 
 DRAFT learns by comparing tool trials against their documentation, identifying
 where the agent misunderstood arguments or preconditions, then rewriting the
@@ -19,12 +19,12 @@ from collections.abc import Collection
 from pathlib import Path
 from typing import Any
 
-from agent.learning_llm import (
-    format_learning_error,
-    learning_backend,
-    learning_max_retries,
-    learning_model,
-    learning_timeout_seconds,
+from agent.training_llm import (
+    format_training_error,
+    training_backend,
+    training_max_retries,
+    training_model,
+    training_timeout_seconds,
 )
 from agent.module_config import module_defaults
 from agent.extensions.llm import load_extension_model as load_model
@@ -58,7 +58,7 @@ DRAFT_CONVERGENCE_THRESHOLD = _DEFAULTS.convergence_threshold
 DRAFT_EXPLORATION_SIMILARITY_THRESHOLD = _DEFAULTS.exploration_similarity_threshold
 DIAGNOSIS_AGENT_NAMES = frozenset({DIAGNOSIS, "diagnosis_agent"})
 DRAFT_PROMPT_TEXT_LIMIT = 360
-INTEGRATED_GUIDANCE_MARKER = "[Integrated learning guidance - not evidence]"
+INTEGRATED_GUIDANCE_MARKER = "[Integrated training guidance - not evidence]"
 
 
 def _short_text(value: Any, *, limit: int = 700) -> str:
@@ -74,8 +74,8 @@ def _short_text(value: Any, *, limit: int = 700) -> str:
     return text.strip()
 
 
-def _learning_updates_allowed(session: Any) -> bool:
-    value = getattr(session, "allow_learning_updates", False)
+def _training_updates_allowed(session: Any) -> bool:
+    value = getattr(session, "allow_training_updates", False)
     if isinstance(value, str):
         return value.strip().lower() in {"1", "true", "yes", "on"}
     return bool(value)
@@ -678,9 +678,9 @@ def _invoke_draft_analyzer(
 ) -> tuple[DraftAnalyzerSuggestion | None, str]:
     """Run DRAFT's natural-language Analyzer over feedback and revision history."""
     selected_backend = (
-        learning_backend(llm_backend, "tool_refinement") if llm_backend else ""
+        training_backend(llm_backend, "tool_refinement") if llm_backend else ""
     )
-    selected_model = learning_model(model, "tool_refinement") if model else ""
+    selected_model = training_model(model, "tool_refinement") if model else ""
     if llm is None and (not selected_backend or not selected_model):
         return None, ""
     if llm is None:
@@ -690,11 +690,11 @@ def _invoke_draft_analyzer(
             llm = load_model(
                 selected_backend,
                 selected_model,
-                timeout=learning_timeout_seconds("tool_refinement"),
-                max_retries=learning_max_retries("tool_refinement"),
+                timeout=training_timeout_seconds("tool_refinement"),
+                max_retries=training_max_retries("tool_refinement"),
             )
         except Exception as exc:
-            return None, format_learning_error(exc)
+            return None, format_training_error(exc)
     payload = {
         "tool": tool_name,
         "immutable_source_contract": {
@@ -757,7 +757,7 @@ def _invoke_draft_analyzer(
             "",
         )
     except Exception as exc:
-        return None, format_learning_error(exc)
+        return None, format_training_error(exc)
 
 
 def _recent_revision_hashes(
@@ -1059,9 +1059,9 @@ def _invoke_draft_rewriter(
     llm_error: str = "",
 ) -> tuple[DraftRewriteProposal | None, str]:
     selected_backend = (
-        learning_backend(llm_backend, "tool_refinement") if llm_backend else ""
+        training_backend(llm_backend, "tool_refinement") if llm_backend else ""
     )
-    selected_model = learning_model(model, "tool_refinement") if model else ""
+    selected_model = training_model(model, "tool_refinement") if model else ""
     if llm is None and (not selected_backend or not selected_model):
         return None, ""
     if llm is None:
@@ -1071,11 +1071,11 @@ def _invoke_draft_rewriter(
             llm = load_model(
                 selected_backend,
                 selected_model,
-                timeout=learning_timeout_seconds("tool_refinement"),
-                max_retries=learning_max_retries("tool_refinement"),
+                timeout=training_timeout_seconds("tool_refinement"),
+                max_retries=training_max_retries("tool_refinement"),
             )
         except Exception as exc:
-            return None, format_learning_error(exc)
+            return None, format_training_error(exc)
     try:
         rewriter = llm.with_structured_output(DraftRewriteDraft)
         raw_proposal = rewriter.invoke(
@@ -1102,7 +1102,7 @@ def _invoke_draft_rewriter(
             proposal.tool_name = tool_name
         return proposal, ""
     except Exception as exc:
-        return None, format_learning_error(exc)
+        return None, format_training_error(exc)
 
 
 def _apply_draft_proposal(
@@ -1210,17 +1210,17 @@ def _rewrite_documentation_unlocked(
 ) -> list[DocumentationRevision]:
     state = store.load()
     selected_backend = (
-        learning_backend(llm_backend, "tool_refinement") if llm_backend else ""
+        training_backend(llm_backend, "tool_refinement") if llm_backend else ""
     )
     selected_analyzer_model = (
         analyzer_model.strip()
         if isinstance(analyzer_model, str) and analyzer_model.strip()
-        else learning_model(model, "tool_refinement")
+        else training_model(model, "tool_refinement")
     )
     selected_rewriter_model = (
         rewriter_model.strip()
         if isinstance(rewriter_model, str) and rewriter_model.strip()
-        else learning_model(model, "tool_refinement")
+        else training_model(model, "tool_refinement")
     )
     role_models: dict[str, tuple[Any | None, str]] = {}
 
@@ -1230,7 +1230,7 @@ def _rewrite_documentation_unlocked(
         selected_model = (
             role_model.strip()
             if isinstance(role_model, str) and role_model.strip()
-            else learning_model(model, "tool_refinement")
+            else training_model(model, "tool_refinement")
         )
         if not selected_backend or not selected_model:
             return None, ""
@@ -1241,13 +1241,13 @@ def _rewrite_documentation_unlocked(
                 load_model(
                     selected_backend,
                     selected_model,
-                    timeout=learning_timeout_seconds("tool_refinement"),
-                    max_retries=learning_max_retries("tool_refinement"),
+                    timeout=training_timeout_seconds("tool_refinement"),
+                    max_retries=training_max_retries("tool_refinement"),
                 ),
                 "",
             )
         except Exception as exc:
-            loaded = (None, format_learning_error(exc))
+            loaded = (None, format_training_error(exc))
         role_models[selected_model] = loaded
         return loaded
 
@@ -1666,7 +1666,7 @@ def finalize_tool_refinement_session(
     *,
     session_id: str,
     metrics: dict[str, Any],
-    allow_learning_updates: bool | None = None,
+    allow_training_updates: bool | None = None,
     rewrite: bool = True,
     min_new_trials: int = _DEFAULTS.min_new_trials,
     max_tools_per_update: int = _DEFAULTS.max_tools_per_update,
@@ -1675,14 +1675,14 @@ def finalize_tool_refinement_session(
     session = Session()
     session.load_closed_session(session_id=session_id)
     updates_allowed = (
-        _learning_updates_allowed(session)
-        if allow_learning_updates is None
-        else bool(allow_learning_updates)
+        _training_updates_allowed(session)
+        if allow_training_updates is None
+        else bool(allow_training_updates)
     )
     if not updates_allowed:
         report = {
             "status": "skipped",
-            "reason": "learning updates are disabled",
+            "reason": "training updates are disabled",
             "method": "DRAFT",
             "library_id": getattr(session, "tool_library_id", "default"),
             "draft_trials": 0,

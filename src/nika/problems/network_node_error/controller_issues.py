@@ -124,7 +124,7 @@ class SouthboundPortMismatch(ProblemBase):
         self.runtime.exec(params.host_name, "pkill -f pox.py")
         self.runtime.exec(
             params.host_name,
-            f"python3 /pox/pox.py openflow.of_01 --port={params.mismatched_port} forwarding.l2_learning &",
+            f"python3 /pox/pox.py openflow.of_01 --port={params.mismatched_port} forwarding.l2_training &",
         )
 
     def verify_fault(self, params: SouthboundPortMismatchParams) -> dict:

@@ -35,7 +35,7 @@ CUSTOM_TIMEOUT_SECONDS=90
 CUSTOM_MAX_RETRIES=5
 ```
 
-Shared workflow and learning defaults live in [`config/modules.yaml`](config/modules.yaml).
+Shared workflow and training defaults live in [`config/modules.yaml`](config/modules.yaml).
 
 ## Experiment Studio
 
@@ -43,7 +43,7 @@ Shared workflow and learning defaults live in [`config/modules.yaml`](config/mod
 uv run nika studio
 ```
 
-The Studio configures baseline and learning experiments, tracks progress, resumes
+The Studio configures baseline and training experiments, tracks progress, resumes
 existing experiments, and compares result metrics.
 
 ## CLI Workflow
@@ -80,7 +80,7 @@ uv run nika eval summary
 
 Benchmark definitions live in [`benchmark/`](benchmark/):
 
-- `benchmark_learning.yaml`: 100 learning cases (90 fault + 10 no-fault)
+- `benchmark_training.yaml`: 100 training cases (90 fault + 10 no-fault)
 - `benchmark_selected.yaml`: small 56-case evaluation set
 - `benchmark_full.yaml`: full 702-case evaluation set
 
@@ -95,7 +95,7 @@ uv run nika benchmark run \
   --max-steps 50
 ```
 
-Learning experiments run `benchmark_learning.yaml` before the chosen evaluation
+Training experiments run `benchmark_training.yaml` before the chosen evaluation
 benchmark. The learned module is frozen at that barrier, and evaluation cannot
 update it. Experiment Studio stores both benchmark paths with the complete command
 and configuration for each run.
@@ -118,9 +118,19 @@ Candidate verification is an offline admissibility prescreen: the gate measures
 the clipped-surrogate improvement over the parent policy, then publishes passing
 candidates as `probationary`. Only candidates with positive conservative gain from
 later NIKA episodes become `validated`; unresolved probationary skills are retired
-when the bank is frozen after the Learning Benchmark. Studio reports Evaluate
-Benchmark cases as the primary endpoint while retaining learning diagnostics
+when the bank is frozen after the Training Benchmark. Studio reports Evaluate
+Benchmark cases as the primary endpoint while retaining training diagnostics
 separately.
+
+The training defaults are deliberately reachable for the 100-case Training
+Benchmark: each three-trajectory batch is split into two generation trajectories
+and one disjoint verification trajectory, with two candidate samples. A completed
+candidate attempt consumes
+both sides of that split, including rejected attempts, so verification data cannot
+be recycled as generation data. Parent evolution quotas are persisted and
+rejections count toward fairness. Sessions that fail at the provider, lifecycle,
+or lab-cleanup layer are recorded as infrastructure skips and are not used as
+negative memory evidence.
 
 CLI and Studio values override these defaults per experiment. `.env` is reserved for
 API connection details and credentials.

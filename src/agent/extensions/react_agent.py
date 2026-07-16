@@ -52,7 +52,7 @@ class _ExploringDiagnosisRunner:
         return result
 
 
-class LearningDiagnosisPhase(DiagnosisPhase):
+class TrainingDiagnosisPhase(DiagnosisPhase):
     """Original diagnosis phase with optional learned tool wrappers."""
 
     def __init__(self, config: AgentRunConfig) -> None:
@@ -77,7 +77,7 @@ class LearningDiagnosisPhase(DiagnosisPhase):
             explorer_model = self.config.tool_refinement.explorer_model.strip()
             explorer_llm = (
                 self.llm
-                if self.config.allow_learning_updates
+                if self.config.allow_training_updates
                 and self.config.tool_refinement.update_due
                 else None
             )
@@ -95,7 +95,7 @@ class LearningDiagnosisPhase(DiagnosisPhase):
                 primitive_tools=self.tools or [],
                 library_id=self.config.tool_refinement.library_id,
                 state_path=self.config.tool_refinement.state_path,
-                allow_learning_updates=self.config.allow_learning_updates,
+                allow_training_updates=self.config.allow_training_updates,
                 tool_doc_chars=self.config.tool_refinement.tool_doc_chars,
                 explorer_llm=explorer_llm,
                 llm_backend=self.config.llm_provider,
@@ -143,11 +143,11 @@ class LearningDiagnosisPhase(DiagnosisPhase):
             min_positive_advantage=(procedural_memory_config.min_positive_advantage),
             evolver_model=procedural_memory_config.evolver_model,
             policy_scorer_model=procedural_memory_config.policy_scorer_model,
-            read_only=not self.config.allow_learning_updates,
+            read_only=not self.config.allow_training_updates,
         )
         self.skill_tool_runtime = SkillToolRuntime(
             procedural_memory=procedural_memory,
-            allow_learning_updates=self.config.allow_learning_updates,
+            allow_training_updates=self.config.allow_training_updates,
             session=self.session,
             task_description=task_description,
             tools=list(self._base_tools),
@@ -184,8 +184,8 @@ class LearningDiagnosisPhase(DiagnosisPhase):
         )
 
 
-class LearningReActAgent(BasicReActAgent):
-    """NIKA ReAct with diagnosis-only learning extensions enabled."""
+class TrainingReActAgent(BasicReActAgent):
+    """NIKA ReAct with diagnosis-only training extensions enabled."""
 
     def __init__(self, config: AgentRunConfig) -> None:
         configure_custom_provider_environment()
@@ -196,24 +196,24 @@ class LearningReActAgent(BasicReActAgent):
             max_steps=config.max_steps,
         )
         self.extension_config = config
-        self._learning_phase = LearningDiagnosisPhase(config)
-        asyncio.run(self._learning_phase.load_tools())
+        self._training_phase = TrainingDiagnosisPhase(config)
+        asyncio.run(self._training_phase.load_tools())
         if config.tool_refinement.enabled and not config.procedural_memory.enabled:
-            self._diagnosis_runner = self._learning_phase.get_agent()
+            self._diagnosis_runner = self._training_phase.get_agent()
             self._install_exploring_runner()
 
     async def run(self, task_description: str):
         if self.extension_config.procedural_memory.enabled:
-            self._learning_phase.install_procedural_memory(
+            self._training_phase.install_procedural_memory(
                 task_description, self.session_dir
             )
-            self._diagnosis_runner = self._learning_phase.get_agent()
+            self._diagnosis_runner = self._training_phase.get_agent()
             self._install_exploring_runner()
         try:
             result = await super().run(task_description)
             reports = result.get("diagnosis_report") or []
             report = reports[-1] if isinstance(reports, list) and reports else reports
-            runtime = self._learning_phase.skill_tool_runtime
+            runtime = self._training_phase.skill_tool_runtime
             if runtime is not None:
                 runtime.record_terminal_diagnosis(str(report or ""))
             return result
@@ -221,10 +221,10 @@ class LearningReActAgent(BasicReActAgent):
             self._write_extension_snapshots()
 
     def _install_exploring_runner(self) -> None:
-        runtime = self._learning_phase.tool_refinement_runtime
+        runtime = self._training_phase.tool_refinement_runtime
         if (
             runtime is not None
-            and self.extension_config.allow_learning_updates
+            and self.extension_config.allow_training_updates
             and self.extension_config.tool_refinement.update_due
             and not isinstance(self._diagnosis_runner, _ExploringDiagnosisRunner)
         ):
@@ -235,10 +235,10 @@ class LearningReActAgent(BasicReActAgent):
 
     def _write_extension_snapshots(self) -> None:
         write_tool_refinement_session(
-            self._learning_phase.tool_refinement_runtime,
+            self._training_phase.tool_refinement_runtime,
             self.session_dir,
         )
-        runtime = self._learning_phase.skill_tool_runtime
+        runtime = self._training_phase.skill_tool_runtime
         if runtime is None:
             return
         path = Path(self.session_dir) / "procedural_memory_runtime_session.json"
@@ -258,4 +258,4 @@ def create_react_agent(config: AgentRunConfig):
             model=config.model,
             max_steps=config.max_steps,
         )
-    return LearningReActAgent(config)
+    return TrainingReActAgent(config)

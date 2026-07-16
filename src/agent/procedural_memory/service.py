@@ -18,12 +18,12 @@ from collections.abc import Collection
 from pathlib import Path
 from typing import Any
 
-from agent.learning_llm import (
-    format_learning_error,
-    learning_backend,
-    learning_max_retries,
-    learning_model,
-    learning_timeout_seconds,
+from agent.training_llm import (
+    format_training_error,
+    training_backend,
+    training_max_retries,
+    training_model,
+    training_timeout_seconds,
 )
 from agent.module_config import module_defaults
 from agent.extensions.llm import load_extension_model as load_model
@@ -120,7 +120,7 @@ def _evidence_score(evidence: EvaluationEvidence) -> float:
         quality = detection
     else:
         # Detection alone is not a reusable diagnosis procedure. Localization
-        # and RCA therefore dominate the online learning signal.
+        # and RCA therefore dominate the online training signal.
         quality = (0.10 * detection) + (0.35 * localization) + (0.55 * rca)
     return _clamp(quality, 0.0, 1.0)
 
@@ -353,7 +353,7 @@ class ProceduralMemoryModule:
         self.min_positive_advantage = max(0, min_positive_advantage)
         self.evolver_model = evolver_model.strip()
         self.policy_scorer_model = policy_scorer_model.strip()
-        self._learning_llm_instance: Any | None = None
+        self._training_llm_instance: Any | None = None
         self._policy_llm_instance: Any | None = None
         self.last_exploration_probability = 0.0
         self.last_exploration_arm = ""
@@ -393,26 +393,26 @@ class ProceduralMemoryModule:
                 base_url=base_url,
                 api_key=api_key,
                 model=selected_model,
-                timeout=learning_timeout_seconds(),
+                timeout=training_timeout_seconds(),
             )
         return BehavioralReplayPolicyScorer(self._policy_llm)
 
-    def _learning_llm(self) -> Any | None:
-        selected_backend = self._selected_learning_backend()
+    def _training_llm(self) -> Any | None:
+        selected_backend = self._selected_training_backend()
         selected_model = self._selected_evolver_model()
         if not selected_backend or not selected_model:
             return None
-        if self._learning_llm_instance is None:
-            self._learning_llm_instance = load_model(
+        if self._training_llm_instance is None:
+            self._training_llm_instance = load_model(
                 selected_backend,
                 selected_model,
-                timeout=learning_timeout_seconds(),
-                max_retries=learning_max_retries(),
+                timeout=training_timeout_seconds(),
+                max_retries=training_max_retries(),
             )
-        return self._learning_llm_instance
+        return self._training_llm_instance
 
     def _policy_llm(self) -> Any | None:
-        selected_backend = self._selected_learning_backend()
+        selected_backend = self._selected_training_backend()
         selected_model = self._selected_policy_scorer_model()
         if not selected_backend or not selected_model:
             return None
@@ -420,25 +420,25 @@ class ProceduralMemoryModule:
             self._policy_llm_instance = load_model(
                 selected_backend,
                 selected_model,
-                timeout=learning_timeout_seconds(),
-                max_retries=learning_max_retries(),
+                timeout=training_timeout_seconds(),
+                max_retries=training_max_retries(),
             )
         return self._policy_llm_instance
 
     def _selected_evolver_model(self) -> str:
-        return self.evolver_model or learning_model(self.model) or self.model or ""
+        return self.evolver_model or training_model(self.model) or self.model or ""
 
-    def _selected_learning_backend(self) -> str:
+    def _selected_training_backend(self) -> str:
         if not self.llm_backend:
             return ""
-        return learning_backend(self.llm_backend)
+        return training_backend(self.llm_backend)
 
     def _selected_policy_scorer_model(self) -> str:
         return (
             self.policy_scorer_model
             or os.getenv("NIKA_SKILL_LOGPROB_MODEL", "").strip()
             or module_defaults().procedural_memory.skill_logprob_model
-            or learning_model(self.model)
+            or training_model(self.model)
             or self.model
             or ""
         )
@@ -451,6 +451,18 @@ class ProceduralMemoryModule:
         """Persist a bounded bank while preserving the active Skill pool."""
 
         history_limit = max(self.experience_pool_size, self.pool_size * 4, 100)
+        # Backfill scheduling counters for banks created before fair parent
+        # scheduling was introduced.  The append-only evolution log remains
+        # the source of truth for the migration.
+        for skill_id in state.skills:
+            state.evolution_parent_attempt_counts.setdefault(
+                skill_id,
+                self._evolution_attempts(state, skill_id),
+            )
+            state.evolution_parent_last_attempt.setdefault(
+                skill_id,
+                self._last_evolution_attempt(state, skill_id),
+            )
         state.episodes = state.episodes[-history_limit:]
         state.experiences = self._bounded_experiences(state.experiences)
         state.ppo_decisions = state.ppo_decisions[-history_limit:]
@@ -912,16 +924,28 @@ class ProceduralMemoryModule:
         """Retire unresolved probationary skills and snapshot a read-only bank."""
 
         retired_ids: list[str] = []
+        insufficient_evidence_ids: list[str] = []
+        probation_support = max(3, self.holdout_size)
         with self.store.exclusive():
             state = self.store.load()
             for skill in state.skills.values():
                 if skill.status != "probationary":
                     continue
+                insufficient_evidence = (
+                    skill.frequency < probation_support
+                    or skill.success_count < self.min_positive_advantage
+                )
                 skill.status = "retired"
                 retired_ids.append(skill.skill_id)
+                if insufficient_evidence:
+                    insufficient_evidence_ids.append(skill.skill_id)
                 state.maintenance_log.append(
                     {
-                        "stage": "freeze unresolved probationary skill",
+                        "stage": (
+                            "freeze probationary skill: insufficient_evidence"
+                            if insufficient_evidence
+                            else "freeze unresolved probationary skill"
+                        ),
                         "skill_id": skill.skill_id,
                         "frequency": skill.frequency,
                         "avg_gain": skill.avg_gain,
@@ -937,6 +961,7 @@ class ProceduralMemoryModule:
             "state_hash": self.bank_state_hash(),
             "snapshot_path": str(snapshot_path),
             "retired_probationary_skill_ids": sorted(retired_ids),
+            "insufficient_evidence_skill_ids": sorted(insufficient_evidence_ids),
             "validated_skill_ids": sorted(
                 skill.skill_id
                 for skill in state.skills.values()
@@ -1205,7 +1230,7 @@ class ProceduralMemoryModule:
         candidate_index: int,
     ) -> SkillCandidateDraft | None:
         """Sample one candidate for direct single-candidate callers."""
-        if not self._selected_learning_backend() or not self._selected_evolver_model():
+        if not self._selected_training_backend() or not self._selected_evolver_model():
             return None
         prompt = self._skill_candidate_prompt(
             parent=parent,
@@ -1219,9 +1244,9 @@ class ProceduralMemoryModule:
             ),
         )
         try:
-            llm = self._learning_llm()
+            llm = self._training_llm()
             if llm is None:
-                raise RuntimeError("learning LLM is unavailable")
+                raise RuntimeError("training LLM is unavailable")
             evolver = llm.with_structured_output(SkillCandidateDraft)
             raw = evolver.invoke(prompt)
             draft = (
@@ -1234,7 +1259,7 @@ class ProceduralMemoryModule:
                 raise RuntimeError("candidate evolver returned an incomplete skill")
             return candidate
         except Exception as exc:
-            raise RuntimeError(format_learning_error(exc)) from exc
+            raise RuntimeError(format_training_error(exc)) from exc
 
     def semantic_gradient(
         self,
@@ -1309,7 +1334,7 @@ class ProceduralMemoryModule:
         """Consolidate per-trajectory gradients into one stable batch update."""
         if not gradients:
             raise RuntimeError("No trajectory gradients were available for evolution.")
-        if not self._selected_learning_backend() or not self._selected_evolver_model():
+        if not self._selected_training_backend() or not self._selected_evolver_model():
             raise RuntimeError(
                 "Procedural Memory semantic-gradient LLM is not configured."
             )
@@ -1341,9 +1366,9 @@ class ProceduralMemoryModule:
             "signal applies to the parent skill."
         )
         try:
-            llm = self._learning_llm()
+            llm = self._training_llm()
             if llm is None:
-                raise RuntimeError("learning LLM is unavailable")
+                raise RuntimeError("training LLM is unavailable")
             aggregator = llm.with_structured_output(SemanticGradientDraft)
             raw = aggregator.invoke(prompt)
             draft = (
@@ -1384,7 +1409,7 @@ class ProceduralMemoryModule:
                 )
             return gradient
         except Exception as exc:
-            raise RuntimeError(format_learning_error(exc)) from exc
+            raise RuntimeError(format_training_error(exc)) from exc
 
     def _llm_semantic_gradient(
         self,
@@ -1393,7 +1418,7 @@ class ProceduralMemoryModule:
         tool_steps: list[SkillStep],
         skill: ProceduralSkill | None = None,
     ) -> tuple[SemanticGradient | None, str]:
-        selected_backend = self._selected_learning_backend()
+        selected_backend = self._selected_training_backend()
         selected_model = self._selected_evolver_model()
         if not selected_backend or not selected_model:
             return None, ""
@@ -1442,9 +1467,9 @@ class ProceduralMemoryModule:
             "procedural skill. Use the same source_session_id."
         )
         try:
-            llm = self._learning_llm()
+            llm = self._training_llm()
             if llm is None:
-                return None, "learning LLM is unavailable"
+                return None, "training LLM is unavailable"
             critic = llm.with_structured_output(SemanticGradientDraft)
             raw_gradient = critic.invoke(prompt)
             if isinstance(raw_gradient, SemanticGradient):
@@ -1489,7 +1514,7 @@ class ProceduralMemoryModule:
             gradient.gradient_source = "llm"
             return gradient, ""
         except Exception as exc:
-            return None, format_learning_error(exc)
+            return None, format_training_error(exc)
 
     def ppo_gate(
         self,
@@ -1552,6 +1577,15 @@ class ProceduralMemoryModule:
             if verification_method != "policy_logprob"
             else True
         )
+        gate_checks = {
+            "verification_available": not verification_error,
+            "positive_j_score": j_score > margin,
+            "parent_stable": parent_safe,
+            "positive_support": has_positive_support,
+            "replay_no_alignment_regression": replay_no_alignment_regression,
+            "structured_no_alignment_regression": structured_no_regression,
+            "no_alignment_regression": no_alignment_regression,
+        }
         accepted = (
             not verification_error
             and j_score > margin
@@ -1564,19 +1598,25 @@ class ProceduralMemoryModule:
             if verification_method == "policy_logprob"
             else verification_method.replace("_", " ") + " gate"
         )
-        reason = (
-            f"candidate passed {gate_name}"
-            if accepted
-            else "candidate verification deferred: verifier unavailable"
-            if verification_error
-            else f"candidate failed {gate_name}: unstable parent skill"
-            if not parent_safe
-            else f"candidate failed {gate_name}: insufficient positive support"
-            if not has_positive_support
-            else f"candidate failed {gate_name}: alignment regression"
-            if not no_alignment_regression
-            else f"candidate failed {gate_name}"
-        )
+        if accepted:
+            reason = f"candidate passed {gate_name}"
+        elif verification_error:
+            reason = "candidate verification deferred: verifier unavailable"
+        else:
+            failed_checks: list[str] = []
+            if not parent_safe:
+                failed_checks.append("unstable parent skill")
+            if not has_positive_support:
+                failed_checks.append("insufficient positive support")
+            if j_score <= margin:
+                failed_checks.append("insufficient PPO gain")
+            if not replay_no_alignment_regression:
+                failed_checks.append("replay alignment regression")
+            if not structured_no_regression:
+                failed_checks.append("structured alignment regression")
+            reason = f"candidate failed {gate_name}: " + ", ".join(
+                failed_checks or ["gate condition"]
+            )
         return PPOGateDecision(
             accepted=accepted,
             reason=reason,
@@ -1597,6 +1637,9 @@ class ProceduralMemoryModule:
             verified_success_count=verified_success_count,
             positive_advantage_count=positive_advantage_count,
             verification_error=verification_error,
+            gate_checks=gate_checks,
+            structured_candidate_alignment=structured_candidate,
+            structured_baseline_alignment=structured_baseline,
         )
 
     def learn_from_episode(
@@ -1689,6 +1732,7 @@ class ProceduralMemoryModule:
 
         def report_base() -> dict[str, Any]:
             return {
+                "training_status": "eligible",
                 "episode_reward": reward,
                 "episode_baseline": baseline_value,
                 "episode_advantage": reward - baseline_value,
@@ -1827,6 +1871,11 @@ class ProceduralMemoryModule:
                 "required_verification_count": 1,
                 **report_base(),
             }
+        # Reserve the parent before any slow gradient/candidate calls.  This
+        # reservation is persisted even if the provider later times out, so a
+        # rejected or interrupted attempt cannot starve other ready parents.
+        self._register_evolution_attempt(state, evolution_parent)
+        self._save_state(state)
         target_tool_steps = self._tool_steps_from_experiences(samples)
         if not target_tool_steps:
             raise RuntimeError("Skill-Pro evolution batch contains no actions")
@@ -1841,6 +1890,7 @@ class ProceduralMemoryModule:
             ]
         ] = []
         candidate_errors: list[str] = []
+        generated_candidate_count = 0
         gradients: list[SemanticGradient] = []
         related_count = 0
         relevance = 0.0
@@ -1877,7 +1927,7 @@ class ProceduralMemoryModule:
                 experiences=samples,
             )
         except Exception as exc:
-            candidate_errors.append(f"semantic gradient: {format_learning_error(exc)}")
+            candidate_errors.append(f"semantic gradient: {format_training_error(exc)}")
 
         for index in range(self.best_of_n if batch_gradient is not None else 0):
             try:
@@ -1901,6 +1951,7 @@ class ProceduralMemoryModule:
                     experiences=samples,
                     sampled_candidate=sampled_candidate,
                 )
+                generated_candidate_count += 1
                 if candidate_type == "NEW" and evolution_parent is not None:
                     candidate.parent_id = evolution_parent.skill_id
                 candidate.status = "candidate"
@@ -1932,13 +1983,36 @@ class ProceduralMemoryModule:
                 )
             except Exception as exc:
                 candidate_errors.append(
-                    f"candidate {index}: {format_learning_error(exc)}"
+                    f"candidate {index}: {format_training_error(exc)}"
                 )
 
         valid_attempts = [
             attempt
             for attempt in candidate_attempts
             if not attempt[1].verification_error
+        ]
+        candidate_attempt_reports = [
+            {
+                "index": index,
+                "skill_id": candidate.skill_id,
+                "title": candidate.title,
+                "content_hash": candidate.content_hash(),
+                "accepted": decision.accepted,
+                "reason": decision.reason,
+                "j_score": decision.j_score,
+                "candidate_alignment": decision.candidate_alignment,
+                "baseline_alignment": decision.baseline_alignment,
+                "structured_candidate_alignment": (
+                    decision.structured_candidate_alignment
+                ),
+                "structured_baseline_alignment": (
+                    decision.structured_baseline_alignment
+                ),
+                "gate_checks": dict(decision.gate_checks),
+                "verification_method": decision.verification_method,
+                "verification_error": decision.verification_error,
+            }
+            for index, (candidate, decision, *_rest) in enumerate(candidate_attempts)
         ]
         if not valid_attempts:
             verification_errors = [
@@ -1952,6 +2026,13 @@ class ProceduralMemoryModule:
                 if errors
                 else "no candidate completed verification"
             )
+            if generated_candidate_count:
+                self._mark_evolution_attempt_consumed(
+                    state,
+                    parent=evolution_parent,
+                    generation_samples=samples,
+                    verification_samples=verification_samples,
+                )
             state.evolution_log.append(
                 {
                     "iteration": state.iteration,
@@ -1968,6 +2049,8 @@ class ProceduralMemoryModule:
                     "reason": reason,
                     "best_of_n": self.best_of_n,
                     "candidate_attempt_count": len(candidate_attempts),
+                    "generated_candidate_count": generated_candidate_count,
+                    "candidate_attempts": candidate_attempt_reports,
                     "candidate_errors": candidate_errors,
                     "attributed_steps": attributed_steps,
                     "unattributed_steps": unattributed_steps,
@@ -1992,6 +2075,8 @@ class ProceduralMemoryModule:
                 ),
                 "verification_error": " | ".join(dict.fromkeys(verification_errors)),
                 "verification_sample_count": len(verification_samples),
+                "generated_candidate_count": generated_candidate_count,
+                "candidate_attempts": candidate_attempt_reports,
                 "decision": None,
                 **report_base(),
             }
@@ -2068,26 +2153,12 @@ class ProceduralMemoryModule:
                 ]
             )
         )
-        consumed_sample_id_set = set(consumed_sample_ids)
-        consumed_session_order = list(
-            dict.fromkeys(
-                sample.session_id for sample in [*samples, *verification_samples]
-            )
+        self._mark_evolution_attempt_consumed(
+            state,
+            parent=evolution_parent,
+            generation_samples=samples,
+            verification_samples=verification_samples,
         )
-        consumed_session_ids = set(consumed_session_order)
-        retained_session_ids: set[str] = set()
-        if not best_decision.accepted:
-            retain_count = max(1, len(consumed_session_ids) // 2)
-            retained_session_ids = set(consumed_session_order[-retain_count:])
-        for item in state.experiences:
-            if (
-                item.experience_id in consumed_sample_id_set
-                or (
-                    item.session_id in consumed_session_ids
-                    and evolution_parent.skill_id in item.skill_ids
-                )
-            ) and item.session_id not in retained_session_ids:
-                item.used_for_evolution = True
         state.evolution_log.append(
             {
                 "iteration": state.iteration,
@@ -2113,6 +2184,8 @@ class ProceduralMemoryModule:
                 "sample_count": best_decision.sample_count,
                 "best_of_n": self.best_of_n,
                 "candidate_attempt_count": len(candidate_attempts),
+                "generated_candidate_count": generated_candidate_count,
+                "candidate_attempts": candidate_attempt_reports,
                 "candidate_errors": candidate_errors,
                 "semantic_gradient_source": gradient_source,
                 "semantic_gradient_llm_error": gradient_error,
@@ -2135,7 +2208,7 @@ class ProceduralMemoryModule:
             "skill_id": best_candidate.skill_id,
             "semantic_gradient_source": gradient_source,
             "semantic_gradient_llm_attempted": bool(
-                self._selected_learning_backend() and self._selected_evolver_model()
+                self._selected_training_backend() and self._selected_evolver_model()
             ),
             "semantic_gradient_llm_failed": bool(gradient_error),
             "semantic_gradient_llm_error": gradient_error,
@@ -2146,6 +2219,8 @@ class ProceduralMemoryModule:
             "verification_method": best_decision.verification_method,
             "verification_error": best_decision.verification_error,
             "verification_sample_count": len(verification_samples),
+            "generated_candidate_count": generated_candidate_count,
+            "candidate_attempts": candidate_attempt_reports,
             "decision": best_decision.model_dump(),
             "skill_status": best_candidate.status,
             **report_base(),
@@ -2192,6 +2267,96 @@ class ProceduralMemoryModule:
             + 0.05 * staleness_factor
             + 0.02 * uncertainty
         )
+
+    @staticmethod
+    def _evolution_attempts(state, skill_id: str) -> int:
+        """Return completed evolution attempts for ``skill_id``.
+
+        Deferred episodes are deliberately excluded: they did not consume a
+        generation/verification split and should not penalize a parent.  The
+        count is derived from the append-only log so older banks do not need a
+        schema migration just to obtain fair scheduling.
+        """
+
+        return sum(
+            1
+            for event in state.evolution_log
+            if event.get("parent") == skill_id
+            and event.get("action") in {"accepted", "rejected"}
+        )
+
+    @staticmethod
+    def _last_evolution_attempt(state, skill_id: str) -> int:
+        attempts = [
+            int(event.get("iteration") or 0)
+            for event in state.evolution_log
+            if event.get("parent") == skill_id
+            and event.get("action") in {"accepted", "rejected"}
+        ]
+        return max(attempts, default=0)
+
+    @staticmethod
+    def _verified_experience_ids(state) -> set[str]:
+        """Collect verification ids from both new and legacy bank records."""
+
+        verified: set[str] = {
+            experience.experience_id
+            for experience in state.experiences
+            if experience.verification_attempts > 0
+        }
+        for event in state.evolution_log:
+            verified.update(
+                str(item)
+                for item in event.get("verification_experience_ids", [])
+                if item
+            )
+        return verified
+
+    @staticmethod
+    def _register_evolution_attempt(state, parent: ProceduralSkill) -> None:
+        """Reserve one fair evolution turn before invoking a slow LLM."""
+
+        skill_id = parent.skill_id
+        state.evolution_parent_attempt_counts[skill_id] = (
+            state.evolution_parent_attempt_counts.get(skill_id, 0) + 1
+        )
+        state.evolution_parent_last_attempt[skill_id] = state.iteration
+
+    @staticmethod
+    def _mark_evolution_attempt_consumed(
+        state,
+        *,
+        parent: ProceduralSkill,
+        generation_samples: list[SkillExperience],
+        verification_samples: list[SkillExperience],
+    ) -> None:
+        """Close a generation/verification split after a real attempt.
+
+        The old implementation retained the last half of a rejected split.
+        Since verification samples are appended last, that policy repeatedly
+        fed the same holdout back into generation.  A completed candidate
+        attempt now consumes both sides exactly once.  Session matching keeps
+        this safe for pre-migration activation-level records that are merged
+        into one trajectory during batching.
+        """
+
+        selected_ids = {
+            sample.experience_id
+            for sample in [*generation_samples, *verification_samples]
+        }
+        selected_sessions = {
+            sample.session_id for sample in [*generation_samples, *verification_samples]
+        }
+        verification_ids = {sample.experience_id for sample in verification_samples}
+        for item in state.experiences:
+            same_parent_session = (
+                item.session_id in selected_sessions
+                and parent.skill_id in item.skill_ids
+            )
+            if item.experience_id in selected_ids or same_parent_session:
+                item.used_for_evolution = True
+            if item.experience_id in verification_ids:
+                item.verification_attempts += 1
 
     def _experience_from_episode(
         self,
@@ -2402,10 +2567,18 @@ class ProceduralMemoryModule:
     ) -> list[SkillExperience]:
         if parent is None:
             return []
+        # A verification trajectory is a one-way boundary.  The explicit
+        # counter handles new banks; the log-derived set protects banks written
+        # before ``verification_attempts`` was introduced.
+        verified_ids = self._verified_experience_ids(state)
         pool = [
             exp
             for exp in state.experiences
-            if parent.skill_id in exp.skill_ids and not exp.used_for_evolution
+            if (
+                parent.skill_id in exp.skill_ids
+                and not exp.used_for_evolution
+                and exp.experience_id not in verified_ids
+            )
         ]
         pool = self._coalesce_legacy_experiences(pool, skill_id=parent.skill_id)
         batch_size = max(self.evolution_threshold, 2)
@@ -2452,16 +2625,37 @@ class ProceduralMemoryModule:
             return None
         required = max(self.evolution_threshold, 2)
         ready = [item for item in buffered if item[1] >= required]
-        candidates = ready or buffered
-        skill, _ = max(
-            candidates,
-            key=lambda item: (
-                item[1] >= required,
-                self._skill_evolution_priority(state, item[0]),
-                item[1],
-                item[0].skill_id,
-            ),
-        )
+        if ready:
+            # Fairness is the primary key once a parent has a complete batch.
+            # Rejected attempts count as attempts, so a high-frequency parent
+            # cannot monopolize the queue merely because its score is high.
+            skill, _ = min(
+                ready,
+                key=lambda item: (
+                    state.evolution_parent_attempt_counts.get(
+                        item[0].skill_id,
+                        self._evolution_attempts(state, item[0].skill_id),
+                    ),
+                    state.evolution_parent_last_attempt.get(
+                        item[0].skill_id,
+                        self._last_evolution_attempt(state, item[0].skill_id),
+                    ),
+                    -self._skill_evolution_priority(state, item[0]),
+                    -item[1],
+                    item[0].skill_id,
+                ),
+            )
+        else:
+            # Nothing is ready: choose the closest parent so the deferred
+            # diagnostic remains useful, but do not consume a fairness quota.
+            skill, _ = max(
+                buffered,
+                key=lambda item: (
+                    item[1],
+                    self._skill_evolution_priority(state, item[0]),
+                    item[0].skill_id,
+                ),
+            )
         return skill
 
     @staticmethod
@@ -2515,7 +2709,7 @@ class ProceduralMemoryModule:
         del state
         # Holdout advantages remain anchored to the behavior-time baseline.
         # Recomputing them with the current EMA leaks the holdout reward and can
-        # change the sign of the learning signal after collection.
+        # change the sign of the training signal after collection.
         return ordered[-holdout_count:]
 
     def _ppo_replay_surrogate(

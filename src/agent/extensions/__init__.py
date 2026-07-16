@@ -1,1 +1,1 @@
-"""Local learning extensions layered on the unmodified NIKA baseline."""
+"""Local training extensions layered on the unmodified NIKA baseline."""

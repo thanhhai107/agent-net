@@ -346,7 +346,7 @@ class BehavioralReplayPolicyScorer:
         try:
             llm = self.llm_factory()
             if llm is None:
-                raise RuntimeError("learning LLM is unavailable")
+                raise RuntimeError("training LLM is unavailable")
             payload = [
                 {
                     "experience_id": item.experience_id,
